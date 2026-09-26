@@ -222,6 +222,15 @@ function getEditableText(element: HTMLDivElement): string {
   return (element.textContent ?? '').replace(/\u00a0/g, ' ');
 }
 
+/** Plain text after a webview-native paste. WebKit turns newlines into `<br>` / blocks. */
+function pastedPlainText(editor: HTMLElement): string {
+  const raw = (editor.innerText || editor.textContent || '').replace(/\u00a0/g, ' ');
+  if (editor.lastChild instanceof HTMLBRElement && raw.endsWith('\n')) {
+    return raw.slice(0, -1);
+  }
+  return raw;
+}
+
 function isEditorDomEmpty(editor: HTMLDivElement): boolean {
   return getEditableText(editor).length === 0;
 }
@@ -703,6 +712,18 @@ function clipboardFiles(data: DataTransfer | null): File[] {
   return Array.from(data.files ?? []);
 }
 
+function clipboardPlainText(data: DataTransfer | null): string {
+  if (!data) return '';
+  // `text/plain` before any other type: older WebKit clears plain text
+  // if `text/html` is read first.
+  return data.getData('text/plain') || data.getData('text') || '';
+}
+
+function clipboardOf(event: ClipboardEvent<HTMLDivElement>): DataTransfer | null {
+  const native = event.nativeEvent as { clipboardData?: DataTransfer | null };
+  return native.clipboardData ?? event.clipboardData ?? null;
+}
+
 function namePastedImage(file: File, serial: number, now: Date): File {
   if (!file.type.startsWith('image/')) return file;
   if (file.name.trim() && !GENERIC_CLIPBOARD_IMAGE_NAME.test(file.name.trim())) return file;
@@ -823,6 +844,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const pasteSerialRef = useRef(0);
+    // WKWebView paste events often carry an empty clipboardData. Canceling
+    // those drops the text. Leave the paste to the webview, then adopt it.
+    const nativePastePendingRef = useRef(false);
+    const nativePasteFrameRef = useRef<number | null>(null);
+    const adoptPastedTextRef = useRef<(text: string) => void>(() => {});
     // 工具栏"空间不足时优先隐藏快捷键提示"的测量 refs，见下方 useLayoutEffect。
     const toolbarRowRef = useRef<HTMLDivElement>(null);
     const toolbarLeftRef = useRef<HTMLDivElement>(null);
@@ -1343,6 +1369,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     };
 
     const handleInput = (event: FormEvent<HTMLDivElement>) => {
+      if (nativePastePendingRef.current) return;
       if (
         isComposingRef.current ||
         Boolean((event.nativeEvent as { isComposing?: boolean }).isComposing)
@@ -1363,6 +1390,19 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         editorRef.current?.removeAttribute('data-composing');
         syncFromEditor();
       }, 0);
+    };
+
+    const cancelNativePasteAdopt = () => {
+      nativePastePendingRef.current = false;
+      if (nativePasteFrameRef.current !== null) {
+        cancelAnimationFrame(nativePasteFrameRef.current);
+        nativePasteFrameRef.current = null;
+      }
+    };
+
+    adoptPastedTextRef.current = (text: string) => {
+      cancelNativePasteAdopt();
+      replaceSelection(text);
     };
 
     const handleBeforeInput = (event: FormEvent<HTMLDivElement>) => {
@@ -1413,16 +1453,50 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         }
         editor.setAttribute('data-composing', 'true');
       };
+      const onNativeBeforeInput = (event: Event) => {
+        const input = event as InputEvent;
+        if (input.inputType !== 'insertFromPaste' || !nativePastePendingRef.current) return;
+        const text = input.data || clipboardPlainText(input.dataTransfer);
+        if (!text) return;
+        input.preventDefault();
+        adoptPastedTextRef.current(text);
+      };
       editor.addEventListener('compositionstart', onCompositionStart, true);
+      editor.addEventListener('beforeinput', onNativeBeforeInput);
       return () => {
         editor.removeEventListener('compositionstart', onCompositionStart, true);
+        editor.removeEventListener('beforeinput', onNativeBeforeInput);
       };
     }, []);
 
     const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      const data = event.clipboardData;
+      // Read before preventDefault. WebKit clears clipboardData once the paste is canceled.
+      const data = clipboardOf(event);
+      const text = clipboardPlainText(data);
       const pasted = !disabled && allowFileAttach ? clipboardFiles(data) : [];
+      if (!text && pasted.length === 0) {
+        cancelPendingInputSync();
+        nativePastePendingRef.current = true;
+        if (nativePasteFrameRef.current !== null) {
+          cancelAnimationFrame(nativePasteFrameRef.current);
+        }
+        nativePasteFrameRef.current = requestAnimationFrame(() => {
+          nativePasteFrameRef.current = null;
+          if (!nativePastePendingRef.current) return;
+          nativePastePendingRef.current = false;
+          const editor = editorRef.current;
+          if (!editor?.isConnected) return;
+          const nextValue = pastedPlainText(editor);
+          if (nextValue === value) return;
+          const caret = Math.min(getSelectionOffsets(editor).end, nextValue.length);
+          lastPushedValueRef.current = nextValue;
+          pendingCaretOffsetRef.current = caret;
+          onChange(nextValue);
+          syncMentionQuery(nextValue, caret);
+        });
+        return;
+      }
+      event.preventDefault();
       if (pasted.length > 0) {
         const now = new Date();
         addFiles(
@@ -1432,7 +1506,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           }),
         );
       }
-      const text = data?.getData('text/plain') ?? '';
       if (text) replaceSelection(text);
     };
 

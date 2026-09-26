@@ -681,4 +681,42 @@ describe('ChatInput 粘贴图片', () => {
     expect(onChange).toHaveBeenCalledWith('你好');
     expect(screen.queryByText(/^pasted-/)).toBeNull();
   });
+
+  it('WKWebView 剪贴板为空时收下网页插入的文本', async () => {
+    const onChange = vi.fn();
+    renderInput({ onChange });
+    const editor = screen.getByTestId('chat-composer');
+    const canceled = !fireEvent.paste(editor, {
+      clipboardData: { items: [], files: [], getData: () => '' },
+    });
+    expect(canceled).toBe(false);
+    editor.replaceChildren(document.createTextNode('粘贴进来'));
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
+    expect(onChange).toHaveBeenCalledWith('粘贴进来');
+  });
+
+  it('WKWebView 在 beforeinput 里拿到粘贴文本', async () => {
+    const onChange = vi.fn();
+    renderInput({ onChange });
+    const editor = screen.getByTestId('chat-composer');
+    fireEvent.paste(editor, {
+      clipboardData: { items: [], files: [], getData: () => '' },
+    });
+    fireEvent(
+      editor,
+      new InputEvent('beforeinput', {
+        bubbles: true,
+        cancelable: true,
+        inputType: 'insertFromPaste',
+        data: '你好',
+      }),
+    );
+    expect(onChange).toHaveBeenCalledWith('你好');
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
 });
