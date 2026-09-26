@@ -109,6 +109,14 @@ pub async fn host_save_text_file(
 }
 
 #[tauri::command]
+pub fn host_read_clipboard_text() -> String {
+    let Ok(mut clipboard) = Clipboard::new() else {
+        return String::new();
+    };
+    clipboard.get_text().unwrap_or_default()
+}
+
+#[tauri::command]
 pub async fn host_capture_screenshot(
     image: ScreenshotImage,
 ) -> Result<CaptureScreenshotResult, String> {

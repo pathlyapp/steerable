@@ -13,6 +13,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SteerOutcome } from '@steerable/agent-ui';
 import { ChatInput, type ChatInputProps } from './ChatInput';
+import * as electronBridge from '@/lib/electron-bridge';
 
 async function flushComposerSync() {
   await act(async () => {
@@ -193,11 +194,15 @@ describe('ChatInput IME composition (Pinyin)', () => {
     expect(editor.getAttribute('data-composing')).toBe('true');
   });
 
-  it('marks composing on IME Process keydown (keyCode 229)', () => {
-    render(<ChatInput value="" onChange={vi.fn()} onSubmit={vi.fn()} />);
+  it('does not treat a keyCode 229 keydown without compositionstart as composition', async () => {
+    const onChange = vi.fn();
+    render(<ChatInput value="你" onChange={onChange} onSubmit={vi.fn()} />);
     const editor = screen.getByRole('textbox');
     fireEvent.keyDown(editor, { key: 'Process', keyCode: 229 });
-    expect(editor.getAttribute('data-composing')).toBe('true');
+    editor.textContent = '你好';
+    fireEvent.input(editor);
+    await flushComposerSync();
+    expect(onChange).toHaveBeenCalledWith('你好');
   });
 
   it('WKWebView Enter keyCode 229 sends and does not stick composition', () => {
@@ -208,6 +213,23 @@ describe('ChatInput IME composition (Pinyin)', () => {
     fireEvent.keyDown(editor, { key: 'Enter', keyCode: 229 });
     expect(onSubmit).toHaveBeenCalledTimes(2);
     expect(editor.getAttribute('data-composing')).toBeNull();
+  });
+
+  it('leaves Backspace to the browser and keeps the typed text node', async () => {
+    function Harness() {
+      const [value, setValue] = useState('');
+      return <ChatInput value={value} onChange={setValue} onSubmit={vi.fn()} />;
+    }
+    render(<Harness />);
+    const editor = screen.getByRole('textbox');
+    editor.focus();
+    editor.textContent = '你好';
+    const typed = editor.firstChild;
+    fireEvent.input(editor);
+    await flushComposerSync();
+    expect(editor.firstChild).toBe(typed);
+    const canceled = !fireEvent.keyDown(editor, { key: 'Backspace', keyCode: 229 });
+    expect(canceled).toBe(false);
   });
 
   it('restores composing state on the first Pinyin letter keydown', () => {
@@ -682,41 +704,58 @@ describe('ChatInput 粘贴图片', () => {
     expect(screen.queryByText(/^pasted-/)).toBeNull();
   });
 
-  it('WKWebView 剪贴板为空时收下网页插入的文本', async () => {
-    const onChange = vi.fn();
-    renderInput({ onChange });
+  it('没有宿主剪贴板时，空剪贴板的粘贴交给浏览器默认行为', () => {
+    renderInput();
     const editor = screen.getByTestId('chat-composer');
     const canceled = !fireEvent.paste(editor, {
       clipboardData: { items: [], files: [], getData: () => '' },
     });
     expect(canceled).toBe(false);
-    editor.replaceChildren(document.createTextNode('粘贴进来'));
-    await act(async () => {
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    });
-    expect(onChange).toHaveBeenCalledWith('粘贴进来');
   });
 
-  it('WKWebView 在 beforeinput 里拿到粘贴文本', async () => {
+  it('输入过中文后再粘贴，内容立即显示', async () => {
+    function Harness() {
+      const [value, setValue] = useState('');
+      return <ChatInput value={value} onChange={setValue} onSubmit={vi.fn()} />;
+    }
+    render(<Harness />);
+    const editor = screen.getByTestId('chat-composer');
+    editor.focus();
+    fireEvent.keyDown(editor, { key: 'n' });
+    fireEvent.keyDown(editor, { key: 'Process', keyCode: 229 });
+    fireEvent.compositionStart(editor);
+    editor.textContent = '你好';
+    fireEvent.compositionEnd(editor);
+    fireEvent.keyDown(editor, { key: 'Process', keyCode: 229 });
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+    fireEvent(editor, new CustomEvent('hostpaste', { detail: '世界', cancelable: true }));
+    await flushComposerSync();
+    expect(editor.textContent).toBe('你好世界');
+    expect(editor.getAttribute('data-composing')).toBeNull();
+  });
+
+  it('Tauri 页面剪贴板为空时改读系统剪贴板', async () => {
     const onChange = vi.fn();
+    const readClipboardText = vi.fn().mockResolvedValue('系统剪贴板');
+    const spy = vi.spyOn(electronBridge, 'getHostBridge').mockReturnValue({
+      readClipboardText,
+    } as Partial<electronBridge.HostBridge> as electronBridge.HostBridge);
     renderInput({ onChange });
     const editor = screen.getByTestId('chat-composer');
+    editor.focus();
     fireEvent.paste(editor, {
       clipboardData: { items: [], files: [], getData: () => '' },
     });
-    fireEvent(
-      editor,
-      new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'insertFromPaste',
-        data: '你好',
-      }),
-    );
-    expect(onChange).toHaveBeenCalledWith('你好');
-    await act(async () => {
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    });
-    expect(onChange).toHaveBeenCalledTimes(1);
+    try {
+      await act(async () => {});
+      expect(readClipboardText).toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledWith('系统剪贴板');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

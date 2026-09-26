@@ -79,7 +79,16 @@ describe('createTauriBridge', () => {
     const bridge = createTauriBridge();
     const callback = vi.fn();
     bridge.onMenuNewChat!(callback);
+    bridge.onMenuPaste!(callback);
 
     expect(mocks.listen).toHaveBeenCalledWith('menu:new-chat', expect.any(Function));
+    expect(mocks.listen).toHaveBeenCalledWith('menu:paste', expect.any(Function));
+  });
+
+  it('reads plain text from the host clipboard', async () => {
+    mocks.invoke.mockResolvedValue('粘贴文本');
+    const bridge = createTauriBridge();
+    await expect(bridge.readClipboardText!()).resolves.toBe('粘贴文本');
+    expect(mocks.invoke).toHaveBeenCalledWith('host_read_clipboard_text');
   });
 });

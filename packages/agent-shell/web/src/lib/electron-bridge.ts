@@ -193,6 +193,15 @@ export interface HostBridge {
   onMenuOpenTerminal?: (callback: () => void) => void;
   offMenuOpenTerminal?: () => void;
   /**
+   * App menu IPC — `Cmd+V` / 编辑 → 粘贴 fires `menu:paste`.
+   * WKWebView does not expose that pasteboard to the page, so the renderer
+   * reads it through `readClipboardText`.
+   */
+  onMenuPaste?: (callback: () => void) => void;
+  offMenuPaste?: () => void;
+  /** Plain text from the OS pasteboard. Empty when the clipboard has no text. */
+  readClipboardText?: () => Promise<string>;
+  /**
    * 异步 AI 标题就绪通知。Backend 在每条 chat 首条助手回复完成后 fire-and-forget
    * 跑 LLM 生成标题；完成时通过这个通道把 `{chatId, title}` 推过来。返回的函数
    * 解除订阅（preload 用 add/remove 配对，不是 removeAllListeners——可以多处订阅）。

@@ -33,6 +33,7 @@ import {
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
 import type { ExecPolicy } from '@/lib/exec-policy';
 import { getWebChatModes, hostToolCapability, settingsChrome } from '@/lib/host-tools';
+import { hostClipboardAvailable, requestHostPaste } from '@/lib/host-paste';
 import type { AttachmentFile } from '@/lib/attachments';
 import type { SteerOutcome } from '@steerable/agent-ui';
 import {
@@ -221,16 +222,6 @@ function mentionChipClassName(ref?: MentionReference): string {
 function getEditableText(element: HTMLDivElement): string {
   return (element.textContent ?? '').replace(/\u00a0/g, ' ');
 }
-
-/** Plain text after a webview-native paste. WebKit turns newlines into `<br>` / blocks. */
-function pastedPlainText(editor: HTMLElement): string {
-  const raw = (editor.innerText || editor.textContent || '').replace(/\u00a0/g, ' ');
-  if (editor.lastChild instanceof HTMLBRElement && raw.endsWith('\n')) {
-    return raw.slice(0, -1);
-  }
-  return raw;
-}
-
 function isEditorDomEmpty(editor: HTMLDivElement): boolean {
   return getEditableText(editor).length === 0;
 }
@@ -823,7 +814,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const pendingCaretOffsetRef = useRef<number | null>(null);
     // Overlay editor + IME: never rewrite textContent/selection while the
     // user is composing. macOS Pinyin otherwise commits the first letter as
-    // Latin instead of starting a marked-text session.
+    // Latin instead of starting a marked-text session. Set only by real
+    // composition events: WKWebView also reports keyCode 229 for committed
+    // keys, with no compositionend to clear a flag guessed from keydown.
     const isComposingRef = useRef(false);
     // Last value we pushed from the editor (or accepted from the parent).
     // While focused, a matching value must not rewrite contenteditable DOM —
@@ -844,10 +837,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const pasteSerialRef = useRef(0);
-    // WKWebView paste events often carry an empty clipboardData. Canceling
-    // those drops the text. Leave the paste to the webview, then adopt it.
-    const nativePastePendingRef = useRef(false);
-    const nativePasteFrameRef = useRef<number | null>(null);
     const adoptPastedTextRef = useRef<(text: string) => void>(() => {});
     // 工具栏"空间不足时优先隐藏快捷键提示"的测量 refs，见下方 useLayoutEffect。
     const toolbarRowRef = useRef<HTMLDivElement>(null);
@@ -1120,9 +1109,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     // or while the focused editor already owns this value.
     useLayoutEffect(() => {
       const editor = editorRef.current;
-      if (!editor || isComposingRef.current || editor.hasAttribute('data-composing')) {
-        return;
-      }
+      if (!editor || isComposingRef.current) return;
+      editor.removeAttribute('data-composing');
       const editorText = getEditableText(editor);
       const focused = document.activeElement === editor;
       const pendingCaretOffset = pendingCaretOffsetRef.current;
@@ -1363,13 +1351,25 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       const { end } = getSelectionOffsets(editor);
       const nextValue = getEditableText(editor);
       lastPushedValueRef.current = nextValue;
-      pendingCaretOffsetRef.current = end;
+      // The browser already rendered this text. Rewrite the DOM only when a
+      // typed token must become a mention chip; any other rewrite detaches the
+      // input method from the text node.
+      const mentionCount = parseMentionSegments(
+        nextValue,
+        mentionReferences,
+        agents,
+        chats,
+        skills,
+        mcpTools,
+      ).filter((segment) => segment.type === 'mention').length;
+      if (mentionCount !== editor.querySelectorAll('[data-mention-chip]').length) {
+        pendingCaretOffsetRef.current = end;
+      }
       onChange(nextValue);
       syncMentionQuery(nextValue, end);
     };
 
     const handleInput = (event: FormEvent<HTMLDivElement>) => {
-      if (nativePastePendingRef.current) return;
       if (
         isComposingRef.current ||
         Boolean((event.nativeEvent as { isComposing?: boolean }).isComposing)
@@ -1392,18 +1392,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       }, 0);
     };
 
-    const cancelNativePasteAdopt = () => {
-      nativePastePendingRef.current = false;
-      if (nativePasteFrameRef.current !== null) {
-        cancelAnimationFrame(nativePasteFrameRef.current);
-        nativePasteFrameRef.current = null;
-      }
-    };
-
-    adoptPastedTextRef.current = (text: string) => {
-      cancelNativePasteAdopt();
-      replaceSelection(text);
-    };
+    adoptPastedTextRef.current = replaceSelection;
 
     const handleBeforeInput = (event: FormEvent<HTMLDivElement>) => {
       const native = event.nativeEvent as unknown as InputEvent;
@@ -1453,19 +1442,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         }
         editor.setAttribute('data-composing', 'true');
       };
-      const onNativeBeforeInput = (event: Event) => {
-        const input = event as InputEvent;
-        if (input.inputType !== 'insertFromPaste' || !nativePastePendingRef.current) return;
-        const text = input.data || clipboardPlainText(input.dataTransfer);
-        if (!text) return;
-        input.preventDefault();
+      const onHostPaste = (event: Event) => {
+        const text = (event as CustomEvent<string>).detail;
+        if (typeof text !== 'string' || !text) return;
+        event.preventDefault();
         adoptPastedTextRef.current(text);
       };
       editor.addEventListener('compositionstart', onCompositionStart, true);
-      editor.addEventListener('beforeinput', onNativeBeforeInput);
+      editor.addEventListener('hostpaste', onHostPaste);
       return () => {
         editor.removeEventListener('compositionstart', onCompositionStart, true);
-        editor.removeEventListener('beforeinput', onNativeBeforeInput);
+        editor.removeEventListener('hostpaste', onHostPaste);
       };
     }, []);
 
@@ -1475,25 +1462,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       const text = clipboardPlainText(data);
       const pasted = !disabled && allowFileAttach ? clipboardFiles(data) : [];
       if (!text && pasted.length === 0) {
-        cancelPendingInputSync();
-        nativePastePendingRef.current = true;
-        if (nativePasteFrameRef.current !== null) {
-          cancelAnimationFrame(nativePasteFrameRef.current);
+        // WKWebView hands the page an empty clipboard; read the OS pasteboard.
+        if (hostClipboardAvailable()) {
+          event.preventDefault();
+          requestHostPaste(event.currentTarget);
         }
-        nativePasteFrameRef.current = requestAnimationFrame(() => {
-          nativePasteFrameRef.current = null;
-          if (!nativePastePendingRef.current) return;
-          nativePastePendingRef.current = false;
-          const editor = editorRef.current;
-          if (!editor?.isConnected) return;
-          const nextValue = pastedPlainText(editor);
-          if (nextValue === value) return;
-          const caret = Math.min(getSelectionOffsets(editor).end, nextValue.length);
-          lastPushedValueRef.current = nextValue;
-          pendingCaretOffsetRef.current = caret;
-          onChange(nextValue);
-          syncMentionQuery(nextValue, caret);
-        });
         return;
       }
       event.preventDefault();
@@ -1514,33 +1487,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     };
 
     const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-      // Honor IME composition (`isComposing` true while Chinese input is mid-
-      // selection) — only intercept on plain key events.
-      // WKWebView reports keyCode 229 for Enter itself. Treating that as IME
-      // composition sticks isComposing and swallows every later Enter, so the
-      // send shortcut never runs. Only non-Enter 229 starts composition.
-      if (event.key !== 'Enter' && (isComposingRef.current || event.nativeEvent.isComposing)) return;
-      if (event.key !== 'Enter' && event.keyCode === 229) {
-        markComposing();
-        return;
-      }
-      // Hide the placeholder on the first letter of an empty editor so it
-      // does not cover IME marked text. Do this even when `isComposing` is
-      // still false (macOS Pinyin first keydown).
       if (
-        !event.metaKey &&
-        !event.ctrlKey &&
+        hostClipboardAvailable() &&
+        (event.metaKey || event.ctrlKey) &&
         !event.altKey &&
-        event.key.length === 1 &&
-        !value
+        event.key.toLowerCase() === 'v'
       ) {
-        editorRef.current?.setAttribute('data-composing', 'true');
-      }
-      // See `compositionEndAtRef` above: treat an Enter that lands right after
-      // `compositionend` as "confirm candidate", not "submit/newline".
-      if (event.key === 'Enter' && Date.now() - compositionEndAtRef.current < 50) {
+        event.preventDefault();
+        requestHostPaste(event.currentTarget);
         return;
       }
+      // Honor IME composition (`isComposing` true while Chinese input is mid-
+      // selection) — only intercept on plain key events. Enter is exempt
+      // because WKWebView reports it with isComposing/keyCode 229 even after
+      // the candidate is committed.
+      if (event.key !== 'Enter' && (isComposingRef.current || event.nativeEvent.isComposing)) return;
 
       if (event.key === 'Backspace' || event.key === 'Delete') {
         const editor = editorRef.current;
@@ -1559,6 +1520,23 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             }
           }
         }
+      }
+      // Hide the placeholder on the first letter of an empty editor so it
+      // does not cover IME marked text. Do this even when `isComposing` is
+      // still false (macOS Pinyin first keydown).
+      if (
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        event.key.length === 1 &&
+        !value
+      ) {
+        editorRef.current?.setAttribute('data-composing', 'true');
+      }
+      // See `compositionEndAtRef` above: treat an Enter that lands right after
+      // `compositionend` as "confirm candidate", not "submit/newline".
+      if (event.key === 'Enter' && Date.now() - compositionEndAtRef.current < 50) {
+        return;
       }
 
       if (mentionQuery && mentionSuggestions.length > 0) {

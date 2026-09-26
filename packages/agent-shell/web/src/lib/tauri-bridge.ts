@@ -42,6 +42,7 @@ export function createTauriBridge(): HostBridge {
   const bridge = createHttpBridge();
   const newChatMenu = createMenuSubscription('menu:new-chat');
   const terminalMenu = createMenuSubscription('menu:open-terminal');
+  const pasteMenu = createMenuSubscription('menu:paste');
 
   return {
     ...bridge,
@@ -89,6 +90,9 @@ export function createTauriBridge(): HostBridge {
     offMenuNewChat: newChatMenu.off,
     onMenuOpenTerminal: terminalMenu.on,
     offMenuOpenTerminal: terminalMenu.off,
+    onMenuPaste: pasteMenu.on,
+    offMenuPaste: pasteMenu.off,
+    readClipboardText: () => invoke<string>('host_read_clipboard_text'),
     app: {
       snapshot: () => invoke<AppReleaseSnapshot>('app_release_snapshot'),
       check: () => invoke<AppReleaseSnapshot>('app_release_check'),

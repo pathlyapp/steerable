@@ -3,7 +3,9 @@ mod host;
 mod python_runner;
 mod update;
 
-use commands::{host_capture_screenshot, host_save_text_file, host_select_directory};
+use commands::{
+    host_capture_screenshot, host_read_clipboard_text, host_save_text_file, host_select_directory,
+};
 use host::HostProcess;
 use python_runner::{
     python_runner_cancel, python_runner_download, python_runner_pick_local, python_runner_restart,
@@ -59,13 +61,18 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
         .separator()
         .item(&quit)
         .build()?;
+    // Predefined Paste delivers an empty clipboard into WKWebView. Own the
+    // shortcut and read the pasteboard from the host process instead.
+    let paste = MenuItemBuilder::with_id("edit-paste", "粘贴")
+        .accelerator("CmdOrCtrl+V")
+        .build(app)?;
     let edit = SubmenuBuilder::new(app, "编辑")
         .undo()
         .redo()
         .separator()
         .cut()
         .copy()
-        .paste()
+        .item(&paste)
         .select_all()
         .build()?;
     let view = SubmenuBuilder::new(app, "视图")
@@ -83,6 +90,9 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
         }
         "open-terminal" => {
             let _ = app.emit("menu:open-terminal", ());
+        }
+        "edit-paste" => {
+            let _ = app.emit("menu:paste", ());
         }
         "app-quit" => app.exit(0),
         _ => {}
@@ -110,6 +120,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
             host_select_directory,
             host_save_text_file,
             host_capture_screenshot,
+            host_read_clipboard_text,
             app_release_snapshot,
             app_release_check,
             app_release_install,

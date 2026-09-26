@@ -8,6 +8,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { getPackRoutes } from './packs/registry';
 import { getBrandLogoUrl, BRAND_NAME } from './brand';
 import { getAppShellGate } from './auth/gate';
+import { installHostPaste } from './lib/host-paste';
 import './styles/index.css';
 
 // 浏览器 dev mock 的安装在 bootstrap() 开头（动态 import + DEV 门）。
@@ -98,6 +99,7 @@ export async function bootstrap(): Promise<void> {
   // （品牌 logo 由包经 setBrandLogoUrl 注入，见 brand.ts）。
   document.title = BRAND_NAME;
   document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute('href', getBrandLogoUrl());
+  installHostPaste();
 
   const rootEl = document.getElementById('root');
   if (!rootEl) {
