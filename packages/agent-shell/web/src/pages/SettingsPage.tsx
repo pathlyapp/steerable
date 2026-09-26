@@ -6,6 +6,7 @@ import { AgentsSettingsPanel } from '@/components/settings/AgentsSettingsPanel';
 import { AppearanceSettingsPanel } from '@/components/settings/AppearanceSettingsPanel';
 import { AppUpdateSettingsPanel } from '@/components/settings/AppUpdateSettingsPanel';
 import { PortableSettingsPanel } from '@/components/settings/PortableSettingsPanel';
+import { PythonRunnerSettingsPanel } from '@/components/settings/PythonRunnerSettingsPanel';
 import { DiagnoseSettingsPanel } from '@/components/settings/DiagnoseSettingsPanel';
 import { InsightsSettingsPanel } from '@/components/settings/InsightsSettingsPanel';
 import {
@@ -230,6 +231,7 @@ export function SettingsPage() {
               </section>
               )}
 
+              <PythonRunnerSettingsPanel />
               <AppUpdateSettingsPanel />
             </>
           )}

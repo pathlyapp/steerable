@@ -8,7 +8,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import html2canvas from 'html2canvas';
-import type { AppReleaseSnapshot, HostBridge } from './electron-bridge';
+import type {
+  AppReleaseSnapshot,
+  HostBridge,
+  PythonRunnerSnapshot,
+} from './electron-bridge';
 import { createHttpBridge } from './http-bridge';
 
 type VoidCallback = () => void;
@@ -95,6 +99,37 @@ export function createTauriBridge(): HostBridge {
         const pending = listen<AppReleaseSnapshot>('app-update-state', (event) => {
           callback(event.payload);
         });
+        void pending.then((stop) => {
+          if (cancelled) stop();
+          else unlisten = stop;
+        });
+        return () => {
+          cancelled = true;
+          if (unlisten) unlisten();
+          else void pending.then((stop) => stop());
+        };
+      },
+    },
+    pythonRunner: {
+      snapshot: () => invoke<PythonRunnerSnapshot>('python_runner_snapshot'),
+      download: (url) =>
+        invoke<PythonRunnerSnapshot>('python_runner_download', {
+          url: url ?? null,
+        }),
+      cancel: () => invoke<PythonRunnerSnapshot>('python_runner_cancel'),
+      pickLocal: () => invoke<string | null>('python_runner_pick_local'),
+      useLocal: (path) =>
+        invoke<PythonRunnerSnapshot>('python_runner_use_local', { path }),
+      useDefault: () =>
+        invoke<PythonRunnerSnapshot>('python_runner_use_default'),
+      restart: () => invoke<void>('python_runner_restart'),
+      onState(callback) {
+        let unlisten: UnlistenFn | undefined;
+        let cancelled = false;
+        const pending = listen<PythonRunnerSnapshot>(
+          'python-runner-state',
+          (event) => callback(event.payload),
+        );
         void pending.then((stop) => {
           if (cancelled) stop();
           else unlisten = stop;

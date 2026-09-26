@@ -1,3 +1,4 @@
+use crate::python_runner::{self, PythonRunnerLock, RunnerSetup};
 use crate::DesktopConfig;
 use command_group::{CommandGroup, GroupChild};
 #[cfg(unix)]
@@ -12,7 +13,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use url::Url;
 
 const READY_PREFIX: &str = "STEERABLE_HOST_READY ";
@@ -22,22 +23,6 @@ const START_TIMEOUT: Duration = Duration::from_secs(30);
 struct ReadyRecord {
     host: String,
     port: u16,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PythonRunnerLock {
-    version: String,
-    python_version: String,
-    python_build_standalone_release: String,
-    targets: std::collections::HashMap<String, PythonRunnerTarget>,
-}
-
-#[derive(Deserialize)]
-struct PythonRunnerTarget {
-    triple: String,
-    sha256: String,
-    runner: String,
 }
 
 #[derive(Deserialize)]
@@ -289,6 +274,18 @@ impl HostPaths {
         if let Some(explicit) = env::var_os("STEERABLE_PYTHON") {
             let explicit = PathBuf::from(explicit);
             if explicit.is_absolute() && explicit.is_file() {
+                python_runner::configure(
+                    app,
+                    RunnerSetup {
+                        user_data: user_data.to_path_buf(),
+                        node: self.node.clone(),
+                        engine_dir: self.engine_dir.clone(),
+                        lock: None,
+                        target_name: platform_tag().into(),
+                        supported: false,
+                        active_runner: Some(explicit.clone()),
+                    },
+                );
                 return Ok(Some(explicit));
             }
             return Err("STEERABLE_PYTHON must name an existing absolute file".into());
@@ -320,62 +317,35 @@ impl HostPaths {
             .get(target_name)
             .ok_or_else(|| format!("Python runner does not support {target_name}"))?;
 
-        if python_runner_mode == "bundle" {
+        let active_runner = if python_runner_mode == "bundle" {
             let runner = engine_dir.join("python-runner").join(&target.runner);
-            return runner
+            runner
                 .is_file()
-                .then_some(Some(runner))
-                .ok_or_else(|| "bundled Python runner is missing".to_string());
-        }
-        if python_runner_mode != "download" {
+                .then_some(runner)
+                .ok_or_else(|| "bundled Python runner is missing".to_string())?
+        } else if python_runner_mode == "download" {
+            python_runner::configured_runner(user_data)
+                .or_else(|| python_runner::default_runner(user_data, &lock, target_name, target))
+                .unwrap_or_default()
+        } else {
             return Err(format!(
                 "unsupported pythonRunner mode {python_runner_mode:?}"
             ));
-        }
-        let destination = user_data
-            .join("python-runner")
-            .join(&lock.version)
-            .join(target_name);
-        let runner = destination.join(&target.runner);
-        if runner.exists() {
-            return Ok(Some(runner));
-        }
-        let confirmed = app
-            .dialog()
-            .message(
-                "Aroli 需要下载独立的 Python 运行器才能使用 run_code。\n\n\
-                 不安装不会影响聊天和其他工具。下载内容会经过 SHA-256 校验。",
-            )
-            .title("安装 Python 代码运行器")
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "下载并安装".to_string(),
-                "暂不安装".to_string(),
-            ))
-            .blocking_show();
-        if !confirmed {
-            return Ok(None);
-        }
-
-        let filename = format!(
-            "cpython-{}+{}-{}-install_only_stripped.tar.gz",
-            lock.python_version, lock.python_build_standalone_release, target.triple
+        };
+        let active_runner = (!active_runner.as_os_str().is_empty()).then_some(active_runner);
+        python_runner::configure(
+            app,
+            RunnerSetup {
+                user_data: user_data.to_path_buf(),
+                node: self.node.clone(),
+                engine_dir: self.engine_dir.clone(),
+                lock: Some(lock),
+                target_name: target_name.into(),
+                supported: python_runner_mode == "download",
+                active_runner: active_runner.clone(),
+            },
         );
-        let url = format!(
-            "https://github.com/astral-sh/python-build-standalone/releases/download/{}/{}",
-            lock.python_build_standalone_release, filename
-        );
-        let installer = engine_dir.join("install-python-runner.mjs");
-        let status = Command::new(&self.node)
-            .arg(installer)
-            .args(["--url", &url, "--sha256", &target.sha256, "--destination"])
-            .arg(&destination)
-            .args(["--runner", &target.runner])
-            .status()
-            .map_err(|error| format!("failed to start Python runner installer: {error}"))?;
-        if !status.success() || !runner.exists() {
-            return Err(format!("Python runner installer exited with {status}"));
-        }
-        Ok(Some(runner))
+        Ok(active_runner)
     }
 
     fn resolve(app: &AppHandle, config: &DesktopConfig) -> Result<Self, String> {
@@ -405,6 +375,7 @@ impl HostPaths {
             .path()
             .resource_dir()
             .map_err(|error| error.to_string())?;
+        let resource_dir = node_compatible_path(&resource_dir);
         let host_root = resource_dir.join("node-host");
         let app_root = host_root.join("app-dist");
         Ok(Self {
@@ -450,6 +421,27 @@ fn node_resource_name() -> &'static str {
     } else {
         "node/node"
     }
+}
+
+fn node_compatible_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        let verbatim_unc = r"\\?\UNC\".encode_utf16().collect::<Vec<_>>();
+        if let Some(rest) = wide.strip_prefix(verbatim_unc.as_slice()) {
+            let mut normalized = r"\\".encode_utf16().collect::<Vec<_>>();
+            normalized.extend_from_slice(rest);
+            return PathBuf::from(OsString::from_wide(&normalized));
+        }
+        let verbatim = r"\\?\".encode_utf16().collect::<Vec<_>>();
+        if let Some(rest) = wide.strip_prefix(verbatim.as_slice()) {
+            return PathBuf::from(OsString::from_wide(rest));
+        }
+    }
+    path.to_path_buf()
 }
 
 fn spawn_group(command: &mut Command) -> std::io::Result<GroupChild> {

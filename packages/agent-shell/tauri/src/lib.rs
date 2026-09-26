@@ -1,9 +1,14 @@
 mod commands;
 mod host;
+mod python_runner;
 mod update;
 
 use commands::{host_capture_screenshot, host_save_text_file, host_select_directory};
 use host::HostProcess;
+use python_runner::{
+    python_runner_cancel, python_runner_download, python_runner_pick_local, python_runner_restart,
+    python_runner_snapshot, python_runner_use_default, python_runner_use_local,
+};
 use std::path::PathBuf;
 use std::thread;
 use tauri::{
@@ -90,6 +95,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
     let product_name = config.product_name.clone();
     let builder = tauri::Builder::default()
         .manage(update::UpdateState::default())
+        .manage(python_runner::PythonRunnerState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -106,7 +112,14 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
             host_capture_screenshot,
             app_release_snapshot,
             app_release_check,
-            app_release_install
+            app_release_install,
+            python_runner_snapshot,
+            python_runner_download,
+            python_runner_cancel,
+            python_runner_pick_local,
+            python_runner_use_local,
+            python_runner_use_default,
+            python_runner_restart
         ])
         .setup(move |app| {
             install_menu(app)?;
@@ -146,6 +159,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
                         .show(move |_| exit_handle.exit(1));
                     return;
                 }
+                python_runner::maybe_prompt(&handle);
                 update::start(&handle);
             });
             Ok(())

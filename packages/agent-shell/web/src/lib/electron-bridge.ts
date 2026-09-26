@@ -110,6 +110,29 @@ export interface AppReleaseSnapshot {
   message?: string;
 }
 
+export type PythonRunnerPhase =
+  | 'idle'
+  | 'downloading'
+  | 'verifying'
+  | 'extracting'
+  | 'ready'
+  | 'error';
+
+export interface PythonRunnerSnapshot {
+  supported: boolean;
+  source: 'default' | 'url' | 'local';
+  phase: PythonRunnerPhase;
+  percent?: number;
+  downloadedBytes?: number;
+  totalBytes?: number;
+  message?: string;
+  defaultUrl?: string;
+  configuredUrl?: string;
+  activeRunner?: string;
+  configuredRunner?: string;
+  restartRequired: boolean;
+}
+
 export interface HostBridge {
   runtime: 'local';
   platform: NodeJS.Platform;
@@ -276,6 +299,17 @@ export interface HostBridge {
     check: () => Promise<AppReleaseSnapshot>;
     install: () => Promise<AppReleaseSnapshot>;
     onState: (callback: (snapshot: AppReleaseSnapshot) => void) => () => void;
+  };
+  /** Desktop-only Python child interpreter management for run_code. */
+  pythonRunner?: {
+    snapshot: () => Promise<PythonRunnerSnapshot>;
+    download: (url?: string) => Promise<PythonRunnerSnapshot>;
+    cancel: () => Promise<PythonRunnerSnapshot>;
+    pickLocal: () => Promise<string | null>;
+    useLocal: (path: string) => Promise<PythonRunnerSnapshot>;
+    useDefault: () => Promise<PythonRunnerSnapshot>;
+    restart: () => Promise<void>;
+    onState: (callback: (snapshot: PythonRunnerSnapshot) => void) => () => void;
   };
   // 场景包的 invoke 命名空间（如包 preload 贡献的 `<pack>` / `<pack>Mock`）
   // 不进本接口——包用自己的结构化收窄访问器（见各包 web/bridge.ts），

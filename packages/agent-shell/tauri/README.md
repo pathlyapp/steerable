@@ -17,6 +17,9 @@ Packaged products place the verified Rust sidecar and egress proxy at
 `engine/steerable-sidecar` and `engine/steerable-egress-proxy`. An optional
 `engine/python-runner` is only a child interpreter for `run_code`; it never
 hosts the sidecar. Products may set `pythonRunner` to `bundle` or `download`
-in `product.json`. Download mode uses the packaged lock and installer,
-verifies SHA-256 before an atomic install under the product data directory,
-and passes the resulting absolute executable as `STEERABLE_PYTHON`.
+in `product.json`. Download mode starts the product without an interpreter and
+lets the settings UI install one in the background. The default
+python-build-standalone archive is checked against the packaged SHA-256; users
+may instead choose an unverified custom archive URL or an existing Python 3.9+
+executable. Download progress is emitted to the renderer, and the selected
+interpreter is passed as `STEERABLE_PYTHON` on the next application start.
