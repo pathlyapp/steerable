@@ -337,12 +337,15 @@ export interface SidecarChatStreamRequest {
    * executor with the six-tool orchestration family (agent_spawn /
    * agent_send / agent_wait / agent_close / agent_list / agent_interrupt).
    * When delegation is also on (it is by default), both surfaces share one
-   * agent pool — one maxParallel budget, one lineage space. */
+   * agent pool — one maxParallel budget, one lineage space.
+   * `childMaxRounds` / `childMaxToolErrors` default to the parent loop's
+   * limits. */
   orchestration?: {
     enabled?: boolean;
     maxDepth?: number;
     maxParallel?: number;
     childMaxRounds?: number;
+    childMaxToolErrors?: number;
   };
   /**
    * Sub-agent delegation (delegate-on-pool). ON BY DEFAULT on the sidecar —

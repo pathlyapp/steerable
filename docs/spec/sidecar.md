@@ -299,13 +299,15 @@ like orchestration children; the `child_spawned` payload adds `profile`
 (the resolved profile name, `general-purpose` when untyped).
 
 Multi-agent orchestration (the explicit six-tool family) is opt-in via
-`orchestration: {enabled: true, maxDepth?, maxParallel?, childMaxRounds?}` in `params`: the parent model drives
+`orchestration: {enabled: true, maxDepth?, maxParallel?, childMaxRounds?, childMaxToolErrors?}` in `params` (child limits default to the parent loop's): the parent model drives
 parallel child CoreLoops through six tools — `agent_spawn` (returns a
 lineage id like `0.2`, optional `toolFilter` narrows the child's tool
 domain), `agent_send` (steers a running child; resumes a finished or
 interrupted one as a follow-up turn seeded from its preserved record),
 `agent_wait` (`timeoutMs`; a live child at timeout returns `status:
-"running"`), `agent_close` (terminal: cooperative cancel with a
+"running"`; a child stopped at its budget gets one no-tools answer round
+and returns `status: "budget_exhausted"` with `resumable: true`, and
+`agent_send` continues it with a fresh budget), `agent_close` (terminal: cooperative cancel with a
 hard-cancel backstop, rejects further sends), `agent_list` (pool
 snapshot with per-child status), and `agent_interrupt` (cooperative
 cancel that keeps the child addressable for a later `agent_send`). Budgets

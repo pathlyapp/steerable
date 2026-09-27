@@ -2179,10 +2179,19 @@ class Sidecar:
                 "to opt into agent_spawn/send/wait/close/list/interrupt."
             )
         if isinstance(orchestration_param, dict) and orchestration_param.get("enabled"):
+            # Child round / tool-error walls inherit the parent loop unless the
+            # host pins them, matching the delegation profiles above.
             orch_config = OrchestrationConfig(
                 max_depth=int(orchestration_param.get("maxDepth", 1)),
                 max_parallel=int(orchestration_param.get("maxParallel", 4)),
-                child_max_rounds=int(orchestration_param.get("childMaxRounds", 8)),
+                child_max_rounds=int(
+                    orchestration_param.get("childMaxRounds", loop_config.max_rounds)
+                ),
+                child_max_tool_errors=int(
+                    orchestration_param.get(
+                        "childMaxToolErrors", loop_config.max_tool_errors
+                    )
+                ),
             )
             orchestration = OrchestrationExecutor(
                 executor,

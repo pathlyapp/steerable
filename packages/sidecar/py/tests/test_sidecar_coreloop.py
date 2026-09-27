@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 from steerable_agent_protocol.generated import ToolCall
@@ -1862,6 +1863,51 @@ async def test_coreloop_orchestration_spawn_wait_over_rpc() -> None:
     spawned = next(p for p in child_events if p["kind"] == "child_spawned")
     assert spawned["childId"] == "0.1"
     assert spawned["streamId"] == stream_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("orchestration", "expected"),
+    [
+        ({"enabled": True}, (80, 16)),
+        (
+            {"enabled": True, "childMaxRounds": 5, "childMaxToolErrors": 2},
+            (5, 2),
+        ),
+    ],
+)
+async def test_orchestration_children_inherit_parent_loop_limits(
+    monkeypatch, orchestration: dict[str, Any], expected: tuple[int, int]
+) -> None:
+    """Unpinned child limits use the parent spec (80 / 16), not the
+    OrchestrationConfig default of 8 rounds / 3 consecutive tool errors."""
+    from steerable_sidecar import sidecar as sidecar_module
+
+    captured: list[Any] = []
+    original = sidecar_module.OrchestrationConfig
+
+    def spy(**kwargs: Any) -> Any:
+        config = original(**kwargs)
+        captured.append(config)
+        return config
+
+    monkeypatch.setattr(sidecar_module, "OrchestrationConfig", spy)
+
+    provider = _ScriptedProvider([_text_round("plain")])
+    sidecar = _make_sidecar(provider)
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+            "orchestration": orchestration,
+        },
+    )
+
+    [config] = captured
+    assert (config.child_max_rounds, config.child_max_tool_errors) == expected
 
 
 @pytest.mark.asyncio

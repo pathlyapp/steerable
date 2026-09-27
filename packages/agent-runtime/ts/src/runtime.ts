@@ -232,11 +232,13 @@ export interface ChatStreamParams {
   apiKey?: string;
   /** History seed window the host already rendered (see WS3 contract). */
   historySeed?: unknown[];
-  /** Orchestration opt-in: {maxDepth?, maxParallel?, childMaxRounds?}. */
+  /** Orchestration opt-in: {maxDepth?, maxParallel?, childMaxRounds?,
+   * childMaxToolErrors?}; child limits default to the parent loop's. */
   orchestration?: {
     maxDepth?: number;
     maxParallel?: number;
     childMaxRounds?: number;
+    childMaxToolErrors?: number;
   };
   /** Per-request tool domain narrowing (fail-closed on the loop side). */
   toolFilter?: string[];
