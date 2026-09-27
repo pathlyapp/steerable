@@ -124,6 +124,7 @@ export const LOCAL_FS_TOOL_NAMES = [
   'view_image',
   'local_write_file',
   'local_edit_file',
+  'present_files',
   'local_open_path',
   'local_run_snippet',
   'local_list_scripts',

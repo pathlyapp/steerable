@@ -1221,8 +1221,14 @@ describe('回合产物文件列表', () => {
       const fileEvents = cap.byType('turn_files');
       expect(fileEvents).toHaveLength(1);
       const files = (fileEvents[0].data as { files: Array<{ path: string; kind: string; size: number }> }).files;
+      // 本轮没有 present_files 声明：按扩展名兜底，pptx 归为交付物。
       expect(files).toEqual([
-        { path: path.join(dir, '自我介绍.pptx'), kind: expect.stringMatching(/^(created|modified)$/), size: 9 },
+        {
+          path: path.join(dir, '自我介绍.pptx'),
+          kind: expect.stringMatching(/^(created|modified)$/),
+          size: 9,
+          category: 'deliverable',
+        },
       ]);
 
       // 顺序约定：turn_files 在 message_id 之前（前端按 message_id 归档本轮队列）。
@@ -1236,6 +1242,53 @@ describe('回合产物文件列表', () => {
       const metadata = JSON.parse(assistant.messageMetadata!);
       expect(metadata.turnFiles).toHaveLength(1);
       expect(metadata.turnFiles[0].path).toBe(path.join(dir, '自我介绍.pptx'));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('present_files 声明的文件是交付物，同轮其余产物（含预览图）归为中间文件', async () => {
+    const { dir, chat, toolRouter } = await seedProjectChat();
+    try {
+      installStream(async (opts) => {
+        opts.onToolStart({ id: 'call-1', tool: 'local_exec_shell', arguments: { command: 'gen ppt' } });
+        await fs.writeFile(path.join(dir, '公司介绍.pptx'), 'ppt-bytes');
+        await fs.writeFile(path.join(dir, '_预览_大事记页.png'), 'png');
+        opts.onToolAction({
+          id: 'call-1',
+          tool: 'local_exec_shell',
+          arguments: { command: 'gen ppt' },
+          result: { success: true },
+          success: true,
+        });
+        const presentArgs = { files: [{ path: '公司介绍.pptx', description: '公司介绍 12 页' }] };
+        opts.onToolStart({ id: 'call-2', tool: 'present_files', arguments: presentArgs });
+        opts.onToolAction({
+          id: 'call-2',
+          tool: 'present_files',
+          arguments: presentArgs,
+          result: { success: true },
+          success: true,
+        });
+        opts.onText('PPT 已生成');
+      });
+      const cap = makeEmitCapture();
+      await makeRouter({ toolRouter }).handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '做个 PPT' } },
+        cap.emit,
+      );
+
+      const assistant = (await h.store.listMessages(chat.id, 10))[0];
+      const metadata = JSON.parse(assistant.messageMetadata!);
+      const byName = Object.fromEntries(
+        (metadata.turnFiles as Array<{ path: string; category: string; description?: string }>).map(
+          (f) => [path.basename(f.path), { category: f.category, description: f.description }],
+        ),
+      );
+      expect(byName).toEqual({
+        '公司介绍.pptx': { category: 'deliverable', description: '公司介绍 12 页' },
+        '_预览_大事记页.png': { category: 'intermediate', description: undefined },
+      });
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

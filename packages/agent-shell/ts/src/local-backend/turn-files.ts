@@ -33,6 +33,11 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {
+  PRESENT_FILES_TOOL_NAME,
+  readPresentedArgs,
+  type PresentedFile,
+} from '../present-files.js';
 
 export interface TurnFile {
   /** 绝对路径（点击打开直接用）。 */
@@ -41,12 +46,21 @@ export interface TurnFile {
   kind: 'created' | 'modified';
   /** 字节数（展示用）。 */
   size: number;
+  /** 新增行数（展示用，如 +110）。 */
+  additions?: number;
+  /** 删除行数（展示用，如 -0）。 */
+  deletions?: number;
+  /** 类别：deliverable = present_files 声明的最终交付文件；intermediate = 其余本轮写过的文件。 */
+  category?: 'deliverable' | 'intermediate';
+  /** present_files 给出的一行说明（交付卡片副标题）。 */
+  description?: string;
 }
 
 /** 扫描入参里只需要工具行动的这几个字段（与 router 的 executedActions 行结构对齐）。 */
 export interface TurnFileAction {
   tool?: unknown;
   arguments?: unknown;
+  result?: unknown;
   success?: unknown;
 }
 
@@ -67,7 +81,63 @@ const IGNORED_DIR_NAMES = new Set([
   '.steerable',
 ]);
 
-const IGNORED_FILE_NAMES = new Set(['.DS_Store']);
+const IGNORED_FILE_NAMES = new Set(['.DS_Store', 'Thumbs.db']);
+
+/** 交付物扩展名（最终产物，如电子表格、幻灯片、文档、图片、音视频、独立页面、压缩包）。 */
+export const DELIVERABLE_EXTENSIONS = new Set([
+  // 表格 / Spreadsheets
+  '.xlsx', '.xls', '.csv', '.tsv', '.numbers',
+  // 幻灯片 / Presentations
+  '.pptx', '.ppt', '.key',
+  // 文档 / Documents
+  '.docx', '.doc', '.pdf', '.pages', '.epub', '.rtf',
+  // 图像与富媒体 / Images & Media
+  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.mp4', '.mov', '.mp3',
+  // 独立文档输出与压缩包 / Standalone HTML & Archives
+  '.html', '.htm', '.zip', '.tar.gz', '.tar', '.7z',
+]);
+
+const INTERMEDIATE_DIR_PATTERNS = [
+  /(?:^|[\\/])review_work(?:[\\/]|$)/i,
+  /(?:^|[\\/])(?:work|temp|tmp|\.temp|\.tmp|scratch)(?:[\\/]|$)/i,
+  /(?:^|[\\/])scripts(?:[\\/]|$)/i,
+  /(?:^|[\\/])(?:build|dist|\.cache|__pycache__)(?:[\\/]|$)/i,
+];
+
+/** 是否为临时文件 / 办公软件锁定文件（如 ~$公司介绍.pptx），产物列表中一律排除。 */
+export function isIgnoredFileName(name: string): boolean {
+  if (IGNORED_FILE_NAMES.has(name)) return true;
+  // Office 临时锁定文件（如 ~$公司介绍.pptx）
+  if (name.startsWith('~$')) return true;
+  // 临时文件与编辑器交换文件
+  if (name.endsWith('.tmp') || name.endsWith('.swp') || name.endsWith('~')) return true;
+  return false;
+}
+
+/** 判定文件是最终交付文件还是中间修改文件。 */
+export function classifyFileCategory(filePath: string): 'deliverable' | 'intermediate' {
+  const normalized = filePath.replace(/\\/g, '/');
+  const ext = path.extname(normalized).toLowerCase();
+  // 1. 若具有最终交付产物扩展名（电子表格、PPT、PDF、图片等），属于交付物
+  if (DELIVERABLE_EXTENSIONS.has(ext)) return 'deliverable';
+  // 2. 位于中间工作目录（如 review_work/、scripts/）属于中间文件
+  for (const pattern of INTERMEDIATE_DIR_PATTERNS) {
+    if (pattern.test(normalized)) return 'intermediate';
+  }
+  // 3. 其余脚本、代码、配置文件均归为中间文件
+  return 'intermediate';
+}
+
+/** 从统一 diff 文本中统计增删行数。 */
+export function parseDiffStats(diffText: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of diffText.split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) additions++;
+    else if (line.startsWith('-') && !line.startsWith('---')) deletions++;
+  }
+  return { additions, deletions };
+}
 
 /** 单次扫描的遍历上限：深度 10、条目 10 万、结果 100 条。 */
 const MAX_DEPTH = 10;
@@ -136,7 +206,77 @@ export async function collectTurnFiles(options: {
     await scanShallow(dir, sinceMs, byPath);
   }
 
-  return [...byPath.values()]
+  // present_files 声明的文件：本轮可能没动过（交付已有文件），不受时间水位线
+  // 约束，只要求仍是普通文件。
+  const presented = new Map<string, PresentedFile>();
+  for (const action of options.actions ?? []) {
+    if (action.tool !== PRESENT_FILES_TOOL_NAME || action.success === false) continue;
+    for (const file of readPresentedArgs(action.arguments, projectRoot, homeDir)) {
+      presented.set(file.path, file);
+    }
+  }
+  for (const file of presented.values()) {
+    if (byPath.has(file.path)) continue;
+    const stat = await statPresentedFile(file.path);
+    if (stat) byPath.set(file.path, stat);
+  }
+
+  // 从 actions 中提取增删行数统计（local_edit_file 的 diff 或 local_write_file 的 content）
+  const statsByPath = new Map<string, { additions: number; deletions: number }>();
+  for (const action of options.actions ?? []) {
+    if (typeof action.tool === 'string') {
+      const args = action.arguments && typeof action.arguments === 'object' ? (action.arguments as Record<string, unknown>) : null;
+      const rawPath = typeof args?.path === 'string' ? args.path : null;
+      if (rawPath) {
+        const full = path.isAbsolute(rawPath)
+          ? path.normalize(rawPath)
+          : projectRoot
+            ? path.resolve(projectRoot, rawPath)
+            : null;
+        if (full) {
+          if (action.tool === 'local_edit_file') {
+            const diff = editDiffOf(action.result);
+            if (diff !== null) {
+              const diffStats = parseDiffStats(diff);
+              const prev = statsByPath.get(full) ?? { additions: 0, deletions: 0 };
+              statsByPath.set(full, {
+                additions: prev.additions + diffStats.additions,
+                deletions: prev.deletions + diffStats.deletions,
+              });
+            }
+          } else if (action.tool === 'local_write_file') {
+            if (typeof args?.content === 'string') {
+              const lineCount = args.content ? args.content.split('\n').length : 0;
+              statsByPath.set(full, { additions: lineCount, deletions: 0 });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const enriched: TurnFile[] = [];
+  for (const file of byPath.values()) {
+    const base = path.basename(file.path);
+    if (isIgnoredFileName(base)) continue;
+    const stats = statsByPath.get(file.path);
+    const declared = presented.get(file.path);
+    // 本轮有声明时以声明为准；没有声明（旧模型、未调用）才退回扩展名规则。
+    const category =
+      presented.size > 0
+        ? declared
+          ? 'deliverable'
+          : 'intermediate'
+        : classifyFileCategory(file.path);
+    enriched.push({
+      ...file,
+      category,
+      ...(declared?.description ? { description: declared.description } : {}),
+      ...(stats ? { additions: stats.additions, deletions: stats.deletions } : {}),
+    });
+  }
+
+  return enriched
     .sort((a, b) => a.path.localeCompare(b.path))
     .slice(0, MAX_FILES);
 }
@@ -180,7 +320,7 @@ async function walk(
       await walk(full, sinceMs, depth + 1, state, out);
       continue;
     }
-    if (!entry.isFile() || IGNORED_FILE_NAMES.has(entry.name)) continue;
+    if (!entry.isFile() || isIgnoredFileName(entry.name)) continue;
     const file = await statTurnFile(full, sinceMs);
     if (file) out.set(full, file);
   }
@@ -196,12 +336,37 @@ async function statTurnFile(full: string, sinceMs: number): Promise<TurnFile | n
     return null;
   }
   // 路径字面量可能指到目录（如 xxx.app 包）；产物列表只收文件。
-  if (!stat.isFile()) return null;
+  if (!stat.isFile() || isIgnoredFileName(path.basename(full))) return null;
   const touched =
     stat.mtimeMs + TOUCHED_SLACK_MS >= sinceMs ||
     stat.birthtimeMs + TOUCHED_SLACK_MS >= sinceMs;
   if (!touched) return null;
   return { path: full, kind: kindOf(stat, sinceMs), size: stat.size };
+}
+
+/** 声明的交付文件只要求仍是普通文件；本轮没动过的已有文件标 modified。 */
+async function statPresentedFile(full: string): Promise<TurnFile | null> {
+  let stat;
+  try {
+    stat = await fs.stat(full);
+  } catch {
+    // 声明后到回合收尾之间被删掉：不再列出。
+    return null;
+  }
+  if (!stat.isFile()) return null;
+  return { path: full, kind: 'modified', size: stat.size };
+}
+
+/** local_edit_file 的 diff：直连结果在顶层，经 sidecar 回流的结果折进 `data`。 */
+function editDiffOf(result: unknown): string | null {
+  if (!result || typeof result !== 'object') return null;
+  const record = result as Record<string, unknown>;
+  if (typeof record.diff === 'string') return record.diff;
+  const data = record.data;
+  if (data && typeof data === 'object' && typeof (data as Record<string, unknown>).diff === 'string') {
+    return (data as Record<string, unknown>).diff as string;
+  }
+  return null;
 }
 
 function kindOf(stat: { mtimeMs: number; birthtimeMs: number }, sinceMs: number): 'created' | 'modified' {
@@ -282,7 +447,7 @@ async function scanShallow(
     return;
   }
   for (const entry of entries) {
-    if (entry.name.startsWith('.') || IGNORED_FILE_NAMES.has(entry.name)) continue;
+    if (entry.name.startsWith('.') || isIgnoredFileName(entry.name)) continue;
     if (entry.isSymbolicLink() || !entry.isFile()) continue;
     const full = path.join(dir, entry.name);
     if (out.has(full)) continue;

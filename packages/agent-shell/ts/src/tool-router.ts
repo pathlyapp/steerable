@@ -28,6 +28,11 @@ import {
   type AgentToolPolicy,
 } from './local-backend/agent-capability.js';
 import { processViewImage } from './image-attachment.js';
+import {
+  PRESENT_FILES_SCHEMA,
+  PRESENT_FILES_TOOL_NAME,
+  executePresentFiles,
+} from './present-files.js';
 import { isHostToolCapabilityEnabled } from './host-tools.js';
 import { getResolvedHostTools } from './host-tools-runtime.js';
 
@@ -346,6 +351,7 @@ export class ToolRouter {
           required: ['path', 'edits'],
         },
       },
+      PRESENT_FILES_SCHEMA,
       {
         name: 'local_open_path',
         description: 'Open local path or URL',
@@ -899,6 +905,8 @@ export class ToolRouter {
         this.autoInstallSkillOnSuccess(edited, args.path);
         return edited;
       }
+      case PRESENT_FILES_TOOL_NAME:
+        return await executePresentFiles(args, projectRoot);
       case 'local_open_path':
         return await this.localExecutor.openLocalTarget({
           target: String(args.target || ''),

@@ -13,7 +13,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { collectTurnFiles } from '../../src/local-backend/turn-files.js';
+import {
+  classifyFileCategory,
+  collectTurnFiles,
+  isIgnoredFileName,
+  parseDiffStats,
+} from '../../src/local-backend/turn-files.js';
 
 let root: string;
 
@@ -62,7 +67,7 @@ describe('collectTurnFiles 工作区扫描', () => {
     const files = await collectTurnFiles({ roots: [root], sinceMs });
 
     expect(files).toEqual([
-      { path: existing, kind: 'modified', size: 7 },
+      { path: existing, kind: 'modified', size: 7, category: 'intermediate' },
     ]);
   });
 
@@ -423,5 +428,113 @@ describe('collectTurnFiles 命令文本路径字面量', () => {
     });
 
     expect(files).toEqual([]);
+  });
+
+  it('排除 Office 临时锁定文件与交换文件（如 ~$公司介绍.pptx）', async () => {
+    const sinceMs = turnStart();
+    const realFile = path.join(root, '公司介绍.pptx');
+    const lockFile = path.join(root, '~$公司介绍.pptx');
+    const tmpFile = path.join(root, 'output.tmp');
+    await fs.writeFile(realFile, 'real-content');
+    await fs.writeFile(lockFile, 'lock-content');
+    await fs.writeFile(tmpFile, 'temp-content');
+
+    const files = await collectTurnFiles({ roots: [root], sinceMs });
+
+    expect(files.map((f) => path.basename(f.path))).toEqual(['公司介绍.pptx']);
+    expect(isIgnoredFileName('~$公司介绍.pptx')).toBe(true);
+    expect(isIgnoredFileName('.DS_Store')).toBe(true);
+    expect(isIgnoredFileName('test.tmp')).toBe(true);
+    expect(isIgnoredFileName('公司介绍.pptx')).toBe(false);
+  });
+
+  it('正确分类交付物与中间修改文件', () => {
+    expect(classifyFileCategory('/work/报价方案.xlsx')).toBe('deliverable');
+    expect(classifyFileCategory('/work/介绍.pptx')).toBe('deliverable');
+    expect(classifyFileCategory('/work/报告.pdf')).toBe('deliverable');
+    expect(classifyFileCategory('/work/预览图.png')).toBe('deliverable');
+    expect(classifyFileCategory('/work/review_work/build.mjs')).toBe('intermediate');
+    expect(classifyFileCategory('/work/scripts/generate.py')).toBe('intermediate');
+    expect(classifyFileCategory('/work/src/index.ts')).toBe('intermediate');
+  });
+
+  it('有 present_files 声明时，声明的是交付物，其余一律是中间文件', async () => {
+    const sinceMs = turnStart();
+    const deck = path.join(root, '公司介绍.pptx');
+    const preview = path.join(root, '_预览_大事记页.png');
+    const pdf = path.join(root, '公司介绍.pdf');
+    await fs.writeFile(deck, 'ppt');
+    await fs.writeFile(preview, 'png');
+    await fs.writeFile(pdf, 'pdf');
+
+    const files = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      projectRoot: root,
+      actions: [
+        {
+          tool: 'present_files',
+          arguments: { files: [{ path: '公司介绍.pptx', description: '12 页介绍' }] },
+          success: true,
+        },
+      ],
+    });
+
+    expect(
+      files.map((f) => [path.basename(f.path), f.category, f.description ?? null]),
+    ).toEqual([
+      ['_预览_大事记页.png', 'intermediate', null],
+      ['公司介绍.pdf', 'intermediate', null],
+      ['公司介绍.pptx', 'deliverable', '12 页介绍'],
+    ]);
+  });
+
+  it('声明本轮没动过的已有文件也会列出；失败的声明调用不生效', async () => {
+    const existing = path.join(root, '年度报告.docx');
+    await fs.writeFile(existing, 'docx');
+    const sinceMs = await sinceAfterExisting();
+    const ghost = path.join(root, 'ghost.xlsx');
+
+    const files = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      actions: [
+        { tool: 'present_files', arguments: { files: [{ path: existing }] }, success: true },
+        { tool: 'present_files', arguments: { files: [{ path: ghost }] }, success: false },
+      ],
+    });
+
+    expect(files).toEqual([
+      { path: existing, kind: 'modified', size: 4, category: 'deliverable' },
+    ]);
+  });
+
+  it('从 diff 中统计增删行数并在 collectTurnFiles 中注入', async () => {
+    const sinceMs = turnStart();
+    const file = path.join(root, 'src', 'util.ts');
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, 'export function add() {}');
+
+    const diff = `--- a/src/util.ts\n+++ b/src/util.ts\n@@ -1,1 +1,4 @@\n export function add() {}\n+export function sub() {}\n+export function mul() {}\n-export function old() {}`;
+    const stats = parseDiffStats(diff);
+    expect(stats).toEqual({ additions: 2, deletions: 1 });
+
+    const files = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      actions: [
+        {
+          tool: 'local_edit_file',
+          arguments: { path: file },
+          result: { success: true, diff },
+          success: true,
+        },
+      ],
+    });
+
+    expect(files).toHaveLength(1);
+    expect(files[0].path).toBe(file);
+    expect(files[0].additions).toBe(2);
+    expect(files[0].deletions).toBe(1);
   });
 });

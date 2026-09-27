@@ -19,6 +19,7 @@ match: any
 | 写入 / 修改文件 | `local_write_file`（`path` + `content`） |
 | 打开文件 / URL | `local_open_path` |
 | 调用已注册脚本 | `local_list_scripts` → `local_run_script` |
+| 声明本轮交付给用户的最终文件 | `present_files`（`files: [{ path, description? }]`，最多 4 个） |
 
 ## 规则
 
@@ -26,6 +27,7 @@ match: any
 - 命令可能改文件、装包、删数据时（destructive 类操作），**先**简单告诉用户你要执行什么，**再**发 tool_call；不要中间停手等用户确认（用户已经请求了）。
 - `local_exec_shell` 返回包含 `stdout` / `stderr` / `exitCode`。非 0 退出码视为失败：把 stderr 摘要给用户，并建议下一步。
 - 路径不存在 / 权限不足时，把 fs 错误原文告诉用户，**不要**反复重试同一个路径。
+- **交付文件要声明**：用户要的产出（表格、PPT、文档、报告、图片、导出包）写好后，在最终回复前调用 `present_files` 声明它们，脚本/命令生成的也一样。辅助脚本、临时文件、只为自查渲染效果导出的预览图、中间导出副本**不要**声明——它们会自动列在「已编辑文件」里。
 
 
 - **超时 ≠ 失败，严禁原样重跑启动命令**：返回里出现 `timedOut: true` 时，只是 shell 等待被掐断——如果命令是启动 GUI / 长时间运行的程序（如 Qt 界面软件），该程序**很可能仍在运行**，用户可能正在里面操作。此时**不要**再次执行同一条启动命令（会把程序重复启动多次）。正确做法：先确认进程是否在运行（如 `Get-Process`）；确实需要长时间等待时传更大的 `timeout` 参数；启动 GUI 程序时优先用不阻塞的方式（PowerShell `Start-Process "app.exe"`），启动成功即视为完成，不要等它退出。

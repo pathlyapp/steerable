@@ -119,7 +119,8 @@ describe('AssistantMessage 回合产物列表', () => {
       />,
     );
     expect(screen.getByText('自我介绍.pptx')).toBeTruthy();
-    expect(screen.getByText('本轮产生了 1 个文件，点击打开')).toBeTruthy();
+    expect(screen.getByText('Presentation · PPTX')).toBeTruthy();
+    expect(screen.getByText('Open in')).toBeTruthy();
   });
 
   it('流式中不渲染产物列表（数据要等回合收尾）', () => {

@@ -441,7 +441,7 @@ export function AssistantMessage({
             回合收尾才有数据，流式期间天然为空。 */}
         {!isStreaming && turnFiles && turnFiles.length > 0 && (
           <div className="mt-2.5 mb-1">
-            <TurnFilesCard files={turnFiles} />
+            <TurnFilesCard files={turnFiles} executedActions={executedActions} />
           </div>
         )}
         <div className="mt-2 flex items-center gap-2 text-[11px] text-agent-muted-foreground/80">
