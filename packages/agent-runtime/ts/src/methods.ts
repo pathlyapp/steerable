@@ -45,6 +45,7 @@ export const SIDECAR_METHODS = [
   'plugin.enable',
   'plugin.disable',
   'plugin.reload',
+  'plugin.tools.describe',
 ] as const;
 
 export type SidecarMethod = (typeof SIDECAR_METHODS)[number];

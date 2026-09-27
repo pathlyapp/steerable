@@ -118,9 +118,35 @@ export const WEB_TOOL_RPC_TIMEOUT_MS = 130_000;
  * 不同，这些是普通 RPC 而非 tool.invoke（不经过模型工具分发层）。
  */
 export type PluginRpcDelegate = (
-  method: 'plugin.list' | 'plugin.enable' | 'plugin.disable' | 'plugin.reload',
+  method:
+    | 'plugin.list'
+    | 'plugin.enable'
+    | 'plugin.disable'
+    | 'plugin.reload'
+    | 'plugin.tools.describe',
   params?: Record<string, unknown>,
 ) => Promise<unknown>;
+
+/**
+ * 插件自带工具的执行缝：唯一实现在 sidecar 的插件路由上，宿主只持
+ * `plugin.tools.describe` 给出的 schema，调用经 `tool.invoke` 前转（与 web
+ * 工具同一模式）。审批已在 sidecar CoreLoop 的 ApprovalExecutor 完成。
+ */
+export type PluginToolDelegate = (
+  name: string,
+  args: Record<string, unknown>,
+) => Promise<unknown>;
+
+/** sidecar `plugin.tools.describe` 的单条描述（见 docs/spec/plugin-host.md）。 */
+interface PluginToolDescriptor {
+  name: string;
+  description?: string;
+  schema?: Record<string, unknown>;
+  mode?: string;
+  plugin?: string | null;
+}
+
+const PLUGIN_TOOL_MODES: ReadonlySet<string> = new Set(['read', 'safe_write', 'destructive']);
 
 /**
  * 本机是否提供网络读取工具（`STEERABLE_WEB_TOOLS=0` 关闭）。
@@ -211,8 +237,61 @@ export class ToolRouter {
    * plugin_* 工具一个 schema 都不出——模型看不到不可用的工具。
    */
   private pluginRpc: PluginRpcDelegate | null = null;
-  setPluginRpc(delegate: PluginRpcDelegate | null): void {
+  private pluginToolInvoke: PluginToolDelegate | null = null;
+  /** 已启用插件的工具（名字 → schema），由 refreshPluginTools 从 sidecar 同步。 */
+  private pluginToolSchemas = new Map<string, ToolSchema>();
+
+  setPluginRpc(
+    delegate: PluginRpcDelegate | null,
+    invokeTool: PluginToolDelegate | null = null,
+  ): void {
     this.pluginRpc = delegate;
+    this.pluginToolInvoke = delegate ? invokeTool : null;
+    if (!delegate) this.pluginToolSchemas = new Map();
+  }
+
+  private pluginToolsEnabled(): boolean {
+    return getResolvedHostTools().plugins.capability;
+  }
+
+  /**
+   * 从 sidecar 拉取已启用插件的工具描述，替换宿主侧的插件工具集。
+   * 启动握手后和每次 plugin_enable / plugin_disable / plugin_reload 成功后
+   * 调用，保证模型看到的集合与 sidecar 路由上可分发的集合一致。
+   * 与内置 / 场景包工具重名的插件工具被跳过并告警——内置工具优先。
+   */
+  async refreshPluginTools(): Promise<void> {
+    if (!this.pluginRpc || !this.pluginToolInvoke) {
+      this.pluginToolSchemas = new Map();
+      return;
+    }
+    const result = (await this.pluginRpc('plugin.tools.describe')) as {
+      tools?: PluginToolDescriptor[];
+    } | null;
+    this.pluginToolSchemas = new Map();
+    const taken = new Set(this.listSchemas().map((s) => s.name));
+    const next = new Map<string, ToolSchema>();
+    for (const tool of result?.tools ?? []) {
+      if (!tool || typeof tool.name !== 'string' || !tool.name) continue;
+      if (taken.has(tool.name)) {
+        console.warn(
+          `[tool-router] plugin tool ${tool.name} (${tool.plugin ?? 'unknown plugin'}) shadows a host tool; skipped`,
+        );
+        continue;
+      }
+      const owner = tool.plugin ? `[plugin:${tool.plugin}] ` : '';
+      next.set(tool.name, {
+        name: tool.name,
+        description: `${owner}${tool.description || tool.name}`,
+        inputSchema:
+          tool.schema && typeof tool.schema === 'object'
+            ? tool.schema
+            : { type: 'object', properties: {} },
+        mode: (tool.mode && PLUGIN_TOOL_MODES.has(tool.mode) ? tool.mode : 'external') as ToolMode,
+        exposure: 'deferred',
+      });
+    }
+    this.pluginToolSchemas = next;
   }
 
   listSchemas(): ToolSchema[] {
@@ -493,6 +572,9 @@ export class ToolRouter {
       ...this.listWebToolSchemas(),
       ...this.listRegisteredMcpToolSchemas(),
       ...this.listPluginToolSchemas(),
+      // 插件自带的工具：与 MCP 动态工具同在 deferred 层，经 tool_search 发现。
+      // 名字不带族前缀，按名归族会漏过 plugins 能力开关，这里显式判定。
+      ...(this.pluginToolsEnabled() ? this.pluginToolSchemas.values() : []),
       // ─── 场景包贡献的工具（0.3a 开槽） ─────────────────
       ...[...this.contributedTools.values()].map((c) => ({
         name: c.name,
@@ -968,7 +1050,9 @@ export class ToolRouter {
           | 'plugin.disable'
           | 'plugin.reload';
         const params = call.name === 'plugin_list' ? undefined : { name: String(args.name || '') };
-        return await this.pluginRpc(method, params);
+        const result = await this.pluginRpc(method, params);
+        if (call.name !== 'plugin_list') await this.refreshPluginTools();
+        return result;
       }
 
       case 'task_run': {
@@ -1037,6 +1121,12 @@ export class ToolRouter {
         const contributed = this.contributedTools.get(call.name);
         if (contributed) {
           return await contributed.handler(args, context ?? {});
+        }
+        if (this.pluginToolSchemas.has(call.name) && this.pluginToolInvoke) {
+          if (!this.pluginToolsEnabled()) {
+            throw new Error(`工具 ${call.name} 未在本产品引入`);
+          }
+          return await this.pluginToolInvoke(call.name, args);
         }
         return { success: false, error: `Unknown tool: ${call.name}` };
       }

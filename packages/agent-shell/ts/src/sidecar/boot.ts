@@ -216,6 +216,41 @@ async function startEgressProxyIfEnabled(store: ScopedStore): Promise<{
 }
 
 /**
+ * Wire the sidecar plugin registry into the host tool router.
+ *
+ * The `plugin.list` probe doubles as the availability check: on failure the
+ * router is cleared (no plugin_* tools, no plugin-provided tools) and the
+ * error is rethrown for the caller to log. On success the router gets the
+ * plugin.* RPC seam plus a `tool.invoke` forwarder, then syncs the enabled
+ * plugins' tool descriptors from `plugin.tools.describe`. Plugin tools run
+ * only in the sidecar; approval already happened in its CoreLoop before a
+ * call is forwarded here, hence `consentGranted`.
+ *
+ * @param supervisor Running sidecar supervisor.
+ * @param toolRouter Host router that advertises and dispatches the tools.
+ */
+export async function wirePluginRegistry(
+  supervisor: Pick<SidecarSupervisor, 'call' | 'invokeTool'>,
+  toolRouter: ToolRouter,
+): Promise<void> {
+  try {
+    await supervisor.call('plugin.list');
+  } catch (err) {
+    toolRouter.setPluginRpc(null);
+    throw err;
+  }
+  toolRouter.setPluginRpc(
+    (method, params) => supervisor.call(method, params),
+    (name, args) =>
+      supervisor.invokeTool(name, args, {
+        consentGranted: true,
+        timeoutMs: WEB_TOOL_RPC_TIMEOUT_MS,
+      }),
+  );
+  await toolRouter.refreshPluginTools();
+}
+
+/**
  * The complete Python sidecar hosts the Rust CoreLoop and is mandatory.
  * Boot is registered synchronously so early RPC thin clients (skill-loader
  * et al.) can await it via whenSidecarSupervisor().
@@ -332,11 +367,9 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
     // 缺省接线）。模型面是 tool-router 的 plugin_* 工具（deferred 层，经
     // tool_search 发现）；这里注入直调缝。握手失败降级为工具缺席，不阻塞 boot。
     try {
-      await supervisor.call('plugin.list');
-      deps.toolRouter.setPluginRpc((method, params) => supervisor.call(method, params));
+      await wirePluginRegistry(supervisor, deps.toolRouter);
       log.info('[sidecar] plugin registry wired; plugin_* tools available');
     } catch (err) {
-      deps.toolRouter.setPluginRpc(null);
       log.warn('[sidecar] plugin registry unavailable; plugin_* tools hidden this session', err);
     }
 

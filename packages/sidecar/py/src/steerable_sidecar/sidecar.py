@@ -277,6 +277,7 @@ class Sidecar:
         register("plugin.enable", self._handle_plugin_enable)
         register("plugin.disable", self._handle_plugin_disable)
         register("plugin.reload", self._handle_plugin_reload)
+        register("plugin.tools.describe", self._handle_plugin_tools_describe)
         register("presets.describe", self._handle_presets_describe)
         register("presets.resolve", self._handle_presets_resolve)
         register("catalog.describe", self._handle_catalog_describe)
@@ -811,6 +812,39 @@ class Sidecar:
         except (PluginStateError, PluginLoadError) as exc:
             raise JsonRpcError(str(exc), code=-32602, kind="invalid_params") from exc
         return {"plugin": self._plugin_record_dict(registry.get(name))}
+
+    async def _handle_plugin_tools_describe(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Descriptors for every tool an enabled plugin has on the router.
+
+        Hosts that own the model-visible tool list (``toolsViaHost``) use
+        this to advertise plugin tools and forward calls back over
+        ``tool.invoke``; ``tool.list`` carries no mode or plugin owner.
+        Disabled plugins have no tools on the router, so they contribute none.
+        """
+        registry = self._require_plugin_registry()
+        tools: list[dict[str, Any]] = []
+        for record in registry.plugins():
+            if not record.enabled:
+                continue
+            for name in record.tools:
+                tool = self.tools.get(name)
+                if tool is None:
+                    continue
+                tools.append(
+                    {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "schema": tool.schema,
+                        "mode": tool.mode,
+                        "exposure": tool.exposure,
+                        "requireConsent": tool.require_consent,
+                        "concurrencySafe": tool.concurrency_safe,
+                        "plugin": record.name,
+                    }
+                )
+        return {"tools": tools}
 
     async def _handle_presets_describe(
         self, _params: dict[str, Any] | None

@@ -168,6 +168,18 @@ export interface PluginRecord {
   reloadable: boolean;
 }
 
+/** One enabled plugin's tool as served by `plugin.tools.describe`. */
+export interface PluginToolDescriptor {
+  name: string;
+  description: string;
+  schema: Record<string, unknown>;
+  mode: string;
+  exposure: 'direct' | 'deferred' | 'hidden';
+  requireConsent: boolean;
+  concurrencySafe: boolean;
+  plugin: string | null;
+}
+
 /** Recursive node of the `agent.session.tree` branch-family view. */
 export interface SessionTreeNode {
   recordId: string;
@@ -653,6 +665,15 @@ export class AgentRuntime {
   /** Hot-reload a reloadable plugin from its source. */
   reloadPlugin(name: string): Promise<{ plugin: PluginRecord }> {
     return this.process.request('plugin.reload', { name });
+  }
+
+  /**
+   * Descriptors for every tool an enabled plugin provides. Hosts that own
+   * the model-visible tool list advertise these and call them with
+   * `tool.invoke`; disabled plugins contribute none.
+   */
+  describePluginTools(): Promise<{ tools: PluginToolDescriptor[] }> {
+    return this.process.request('plugin.tools.describe');
   }
 
   /** The framework-owned provider-preset table for host settings UIs. */

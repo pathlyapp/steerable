@@ -118,6 +118,7 @@
     "plugin.enable",
     "plugin.disable",
     "plugin.reload",
+    "plugin.tools.describe",
     "presets.describe",
     "presets.resolve",
     "catalog.describe",

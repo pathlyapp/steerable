@@ -102,6 +102,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     setWebTools: vi.fn(),
     setHostedWebSearch: vi.fn(),
     setPluginRpc: vi.fn(),
+    refreshPluginTools: vi.fn(async () => {}),
   };
   const deps = {
     store: { getWebSearchSettings: mocks.storeGetWebSearchSettings },
@@ -311,10 +312,20 @@ describe('startHostSidecar · web 工具与插件握手', () => {
     const deps = makeDeps();
     await startHostSidecar(deps);
     const setPluginRpc = (deps as never as { setPluginRpc: ReturnType<typeof vi.fn> }).setPluginRpc;
-    expect(setPluginRpc).toHaveBeenCalledWith(expect.any(Function));
+    expect(setPluginRpc).toHaveBeenCalledWith(expect.any(Function), expect.any(Function));
     const rpc = setPluginRpc.mock.calls[0][0];
     await rpc('plugin.get', { id: 'p1' });
     expect(sup.call).toHaveBeenCalledWith('plugin.get', { id: 'p1' });
+    const invoke = setPluginRpc.mock.calls[0][1];
+    await invoke('plugin_echo', { x: 1 });
+    expect(sup.invokeTool).toHaveBeenCalledWith(
+      'plugin_echo',
+      { x: 1 },
+      expect.objectContaining({ consentGranted: true }),
+    );
+    expect(
+      (deps as never as { refreshPluginTools: ReturnType<typeof vi.fn> }).refreshPluginTools,
+    ).toHaveBeenCalled();
 
     // 失败分支
     vi.clearAllMocks();
