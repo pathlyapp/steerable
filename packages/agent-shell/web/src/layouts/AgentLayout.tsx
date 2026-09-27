@@ -410,6 +410,21 @@ function AgentLayoutContent() {
     [setRightPanel],
   );
 
+  // Cmd+T from the app menu — wired in src/main.ts:createMenu (sends
+  // `menu:open-terminal`). The terminal is a toggleable panel beside the chat,
+  // so this flips the layout state owned by AgentLayout.
+  useEffect(() => {
+    if (!hostToolChrome('terminal')) return;
+    const bridge = getElectronBridge();
+    if (!bridge?.onMenuOpenTerminal) return;
+    bridge.onMenuOpenTerminal(() => {
+      toggleRightPanel('terminal');
+    });
+    return () => {
+      bridge.offMenuOpenTerminal?.();
+    };
+  }, [toggleRightPanel]);
+
   // dock 里当前显示的任务（null = 显示终端）。recentTask 在切回终端后仍
   // 保留，终端头部的「后台任务」按钮据此切回来——任务的挑选入口只有一个，
   // 就是 chat 头部的后台任务弹层。

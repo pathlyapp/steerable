@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { LuCheck, LuDownload, LuGitBranch, LuListTodo, LuListTree, LuLoaderCircle } from 'react-icons/lu';
+import { LuCheck, LuDownload, LuGitBranch, LuListTodo, LuListTree, LuLoaderCircle, LuTerminal } from 'react-icons/lu';
 import type { LocalChat, LocalTask } from '@/lib/local-api';
 import {
   activateChatBranch,
@@ -18,6 +18,7 @@ import {
   safeDownloadName,
   saveJsonFile,
 } from '@/lib/portable';
+import { hostToolChrome } from '@/lib/host-tools';
 
 interface ChatHeaderProps {
   chat: LocalChat | null;
@@ -37,16 +38,17 @@ interface ChatHeaderProps {
   rightPanel?: string | null;
   /** 点击槽位入口：点已打开的关闭，点另一个直接切换。 */
   onToggleChatSlot?: (slotId: string) => void;
+  /** 切换右侧面板（终端、包槽位等）。 */
+  onToggleRightPanel?: (kind: string) => void;
 }
 
 /**
  * ChatHeader — slim title bar above ChatPanel. Shows:
  *   - chat title (完整显示，长标题换行不截断)
  *   - shortened chat id (for support / debugging)
+ *   - 导出 / 分支 / 后台任务 / 包槽位 / 终端 入口
  *
- * Terminal / 场景包调试窗 / 本地模型设置 USED to live here, but per the
- * P1 parity contract (`match_old`) they've been moved to the AgentSidebar
- * bottom strip. 刷新按钮已下线（消息流有 SSE 自动同步）。分享在最后一条
+ * 刷新按钮已下线（消息流有 SSE 自动同步）。分享在最后一条
  * 助手消息的时间戳行，不占标题栏。
  */
 export function ChatHeader({
@@ -57,6 +59,7 @@ export function ChatHeader({
   chatSlots = [],
   rightPanel = null,
   onToggleChatSlot,
+  onToggleRightPanel,
 }: ChatHeaderProps) {
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [treeModalOpen, setTreeModalOpen] = useState(false);
@@ -70,6 +73,22 @@ export function ChatHeader({
   );
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const [isMac, setIsMac] = useState(() => {
+    if (typeof navigator !== 'undefined') {
+      return /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (typeof navigator !== 'undefined') {
+      setIsMac(/Mac|iPod|iPhone|iPad/.test(navigator.platform));
+    }
+  }, []);
+
+  const showTerminalChrome = hostToolChrome('terminal');
+  const togglePanel = onToggleRightPanel ?? onToggleChatSlot;
 
   const branchCount = branches ? branches.lineage.length + branches.children.length : 0;
 
@@ -300,6 +319,24 @@ export function ChatHeader({
             </button>
           );
         })}
+      {chat && showTerminalChrome && (
+        <button
+          type="button"
+          onClick={() => togglePanel?.('terminal')}
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs transition-colors ${
+            rightPanel === 'terminal'
+              ? 'bg-agent-foreground/10 text-agent-foreground'
+              : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground'
+          }`}
+          title={`${rightPanel === 'terminal' ? '关闭' : '打开'}终端面板 (${isMac ? '⌘T' : 'Ctrl+T'})`}
+          aria-label="终端"
+          aria-pressed={rightPanel === 'terminal'}
+          data-action="terminal"
+          data-testid="header-terminal"
+        >
+          <LuTerminal className="h-3.5 w-3.5" />
+        </button>
+      )}
       {chat && taskPanelOpen && (
         <TaskPanelModal
           chatId={chat.id}

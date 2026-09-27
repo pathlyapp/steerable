@@ -270,3 +270,61 @@ describe('ChatHeader 包槽位入口', () => {
     expect(screen.getByTestId('header-slot-ppt').getAttribute('aria-pressed')).toBe('false');
   });
 });
+
+function setPlatform(platform: string) {
+  Object.defineProperty(window.navigator, 'platform', { value: platform, configurable: true });
+}
+
+describe('ChatHeader 终端入口', () => {
+  it('Mac 上终端按钮为纯图标且 title 提示 ⌘T，点击切换终端面板', () => {
+    setPlatform('MacIntel');
+    const onToggleRightPanel = vi.fn();
+    render(
+      <ChatHeader
+        chat={CHAT}
+        tasks={[]}
+        onToggleRightPanel={onToggleRightPanel}
+      />,
+    );
+
+    const btn = screen.getByTestId('header-terminal');
+    expect(btn.textContent).toBe('');
+    expect(btn.getAttribute('title')).toBe('打开终端面板 (⌘T)');
+    expect(btn.getAttribute('aria-label')).toBe('终端');
+    fireEvent.click(btn);
+    expect(onToggleRightPanel).toHaveBeenCalledWith('terminal');
+  });
+
+  it('非 Mac title 提示 Ctrl+T；面板已打开时 title 变为关闭且高亮', () => {
+    setPlatform('Linux');
+    const onToggleChatSlot = vi.fn();
+    render(
+      <ChatHeader
+        chat={CHAT}
+        tasks={[]}
+        rightPanel="terminal"
+        onToggleChatSlot={onToggleChatSlot}
+      />,
+    );
+
+    const btn = screen.getByTestId('header-terminal');
+    expect(btn.textContent).toBe('');
+    expect(btn.getAttribute('title')).toBe('关闭终端面板 (Ctrl+T)');
+    expect(btn.getAttribute('aria-pressed')).toBe('true');
+    expect(btn.className).toContain('bg-agent-foreground/10');
+
+    fireEvent.click(btn);
+    expect(onToggleChatSlot).toHaveBeenCalledWith('terminal');
+  });
+
+  it('没有选择对话时不渲染终端按钮', () => {
+    render(
+      <ChatHeader
+        chat={null}
+        tasks={[]}
+      />,
+    );
+
+    expect(screen.queryByTestId('header-terminal')).toBeNull();
+  });
+});

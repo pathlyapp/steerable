@@ -1117,6 +1117,7 @@ function AgentChatView({
             chatSlots={ctx.chatSlots}
             rightPanel={ctx.rightPanel}
             onToggleChatSlot={ctx.onToggleChatSlot}
+            onToggleRightPanel={ctx.onToggleChatSlot}
           />
         }
         onRegenerate={

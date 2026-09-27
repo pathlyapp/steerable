@@ -583,38 +583,10 @@ describe('AgentSidebar 入口导航与高亮', () => {
 });
 
 describe('AgentSidebar 右侧面板切换', () => {
-  it('Mac 上终端按钮提示 ⌘T，点击切换终端面板', () => {
-    setPlatform('MacIntel');
-    const onToggleRightPanel = vi.fn();
-    renderSidebar('/agent', vi.fn(), { onToggleRightPanel });
-
-    const btn = screen.getByTestId('sidebar-terminal');
-    expect(btn.getAttribute('title')).toBe('打开终端面板 (⌘T)');
-    fireEvent.click(btn);
-    expect(onToggleRightPanel).toHaveBeenCalledWith('terminal');
-  });
-
-  it('非 Mac 提示 Ctrl+T；面板已打开时 title 变为关闭', () => {
-    setPlatform('Linux');
+  it('终端与包槽位入口均移至聊天标题栏，侧栏不再渲染终端按钮', () => {
     renderSidebar('/agent', vi.fn(), { rightPanel: 'terminal' });
-
-    const btn = screen.getByTestId('sidebar-terminal');
-    expect(btn.textContent).toContain('Ctrl+T');
-    expect(btn.getAttribute('title')).toBe('关闭终端面板 (Ctrl+T)');
-    expect(btn.className).toContain('bg-agent-foreground/10');
-  });
-
-  it('槽位入口移到 chat 标题栏后，侧栏只保留单个终端按钮', () => {
-    const onToggleRightPanel = vi.fn();
-    renderSidebar('/agent', vi.fn(), { rightPanel: 'preview', onToggleRightPanel });
-
-    // 右侧栏位即使是包槽位，侧栏也只显示终端（能一键切回）。
+    expect(screen.queryByTestId('sidebar-terminal')).toBeNull();
     expect(screen.queryByTestId('sidebar-slot-preview')).toBeNull();
-    const terminal = screen.getByTestId('sidebar-terminal');
-    expect(terminal.textContent).toContain('终端');
-    expect(terminal.getAttribute('title')).toContain('打开终端面板');
-    fireEvent.click(terminal);
-    expect(onToggleRightPanel).toHaveBeenCalledWith('terminal');
   });
 });
 
@@ -665,27 +637,6 @@ describe('AgentSidebar 副作用', () => {
 
     unmount();
     expect(offMenuNewChat).toHaveBeenCalledTimes(1);
-  });
-
-  it('订阅菜单打开终端事件：回调切换终端面板，卸载时退订', () => {
-    let menuCb: (() => void) | null = null;
-    const offMenuOpenTerminal = vi.fn();
-    const onToggleRightPanel = vi.fn();
-    bridgeStub = baseElectronBridge({
-      onMenuOpenTerminal: (cb) => {
-        menuCb = cb;
-      },
-      offMenuOpenTerminal,
-    });
-    const { unmount } = renderSidebar('/agent', vi.fn(), { onToggleRightPanel });
-
-    act(() => {
-      menuCb!();
-    });
-    expect(onToggleRightPanel).toHaveBeenCalledWith('terminal');
-
-    unmount();
-    expect(offMenuOpenTerminal).toHaveBeenCalledTimes(1);
   });
 
   it('滚动容器接近底部时自动加载下一页（测试环境零高度即触底）', async () => {

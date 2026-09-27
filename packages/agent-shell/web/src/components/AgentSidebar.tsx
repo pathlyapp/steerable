@@ -87,7 +87,6 @@ import {
   LuCloudCog,
   LuTrash2,
   LuLoaderCircle,
-  LuTerminal,
   LuSettings,
   LuSquarePen,
   LuPanelLeftClose,
@@ -252,17 +251,17 @@ function ProjectOverflowMenu({
 interface AgentSidebarProps {
   data: UseChatsAndAgentsResult;
   /** 右侧栏当前打开的面板：null / 'terminal' / 包槽位 id（互斥）。 */
-  rightPanel: RightPanelState;
+  rightPanel?: RightPanelState;
   /** 切换右侧栏面板显隐——面板不是路由也不是独立窗口，只是布局里的一栏。 */
-  onToggleRightPanel: (kind: string) => void;
+  onToggleRightPanel?: (kind: string) => void;
   /** 收起侧边栏（AgentLayout 换成窄 rail，展开按钮在 rail 上）。 */
   onCollapse: () => void;
 }
 
 export function AgentSidebar({
   data,
-  rightPanel,
-  onToggleRightPanel,
+  rightPanel: _rightPanel,
+  onToggleRightPanel: _onToggleRightPanel,
   onCollapse,
 }: AgentSidebarProps) {
   const navigate = useNavigate();
@@ -834,22 +833,6 @@ export function AgentSidebar({
     normalizedChats.length,
   ]);
 
-  // Cmd+T from the app menu — wired in src/main.ts:createMenu (sends
-  // `menu:open-terminal`). Same pattern as `menu:new-chat` above. The
-  // terminal is a toggleable panel beside the chat, so this just flips
-  // the layout state owned by AgentLayout.
-  const showTerminalChrome = hostToolChrome("terminal");
-
-  useEffect(() => {
-    if (!showTerminalChrome || !bridge?.onMenuOpenTerminal) return;
-    bridge.onMenuOpenTerminal(() => {
-      onToggleRightPanel("terminal");
-    });
-    return () => {
-      bridge.offMenuOpenTerminal?.();
-    };
-  }, [bridge, onToggleRightPanel, showTerminalChrome]);
-
   const hasElectron = isElectron();
 
   return (
@@ -1207,34 +1190,14 @@ export function AgentSidebar({
         </div>
       )}
 
-      {/* ───── Footer: 右侧面板切换（终端 | 包槽位）+ 设置 ───── */}
+      {/* ───── Footer: 设置 ───── */}
       <div className="flex-shrink-0 border-t border-agent-border/40 px-2.5 py-1.5">
-        {showTerminalChrome ? (
-        <button
-          type="button"
-          onClick={() => onToggleRightPanel("terminal")}
-          className={[
-            "flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
-            rightPanel === "terminal"
-              ? "bg-agent-foreground/10 font-medium text-agent-foreground"
-              : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-foreground",
-          ].join(" ")}
-          title={`${rightPanel === "terminal" ? "关闭" : "打开"}终端面板 (${isMac ? "⌘T" : "Ctrl+T"})`}
-          data-testid="sidebar-terminal"
-        >
-          <LuTerminal className="h-3.5 w-3.5" />
-          <span>终端</span>
-          <span className="ml-auto text-[10px] text-agent-muted-foreground/70">
-            {isMac ? "⌘T" : "Ctrl+T"}
-          </span>
-        </button>
-        ) : null}
         {hasGeneralSettingsChrome() && (
         <button
           type="button"
           onClick={() => navigate("/settings")}
           className={[
-            "mt-0.5 flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
+            "flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
             onGeneralSettings
               ? "bg-agent-foreground/10 font-medium text-agent-foreground"
               : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground",
