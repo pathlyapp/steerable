@@ -164,3 +164,32 @@ body {
 .chat-input-surface:has(.chat-input-editor[data-composing]) .chat-input-mirror {
   visibility: hidden;
 }
+
+/*
+ * Thin scrollbars everywhere. The system "always show" bar is about 15px.
+ * Kept in the base layer so a utility can still hide a scrollbar.
+ */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--color-agent-foreground) 28%, transparent) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-agent-foreground) 28%, transparent);
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--color-agent-foreground) 45%, transparent);
+  }
+}
