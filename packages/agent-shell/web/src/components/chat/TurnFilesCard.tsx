@@ -171,12 +171,12 @@ function DeliverableCard({
 
   return (
     <div
-      className="rounded-xl border border-agent-border bg-agent-canvas p-3 shadow-xs transition-all hover:border-agent-border/80"
+      className="rounded-agent-lg border border-agent-border bg-agent-canvas p-2.5 shadow-xs transition-all hover:border-agent-border/80"
       data-deliverable-card=""
       data-turn-file=""
       data-kind={file.kind}
     >
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-2.5">
         {/* 左侧：文件图标 */}
         <div className="shrink-0">
           <DeliverableIcon meta={meta} />
@@ -189,20 +189,20 @@ function DeliverableCard({
             onClick={onOpen}
             disabled={!allowOpen || busy}
             title={file.path}
-            className={`block w-full truncate text-left text-sm font-medium text-agent-foreground ${
+            className={`block w-full truncate text-left text-xs font-medium text-agent-foreground ${
               allowOpen ? 'hover:underline cursor-pointer' : 'cursor-default'
             }`}
           >
             {name}
           </button>
-          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-agent-muted-foreground">
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-agent-muted-foreground">
             <span className="truncate" title={file.description}>
               {file.description ?? `${meta.label} · ${meta.extBadge}`}
             </span>
             {size && (
               <>
                 <span className="shrink-0 opacity-40">·</span>
-                <span className="shrink-0">{size}</span>
+                <span className="shrink-0 tabular-nums">{size}</span>
               </>
             )}
           </div>
@@ -210,13 +210,13 @@ function DeliverableCard({
 
         {/* 右侧：Open in ⌵ 动作按钮 */}
         <div className="relative shrink-0" ref={menuRef}>
-          <div className="flex items-center rounded-lg border border-agent-border bg-agent-canvas shadow-xs hover:border-agent-border/80 transition-colors">
+          <div className="flex items-center rounded-agent-md border border-agent-border bg-agent-canvas shadow-xs hover:border-agent-border/80 transition-colors">
             <button
               type="button"
               onClick={onOpen}
               disabled={!allowOpen || busy}
               title={file.path}
-              className="flex items-center gap-1.5 rounded-l-lg px-2.5 py-1 text-xs font-medium text-agent-foreground hover:bg-agent-muted/50 transition-colors disabled:cursor-wait"
+              className="flex items-center gap-1.5 rounded-l-agent-md px-2.5 py-1 text-xs font-medium text-agent-foreground hover:bg-agent-muted/50 transition-colors disabled:cursor-wait"
             >
               {busy ? (
                 <LuLoaderCircle className="h-3.5 w-3.5 animate-spin text-agent-muted-foreground" />
@@ -228,7 +228,7 @@ function DeliverableCard({
               onClick={() => setDropdownOpen(!dropdownOpen)}
               disabled={!allowOpen}
               aria-label="更多操作"
-              className="border-l border-agent-border px-1.5 py-1 text-agent-muted-foreground hover:bg-agent-muted/50 hover:text-agent-foreground rounded-r-lg transition-colors"
+              className="border-l border-agent-border px-1.5 py-1 text-agent-muted-foreground hover:bg-agent-muted/50 hover:text-agent-foreground rounded-r-agent-md transition-colors"
             >
               <LuChevronDown className="h-3.5 w-3.5" />
             </button>
@@ -236,7 +236,7 @@ function DeliverableCard({
 
           {/* 下拉菜单 */}
           {dropdownOpen && (
-            <div className="absolute right-0 top-full z-30 mt-1.5 w-44 rounded-lg border border-agent-border bg-agent-canvas py-1 shadow-lg text-xs">
+            <div className="absolute right-0 top-full z-30 mt-1.5 w-44 rounded-agent-md border border-agent-border bg-agent-canvas py-1 shadow-lg text-xs">
               <button
                 type="button"
                 onClick={() => {
@@ -280,7 +280,7 @@ function DeliverableCard({
       </div>
 
       {error && (
-        <div className="mt-2 px-1 text-xs text-agent-destructive" role="status">
+        <div className="mt-2 px-1 text-[11px] text-agent-destructive" role="status">
           打开失败：{error}
         </div>
       )}
@@ -292,38 +292,38 @@ function DeliverableIcon({ meta }: { meta: DeliverableFileMeta }) {
   switch (meta.themeColor) {
     case 'emerald':
       return (
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">
-          <LuFileSpreadsheet className="h-5 w-5" />
+        <div className="flex h-8 w-8 items-center justify-center rounded-agent-md border border-emerald-500/35 text-emerald-600 dark:text-emerald-400">
+          <LuFileSpreadsheet className="h-4 w-4" />
         </div>
       );
     case 'amber':
       return (
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-amber-500/25 bg-amber-500/10 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400">
-          <LuPresentation className="h-5 w-5" />
+        <div className="flex h-8 w-8 items-center justify-center rounded-agent-md border border-amber-500/35 text-amber-600 dark:text-amber-400">
+          <LuPresentation className="h-4 w-4" />
         </div>
       );
     case 'rose':
       return (
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-rose-500/25 bg-rose-500/10 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400">
-          <LuFileText className="h-5 w-5" />
+        <div className="flex h-8 w-8 items-center justify-center rounded-agent-md border border-rose-500/35 text-rose-600 dark:text-rose-400">
+          <LuFileText className="h-4 w-4" />
         </div>
       );
     case 'blue':
       return (
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-blue-500/25 bg-blue-500/10 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400">
-          <LuFileText className="h-5 w-5" />
+        <div className="flex h-8 w-8 items-center justify-center rounded-agent-md border border-blue-500/35 text-blue-600 dark:text-blue-400">
+          <LuFileText className="h-4 w-4" />
         </div>
       );
     case 'purple':
       return (
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-purple-500/25 bg-purple-500/10 text-purple-600 dark:bg-purple-500/15 dark:text-purple-400">
-          <LuImage className="h-5 w-5" />
+        <div className="flex h-8 w-8 items-center justify-center rounded-agent-md border border-purple-500/35 text-purple-600 dark:text-purple-400">
+          <LuImage className="h-4 w-4" />
         </div>
       );
     default:
       return (
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-agent-border bg-agent-muted/40 text-agent-muted-foreground">
-          <LuFile className="h-5 w-5" />
+        <div className="flex h-8 w-8 items-center justify-center rounded-agent-md border border-agent-border text-agent-muted-foreground">
+          <LuFile className="h-4 w-4" />
         </div>
       );
   }
@@ -352,25 +352,28 @@ function EditedFilesCard({
   openError,
   allowOpen,
 }: EditedFilesCardProps) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
 
   return (
     <div
-      className="rounded-xl border border-agent-border bg-agent-canvas shadow-xs overflow-hidden"
+      className="rounded-agent-lg border border-agent-border bg-agent-canvas shadow-xs overflow-hidden"
       data-edited-files-card=""
     >
-      {/* 头部标题与统计 */}
-      <div className="flex items-center justify-between px-3.5 py-2.5">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-agent-border bg-agent-muted/30 text-agent-foreground/80">
+      {/* 头部标题与统计（默认折叠，点击标题栏或 Review 展开） */}
+      <div
+        className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-agent-foreground/[0.03] transition-colors select-none"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-agent-sm border border-agent-border bg-agent-muted/30 text-agent-foreground/80">
             <LuFileDiff className="h-3.5 w-3.5" />
           </div>
           <div className="min-w-0">
-            <div className="truncate text-xs sm:text-sm font-medium text-agent-foreground">
+            <div className="truncate text-xs font-medium text-agent-foreground">
               Edited {files.length} file{files.length === 1 ? '' : 's'}
             </div>
             {(totalAdditions > 0 || totalDeletions > 0) && (
-              <div className="flex items-center gap-1.5 font-mono text-xs tabular-nums text-agent-muted-foreground">
+              <div className="flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-agent-muted-foreground">
                 <span className="font-medium text-emerald-600 dark:text-emerald-400">
                   +{totalAdditions}
                 </span>
@@ -381,20 +384,21 @@ function EditedFilesCard({
         </div>
 
         {/* 右侧动作按钮：Undo 与 Review */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
             disabled
             title="撤销本轮文件改动"
-            className="flex items-center gap-1 px-2 py-1 text-xs text-agent-muted-foreground/50 cursor-default"
+            className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-agent-muted-foreground/50 cursor-default"
           >
             <span>Undo</span>
             <LuUndo2 className="h-3 w-3" />
           </button>
           <button
             type="button"
+            aria-expanded={expanded}
             onClick={() => setExpanded(!expanded)}
-            className="rounded-full border border-agent-border bg-agent-canvas px-3 py-1 text-xs font-medium text-agent-foreground hover:bg-agent-muted/50 transition-colors"
+            className="rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 py-0.5 text-xs font-medium text-agent-foreground hover:bg-agent-muted/50 transition-colors"
           >
             Review
           </button>
@@ -419,7 +423,7 @@ function EditedFilesCard({
                   onClick={() => onOpen(file)}
                   disabled={!allowOpen || openingPath !== null}
                   title={file.path}
-                  className={`group flex w-full items-center justify-between px-3.5 py-1.5 text-left text-xs transition-colors ${
+                  className={`group flex w-full items-center justify-between px-3 py-1.5 text-left text-xs transition-colors ${
                     allowOpen
                       ? 'hover:bg-agent-foreground/5 cursor-pointer disabled:cursor-wait'
                       : 'cursor-default'
@@ -427,7 +431,7 @@ function EditedFilesCard({
                   data-turn-file=""
                   data-kind={file.kind}
                 >
-                  <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-agent-foreground/90 group-hover:text-agent-foreground">
+                  <span className="min-w-0 flex-1 truncate text-xs text-agent-foreground/90 group-hover:text-agent-foreground">
                     {displayPath}
                   </span>
 
@@ -435,7 +439,7 @@ function EditedFilesCard({
                     {busy ? (
                       <LuLoaderCircle className="h-3.5 w-3.5 animate-spin text-agent-muted-foreground" />
                     ) : hasDiffStats ? (
-                      <span className="flex items-center gap-1.5 font-mono text-xs tabular-nums">
+                      <span className="flex items-center gap-1.5 font-mono text-[11px] tabular-nums">
                         <span className="font-medium text-emerald-600 dark:text-emerald-400">
                           +{file.additions ?? 0}
                         </span>
@@ -452,7 +456,7 @@ function EditedFilesCard({
                 </button>
 
                 {error && (
-                  <div className="px-3.5 pb-1 text-xs text-agent-destructive" role="status">
+                  <div className="px-3 pb-1 text-[11px] text-agent-destructive" role="status">
                     打开失败：{error}
                   </div>
                 )}

@@ -66,13 +66,21 @@ describe('TurnFilesCard', () => {
     expect(screen.getByText('Open in')).toBeTruthy();
     expect(document.querySelector('[data-deliverable-card]')).toBeTruthy();
 
-    // 中间修改文件卡片
+    // 中间修改文件卡片（默认折叠，点击 Review 展开）
     expect(screen.getByText('Edited 1 file')).toBeTruthy();
+    expect(screen.getByText('Review')).toBeTruthy();
+    expect(document.querySelector('[data-edited-files-card]')).toBeTruthy();
+    expect(screen.queryByText('review_work/build.mjs')).toBeNull();
+
+    // 点击 Review 展开文件列表
+    fireEvent.click(screen.getByText('Review'));
     expect(screen.getAllByText('+110').length).toBeGreaterThan(0);
     expect(screen.getAllByText('-0').length).toBeGreaterThan(0);
     expect(screen.getByText('review_work/build.mjs')).toBeTruthy();
-    expect(screen.getByText('Review')).toBeTruthy();
-    expect(document.querySelector('[data-edited-files-card]')).toBeTruthy();
+
+    // 再次点击折叠收起
+    fireEvent.click(screen.getByText('Review'));
+    expect(screen.queryByText('review_work/build.mjs')).toBeNull();
   });
 
   it('后端 category 优先于扩展名：声明外的图片进 Edited files，说明替代类型标签', () => {
@@ -89,6 +97,9 @@ describe('TurnFilesCard', () => {
     expect(screen.queryByText('Presentation · PPTX')).toBeNull();
     expect(document.querySelectorAll('[data-deliverable-card]')).toHaveLength(1);
     expect(screen.getByText('Edited 1 file')).toBeTruthy();
+
+    // 展开查看 intermediate 文件
+    fireEvent.click(screen.getByText('Review'));
     expect(screen.getByText('proj/_预览_大事记页.png')).toBeTruthy();
   });
 
@@ -122,6 +133,9 @@ describe('TurnFilesCard', () => {
         ]}
       />,
     );
+
+    // 默认折叠，先展开
+    fireEvent.click(screen.getByText('Review'));
 
     fireEvent.click(screen.getByText('src/index.ts'));
     expect(openLocalPathMock).toHaveBeenCalledWith('/proj/src/index.ts');
