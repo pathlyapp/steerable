@@ -45,18 +45,29 @@ import { isPortableEnabled } from '@/lib/portable';
 import type { AgentOutletContext } from '@/layouts/AgentLayout';
 
 type SettingsSection = 'plugins' | 'general';
-type PluginTab = 'agents' | 'skills' | 'mcp';
+type PluginTab = 'agents' | 'skills' | 'mcp' | 'web-search';
 
-const PLUGIN_TABS: readonly PluginTab[] = ['agents', 'skills', 'mcp'];
+const PLUGIN_TABS: readonly PluginTab[] = ['agents', 'skills', 'mcp', 'web-search'];
 
 const PLUGIN_TAB_META: Record<
   PluginTab,
-  { label: string; Icon: typeof LuBot }
+  { label: string; noun: string; Icon: typeof LuBot }
 > = {
-  agents: { label: '智能体', Icon: LuBot },
-  skills: { label: 'Skills', Icon: LuBlocks },
-  mcp: { label: 'MCP', Icon: LuPlug },
+  agents: { label: '智能体', noun: '智能体', Icon: LuBot },
+  skills: { label: 'Skills', noun: '技能', Icon: LuBlocks },
+  mcp: { label: 'MCP', noun: 'MCP 服务', Icon: LuPlug },
+  'web-search': { label: '网络搜索', noun: '网络搜索', Icon: LuSearch },
 };
+
+function isPluginTab(value: string | null): value is PluginTab {
+  return (PLUGIN_TABS as readonly string[]).includes(value ?? '');
+}
+
+function pluginsSummary(tabs: readonly PluginTab[]): string {
+  const nouns = tabs.map((id) => PLUGIN_TAB_META[id].noun);
+  if (nouns.length <= 1) return `管理${nouns[0] ?? '插件'}。`;
+  return `管理${nouns.slice(0, -1).join('、')}和${nouns[nouns.length - 1]}。`;
+}
 
 function enabledPluginTabs(): PluginTab[] {
   return PLUGIN_TABS.filter((id) => settingsChrome(id));
@@ -75,10 +86,7 @@ function resolvePluginTab(section: string | null, tab: string | null): PluginTab
   const enabled = enabledPluginTabs();
   const requested =
     section === 'agents' || section === 'skills' || section === 'mcp' ? section : tab;
-  if (
-    (requested === 'agents' || requested === 'skills' || requested === 'mcp') &&
-    enabled.includes(requested)
-  ) {
+  if (isPluginTab(requested) && enabled.includes(requested)) {
     return requested;
   }
   return enabled[0] ?? null;
@@ -86,7 +94,7 @@ function resolvePluginTab(section: string | null, tab: string | null): PluginTab
 
 /**
  * `/settings` — 右侧内容区的设置页，按 `?section=` 分成独立页面：
- *   - `plugins`  侧栏「插件」。顶栏分类切换智能体 / Skills / MCP
+ *   - `plugins`  侧栏「插件」。顶栏分类切换智能体 / Skills / MCP / 网络搜索
  *     （`?tab=`，旧的 `?section=agents|skills|mcp` 仍落到对应分类）
  *   - 缺省/`general`  侧栏底「设置」（界面 / 模型 / 搜索 / 用量 / 安全 / 洞察 / 遥测 / 关于）
  *
@@ -342,7 +350,7 @@ export function SettingsPage() {
           {section === 'plugins' && (
             <>
               <p className="text-xs text-agent-muted-foreground" data-testid="plugins-summary">
-                管理智能体、技能和 MCP 服务。
+                {pluginsSummary(pluginTabs)}
               </p>
               {pluginTab === 'skills' && (
                 <section className="space-y-2" data-testid="settings-section-skills">
@@ -369,6 +377,15 @@ export function SettingsPage() {
                     智能体
                   </h2>
                   <AgentsSettingsPanel onCatalogChange={catalog?.refreshAgents} />
+                </section>
+              )}
+              {pluginTab === 'web-search' && settingsChrome('web-search') && (
+                <section className="space-y-2" data-testid="settings-section-web-search">
+                  <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
+                    <LuSearch className="h-3.5 w-3.5 text-agent-muted-foreground" />
+                    网络搜索
+                  </h2>
+                  <WebSearchSettingsPanel />
                 </section>
               )}
             </>

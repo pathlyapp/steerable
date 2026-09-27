@@ -92,6 +92,14 @@ describe('SettingsPage header save', () => {
     fireEvent.click(screen.getByTestId('plugins-tab-mcp'));
     expect(screen.getByTestId('settings-section-mcp')).toBeTruthy();
     expect(screen.queryByTestId('settings-section-skills')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('plugins-tab-web-search'));
+    expect(screen.getByTestId('settings-section-web-search')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '网络搜索' })).toBeTruthy();
+    expect(screen.queryByTestId('settings-section-mcp')).toBeNull();
+    expect(screen.getByTestId('plugins-summary').textContent).toBe(
+      '管理智能体、技能、MCP 服务和网络搜索。',
+    );
     view.unmount();
 
     renderSettings('?section=agents');

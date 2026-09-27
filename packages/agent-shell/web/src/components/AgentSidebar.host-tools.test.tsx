@@ -172,6 +172,7 @@ describe('AgentSidebar 宿主工具族 chrome', () => {
     settingsOff.add('agents');
     settingsOff.add('skills');
     settingsOff.add('mcp');
+    settingsOff.add('web-search');
     renderSidebar();
     expect(screen.queryByTestId('sidebar-plugins')).toBeNull();
     expect(screen.getByTestId('sidebar-llm-settings')).toBeTruthy();

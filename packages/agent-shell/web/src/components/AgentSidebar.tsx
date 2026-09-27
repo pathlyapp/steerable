@@ -54,7 +54,7 @@
  *   │ ✨ Product Agent          +•   │ ← + has a color dot of the selected agent
  *   ├─────────────────────────────────┤
  *   │ ✎ 新对话                        │  ← 只打开落地页，有内容才落库
- *   │ 🧩 插件                         │ ← /settings?section=plugins（智能体 / Skills / MCP）
+ *   │ 🧩 插件                         │ ← /settings?section=plugins（智能体 / Skills / MCP / 网络搜索）
  *   │  会话 v                     📁+ │ ← 📁+ 打开新建项目弹窗
  *   │  v 📁 项目A          (hover: ✎··)│ ← ✎ 新建对话；·· 菜单：重命名/换目录/访达/删
  *   │   ...（项目内对话）              │
@@ -299,7 +299,10 @@ export function AgentSidebar({
     [location.search],
   );
   const pluginsAvailable =
-    settingsChrome("agents") || settingsChrome("skills") || settingsChrome("mcp");
+    settingsChrome("agents") ||
+    settingsChrome("skills") ||
+    settingsChrome("mcp") ||
+    settingsChrome("web-search");
   const onPluginsSettings =
     pluginsAvailable &&
     onSettingsPage &&
@@ -891,7 +894,7 @@ export function AgentSidebar({
 
       {/* ───── 会话 ───── */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {/* 新对话 + 插件（智能体 / Skills / MCP 在同一页用分类切换） */}
+        {/* 新对话 + 插件（智能体 / Skills / MCP / 网络搜索在同一页用分类切换） */}
         <div className="flex-shrink-0 space-y-0.5 px-2.5 pb-0.5">
           <button
             type="button"
