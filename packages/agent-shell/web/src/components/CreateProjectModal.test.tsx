@@ -156,7 +156,7 @@ describe('CreateProjectModal', () => {
     );
   });
 
-  it('编辑模式删除需两段确认', async () => {
+  it('编辑模式删除需弹窗确认', async () => {
     const onDelete = vi.fn(async () => {});
     render(
       <CreateProjectModal
@@ -171,7 +171,12 @@ describe('CreateProjectModal', () => {
 
     fireEvent.click(screen.getByTestId('edit-project-delete'));
     expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.getByTestId('edit-project-delete-dialog').textContent).toContain('项目甲');
+    fireEvent.click(screen.getByTestId('edit-project-delete-dialog-cancel'));
+    expect(onDelete).not.toHaveBeenCalled();
+
     fireEvent.click(screen.getByTestId('edit-project-delete'));
+    fireEvent.click(screen.getByTestId('edit-project-delete-dialog-confirm'));
     await waitFor(() => expect(onDelete).toHaveBeenCalled());
   });
 });

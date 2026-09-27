@@ -3,15 +3,15 @@
  *   - 新对话只开落地页不落库（既有用例，见第一个 describe）；
  *   - 会话列表：置顶优先 + 时间倒序、[自动化] 标题解析、
  *     日期分组、空态 / 加载态 / 错误横幅、底部分页提示；
- *   - 会话行：点击导航、删除两段确认（第一次武装第二次才删）、
- *     删除当前会话回落地页、武装后点行解除武装；
+ *   - 会话行：点击导航、删除弹窗确认（取消不删，确认才删）、
+ *     删除当前会话回落地页、删除失败不导航；
  *   - 入口导航与高亮：插件页（含旧深链）与综合设置随路由各自高亮；
  *   - 右侧面板：终端按钮快捷键提示随平台变化，包槽位渲染分段控件；
  *   - 副作用：进入会话路由同步 selectedAgentId、菜单 Cmd+N / Cmd+T 订阅与
  *     退订、滚动接近底部自动加载下一页；
  *   - 项目模式（Electron）：项目分组与折叠、孤儿会话回落日期分组、
  *     新建（弹窗填名称 + 可选源文件夹）；组头 hover 为 ✎ 新建对话 / ·· 菜单
- *     （重命名 / 编辑项目多源文件夹 / 访达或文件管理器 / 两段确认删除）。
+ *     （重命名 / 编辑项目多源文件夹 / 访达或文件管理器 / 弹窗确认删除）。
  * 智能体挑选列表已迁到 ChatInput（见组件头注释），侧栏只剩同步副作用可测。
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -405,16 +405,22 @@ describe('AgentSidebar 会话行交互', () => {
     expect(screen.getByTestId('loc').textContent).toBe('/agent/chat-with-content');
   });
 
-  it('删除需两段确认：第一次武装红色按钮，第二次才调 deleteChat', async () => {
+  it('删除需弹窗确认：取消不删，确认才调 deleteChat', async () => {
     const deleteChat = vi.fn(async () => true);
     renderSidebar('/agent', vi.fn(), { data: { deleteChat } });
 
-    const del = screen.getByTestId('sidebar-chat-delete');
-    fireEvent.click(del);
+    fireEvent.click(screen.getByTestId('sidebar-chat-delete'));
     expect(deleteChat).not.toHaveBeenCalled();
-    expect(del.getAttribute('aria-label')).toBe('再次点击确认删除');
+    expect(screen.getByTestId('sidebar-delete-chat-dialog').textContent).toContain(
+      '已经聊过的对话',
+    );
 
-    fireEvent.click(del);
+    fireEvent.click(screen.getByTestId('sidebar-delete-chat-dialog-cancel'));
+    expect(deleteChat).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('sidebar-delete-chat-dialog')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('sidebar-chat-delete'));
+    fireEvent.click(screen.getByTestId('sidebar-delete-chat-dialog-confirm'));
     await waitFor(() => expect(deleteChat).toHaveBeenCalledWith('chat-with-content'));
   });
 
@@ -422,31 +428,26 @@ describe('AgentSidebar 会话行交互', () => {
     const deleteChat = vi.fn(async () => true);
     renderSidebar('/agent/chat-with-content', vi.fn(), { data: { deleteChat } });
 
-    const del = screen.getByTestId('sidebar-chat-delete');
-    fireEvent.click(del);
-    fireEvent.click(del);
+    fireEvent.click(screen.getByTestId('sidebar-chat-delete'));
+    fireEvent.click(screen.getByTestId('sidebar-delete-chat-dialog-confirm'));
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/agent'));
   });
 
-  it('deleteChat 返回 false 时不导航且保持武装态', async () => {
+  it('deleteChat 返回 false 时不导航且保留确认弹窗', async () => {
     const deleteChat = vi.fn(async () => false);
     renderSidebar('/agent/chat-with-content', vi.fn(), { data: { deleteChat } });
 
-    const del = screen.getByTestId('sidebar-chat-delete');
-    fireEvent.click(del);
-    fireEvent.click(del);
+    fireEvent.click(screen.getByTestId('sidebar-chat-delete'));
+    fireEvent.click(screen.getByTestId('sidebar-delete-chat-dialog-confirm'));
     await waitFor(() => expect(deleteChat).toHaveBeenCalled());
     expect(screen.getByTestId('loc').textContent).toBe('/agent/chat-with-content');
-    expect(screen.getByTestId('sidebar-chat-delete').getAttribute('aria-label')).toBe(
-      '再次点击确认删除',
-    );
+    expect(screen.getByTestId('sidebar-delete-chat-dialog')).toBeTruthy();
   });
 
-  it('武装后点击会话行会解除武装并正常导航', () => {
+  it('取消删除后点击会话行正常导航', () => {
     renderSidebar('/agent');
-    const del = screen.getByTestId('sidebar-chat-delete');
-    fireEvent.click(del);
-    expect(del.getAttribute('aria-label')).toBe('再次点击确认删除');
+    fireEvent.click(screen.getByTestId('sidebar-chat-delete'));
+    fireEvent.click(screen.getByTestId('sidebar-delete-chat-dialog-cancel'));
 
     fireEvent.click(screen.getByText('已经聊过的对话'));
     expect(screen.getByTestId('loc').textContent).toBe('/agent/chat-with-content');
@@ -979,7 +980,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     await waitFor(() => expect(listProjects).toHaveBeenCalledTimes(2));
   });
 
-  it('删除项目两段确认：第二次点击才删除并刷新会话列表', async () => {
+  it('删除项目需弹窗确认：确认后删除并刷新会话列表', async () => {
     enterElectron([makeProject({ id: 'proj-1', name: '项目甲' })]);
     deleteProject.mockResolvedValue({ success: true, detachedChats: 2 });
     const { data } = renderSidebar('/agent');
@@ -988,8 +989,16 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     openProjectMenu();
     fireEvent.click(screen.getByTitle('删除项目（会话保留为无项目对话）'));
     expect(deleteProject).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('project-overflow-menu')).toBeNull();
+    expect(screen.getByTestId('sidebar-delete-project-dialog').textContent).toContain('项目甲');
 
-    fireEvent.click(screen.getByTitle('再次点击确认删除（会话会保留为无项目对话）'));
+    fireEvent.click(screen.getByTestId('sidebar-delete-project-dialog-cancel'));
+    expect(deleteProject).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('sidebar-delete-project-dialog')).toBeNull();
+
+    openProjectMenu();
+    fireEvent.click(screen.getByTitle('删除项目（会话保留为无项目对话）'));
+    fireEvent.click(screen.getByTestId('sidebar-delete-project-dialog-confirm'));
     await waitFor(() => expect(deleteProject).toHaveBeenCalledWith('proj-1'));
     await waitFor(() => expect(data.refreshChats).toHaveBeenCalled());
   });

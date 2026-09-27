@@ -5,6 +5,7 @@ import {
   LuPlus,
   LuTrash2,
 } from 'react-icons/lu';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { isElectron } from '@/lib/electron-bridge';
 import {
   archiveChatAgent,
@@ -91,7 +92,10 @@ export function AgentsSettingsPanel({
   const [capability, setCapability] = useState<AgentCapabilityDraft>(
     DEFAULT_CAPABILITY_DRAFT,
   );
-  const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
+  const [pendingArchive, setPendingArchive] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -179,17 +183,14 @@ export function AgentsSettingsPanel({
     }
   };
 
-  const handleArchive = async (agent: LocalChatAgent) => {
-    if (agent.isBuiltin) return;
-    if (confirmArchiveId !== agent.id) {
-      setConfirmArchiveId(agent.id);
-      return;
-    }
-    setArchivingId(agent.id);
+  const handleArchive = async () => {
+    if (!pendingArchive || archivingId === pendingArchive.id) return;
+    const id = pendingArchive.id;
+    setArchivingId(id);
     setError(null);
     try {
-      await archiveChatAgent(agent.id);
-      setConfirmArchiveId(null);
+      await archiveChatAgent(id);
+      setPendingArchive(null);
       await fetchAgents();
       await onCatalogChange?.();
     } catch (err) {
@@ -371,18 +372,12 @@ export function AgentsSettingsPanel({
                   {!agent.isBuiltin && (
                     <button
                       type="button"
-                      onClick={() => void handleArchive(agent)}
-                      disabled={archivingId === agent.id}
-                      className={`rounded-full p-1 transition-colors ${
-                        confirmArchiveId === agent.id
-                          ? 'bg-agent-destructive/10 text-agent-destructive hover:bg-agent-destructive/20'
-                          : 'text-agent-muted-foreground hover:bg-agent-muted hover:text-agent-destructive'
-                      }`}
-                      title={
-                        confirmArchiveId === agent.id
-                          ? '再次点击确认删除'
-                          : '删除'
+                      onClick={() =>
+                        setPendingArchive({ id: agent.id, name: agent.name })
                       }
+                      disabled={archivingId === agent.id}
+                      className="rounded-full p-1 text-agent-muted-foreground transition-colors hover:bg-agent-muted hover:text-agent-destructive"
+                      title="删除"
                       data-testid={`agent-archive-${agent.id}`}
                     >
                       {archivingId === agent.id ? (
@@ -407,6 +402,22 @@ export function AgentsSettingsPanel({
           {error}
         </div>
       )}
+      <ConfirmDialog
+        open={pendingArchive !== null}
+        title="删除智能体"
+        description={
+          pendingArchive
+            ? `确定删除「${pendingArchive.name}」？它会从专家选择器中移除，已有会话不受影响。`
+            : ''
+        }
+        pending={pendingArchive !== null && archivingId === pendingArchive.id}
+        onCancel={() => {
+          if (archivingId) return;
+          setPendingArchive(null);
+        }}
+        onConfirm={() => void handleArchive()}
+        testId="agent-archive-dialog"
+      />
     </div>
   );
 }

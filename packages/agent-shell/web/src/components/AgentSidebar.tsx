@@ -111,6 +111,7 @@ import type { UseChatsAndAgentsResult } from "@/hooks/useChatsAndAgents";
 import { useProjects } from "@/hooks/useProjects";
 import type { RightPanelState } from "@/layouts/AgentLayout";
 import { BrandLockup } from "@/components/BrandLockup";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   SidebarVersionLabel,
   useAppRelease,
@@ -129,8 +130,6 @@ function ProjectOverflowMenu({
   chatCount,
   anchor,
   revealLabel,
-  confirmDelete,
-  deleting,
   onClose,
   onRename,
   onChangeFolder,
@@ -141,8 +140,6 @@ function ProjectOverflowMenu({
   chatCount: number;
   anchor: HTMLElement;
   revealLabel: string;
-  confirmDelete: boolean;
-  deleting: boolean;
   onClose: () => void;
   onRename: () => void;
   onChangeFolder: () => void;
@@ -218,19 +215,12 @@ function ProjectOverflowMenu({
         <button
           type="button"
           role="menuitem"
-          disabled={deleting}
-          title={
-            confirmDelete
-              ? "再次点击确认删除（会话会保留为无项目对话）"
-              : "删除项目（会话保留为无项目对话）"
-          }
+          title="删除项目（会话保留为无项目对话）"
           onClick={onDelete}
-          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-agent-destructive/10 ${
-            confirmDelete ? "text-agent-destructive" : "text-agent-foreground"
-          }`}
+          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-agent-foreground hover:bg-agent-destructive/10"
         >
-          <LuTrash2 className={`h-3.5 w-3.5 shrink-0 ${deleting ? "animate-pulse" : ""}`} />
-          {confirmDelete ? "再次点击确认删除" : "删除项目"}
+          <LuTrash2 className="h-3.5 w-3.5 shrink-0" />
+          删除项目
         </button>
       </div>
     </>,
@@ -341,9 +331,10 @@ export function AgentSidebar({
       setIsMac(/Mac|iPod|iPhone|iPad/.test(navigator.platform));
     }
   }, []);
-  const [confirmDeleteChatId, setConfirmDeleteChatId] = useState<string | null>(
-    null,
-  );
+  const [pendingDeleteChat, setPendingDeleteChat] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
   const [pinningChatId, setPinningChatId] = useState<string | null>(null);
   const [streamingChatIds, setStreamingChatIds] = useState<Set<string>>(
@@ -491,9 +482,8 @@ export function AgentSidebar({
     null,
   );
   const [renamingValue, setRenamingValue] = useState("");
-  const [confirmDeleteProjectId, setConfirmDeleteProjectId] = useState<
-    string | null
-  >(null);
+  const [pendingDeleteProject, setPendingDeleteProject] =
+    useState<LocalProject | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(
     null,
   );
@@ -569,7 +559,7 @@ export function AgentSidebar({
       try {
         setDeletingProjectId(projectId);
         await deleteProject(projectId);
-        setConfirmDeleteProjectId(null);
+        setPendingDeleteProject(null);
         setProjectMenu(null);
         setEditingProjectId(null);
         await fetchProjects();
@@ -585,25 +575,8 @@ export function AgentSidebar({
     [deletingProjectId, fetchProjects, data],
   );
 
-  const handleDeleteProject = useCallback(
-    async (projectId: string) => {
-      // 与会话删除同款两段确认：第一次点击武装红色按钮，第二次才真删。
-      if (confirmDeleteProjectId !== projectId) {
-        setConfirmDeleteProjectId(projectId);
-        return;
-      }
-      try {
-        await removeProject(projectId);
-      } catch {
-        // 横幅已写 projectError
-      }
-    },
-    [confirmDeleteProjectId, removeProject],
-  );
-
   const closeProjectMenu = useCallback(() => {
     setProjectMenu(null);
-    setConfirmDeleteProjectId(null);
   }, []);
 
   const handleRevealProjectFolder = useCallback(async (folderPath: string) => {
@@ -750,29 +723,20 @@ export function AgentSidebar({
   const isProjectsExpanded = projectsExpanded ?? true;
   const isRecentsExpanded = recentsExpanded ?? true;
 
-  const handleDeleteChat = useCallback(
-    async (id: string) => {
-      if (deletingChatId === id) return;
-      // Two-step confirm — first click arms the red button, second click
-      // actually deletes. Matches the cloud sibling exactly so users don't
-      // get muscle-memory whiplash.
-      if (confirmDeleteChatId !== id) {
-        setConfirmDeleteChatId(id);
-        return;
+  const handleDeleteChat = useCallback(async () => {
+    if (!pendingDeleteChat || deletingChatId === pendingDeleteChat.id) return;
+    const id = pendingDeleteChat.id;
+    try {
+      setDeletingChatId(id);
+      const ok = await deleteChat(id);
+      if (ok) {
+        setPendingDeleteChat(null);
+        if (id === currentChatId) navigate("/agent");
       }
-      try {
-        setDeletingChatId(id);
-        const ok = await deleteChat(id);
-        if (ok) {
-          setConfirmDeleteChatId(null);
-          if (id === currentChatId) navigate("/agent");
-        }
-      } finally {
-        setDeletingChatId(null);
-      }
-    },
-    [confirmDeleteChatId, deleteChat, deletingChatId, currentChatId, navigate],
-  );
+    } finally {
+      setDeletingChatId(null);
+    }
+  }, [pendingDeleteChat, deleteChat, deletingChatId, currentChatId, navigate]);
 
   const handleTogglePinChat = useCallback(
     async (id: string, nextPinned: boolean) => {
@@ -793,7 +757,6 @@ export function AgentSidebar({
   // 单条会话行——无项目日期分组和项目分组共用同一个渲染，避免两份 JSX。
   const renderChatRow = (chat: (typeof normalizedChats)[number]) => {
     const isCurrent = currentChatId === chat.id;
-    const isConfirmingDelete = confirmDeleteChatId === chat.id;
     const isDeleting = deletingChatId === chat.id;
     const isPinning = pinningChatId === chat.id;
     const isStreaming = Boolean(
@@ -815,7 +778,6 @@ export function AgentSidebar({
         <button
           type="button"
           onClick={() => {
-            setConfirmDeleteChatId(null);
             navigate(`/agent/${chat.id}`);
           }}
           className={[
@@ -859,47 +821,37 @@ export function AgentSidebar({
           className={[
             "absolute inset-y-0 right-0 flex items-center justify-end gap-0.5 pr-1 pl-8 rounded-r-full transition-all duration-200",
             "bg-gradient-to-l from-agent-muted/95 via-agent-muted/80 to-transparent",
-            isConfirmingDelete
-              ? "opacity-100 pointer-events-auto"
-              : "opacity-0 group-hover/item:opacity-100 focus-within:opacity-100 pointer-events-none group-hover/item:pointer-events-auto focus-within:pointer-events-auto",
+            "opacity-0 group-hover/item:opacity-100 focus-within:opacity-100 pointer-events-none group-hover/item:pointer-events-auto focus-within:pointer-events-auto",
           ].join(" ")}
         >
-          {!isConfirmingDelete && (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                void handleTogglePinChat(chat.id, !chat.isPinned);
-              }}
-              disabled={isPinning}
-              className="flex h-6 w-6 items-center justify-center rounded-full text-agent-foreground/70 transition-all duration-200 hover:bg-agent-foreground/10 hover:text-agent-foreground disabled:cursor-not-allowed"
-              title={chat.isPinned ? "取消置顶" : "置顶会话"}
-              aria-label={chat.isPinned ? "取消置顶" : "置顶会话"}
-              data-testid="sidebar-chat-pin"
-            >
-              {chat.isPinned ? (
-                <RiPushpin2Fill className="h-3.5 w-3.5 text-agent-foreground" />
-              ) : (
-                <RiPushpin2Line className="h-3.5 w-3.5 text-agent-foreground/75 hover:text-agent-foreground" />
-              )}
-            </button>
-          )}
           <button
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              void handleDeleteChat(chat.id);
+              void handleTogglePinChat(chat.id, !chat.isPinned);
+            }}
+            disabled={isPinning}
+            className="flex h-6 w-6 items-center justify-center rounded-full text-agent-foreground/70 transition-all duration-200 hover:bg-agent-foreground/10 hover:text-agent-foreground disabled:cursor-not-allowed"
+            title={chat.isPinned ? "取消置顶" : "置顶会话"}
+            aria-label={chat.isPinned ? "取消置顶" : "置顶会话"}
+            data-testid="sidebar-chat-pin"
+          >
+            {chat.isPinned ? (
+              <RiPushpin2Fill className="h-3.5 w-3.5 text-agent-foreground" />
+            ) : (
+              <RiPushpin2Line className="h-3.5 w-3.5 text-agent-foreground/75 hover:text-agent-foreground" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setPendingDeleteChat({ id: chat.id, title: chat.title });
             }}
             disabled={isDeleting}
-            className={[
-              "flex h-6 w-6 items-center justify-center rounded-full transition-all duration-200",
-              isConfirmingDelete
-                ? "bg-agent-destructive/10 text-agent-destructive hover:bg-agent-destructive/20"
-                : "text-agent-foreground/70 hover:bg-agent-foreground/10 hover:text-agent-destructive",
-              "disabled:cursor-not-allowed disabled:opacity-100",
-            ].join(" ")}
-            title={isConfirmingDelete ? "再次点击确认删除" : "删除会话"}
-            aria-label={isConfirmingDelete ? "再次点击确认删除" : "删除会话"}
+            className="flex h-6 w-6 items-center justify-center rounded-full text-agent-foreground/70 transition-all duration-200 hover:bg-agent-foreground/10 hover:text-agent-destructive disabled:cursor-not-allowed disabled:opacity-100"
+            title="删除会话"
+            aria-label="删除会话"
             data-testid="sidebar-chat-delete"
           >
             <LuTrash2
@@ -1161,7 +1113,6 @@ export function AgentSidebar({
                                       aria-expanded={projectMenu?.id === project.id}
                                       onClick={(event) => {
                                         const button = event.currentTarget;
-                                        setConfirmDeleteProjectId(null);
                                         setProjectMenu((current) =>
                                           current?.id === project.id
                                             ? null
@@ -1327,8 +1278,6 @@ export function AgentSidebar({
               chatCount={chatCount}
               anchor={projectMenu.anchor}
               revealLabel={isMac ? "在访达中显示" : "在文件管理器中显示"}
-              confirmDelete={confirmDeleteProjectId === project.id}
-              deleting={deletingProjectId === project.id}
               onClose={closeProjectMenu}
               onRename={() => {
                 setProjectMenu(null);
@@ -1347,11 +1296,57 @@ export function AgentSidebar({
                     }
                   : undefined
               }
-              onDelete={() => void handleDeleteProject(project.id)}
+              onDelete={() => {
+                setProjectMenu(null);
+                setPendingDeleteProject(project);
+              }}
             />
           );
         })()}
 
+      <ConfirmDialog
+        open={pendingDeleteChat !== null}
+        title="删除会话"
+        description={
+          pendingDeleteChat
+            ? `确定删除「${pendingDeleteChat.title}」？此操作无法撤销。`
+            : ""
+        }
+        pending={
+          pendingDeleteChat !== null && deletingChatId === pendingDeleteChat.id
+        }
+        onCancel={() => {
+          if (deletingChatId) return;
+          setPendingDeleteChat(null);
+        }}
+        onConfirm={() => void handleDeleteChat()}
+        testId="sidebar-delete-chat-dialog"
+      />
+      <ConfirmDialog
+        open={pendingDeleteProject !== null}
+        title="删除项目"
+        description={
+          pendingDeleteProject
+            ? `确定删除项目「${pendingDeleteProject.name}」？会话会保留为无项目对话。`
+            : ""
+        }
+        confirmLabel="删除项目"
+        pending={
+          pendingDeleteProject !== null &&
+          deletingProjectId === pendingDeleteProject.id
+        }
+        onCancel={() => {
+          if (deletingProjectId) return;
+          setPendingDeleteProject(null);
+        }}
+        onConfirm={() => {
+          if (!pendingDeleteProject) return;
+          void removeProject(pendingDeleteProject.id).catch(() => {
+            // 横幅已写 projectError
+          });
+        }}
+        testId="sidebar-delete-project-dialog"
+      />
       <CreateProjectModal
         open={createProjectOpen}
         onClose={() => setCreateProjectOpen(false)}

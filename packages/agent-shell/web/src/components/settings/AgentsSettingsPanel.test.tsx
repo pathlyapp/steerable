@@ -209,16 +209,22 @@ describe('AgentsSettingsPanel', () => {
     expect(screen.queryByTestId('agent-capability-local-assistant')).toBeNull();
   });
 
-  it('archives a custom agent after two-step confirm', async () => {
+  it('archives a custom agent after dialog confirm', async () => {
     listChatAgents
       .mockResolvedValueOnce({ agents: [builtin, custom], total: 2 })
       .mockResolvedValueOnce({ agents: [builtin], total: 1 });
     render(<AgentsSettingsPanel />);
     await screen.findByTestId('agent-row-geo-advisor');
-    const archive = screen.getByTestId('agent-archive-geo-advisor');
-    fireEvent.click(archive);
+    fireEvent.click(screen.getByTestId('agent-archive-geo-advisor'));
     expect(archiveChatAgent).not.toHaveBeenCalled();
-    fireEvent.click(archive);
+    expect(screen.getByTestId('agent-archive-dialog').textContent).toContain('地质顾问');
+
+    fireEvent.click(screen.getByTestId('agent-archive-dialog-cancel'));
+    expect(archiveChatAgent).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('agent-archive-dialog')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('agent-archive-geo-advisor'));
+    fireEvent.click(screen.getByTestId('agent-archive-dialog-confirm'));
     await waitFor(() => {
       expect(archiveChatAgent).toHaveBeenCalledWith('geo-advisor');
     });

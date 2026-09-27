@@ -1,11 +1,12 @@
 /**
  * 新建 / 编辑项目弹窗（Codex 式）：项目是带名字的容器，可附加多个源文件夹。
- * 家目录由后端建在 Documents/<应用名>/<项目名>/；源文件夹只放宽读取。
+ * 家目录由后端建在 Documents/<应用名>/<项目名>/；源文件夹及其子目录也可读写。
  */
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { LuFolder, LuFolderPlus, LuX } from 'react-icons/lu';
 import { BRAND_NAME } from '@/brand';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { getElectronBridge } from '@/lib/electron-bridge';
 
 export interface ProjectFormValues {
@@ -36,7 +37,7 @@ export function CreateProjectModal({
   const [folderDraft, setFolderDraft] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const initialFoldersKey = (initial?.sourceFolders ?? []).join('\0');
 
@@ -47,14 +48,18 @@ export function CreateProjectModal({
     setFolderDraft('');
     setSubmitting(false);
     setDeleting(false);
-    setConfirmDelete(false);
+    setDeleteConfirmOpen(false);
     setError(null);
+  }, [open, initial?.name, initialFoldersKey]);
+
+  useEffect(() => {
+    if (!open || deleteConfirmOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose, initial?.name, initialFoldersKey]);
+  }, [open, onClose, deleteConfirmOpen]);
 
   if (!open) return null;
   if (typeof document === 'undefined') return null;
@@ -106,10 +111,6 @@ export function CreateProjectModal({
 
   const handleDelete = async () => {
     if (!onDelete || deleting || submitting) return;
-    if (!confirmDelete) {
-      setConfirmDelete(true);
-      return;
-    }
     setDeleting(true);
     setError(null);
     try {
@@ -118,6 +119,7 @@ export function CreateProjectModal({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setDeleting(false);
+      setDeleteConfirmOpen(false);
     }
   };
 
@@ -170,7 +172,10 @@ export function CreateProjectModal({
           )}
 
           <div>
-            <div className="mb-2 text-sm text-agent-foreground">源文件夹</div>
+            <div className="mb-1 text-sm text-agent-foreground">源文件夹</div>
+            <p className="mb-2 text-[11px] text-agent-muted-foreground">
+              这些目录及其子目录可读写。
+            </p>
             <div className="overflow-hidden rounded-2xl border border-agent-border">
               {sourceFolders.map((folder) => (
                 <div
@@ -232,17 +237,13 @@ export function CreateProjectModal({
           {onDelete && (
             <button
               type="button"
-              onClick={() => void handleDelete()}
+              onClick={() => setDeleteConfirmOpen(true)}
               disabled={deleting || submitting}
-              title={
-                confirmDelete
-                  ? '再次点击确认删除（会话会保留为无项目对话）'
-                  : '删除项目（会话保留为无项目对话）'
-              }
+              title="删除项目（会话保留为无项目对话）"
               className="mr-auto h-9 rounded-full px-3 text-sm text-agent-destructive transition-colors hover:bg-agent-destructive/10 disabled:opacity-40"
               data-testid="edit-project-delete"
             >
-              {confirmDelete ? '再次点击确认删除' : '删除本地项目'}
+              删除本地项目
             </button>
           )}
           <button
@@ -265,6 +266,21 @@ export function CreateProjectModal({
           </button>
         </div>
       </div>
+      {onDelete && (
+        <ConfirmDialog
+          open={deleteConfirmOpen}
+          title="删除项目"
+          description={`确定删除项目「${trimmed || '未命名'}」？会话会保留为无项目对话。`}
+          confirmLabel="删除项目"
+          pending={deleting}
+          onCancel={() => {
+            if (deleting) return;
+            setDeleteConfirmOpen(false);
+          }}
+          onConfirm={() => void handleDelete()}
+          testId="edit-project-delete-dialog"
+        />
+      )}
     </div>,
     document.body,
   );
