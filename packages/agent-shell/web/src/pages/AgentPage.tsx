@@ -1054,6 +1054,10 @@ function AgentChatView({
       }),
     );
     return () => {
+      // 切走不取消回合。正在流式时卸载不要把侧栏指示清掉，侧栏会轮询
+      // live-stream，等回合结束后再摘。本页确认已结束时，下一次 effect
+      // 会带 isStreaming:false。
+      if (effectiveIsStreaming) return;
       window.dispatchEvent(
         new CustomEvent("chat:streaming-change", {
           detail: { chatId, isStreaming: false },

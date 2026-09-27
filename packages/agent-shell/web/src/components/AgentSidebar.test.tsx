@@ -37,6 +37,7 @@ const updateProject = vi.fn();
 const deleteProject = vi.fn();
 const openLocalPath = vi.fn();
 const setChatPinned = vi.fn();
+const getChatLiveStream = vi.fn();
 
 vi.mock('@/lib/local-api', () => ({
   listProjects: (...args: unknown[]) => listProjects(...args),
@@ -45,6 +46,7 @@ vi.mock('@/lib/local-api', () => ({
   deleteProject: (...args: unknown[]) => deleteProject(...args),
   openLocalPath: (...args: unknown[]) => openLocalPath(...args),
   setChatPinned: (...args: unknown[]) => setChatPinned(...args),
+  getChatLiveStream: (chatId: string) => getChatLiveStream(chatId),
 }));
 
 vi.mock('@/brand', () => ({
@@ -68,7 +70,9 @@ beforeEach(() => {
   deleteProject.mockReset();
   openLocalPath.mockReset();
   setChatPinned.mockReset();
+  getChatLiveStream.mockReset();
   listProjects.mockResolvedValue({ projects: [] });
+  getChatLiveStream.mockResolvedValue({ active: false });
   openLocalPath.mockResolvedValue({ success: true });
   setChatPinned.mockResolvedValue({ success: true, isPinned: true });
 });
@@ -568,6 +572,73 @@ describe('AgentSidebar 会话行交互', () => {
     });
     renderSidebar('/agent', vi.fn(), { data: { chats: [streamingChat] } });
 
+    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+  });
+
+  it('切到别的会话后，后台仍在生成的会话保留正在生成指示，结束后摘掉', async () => {
+    enterElectron([]);
+    getChatLiveStream.mockResolvedValue({ active: true });
+    const background = makeChat({ id: 'c-bg', title: '做一个自我介绍' });
+    renderSidebar('/agent/c-other', vi.fn(), { data: { chats: [background] } });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('chat:streaming-change', {
+          detail: { chatId: 'c-bg', isStreaming: true },
+        }),
+      );
+    });
+    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+
+    await waitFor(() => expect(getChatLiveStream).toHaveBeenCalledWith('c-bg'));
+    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+
+    getChatLiveStream.mockResolvedValue({ active: false });
+    await waitFor(() => expect(screen.queryByLabelText('正在生成')).toBeNull(), {
+      timeout: 2500,
+    });
+  });
+
+  it('后台会话的快照还没注册时，不立刻摘掉正在生成指示', async () => {
+    enterElectron([]);
+    getChatLiveStream.mockResolvedValue({ active: false });
+    const background = makeChat({ id: 'c-bg', title: '刚发送' });
+    renderSidebar('/agent/c-other', vi.fn(), { data: { chats: [background] } });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('chat:streaming-change', {
+          detail: { chatId: 'c-bg', isStreaming: true },
+        }),
+      );
+    });
+
+    await waitFor(() => expect(getChatLiveStream).toHaveBeenCalledWith('c-bg'));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+  });
+
+  it('当前打开的会话不因 live-stream 暂时 inactive 丢掉正在生成指示', async () => {
+    enterElectron([]);
+    getChatLiveStream.mockResolvedValue({ active: false });
+    const current = makeChat({ id: 'c-current', title: '当前会话' });
+    renderSidebar('/agent/c-current', vi.fn(), { data: { chats: [current] } });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('chat:streaming-change', {
+          detail: { chatId: 'c-current', isStreaming: true },
+        }),
+      );
+    });
+    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(getChatLiveStream).not.toHaveBeenCalled();
     expect(screen.getByLabelText('正在生成')).toBeTruthy();
   });
 

@@ -97,6 +97,7 @@ import { hasGeneralSettingsChrome, hostToolChrome, settingsChrome } from "@/lib/
 import {
   createProject,
   deleteProject,
+  getChatLiveStream,
   listProjects,
   openLocalPath,
   setChatPinned,
@@ -259,6 +260,14 @@ function readStoredSidebarSections(): Partial<Record<SidebarSectionId, boolean>>
   }
 }
 
+/** 切走后对后台会话轮询 live-stream 的间隔，与对话页恢复轮询同级。 */
+const BACKGROUND_STREAM_POLL_MS = 750;
+/**
+ * 标记成正在生成之后，快照可能还没注册。这段时间内 live-stream 报
+ * inactive 不摘指示；见过 active，或超过这段时间仍 inactive，才摘掉。
+ */
+const BACKGROUND_STREAM_GRACE_MS = 3_000;
+
 function writeSidebarSectionExpanded(id: SidebarSectionId, expanded: boolean) {
   try {
     const current = readStoredSidebarSections();
@@ -369,6 +378,90 @@ export function AgentSidebar({
       );
     };
   }, []);
+
+  // 当前打开的会话由 AgentChatView 自己报开始/结束。切走后的会话回合还在
+  // 后端跑，卸载时不会再报结束，这里用 live-stream 对账，结束后摘掉指示。
+  const seenActiveBackgroundRef = useRef<Set<string>>(new Set());
+  const backgroundSinceRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    for (const id of seenActiveBackgroundRef.current) {
+      if (!streamingChatIds.has(id)) seenActiveBackgroundRef.current.delete(id);
+    }
+    for (const id of backgroundSinceRef.current.keys()) {
+      if (!streamingChatIds.has(id)) backgroundSinceRef.current.delete(id);
+    }
+    const backgroundIds = [...streamingChatIds].filter(
+      (id) => id !== currentChatId,
+    );
+    if (backgroundIds.length === 0 || !isElectron()) return;
+
+    let cancelled = false;
+    let ticking = false;
+    const tick = async () => {
+      if (ticking || cancelled) return;
+      ticking = true;
+      try {
+        const now = Date.now();
+        const settled = await Promise.all(
+          backgroundIds.map(async (id) => {
+            try {
+              const live = await getChatLiveStream(id);
+              return { id, active: live?.active === true, ok: true as const };
+            } catch {
+              return { id, active: false, ok: false as const };
+            }
+          }),
+        );
+        if (cancelled) return;
+        const drop = new Set<string>();
+        for (const row of settled) {
+          if (!row.ok) continue;
+          if (row.active) {
+            seenActiveBackgroundRef.current.add(row.id);
+            backgroundSinceRef.current.delete(row.id);
+            continue;
+          }
+          // 已经对上过运行中的快照：inactive 就是回合结束。
+          if (seenActiveBackgroundRef.current.has(row.id)) {
+            drop.add(row.id);
+            seenActiveBackgroundRef.current.delete(row.id);
+            backgroundSinceRef.current.delete(row.id);
+            continue;
+          }
+          // 还没见过快照（切走时回合可能刚起步）。宽限期内保留指示。
+          const since = backgroundSinceRef.current.get(row.id);
+          if (since === undefined) {
+            backgroundSinceRef.current.set(row.id, now);
+            continue;
+          }
+          if (now - since >= BACKGROUND_STREAM_GRACE_MS) {
+            drop.add(row.id);
+            backgroundSinceRef.current.delete(row.id);
+          }
+        }
+        if (drop.size === 0) return;
+        setStreamingChatIds((prev) => {
+          let changed = false;
+          const next = new Set(prev);
+          for (const id of drop) {
+            if (next.delete(id)) changed = true;
+          }
+          return changed ? next : prev;
+        });
+      } finally {
+        ticking = false;
+      }
+    };
+
+    void tick();
+    const timer = window.setInterval(() => {
+      void tick();
+    }, BACKGROUND_STREAM_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [streamingChatIds, currentChatId]);
 
   // null = 用户还没点过这一组，走默认（置顶：有置顶会话才展开；项目、最近：展开）。
   // 点过之后写入 localStorage，刷新和重启后保持。

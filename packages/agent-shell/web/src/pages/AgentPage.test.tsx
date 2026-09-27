@@ -748,6 +748,61 @@ describe('AgentPage plan 模式操作条', () => {
   });
 });
 
+describe('AgentPage 侧栏正在生成指示', () => {
+  function listenStreaming(chatId: string) {
+    const flags: boolean[] = [];
+    const onChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId: string; isStreaming: boolean }>).detail;
+      if (detail?.chatId === chatId) flags.push(detail.isStreaming);
+    };
+    window.addEventListener('chat:streaming-change', onChange);
+    return {
+      flags,
+      stop() {
+        window.removeEventListener('chat:streaming-change', onChange);
+      },
+    };
+  }
+
+  it('本页回合结束时通知侧栏停止正在生成', async () => {
+    const events = listenStreaming('chat-1');
+    try {
+      renderPage('/agent/chat-1', makeCtx());
+      await screen.findByRole('textbox');
+      await typeComposer('你好');
+      pressEnter();
+      await screen.findByText('默认回复');
+      await waitFor(() => expect(events.flags.at(-1)).toBe(false));
+    } finally {
+      events.stop();
+    }
+  });
+
+  it('切走时回合仍在流式，不把侧栏指示清成结束', async () => {
+    let release: (() => void) | undefined;
+    streamMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const events = listenStreaming('chat-1');
+    try {
+      const view = renderPage('/agent/chat-1', makeCtx());
+      await screen.findByRole('textbox');
+      await typeComposer('做一个自我介绍');
+      pressEnter();
+      await screen.findByRole('button', { name: '停止生成' });
+      expect(events.flags.at(-1)).toBe(true);
+      view.unmount();
+      expect(events.flags.at(-1)).toBe(true);
+      release?.();
+    } finally {
+      events.stop();
+    }
+  });
+});
+
 describe('AgentPage 远端回合恢复', () => {
   it('切回时远端回合仍在运行：叠加显示运行中的部分内容', async () => {
     getChatLiveStream.mockResolvedValue({
