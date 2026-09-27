@@ -655,8 +655,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     renderSidebar('/agent', vi.fn(), { data: { chats: [inProject, orphan] } });
 
     await screen.findByText('项目甲');
-    // 项目组头计数只算真正属于该项目的会话。
-    expect(screen.getByText('· 1')).toBeTruthy();
+    expect(screen.queryByText('· 1')).toBeNull();
     expect(chatRow('c-in')).toBeTruthy();
     // 孤儿会话按无项目处理，进入日期分组。
     expect(chatRow('c-orphan')).toBeTruthy();

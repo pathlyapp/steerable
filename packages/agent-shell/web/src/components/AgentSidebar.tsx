@@ -64,7 +64,7 @@
  *   │ ⬡ Skill 设置                    │ ← /settings?section=skills（独立页）
  *   │ 🔌 MCP 设置                     │ ← /settings?section=mcp（独立页）
  *   │  会话 v                     📁+ │ ← 📁+ 打开新建项目弹窗
- *   │  v 📁 项目A · 3      (hover: +··)│ ← + 新建对话；·· 菜单：重命名/换目录/访达/删
+ *   │  v 📁 项目A          (hover: +··)│ ← + 新建对话；·· 菜单：重命名/换目录/访达/删
  *   │   ...（项目内对话）              │
  *   │   今天                          │
  *   │   ...（无项目对话，按日期分组）  │ ← 无项目排在项目分组之后
@@ -958,11 +958,6 @@ export function AgentSidebar({
                                 <LuChevronUp className="h-3 w-3" />
                               )}
                             </span>
-                            {items.length > 0 && (
-                              <span className="ml-1 shrink-0 font-normal">
-                                · {items.length}
-                              </span>
-                            )}
                           </button>
                           <div
                             className={`absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 transition-opacity ${
