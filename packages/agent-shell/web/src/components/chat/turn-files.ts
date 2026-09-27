@@ -76,7 +76,7 @@ export function formatFileSize(size: number | undefined): string | null {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** 是否为临时文件 / Office 锁定文件（如 ~$公司介绍.pptx），产物列表中一律排除。 */
+/** 是否为临时文件 / Office 锁定文件（如 ~$ 开头的文件名），产物列表中一律排除。 */
 export function isIgnoredTurnFile(filePath: string): boolean {
   const { name } = splitTurnFilePath(filePath);
   if (!name) return true;
@@ -93,7 +93,7 @@ export const DELIVERABLE_EXTENSIONS = new Set([
   // 表格 / Spreadsheets
   '.xlsx', '.xls', '.csv', '.tsv', '.numbers',
   // 幻灯片 / Presentations
-  '.pptx', '.ppt', '.key',
+  '.pptx', '.ppt', '.key', // shell-neutral:allow — Office 幻灯片扩展名，不是产品品牌
   // 文档 / Documents
   '.docx', '.doc', '.pdf', '.pages', '.epub', '.rtf',
   // 图像与富媒体 / Images & Media
@@ -146,8 +146,8 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
         kind: 'spreadsheet',
         themeColor: 'emerald',
       };
-    case '.pptx':
-    case '.ppt':
+    case '.pptx': // shell-neutral:allow — Office 幻灯片扩展名，不是产品品牌
+    case '.ppt': // shell-neutral:allow — Office 幻灯片扩展名，不是产品品牌
     case '.key':
       return {
         label: '演示文稿',

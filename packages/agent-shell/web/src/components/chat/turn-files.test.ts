@@ -98,11 +98,11 @@ describe('formatFileSize', () => {
 
 describe('isIgnoredTurnFile', () => {
   it('过滤 Office 临时锁定文件与交换文件', () => {
-    expect(isIgnoredTurnFile('/Users/wangtai/Documents/~$公司介绍.pptx')).toBe(true);
-    expect(isIgnoredTurnFile('/Users/wangtai/Documents/.DS_Store')).toBe(true);
-    expect(isIgnoredTurnFile('/Users/wangtai/Documents/output.tmp')).toBe(true);
-    expect(isIgnoredTurnFile('/Users/wangtai/Documents/公司介绍.pptx')).toBe(false);
-    expect(isIgnoredTurnFile('/Users/wangtai/Documents/公司介绍.pdf')).toBe(false);
+    expect(isIgnoredTurnFile('/home/dev/Documents/~$公司介绍.pptx')).toBe(true);
+    expect(isIgnoredTurnFile('/home/dev/Documents/.DS_Store')).toBe(true);
+    expect(isIgnoredTurnFile('/home/dev/Documents/output.tmp')).toBe(true);
+    expect(isIgnoredTurnFile('/home/dev/Documents/公司介绍.pptx')).toBe(false);
+    expect(isIgnoredTurnFile('/home/dev/Documents/公司介绍.pdf')).toBe(false);
   });
 });
 
@@ -147,10 +147,10 @@ describe('getTurnFileCategory & getDeliverableMeta', () => {
 describe('formatIntermediateDisplayPath', () => {
   it('提取清晰的相对路径', () => {
     expect(
-      formatIntermediateDisplayPath('/Users/wangtai/code/proj/review_work/build_clean.mjs'),
+      formatIntermediateDisplayPath('/home/dev/code/proj/review_work/build_clean.mjs'),
     ).toBe('review_work/build_clean.mjs');
     expect(
-      formatIntermediateDisplayPath('/Users/wangtai/code/proj/src/components/Agent.tsx'),
+      formatIntermediateDisplayPath('/home/dev/code/proj/src/components/Agent.tsx'),
     ).toBe('src/components/Agent.tsx');
   });
 });

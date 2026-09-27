@@ -88,7 +88,7 @@ export const DELIVERABLE_EXTENSIONS = new Set([
   // 表格 / Spreadsheets
   '.xlsx', '.xls', '.csv', '.tsv', '.numbers',
   // 幻灯片 / Presentations
-  '.pptx', '.ppt', '.key',
+  '.pptx', '.ppt', '.key', // shell-neutral:allow — Office 幻灯片扩展名，不是产品品牌
   // 文档 / Documents
   '.docx', '.doc', '.pdf', '.pages', '.epub', '.rtf',
   // 图像与富媒体 / Images & Media
@@ -104,10 +104,10 @@ const INTERMEDIATE_DIR_PATTERNS = [
   /(?:^|[\\/])(?:build|dist|\.cache|__pycache__)(?:[\\/]|$)/i,
 ];
 
-/** 是否为临时文件 / 办公软件锁定文件（如 ~$公司介绍.pptx），产物列表中一律排除。 */
+/** 是否为临时文件 / 办公软件锁定文件（如 ~$ 开头的文件名），产物列表中一律排除。 */
 export function isIgnoredFileName(name: string): boolean {
   if (IGNORED_FILE_NAMES.has(name)) return true;
-  // Office 临时锁定文件（如 ~$公司介绍.pptx）
+  // Office 临时锁定文件（如 ~$ 开头）
   if (name.startsWith('~$')) return true;
   // 临时文件与编辑器交换文件
   if (name.endsWith('.tmp') || name.endsWith('.swp') || name.endsWith('~')) return true;

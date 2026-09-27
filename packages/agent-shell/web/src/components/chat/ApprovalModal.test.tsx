@@ -36,7 +36,7 @@ const SHELL_REQUEST: ApprovalPromptRequest = {
 const SANDBOX_ESCALATION_REQUEST: ApprovalPromptRequest = {
   requestId: 'req-sandbox-escalation',
   toolName: 'local_exec_shell',
-  arguments: { command: 'rm -rf ~/.aroli/python-runner' },
+  arguments: { command: 'rm -rf ~/.local/share/python-runner' },
   mode: 'destructive',
   category: 'sandbox_escalation',
   round: 1,
@@ -84,7 +84,7 @@ describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
     );
 
     expect(screen.getByText('Agent 请求在工作区外执行命令')).toBeTruthy();
-    expect(screen.getByText('rm -rf ~/.aroli/python-runner')).toBeTruthy();
+    expect(screen.getByText('rm -rf ~/.local/share/python-runner')).toBeTruthy();
     expect(screen.getByText(/命令已在工作区沙箱中尝试/)).toBeTruthy();
     expect(screen.queryByText(/把沙箱切到/)).toBeNull();
   });
