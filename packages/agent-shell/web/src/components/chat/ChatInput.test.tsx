@@ -1,9 +1,9 @@
 /**
  * ChatInput 的 streaming 期交互契约（W6-2）：
- *   - Enter 转向失败不再静默——hook 兜底后本组件按结果给反馈：'queued'
+ *   - ⌘/Ctrl+Enter 插队失败不再静默——hook 兜底后本组件按结果给反馈：'queued'
  *     提示「已改为排队」，三种结果都清草稿（消息必然已落地）；
- *   - 待发队列横幅展示数量、撤回入口与「停止将丢弃」预警；
- *   - ⌘/Ctrl+Enter 排队快捷键在 streaming 期间有可见提示。
+ *   - 待发队列横幅展示数量、撤回入口与停止后恢复提示；
+ *   - Enter 排队、⌘/Ctrl+Enter 插队快捷键在 streaming 期间有可见提示。
  * 队列 drain / 兜底决策本身由框架 useChatStream 的测试覆盖，这里只验
  * 呈现层接线。
  */
@@ -34,63 +34,64 @@ function renderInput(overrides: Partial<ChatInputProps> = {}) {
   return props;
 }
 
-function pressEnter(init: { metaKey?: boolean } = {}) {
+function pressEnter(init: { metaKey?: boolean; ctrlKey?: boolean } = {}) {
   fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', ...init });
 }
 
-describe('ChatInput streaming 期 Enter 转向兜底（W6-2）', () => {
-  it('转向被兜底为排队（queued）：清空草稿并提示「已改为排队」', async () => {
+describe('ChatInput streaming 期排队与插队（W6-2）', () => {
+  it('Enter 直接排入 follow-up 队列并清空草稿', () => {
+    const onFollowUp = vi.fn();
+    const onSteer = vi.fn();
+    const onChange = vi.fn();
+    renderInput({ value: '排队这条', onChange, isStreaming: true, onFollowUp, onSteer });
+
+    pressEnter();
+    expect(onFollowUp).toHaveBeenCalledWith('排队这条');
+    expect(onChange).toHaveBeenCalledWith('');
+    expect(onSteer).not.toHaveBeenCalled();
+  });
+
+  it('⌘/Ctrl+Enter 插队被兜底为排队（queued）：清空草稿并提示「已改为排队」', async () => {
     const onSteer = vi.fn<(text: string) => Promise<SteerOutcome>>().mockResolvedValue('queued');
     const onChange = vi.fn();
     renderInput({ value: '补充一下', onChange, isStreaming: true, onSteer });
 
-    pressEnter();
+    pressEnter({ metaKey: true });
     // 消息已交给 hook（进入待发队列），不是丢进虚空。
     expect(onSteer).toHaveBeenCalledWith('补充一下');
 
     await act(async () => {});
     expect(onChange).toHaveBeenCalledWith('');
     const notice = screen.getByRole('status');
-    expect(notice.textContent).toBe('当前回合无法追加，已加入排队，本轮结束后自动发出');
+    expect(notice.textContent).toBe('当前回合无法插队，已改为排队，本轮结束后自动发出');
   });
 
-  it('转向被接受（steered）：清空草稿且不显示排队提示', async () => {
+  it('⌘/Ctrl+Enter 插队被接受（steered）：清空草稿且不显示排队提示', async () => {
     const onSteer = vi.fn<(text: string) => Promise<SteerOutcome>>().mockResolvedValue('steered');
     const onChange = vi.fn();
     renderInput({ value: '补一句', onChange, isStreaming: true, onSteer });
 
-    pressEnter();
+    pressEnter({ ctrlKey: true });
     await act(async () => {});
     expect(onChange).toHaveBeenCalledWith('');
     expect(screen.queryByRole('status')).toBeNull();
   });
 
-  it('回合已结束兜底为直发（sent）：清空草稿且不显示排队提示', async () => {
+  it('⌘/Ctrl+Enter 遇到已结束回合时兜底为直发（sent）', async () => {
     const onSteer = vi.fn<(text: string) => Promise<SteerOutcome>>().mockResolvedValue('sent');
     const onChange = vi.fn();
     renderInput({ value: '来迟了', onChange, isStreaming: true, onSteer });
 
-    pressEnter();
+    pressEnter({ metaKey: true });
     await act(async () => {});
     expect(onChange).toHaveBeenCalledWith('');
     expect(screen.queryByRole('status')).toBeNull();
   });
 
-  it('⌘/Ctrl+Enter 直接排入 follow-up 队列并清空草稿', () => {
-    const onFollowUp = vi.fn();
-    const onSteer = vi.fn();
-    const onChange = vi.fn();
-    renderInput({ value: '排队这条', onChange, isStreaming: true, onFollowUp, onSteer });
-
-    pressEnter({ metaKey: true });
-    expect(onFollowUp).toHaveBeenCalledWith('排队这条');
-    expect(onChange).toHaveBeenCalledWith('');
-    expect(onSteer).not.toHaveBeenCalled();
-  });
 });
 
 describe('ChatInput 待发队列可见性（W6-2）', () => {
-  it('排队横幅展示数量与「停止将丢弃」预警，可撤回单条，快捷键提示可见', () => {
+  it('排队横幅展示数量与停止恢复提示，可撤回单条，快捷键提示可见', () => {
     const onRemoveFollowUp = vi.fn();
     renderInput({
       isStreaming: true,
@@ -100,11 +101,11 @@ describe('ChatInput 待发队列可见性（W6-2）', () => {
     });
 
     expect(
-      screen.getByText('排队中（2）· 本轮结束后自动发出 · 停止将丢弃'),
+      screen.getByText('排队中（2）· 本轮结束后自动发出 · 停止后恢复到输入框'),
     ).toBeTruthy();
     expect(screen.getByText('第一条')).toBeTruthy();
     expect(screen.getByText('第二条')).toBeTruthy();
-    // 发现性：streaming 期间快捷键区展示「⌘/Ctrl+Enter 排队」。
+    // 发现性：streaming 期间快捷键区展示 Enter 排队。
     expect(screen.getByText('排队')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: '撤回排队消息 2' }));
@@ -117,8 +118,8 @@ describe('ChatInput 待发队列可见性（W6-2）', () => {
   });
 });
 
-describe('ChatInput 停止按钮的丢弃预警（W6-2）', () => {
-  it('有排队消息时 title 提示将丢弃 N 条，无排队时不提示', () => {
+describe('ChatInput 停止交互（W6-2）', () => {
+  it('有排队消息时 title 提示将恢复 N 条，无排队时不提示', () => {
     const base: Partial<ChatInputProps> = { isStreaming: true, onCancel: vi.fn() };
     const { rerender } = render(
       <ChatInput
@@ -131,7 +132,7 @@ describe('ChatInput 停止按钮的丢弃预警（W6-2）', () => {
     );
     expect(
       screen.getByRole('button', { name: '停止生成' }).getAttribute('title'),
-    ).toContain('将丢弃 2 条排队消息');
+    ).toContain('2 条排队消息将恢复到输入框');
 
     rerender(
       <ChatInput
@@ -144,7 +145,16 @@ describe('ChatInput 停止按钮的丢弃预警（W6-2）', () => {
     );
     const title = screen.getByRole('button', { name: '停止生成' }).getAttribute('title');
     expect(title).toContain('停止生成');
-    expect(title).not.toContain('丢弃');
+    expect(title).not.toContain('恢复');
+  });
+
+  it('Escape 停止生成，⌘/Ctrl+. 仍作为兼容快捷键', () => {
+    const onCancel = vi.fn();
+    renderInput({ isStreaming: true, onCancel });
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(window, { key: '.', metaKey: true });
+    expect(onCancel).toHaveBeenCalledTimes(2);
   });
 });
 

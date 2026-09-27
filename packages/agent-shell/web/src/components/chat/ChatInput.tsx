@@ -60,7 +60,7 @@ export type { ExecPolicy, McpToolItem, SkillItem };
  *     product's `chat-input-box`).
  *   - Auto-growing rich text input (1 → 8 lines) that grows as the user types.
  *   - `Enter` to send, `Shift+Enter` for newline (`Cmd/Ctrl+Enter` also sends;
- *     IME composition is guarded so confirming a candidate never submits).
+ *     while streaming, Enter queues and Cmd/Ctrl+Enter steers the current turn).
  *   - Send button on the right; turns into a Stop button when streaming.
  *   - Externally-controlled value (`LocalChatPanel` lifts it so EmptyChat can
  *     inject prompts via `setAndFocusInputMessage`).
@@ -106,15 +106,15 @@ export interface ChatInputProps {
   onSubmit: () => void | Promise<void>;
   onCancel?: () => void;
   /**
-   * 轮中转向（streaming 期间 Enter）：优先把文本注入运行中的回合；注入
+   * 轮中插队（streaming 期间 ⌘/Ctrl+Enter）：优先把文本注入运行中的回合；注入
    * 失败由 hook 兜底——回合仍在跑则排入 W6-2 follow-up 队列（'queued'，
    * 本组件提示"已改为排队"），回合恰好已结束则作为新消息直接发出
    * （'sent'）。三种结果消息都已落地，调用方据此清空草稿。
    */
   onSteer?: (text: string) => Promise<SteerOutcome>;
   /**
-   * W6-2 follow-up 队列：streaming 期间按 ⌘/Ctrl+Enter 把当前文本排入
-   * 待发队列，本轮结束后自动作为下一轮发出（与 Enter 的轮中转向相对）。
+   * W6-2 follow-up 队列：streaming 期间按 Enter 把当前文本排入待发队列，
+   * 本轮结束后自动作为下一轮发出（与 ⌘/Ctrl+Enter 的轮中插队相对）。
    */
   onFollowUp?: (text: string) => void;
   /** 当前排队待发的 follow-up 文本（用于在输入框上方展示待发队列）。 */
@@ -862,7 +862,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null);
     const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
     const [mentionReferences, setMentionReferences] = useState<MentionReference[]>([]);
-    // 转向降级提示：Enter 转向失败被兜底进 W6-2 队列时告知用户"不是注入"，
+    // 插队降级提示：⌘/Ctrl+Enter 插队失败被兜底进 W6-2 队列时告知用户，
     // 几秒后自动消失（队列横幅本身常驻，提示只是动作反馈）。
     const [steerNotice, setSteerNotice] = useState<string | null>(null);
     const steerNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1144,15 +1144,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       }
     }, [value, mentionReferences, agents, chats, disabled, skills, mcpTools]);
 
-    // `Cmd+.` / `Ctrl+.` cancels the in-flight stream — matches macOS's
-    // conventional "interrupt" chord (Xcode, Terminal). Bound at the window
-    // level so users can hit it without the textarea being focused.
+    // Escape stops the current turn, matching Codex's graphical composer.
+    // Cmd/Ctrl+. remains as a compatibility alias. Bound at the window level
+    // so users can stop without the editor being focused.
     // Confined to the `isStreaming` window so it never fights with other
     // app-level shortcuts when the chat is idle.
     useEffect(() => {
       if (!isStreaming || !onCancel) return;
       const onKey = (event: globalThis.KeyboardEvent) => {
-        if ((event.metaKey || event.ctrlKey) && event.key === '.') {
+        const isStopAlias = (event.metaKey || event.ctrlKey) && event.key === '.';
+        const isEscape = event.key === 'Escape' && !event.metaKey && !event.ctrlKey && !event.altKey;
+        if (!event.defaultPrevented && (isStopAlias || isEscape)) {
           event.preventDefault();
           onCancel();
         }
@@ -1590,31 +1592,31 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         }
       }
 
-      // Enter 发送，Shift+Enter 换行（⌘/Ctrl+Enter 作为老习惯保留，同样发送）。
+      // 空闲时 Enter / ⌘/Ctrl+Enter 发送，Shift+Enter 换行。
       // IME 候选确认的 Enter 已被上面的 composition 守卫拦截，不会误发送。
       const isSendCombo =
         event.key === 'Enter' && !event.shiftKey;
       if (isSendCombo) {
         event.preventDefault();
-        // streaming 期间：Enter = 轮中转向（注入运行中的回合；注入不了时
-        // hook 兜底为 W6-2 排队或新回合直发，消息不会丢）；⌘/Ctrl+Enter =
-        // follow-up 排队（本轮结束后自动作为下一轮发出）。
+        // streaming 期间：Enter = follow-up 排队（本轮结束后自动作为下一轮
+        // 发出）；⌘/Ctrl+Enter = 轮中插队（注入运行中的回合；注入不了时
+        // hook 兜底为 W6-2 排队或新回合直发，消息不会丢）。
         if (isStreaming) {
-          if ((event.metaKey || event.ctrlKey) && onFollowUp && trimmed) {
-            onFollowUp(trimmed);
-            onChange('');
-            return;
-          }
-          if (onSteer && trimmed) {
+          if ((event.metaKey || event.ctrlKey) && onSteer && trimmed) {
             void onSteer(trimmed).then((outcome) => {
               // steered / queued / sent 三种结果消息都已落地（注入当前回合 /
               // 进入待发队列 / 作为新回合发出），草稿都可以清；queued 额外
               // 提示用户"不是追加进当前回合"。
               if (outcome === 'queued') {
-                showSteerNotice('当前回合无法追加，已加入排队，本轮结束后自动发出');
+                showSteerNotice('当前回合无法插队，已改为排队，本轮结束后自动发出');
               }
               onChange('');
             });
+            return;
+          }
+          if (onFollowUp && trimmed) {
+            onFollowUp(trimmed);
+            onChange('');
           }
           return;
         }
@@ -1874,7 +1876,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           {pendingFollowUps.length > 0 && (
             <div className="flex flex-col gap-1 border-b border-agent-border bg-agent-muted/30 px-2.5 py-1.5">
               <div className="text-[11px] font-medium text-agent-muted-foreground">
-                排队中（{pendingFollowUps.length}）· 本轮结束后自动发出 · 停止将丢弃
+                排队中（{pendingFollowUps.length}）· 本轮结束后自动发出 · 停止后恢复到输入框
               </div>
               {pendingFollowUps.map((text, i) => (
                 <div
@@ -2006,23 +2008,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               >
                 {isStreaming ? (
                   <>
-                    <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
-                      {MOD_KEY_LABEL}
-                    </kbd>
-                    <span className="mx-0.5">+</span>
-                    <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
-                      .
-                    </kbd>
-                    <span className="ml-1">停止</span>
-                    {onSteer && (
+                    {onFollowUp && (
                       <span className="ml-2">
                         <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
                           Enter
                         </kbd>
-                        <span className="ml-1">追加</span>
+                        <span className="ml-1">排队</span>
                       </span>
                     )}
-                    {onFollowUp && (
+                    {onSteer && (
                       <span className="ml-2">
                         <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
                           {MOD_KEY_LABEL}
@@ -2031,9 +2025,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                         <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
                           Enter
                         </kbd>
-                        <span className="ml-1">排队</span>
+                        <span className="ml-1">插队</span>
                       </span>
                     )}
+                    <span className="ml-2">
+                      <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
+                        Esc
+                      </kbd>
+                      <span className="ml-1">停止</span>
+                    </span>
                   </>
                 ) : (
                   <>
@@ -2069,8 +2069,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 title={
                   isStreaming
                     ? pendingFollowUps.length > 0
-                      ? `停止生成 (${MOD_KEY_LABEL}+.) · 将丢弃 ${pendingFollowUps.length} 条排队消息`
-                      : `停止生成 (${MOD_KEY_LABEL}+.)`
+                      ? `停止生成 (Esc) · ${pendingFollowUps.length} 条排队消息将恢复到输入框`
+                      : '停止生成 (Esc)'
                     : '发送 (Enter)'
                 }
                 aria-label={isStreaming ? '停止生成' : '发送消息'}

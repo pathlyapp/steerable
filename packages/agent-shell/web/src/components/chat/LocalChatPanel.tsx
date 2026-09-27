@@ -60,9 +60,9 @@ export interface LocalChatPanelProps {
   isStreaming?: boolean;
   onSubmit: (input: { content: string; metadata?: Record<string, unknown> }) => void | Promise<void>;
   onCancel?: () => void;
-  /** 轮中转向（streaming 期间 Enter）：注入失败由 hook 兜底为排队/直发，见 ChatInput。 */
+  /** 轮中插队（streaming 期间 ⌘/Ctrl+Enter）：注入失败由 hook 兜底为排队/直发。 */
   onSteer?: (text: string) => Promise<SteerOutcome>;
-  /** W6-2 follow-up 排队：streaming 期间 ⌘/Ctrl+Enter 把文本排入待发队列。 */
+  /** W6-2 follow-up 排队：streaming 期间 Enter 把文本排入待发队列。 */
   onFollowUp?: (text: string) => void;
   /** 排队待发的 follow-up 文本列表。 */
   pendingFollowUps?: string[];
@@ -379,6 +379,17 @@ export function LocalChatPanel({
     // inputBox 并重新 observe，否则气泡宽度变量停在旧节点上。
   }, [showEmptyHero]);
 
+  const handleCancel = useCallback(() => {
+    if (pendingFollowUps && pendingFollowUps.length > 0) {
+      setInputValue((draft) =>
+        [...pendingFollowUps, draft.trim()]
+          .filter(Boolean)
+          .join('\n\n'),
+      );
+    }
+    onCancel?.();
+  }, [onCancel, pendingFollowUps]);
+
   const chatInputNode = (
     <>
       {attachmentError && (
@@ -395,7 +406,7 @@ export function LocalChatPanel({
         value={inputValue}
         onChange={setInputValue}
         onSubmit={handleSubmit}
-        onCancel={onCancel}
+        onCancel={handleCancel}
         onSteer={onSteer}
         onFollowUp={onFollowUp}
         pendingFollowUps={pendingFollowUps}

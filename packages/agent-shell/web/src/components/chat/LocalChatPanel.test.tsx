@@ -123,3 +123,25 @@ describe('LocalChatPanel 附件提交', () => {
     expect(saveMock).not.toHaveBeenCalled();
   });
 });
+
+describe('LocalChatPanel 停止生成', () => {
+  it('停止时把排队消息恢复到输入框后再取消回合', () => {
+    const onCancel = vi.fn();
+    render(
+      <LocalChatPanel
+        messages={[]}
+        agents={[]}
+        currentAgent={null}
+        isStreaming
+        pendingFollowUps={['第一条', '第二条']}
+        onSubmit={vi.fn()}
+        onCancel={onCancel}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('textbox').textContent).toBe('第一条\n\n第二条');
+  });
+});

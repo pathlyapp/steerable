@@ -683,6 +683,7 @@ function AgentChatView({
     pendingFollowUps,
     removeFollowUp,
     cancel,
+    setMessages,
     appendMessage,
   } = useChatStream({
     transport,
@@ -696,6 +697,15 @@ function AgentChatView({
   // 新 mount 没发起流，所以 isStreaming=false，但后端快照 liveStream.active
   // 为 true —— 此时用快照叠出「正在运行」的助手气泡 + 部分工具卡片/时间线。
   const remoteStreaming = liveStream.active === true && !isStreaming;
+  // 切回运行中的远端回合时，本 mount 没有 useChatStream 的本地队列。显式
+  // 保留 Enter 排队的消息，等远端回合结束后再由本 mount 依次发出。
+  const [remoteFollowUps, setRemoteFollowUps] = useState<string[]>([]);
+  const remoteFollowUpsRef = useRef<string[]>([]);
+  const updateRemoteFollowUps = useCallback((update: (current: string[]) => string[]) => {
+    const next = update(remoteFollowUpsRef.current);
+    remoteFollowUpsRef.current = next;
+    setRemoteFollowUps(next);
+  }, []);
 
   // 远端轮中转向：transport.steer 按 chatId 找活跃流，天然支持「切回后注入」
   // ——不像 useChatStream.steerOrFollowUpUserMessage 那样被本地 isStreamingRef
@@ -713,8 +723,8 @@ function AgentChatView({
         });
         return "steered";
       }
-      // 回合可能恰好已结束——回落 queued 让 ChatInput 给出提示，紧跟着的
-      // re-hydrate 会把最终消息拉出来。
+      // 回合可能恰好已结束——回落 queued，由 handleSteer 放进远端待发
+      // 队列；轮询确认回合结束后先对账历史，再启动下一轮。
       return "queued";
     },
     [transport, appendMessage],
@@ -740,16 +750,9 @@ function AgentChatView({
     };
   }, [chatId, remoteStreaming]);
 
-  // 快照从 active=true → false 的边沿：远端回合结束了，re-hydrate 出最终
-  // 落库消息（含真实 message id / executedActions / timeline）。
+  // 快照从 active=true → false 的边沿在 handleSubmit 声明后处理：没有排队
+  // 消息时重新水合，有排队消息时直接启动下一轮。
   const wasLiveActiveRef = useRef(liveStream.active === true);
-  useEffect(() => {
-    const nowActive = liveStream.active === true;
-    if (wasLiveActiveRef.current && !nowActive) {
-      onBranchTick();
-    }
-    wasLiveActiveRef.current = nowActive;
-  }, [liveStream.active, onBranchTick]);
 
   // W7-1: 中断提示卡的可见性。初值来自 messages 响应的 interrupted 标记；
   // 点击「继续」/「忽略」或用户手动发起新一轮时本地清除（继续成功后后端的
@@ -809,7 +812,8 @@ function AgentChatView({
   const handleCancel = useCallback(() => {
     transport.cancelActive();
     cancel();
-  }, [transport, cancel]);
+    updateRemoteFollowUps(() => []);
+  }, [transport, cancel, updateRemoteFollowUps]);
 
   // Reset the in-flight queue on every new user submit. We do this in a
   // wrapper rather than directly in `handleUnknownEvent`, because there's no
@@ -875,6 +879,48 @@ function AgentChatView({
     [handleSubmit],
   );
 
+  // 远端回合结束时，优先发送用户在等待期间排队的内容。第一条启动新回合，
+  // 其余条目进入 useChatStream 的本地队列；没有排队内容才重新水合历史。
+  useEffect(() => {
+    const nowActive = liveStream.active === true;
+    if (wasLiveActiveRef.current && !nowActive) {
+      const queued = remoteFollowUpsRef.current;
+      if (queued.length > 0) {
+        updateRemoteFollowUps(() => []);
+        void (async () => {
+          try {
+            const response = await getElectronBridge()?.localBackend.request<{
+              messages?: ChatMessageWithMetadata[];
+            }>({
+              method: "GET",
+              path: `/api/v2/chats/${encodeURIComponent(chatId)}/messages?limit=200`,
+            });
+            if (response?.messages) {
+              setMessages(chronological(response.messages));
+            }
+          } catch {
+            // 排队内容仍须发出；后续刷新会补齐刚结束的远端回复。
+          }
+          void handleSubmit({ content: queued[0] });
+          for (const content of queued.slice(1)) {
+            followUpUserMessage({ content });
+          }
+        })();
+      } else {
+        onBranchTick();
+      }
+    }
+    wasLiveActiveRef.current = nowActive;
+  }, [
+    followUpUserMessage,
+    chatId,
+    handleSubmit,
+    liveStream.active,
+    onBranchTick,
+    setMessages,
+    updateRemoteFollowUps,
+  ]);
+
   useEffect(() => {
     const bridge = getElectronBridge();
     if (!bridge?.onSuggestedReplies) return;
@@ -934,28 +980,38 @@ function AgentChatView({
     setInterrupted(false);
   }, []);
 
-  // 轮中转向 + 失败兜底（W6-2）：streaming 期间 Enter 优先注入运行中的
+  // 轮中插队 + 失败兜底（W6-2）：streaming 期间 ⌘/Ctrl+Enter 优先注入运行中的
   // CoreLoop 回合；注入不了时 hook 按回合实况降级——仍在跑则排入待发队列
   // （'queued'，ChatInput 提示"已改为排队"），恰好已结束则作为新回合直发
   // （'sent'）。消息不会丢，ChatInput 对任何结果都清草稿。
   const handleSteer = useCallback(
-    (text: string) =>
-      remoteStreaming ? steerRemote(text) : steerOrFollowUpUserMessage(text),
-    [remoteStreaming, steerRemote, steerOrFollowUpUserMessage],
+    async (text: string) => {
+      if (!remoteStreaming) return steerOrFollowUpUserMessage(text);
+      const outcome = await steerRemote(text);
+      if (outcome === "queued") {
+        updateRemoteFollowUps((current) => [...current, text]);
+      }
+      return outcome;
+    },
+    [
+      remoteStreaming,
+      steerRemote,
+      steerOrFollowUpUserMessage,
+      updateRemoteFollowUps,
+    ],
   );
 
-  // follow-up 排队（W6-2）：streaming 期间 ⌘/Ctrl+Enter 把文本排入待发
-  // 队列，本轮结束后自动作为下一轮发出。与转向（注入当前回合）相对。
-  // 切回后的远端回合没有本地 follow-up 队列可挂，降级为注入当前回合。
+  // follow-up 排队（W6-2）：streaming 期间 Enter 把文本排入待发队列，
+  // 本轮结束后自动作为下一轮发出。与 ⌘/Ctrl+Enter 插队相对。
   const handleFollowUp = useCallback(
     (text: string) => {
       if (remoteStreaming) {
-        void steerRemote(text);
+        updateRemoteFollowUps((current) => [...current, text]);
         return;
       }
       followUpUserMessage({ content: text });
     },
-    [remoteStreaming, steerRemote, followUpUserMessage],
+    [remoteStreaming, followUpUserMessage, updateRemoteFollowUps],
   );
 
   // 首页输入框接力：EmptyChatGate 建好 chat 并跳转后，首条消息暂存在
@@ -1079,6 +1135,20 @@ function AgentChatView({
       suggestedReplies.messageId === tailAssistantDbId)
       ? suggestedReplies.suggestions
       : undefined;
+  const visiblePendingFollowUps = [
+    ...pendingFollowUps.map((message) => message.content),
+    ...remoteFollowUps,
+  ];
+  const handleRemovePendingFollowUp = (index: number) => {
+    if (index < pendingFollowUps.length) {
+      removeFollowUp(index);
+      return;
+    }
+    const remoteIndex = index - pendingFollowUps.length;
+    updateRemoteFollowUps((current) =>
+      current.filter((_, itemIndex) => itemIndex !== remoteIndex),
+    );
+  };
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -1095,8 +1165,8 @@ function AgentChatView({
         onCancel={handleCancel}
         onSteer={handleSteer}
         onFollowUp={handleFollowUp}
-        pendingFollowUps={pendingFollowUps.map((m) => m.content)}
-        onRemoveFollowUp={removeFollowUp}
+        pendingFollowUps={visiblePendingFollowUps}
+        onRemoveFollowUp={handleRemovePendingFollowUp}
         className="flex-1"
         emptyHero
         header={
