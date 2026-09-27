@@ -805,7 +805,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     ref,
   ) {
     const askUserPrompt = useAskUserPrompt(chatId);
-    const approvalPrompt = useApprovalPrompt();
+    const approvalPrompt = useApprovalPrompt(chatId);
     const editorRef = useRef<HTMLDivElement>(null);
     const agentMenuRef = useRef<HTMLDivElement>(null);
     const skillOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);

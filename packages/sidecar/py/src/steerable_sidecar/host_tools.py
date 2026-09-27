@@ -103,23 +103,29 @@ class HostApprover:
         method: str = "approval.request",
         timeout: float | None = None,
         amendment_sink: Any | None = None,
+        chat_id: str | None = None,
     ) -> None:
         self._server = server
         self._method = method
         self._timeout = timeout
         self._amendment_sink = amendment_sink
+        self._chat_id = chat_id if isinstance(chat_id, str) and chat_id else None
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
+        params: dict[str, Any] = {
+            "toolName": request.tool_name,
+            "arguments": request.arguments,
+            "mode": request.mode,
+            "category": request.category,
+            "round": request.round_index,
+        }
+        if self._chat_id:
+            # The renderer only shows the card in the chat that asked.
+            params["chatId"] = self._chat_id
         try:
             payload: Any = await self._server.call(
                 self._method,
-                {
-                    "toolName": request.tool_name,
-                    "arguments": request.arguments,
-                    "mode": request.mode,
-                    "category": request.category,
-                    "round": request.round_index,
-                },
+                params,
                 timeout=self._timeout,
             )
         except Exception as exc:  # noqa: BLE001 — fail closed

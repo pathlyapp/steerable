@@ -1883,7 +1883,39 @@ class Sidecar:
             # updates the live in-memory policy too, so an amendment takes
             # effect within the same run, not just on the next one.
             approver: Any
+            approval_chat_id = _approval_prompt_chat_id(params)
             policy_path = approval.get("policyPath")
+            # In-project file targets do not ask. The prompt stays for calls
+            # that leave the writable roots, and for tools whose paths we
+            # cannot see (shell). allow_once is not cached, so the next call
+            # is judged on its own paths. Sits under policy rules so an
+            # explicit deny still wins.
+            writable_roots = (
+                [
+                    str(root)
+                    for root in (exec_sandbox.get("writableRoots") or [])
+                    if root
+                ]
+                if (
+                    approval["mode"] == "host"
+                    and isinstance(exec_sandbox, dict)
+                    and exec_sandbox.get("enabled")
+                )
+                else []
+            )
+
+            def _host_approver(amendment_sink: Any | None = None) -> Any:
+                host = HostApprover(
+                    self.server,
+                    amendment_sink=amendment_sink,
+                    chat_id=approval_chat_id,
+                )
+                if not writable_roots:
+                    return host
+                from steerable_agent_runtime.approval import WorkspaceAutoApprover
+
+                return WorkspaceAutoApprover(host, writable_roots)
+
             if policy_path:
                 from steerable_agent_runtime import (
                     JsonApprovalPolicyStore,
@@ -1900,13 +1932,13 @@ class Sidecar:
                 base = (
                     AutoApprover()
                     if approval["mode"] == "auto"
-                    else HostApprover(self.server, amendment_sink=_amendment_sink)
+                    else _host_approver(_amendment_sink)
                 )
                 approver = PolicyApprover(base, live_policy)
             elif approval["mode"] == "auto":
                 approver = AutoApprover()
             else:
-                approver = HostApprover(self.server)
+                approver = _host_approver()
             executor = ApprovalExecutor(
                 executor,
                 approver,
@@ -2636,6 +2668,24 @@ def _connect_stdio_threaded() -> tuple[asyncio.StreamReader, Any]:
         target=_pump_stdin, name="sidecar-stdin-pump", daemon=True
     ).start()
     return reader, _ThreadedStdoutWriter()
+
+
+def _approval_prompt_chat_id(params: dict[str, Any]) -> str | None:
+    """Chat the approval card belongs to.
+
+    A background task streams under ``task:<id>`` while the user stays in
+    the parent conversation (``toolContext.chatId``). Otherwise the stream
+    ``chatId`` is that conversation.
+    """
+    tool_context = params.get("toolContext")
+    if isinstance(tool_context, dict):
+        raw = tool_context.get("chatId")
+        if isinstance(raw, str) and raw:
+            return raw
+    raw = params.get("chatId")
+    if isinstance(raw, str) and raw:
+        return raw
+    return None
 
 
 def _require_params(params: Any) -> dict[str, Any]:

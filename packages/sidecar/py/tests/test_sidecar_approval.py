@@ -199,12 +199,97 @@ async def test_host_mode_asks_and_executes_on_allow() -> None:
     )
     sidecar.server.attach_writer(host)
 
-    await _run_stream(sidecar, _base_params(approval={"mode": "host"}))
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host"},
+            chatId="task:1",
+            toolContext={"mode": "agent", "chatId": "chat-parent"},
+        ),
+    )
 
     assert len(host.approval_requests) == 1
     assert host.approval_requests[0]["toolName"] == "delete_file"
     assert host.approval_requests[0]["mode"] == "destructive"
+    # Task streams run under task:<id>; the card belongs to the parent chat.
+    assert host.approval_requests[0]["chatId"] == "chat-parent"
     assert [c["name"] for c in host.reverse_calls] == ["delete_file"]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_skips_prompt_for_files_inside_writable_roots(tmp_path) -> None:
+    project = tmp_path / "111-2"
+    project.mkdir()
+    pptx = project / "自我介绍.pptx"
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="c1",
+                    name="present_files",
+                    arguments={"files": [{"path": str(pptx)}]},
+                )
+            ),
+            _text_round("shown"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"present_files": {"success": True, "data": {"files": []}}},
+        approvals={"kind": "deny_once", "reason": "should not ask"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host"},
+            execSandbox={"enabled": True, "writableRoots": [str(project)]},
+        ),
+    )
+
+    assert host.approval_requests == []
+    assert [c["name"] for c in host.reverse_calls] == ["present_files"]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_still_asks_for_files_outside_writable_roots(tmp_path) -> None:
+    project = tmp_path / "111-2"
+    project.mkdir()
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="c1",
+                    name="present_files",
+                    arguments={"files": [{"path": str(tmp_path / "other.pptx")}]},
+                )
+            ),
+            _text_round("shown"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"present_files": {"success": True, "data": {"files": []}}},
+        approvals={"kind": "allow_once"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host"},
+            execSandbox={"enabled": True, "writableRoots": [str(project)]},
+        ),
+    )
+
+    assert len(host.approval_requests) == 1
+    assert host.approval_requests[0]["toolName"] == "present_files"
+    assert [c["name"] for c in host.reverse_calls] == ["present_files"]
 
 
 @pytest.mark.asyncio
@@ -287,6 +372,7 @@ async def test_session_decision_carries_across_turns_of_one_chat() -> None:
     # second turn's decision came from the chat's session cache.
     assert [c["name"] for c in host.reverse_calls] == ["delete_file", "delete_file"]
     assert len(host.approval_requests) == 1
+    assert host.approval_requests[0]["chatId"] == "chat-session"
 
 
 @pytest.mark.asyncio

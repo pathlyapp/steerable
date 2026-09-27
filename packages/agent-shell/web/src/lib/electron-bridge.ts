@@ -48,6 +48,7 @@ export interface ApprovalPromptRequest {
   mode: string;
   category: string;
   round: number;
+  /** 发起审批的对话。缺省时卡片不绑定会话（旧请求）。 */
   chatId?: string;
 }
 

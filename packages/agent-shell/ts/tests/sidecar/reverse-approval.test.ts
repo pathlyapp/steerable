@@ -104,6 +104,20 @@ describe('createApprovalBridge', () => {
     await expect(second).resolves.toMatchObject({ kind: 'deny_once' });
   });
 
+  it('forwards chatId so the card stays on the chat that asked', () => {
+    const { bridge, sent } = makeBridge({});
+    void bridge.handler({
+      toolName: 'present_files',
+      arguments: { files: [] },
+      mode: 'other',
+      category: 'present_files',
+      round: 1,
+      chatId: 'chat-a',
+    });
+    expect(sent[0]?.chatId).toBe('chat-a');
+    expect(bridge.pending()[0]?.chatId).toBe('chat-a');
+  });
+
   it('covers exactly the 7 UI-decidable variants', () => {
     expect(APPROVAL_DECISION_KINDS).toEqual([
       'allow_once',

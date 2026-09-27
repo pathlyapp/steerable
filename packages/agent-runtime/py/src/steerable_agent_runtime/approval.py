@@ -53,6 +53,7 @@ __all__ = [
     "ApprovalStore",
     "Approver",
     "AutoApprover",
+    "WorkspaceAutoApprover",
     "InMemoryApprovalStore",
     "JsonApprovalStore",
     "SessionApprovalCache",
@@ -128,6 +129,91 @@ class Approver(Protocol):
     """
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision: ...
+
+
+_PATH_ARG_TOOLS = {
+    "local_read_file": "path",
+    "local_write_file": "path",
+    "local_edit_file": "path",
+    "view_image": "path",
+}
+
+
+def declared_target_paths(request: ApprovalRequest) -> list[str] | None:
+    """Filesystem targets of a path-scoped tool, or None when the call is not one.
+
+    ``None`` means the approver cannot prove the call stays inside the
+    project, so the interactive prompt still runs. Shell commands stay in
+    that bucket: the command text can name paths the cwd does not.
+    """
+    if request.tool_name == "present_files":
+        files = request.arguments.get("files")
+        if not isinstance(files, list) or not files:
+            return None
+        paths: list[str] = []
+        for item in files:
+            if not isinstance(item, dict):
+                return None
+            raw = item.get("path")
+            if not isinstance(raw, str) or not raw.strip():
+                return None
+            paths.append(raw.strip())
+        return paths
+    key = _PATH_ARG_TOOLS.get(request.tool_name)
+    if key is None:
+        return None
+    raw = request.arguments.get(key)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    return [raw.strip()]
+
+
+def path_inside_writable_roots(raw: str, roots: list[str]) -> bool:
+    """True when ``raw`` is the configured directory or one of its subdirectories.
+
+    Relative paths are project-relative. A ``..`` segment can leave the
+    project, so those still go to the prompt. Absolute paths must sit under
+    one of ``roots``.
+    """
+    expanded = os.path.expanduser(raw.strip())
+    if not os.path.isabs(expanded):
+        normalized = os.path.normpath(expanded)
+        return normalized != ".." and not normalized.startswith(".." + os.sep)
+    target = os.path.abspath(expanded)
+    for root in roots:
+        if not isinstance(root, str) or not root.strip():
+            continue
+        root_abs = os.path.abspath(os.path.expanduser(root.strip()))
+        try:
+            if os.path.commonpath([target, root_abs]) == root_abs:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+class WorkspaceAutoApprover:
+    """Skip the host prompt when every declared path is already inside a writable root.
+
+    The allow is request-scoped. The next call is judged again, so an
+    in-project ``present_files`` does not grant the same tool outside the
+    project. Calls with no path we can check, or any path outside the roots,
+    fall through to the inner approver.
+    """
+
+    def __init__(self, inner: Approver, writable_roots: list[str]) -> None:
+        self._inner = inner
+        self._roots = [root for root in writable_roots if isinstance(root, str) and root.strip()]
+
+    async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
+        paths = declared_target_paths(request)
+        if (
+            self._roots
+            and paths is not None
+            and all(path_inside_writable_roots(path, self._roots) for path in paths)
+        ):
+            return ApprovalDecision("allow_once", "path is inside a writable project root")
+        return await self._inner.approve(request)
 
 
 class AutoApprover:

@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { getElectronBridge, type AskUserPromptRequest } from '@/lib/electron-bridge';
+import { bindPromptToActiveChat, promptVisibleInChat } from './prompt-chat-scope';
 
 type AnswerValue = string | string[];
 
@@ -21,38 +22,6 @@ interface AskUserPromptView {
   current: AskUserPromptRequest | null;
   pendingCount: number;
   answer: (answers: Record<string, AnswerValue>) => void;
-}
-
-/**
- * Chat id from `#/agent/:chatId` (hash router) or `/agent/:chatId`.
- * The running server build drops `chatId` on the ask-user payload.
- */
-function chatIdFromLocation(location: { pathname: string; hash: string }): string | null {
-  const hashed = location.hash.startsWith('#') ? location.hash.slice(1) : '';
-  const raw = hashed || location.pathname;
-  const match = raw.match(/\/agent\/([^/?#]+)/);
-  if (!match?.[1]) return null;
-  try {
-    return decodeURIComponent(match[1]);
-  } catch {
-    return match[1];
-  }
-}
-
-function bindPromptToActiveChat(request: AskUserPromptRequest): AskUserPromptRequest {
-  if (request.chatId) return request;
-  const chatId = chatIdFromLocation(window.location);
-  if (!chatId) return request;
-  return { ...request, chatId };
-}
-
-/** A prompt with a chat id belongs only to that chat. A prompt without one stays visible so an older request is still answerable. */
-function promptVisibleInChat(
-  request: AskUserPromptRequest,
-  chatId: string | null | undefined,
-): boolean {
-  if (!request.chatId) return !chatId;
-  return request.chatId === chatId;
 }
 
 const AskUserPromptContext = createContext<AskUserPromptContextValue | null>(null);

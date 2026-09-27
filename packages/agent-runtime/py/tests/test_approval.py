@@ -468,3 +468,104 @@ async def test_loop_abort_ends_turn_with_full_tool_responses() -> None:
     assert "user cancelled" in aborted
     assert "not executed" in skipped
     assert entries[3]["message"]["tool_call_id"] == "d2"
+
+
+# ---------------------------------------------------------------------------
+# In-project paths skip the prompt
+# ---------------------------------------------------------------------------
+
+
+def _request(name: str, arguments: dict[str, Any]) -> ApprovalRequest:
+    return ApprovalRequest(
+        tool_name=name,
+        arguments=arguments,
+        mode="other",
+        category=name,
+        round_index=0,
+        call_id="c1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_workspace_auto_approver_allows_paths_inside_writable_roots(tmp_path) -> None:
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover
+
+    project = tmp_path / "111-2"
+    project.mkdir()
+    inner = _ScriptedApprover([ApprovalDecision("deny_once", "should not ask")])
+    approver = WorkspaceAutoApprover(inner, [str(project)])
+    pptx = project / "自我介绍.pptx"
+
+    decision = await approver.approve(
+        _request("present_files", {"files": [{"path": str(pptx), "description": "deck"}]})
+    )
+    nested = await approver.approve(
+        _request("local_write_file", {"path": str(project / "notes" / "a.md"), "content": "x"})
+    )
+    relative = await approver.approve(
+        _request("local_read_file", {"path": "notes/a.md"})
+    )
+
+    assert decision.kind == "allow_once"
+    assert nested.kind == "allow_once"
+    assert relative.kind == "allow_once"
+    assert inner.requests == []
+
+
+@pytest.mark.asyncio
+async def test_workspace_auto_approver_asks_when_a_path_leaves_the_project(tmp_path) -> None:
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    inner = _ScriptedApprover([ApprovalDecision("allow_once", "user allowed")] * 5)
+    approver = WorkspaceAutoApprover(inner, [str(project)])
+
+    outside = await approver.approve(
+        _request("present_files", {"files": [{"path": str(tmp_path / "other" / "a.pptx")}]})
+    )
+    sibling = await approver.approve(
+        _request("local_read_file", {"path": str(tmp_path / "proj-evil" / "secret")})
+    )
+    escaped = await approver.approve(
+        _request("local_read_file", {"path": "../outside.txt"})
+    )
+    mixed = await approver.approve(
+        _request(
+            "present_files",
+            {"files": [{"path": str(project / "in.pptx")}, {"path": str(tmp_path / "out.pptx")}]},
+        )
+    )
+    shell = await approver.approve(
+        _request("local_exec_shell", {"command": "ls", "cwd": str(project)})
+    )
+
+    assert [item.kind for item in (outside, sibling, escaped, mixed, shell)] == ["allow_once"] * 5
+    assert [item.tool_name for item in inner.requests] == [
+        "present_files",
+        "local_read_file",
+        "local_read_file",
+        "present_files",
+        "local_exec_shell",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_workspace_auto_approver_does_not_cache_the_tool_name(tmp_path) -> None:
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    inner = _ScriptedApprover([ApprovalDecision("deny_once", "outside")])
+    approver = WorkspaceAutoApprover(inner, [str(project)])
+
+    inside = await approver.approve(
+        _request("present_files", {"files": [{"path": str(project / "a.pptx")}]})
+    )
+    outside = await approver.approve(
+        _request("present_files", {"files": [{"path": str(tmp_path / "b.pptx")}]})
+    )
+
+    assert inside.kind == "allow_once"
+    assert outside.kind == "deny_once"
+    assert len(inner.requests) == 1

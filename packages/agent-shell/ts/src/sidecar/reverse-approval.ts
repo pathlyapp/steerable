@@ -42,6 +42,8 @@ export interface ApprovalPromptRequest {
   mode: string;
   category: string;
   round: number;
+  /** Chat that asked. The renderer only shows the card in that composer. */
+  chatId?: string;
 }
 
 interface PendingApproval {
@@ -91,6 +93,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps): ApprovalBridge {
         return deny('no renderer window available to approve the call');
       }
       const requestId = randomUUID();
+      const chatId = typeof p.chatId === 'string' && p.chatId ? p.chatId : undefined;
       const prompt: ApprovalPromptRequest = {
         requestId,
         toolName,
@@ -101,6 +104,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps): ApprovalBridge {
         mode: typeof p.mode === 'string' ? p.mode : 'other',
         category: typeof p.category === 'string' ? p.category : toolName,
         round: typeof p.round === 'number' ? p.round : 0,
+        ...(chatId ? { chatId } : {}),
       };
       deps.onLog?.(`approval: prompting for ${toolName} (${prompt.mode}/${prompt.category})`);
       return await new Promise((resolve) => {

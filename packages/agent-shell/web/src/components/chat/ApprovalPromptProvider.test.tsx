@@ -77,4 +77,68 @@ describe('ApprovalPromptProvider', () => {
     expect(screen.queryByTestId('chat-composer')).toBeNull();
     expect(bridge.pending).toHaveBeenCalledOnce();
   });
+
+  it('binds an unscoped prompt to the open chat and hides it elsewhere', () => {
+    window.location.hash = '#/agent/chat-a';
+    const bridge = installBridge();
+    const { rerender } = render(
+      <ApprovalPromptProvider>
+        <ChatInput chatId="chat-b" value="" onChange={vi.fn()} onSubmit={vi.fn()} />
+      </ApprovalPromptProvider>,
+    );
+    act(() => bridge.emit(REQUEST));
+
+    expect(screen.queryByTestId('approval-composer')).toBeNull();
+    expect(screen.getByTestId('chat-composer')).toBeTruthy();
+
+    rerender(
+      <ApprovalPromptProvider>
+        <ChatInput chatId="chat-a" value="" onChange={vi.fn()} onSubmit={vi.fn()} />
+      </ApprovalPromptProvider>,
+    );
+    expect(screen.getByTestId('approval-composer')).toBeTruthy();
+    window.location.hash = '';
+  });
+
+  it('hides a prompt that belongs to another chat', () => {
+    const bridge = installBridge();
+    const { rerender } = render(
+      <ApprovalPromptProvider>
+        <ChatInput chatId="chat-b" value="" onChange={vi.fn()} onSubmit={vi.fn()} />
+      </ApprovalPromptProvider>,
+    );
+    act(() => bridge.emit({ ...REQUEST, chatId: 'chat-a' }));
+
+    expect(screen.queryByTestId('approval-composer')).toBeNull();
+    expect(screen.getByTestId('chat-composer')).toBeTruthy();
+
+    rerender(
+      <ApprovalPromptProvider>
+        <ChatInput chatId="chat-a" value="" onChange={vi.fn()} onSubmit={vi.fn()} />
+      </ApprovalPromptProvider>,
+    );
+
+    expect(screen.getByTestId('approval-composer')).toBeTruthy();
+    expect(screen.getByText(/local_exec_shell/)).toBeTruthy();
+  });
+
+  it('decides only the prompt belonging to this chat', () => {
+    const bridge = installBridge();
+    render(
+      <ApprovalPromptProvider>
+        <ChatInput chatId="chat-a" value="" onChange={vi.fn()} onSubmit={vi.fn()} />
+      </ApprovalPromptProvider>,
+    );
+    act(() => {
+      bridge.emit({ ...REQUEST, chatId: 'chat-b', requestId: 'approval-b' });
+      bridge.emit({ ...REQUEST, chatId: 'chat-a', requestId: 'approval-a' });
+    });
+
+    fireEvent.click(screen.getByText('允许一次'));
+    expect(bridge.decide).toHaveBeenCalledWith({
+      requestId: 'approval-a',
+      kind: 'allow_once',
+    });
+    expect(screen.getByTestId('chat-composer')).toBeTruthy();
+  });
 });

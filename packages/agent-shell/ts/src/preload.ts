@@ -262,6 +262,7 @@ const electronAPI = {
         mode: string;
         category: string;
         round: number;
+        chatId?: string;
       }) => void,
     ) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: unknown) => {
@@ -297,6 +298,7 @@ const electronAPI = {
         mode: string;
         category: string;
         round: number;
+        chatId?: string;
       }>
     > => {
       return await ipcRenderer.invoke('approval:pending');
