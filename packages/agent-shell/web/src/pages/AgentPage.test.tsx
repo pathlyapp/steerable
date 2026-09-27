@@ -40,6 +40,7 @@ const trackBehavior = vi.fn();
 
 vi.mock('@/lib/electron-bridge', () => ({
   isElectron: () => electronState.active,
+  getHostBridge: () => null,
   getElectronBridge: () =>
     electronState.active
       ? {
