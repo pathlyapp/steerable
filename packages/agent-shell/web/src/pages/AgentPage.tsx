@@ -52,11 +52,10 @@ import {
 import { ProjectTrustBanner } from "@/components/chat/ProjectTrustBanner";
 import {
   getChatLiveStream,
-  listProjects,
   type ChatLiveStream,
   type LocalChatMessage,
-  type LocalProject,
 } from "@/lib/local-api";
+import { useProjects } from "@/hooks/useProjects";
 import type { AgentOutletContext } from "@/layouts/AgentLayout";
 import {
   setPendingFirstMessage,
@@ -381,20 +380,8 @@ function AgentChatView({
 
   // 当前会话绑定的项目 — Codex 式 cwd 指示：输入框上方显示项目名徽章，
   // 点击可关联到其他项目 / 修改项目目录 / 移出项目。无项目会话不显示。
-  const [projects, setProjects] = useState<LocalProject[]>([]);
   const showProjectsChrome = hostToolChrome("projects");
-  const fetchProjects = useCallback(async () => {
-    if (!isElectron() || !hostToolChrome("projects")) return;
-    try {
-      const res = await listProjects();
-      setProjects(res.projects ?? []);
-    } catch {
-      /* 列表失败保持旧数据 */
-    }
-  }, []);
-  useEffect(() => {
-    void fetchProjects();
-  }, [fetchProjects]);
+  const { projects, refresh: fetchProjects } = useProjects();
   const chatProject = chat?.projectId
     ? (projects.find((p) => p.id === chat.projectId) ?? null)
     : null;
@@ -1282,7 +1269,6 @@ function EmptyChatGate() {
 
   // 落地页项目选择：还没有 chat 可绑，选中的 projectId 在首次提交
   // createChat 时一并传入。侧栏项目组「+」会带 ?projectId= 预选。
-  const [projects, setProjects] = useState<LocalProject[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     projectIdFromUrl,
   );
@@ -1290,18 +1276,7 @@ function EmptyChatGate() {
     setSelectedProjectId(projectIdFromUrl);
   }, [projectIdFromUrl]);
   const showProjectsChrome = hostToolChrome("projects");
-  const fetchProjects = useCallback(async () => {
-    if (!isElectron() || !hostToolChrome("projects")) return;
-    try {
-      const res = await listProjects();
-      setProjects(res.projects ?? []);
-    } catch {
-      /* 列表失败保持旧数据 */
-    }
-  }, []);
-  useEffect(() => {
-    void fetchProjects();
-  }, [fetchProjects]);
+  const { projects, refresh: fetchProjects } = useProjects();
 
   useEffect(() => {
     inputRef.current?.focusAtEnd();

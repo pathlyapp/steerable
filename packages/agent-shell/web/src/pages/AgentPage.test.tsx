@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import type { AgentOutletContext } from '@/layouts/AgentLayout';
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
+import { resetProjectsStoreForTests } from '@/hooks/useProjects';
 
 const electronState = { active: true };
 const bridgeRequest = vi.fn();
@@ -268,6 +269,7 @@ function pressEnter() {
 }
 
 beforeEach(() => {
+  resetProjectsStoreForTests();
   vi.clearAllMocks();
   localStorage.clear();
   electronState.active = true;

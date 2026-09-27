@@ -21,6 +21,7 @@ import type { ElectronBridge } from '@/lib/electron-bridge';
 import type { UseChatsAndAgentsResult } from '@/hooks/useChatsAndAgents';
 import type { LocalChat, LocalChatAgent, LocalProject } from '@/lib/local-api';
 import type { RightPanelState } from '@/layouts/AgentLayout';
+import { resetProjectsStoreForTests } from '@/hooks/useProjects';
 
 // 可控桥桩：bridgeStub 为 null 时 isElectron() = false（纯浏览器预览路径），
 // 项目模式用例经 enterElectron() 装上带 selectDirectory 的桥。
@@ -62,6 +63,7 @@ const originalPlatform = window.navigator.platform;
 const SIDEBAR_SECTIONS_KEY = 'deeppath.agent.sidebarSections';
 
 beforeEach(() => {
+  resetProjectsStoreForTests();
   localStorage.removeItem(SIDEBAR_SECTIONS_KEY);
   bridgeStub = null;
   listProjects.mockReset();

@@ -98,7 +98,6 @@ import {
   createProject,
   deleteProject,
   getChatLiveStream,
-  listProjects,
   openLocalPath,
   setChatPinned,
   updateProject,
@@ -109,6 +108,7 @@ import {
 import { usePendingAskUserChatIds } from "@/components/chat/AskUserPromptProvider";
 import { usePendingApprovalChatIds } from "@/components/chat/ApprovalPromptProvider";
 import type { UseChatsAndAgentsResult } from "@/hooks/useChatsAndAgents";
+import { useProjects } from "@/hooks/useProjects";
 import type { RightPanelState } from "@/layouts/AgentLayout";
 import { BrandLockup } from "@/components/BrandLockup";
 import {
@@ -477,10 +477,13 @@ export function AgentSidebar({
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
   // ───── 项目模式 ─────
-  // 项目列表从 local-backend 拉取（electron-store 持久化）。会话按
-  // projectId 分组：项目分组在上（组头 hover：+ 新建对话 / ·· 菜单），
-  // 无项目对话在下（日期分组）。
-  const [projects, setProjects] = useState<LocalProject[]>([]);
+  // 项目列表与输入框「关联到项目」共用 useProjects。会话按 projectId
+  // 分组：项目分组在上（组头 hover：+ 新建对话 / ·· 菜单），无项目对话在下。
+  const {
+    projects,
+    error: projectsLoadError,
+    refresh: fetchProjects,
+  } = useProjects();
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -503,21 +506,6 @@ export function AgentSidebar({
   } | null>(null);
 
   const showProjectsChrome = hostToolChrome("projects");
-
-  const fetchProjects = useCallback(async () => {
-    if (!isElectron() || !hostToolChrome("projects")) return;
-    try {
-      const res = await listProjects();
-      setProjects(res.projects || []);
-    } catch (err) {
-      console.error("获取项目列表失败:", err);
-      setProjectError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchProjects();
-  }, [fetchProjects]);
 
   const handleCreateProject = useCallback(
     async (input: { name: string; sourceFolders: string[] }) => {
@@ -1290,12 +1278,12 @@ export function AgentSidebar({
         </div>
       </div>
 
-      {(error || projectError) && (
+      {(error || projectError || projectsLoadError) && (
         <div
           className="flex-shrink-0 border-t border-agent-destructive/40 bg-agent-destructive/10 px-2.5 py-1.5 text-[11px] text-agent-destructive"
           role="alert"
         >
-          {error ?? projectError}
+          {error ?? projectError ?? projectsLoadError}
         </div>
       )}
 

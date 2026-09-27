@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ElectronBridge } from '@/lib/electron-bridge';
 import type { UseChatsAndAgentsResult } from '@/hooks/useChatsAndAgents';
 import type { LocalProject } from '@/lib/local-api';
+import { resetProjectsStoreForTests } from '@/hooks/useProjects';
 
 const chromeOff = new Set<string>();
 const settingsOff = new Set<string>();
@@ -49,6 +50,7 @@ const { AgentSidebar } = await import('./AgentSidebar');
 
 afterEach(() => {
   cleanup();
+  resetProjectsStoreForTests();
   chromeOff.clear();
   settingsOff.clear();
   bridgeStub = null;
