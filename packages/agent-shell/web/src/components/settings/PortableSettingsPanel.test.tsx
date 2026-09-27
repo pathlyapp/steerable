@@ -96,4 +96,68 @@ describe('PortableSettingsPanel', () => {
     expect(body.kind).toBe('steerable-chats');
     expect(body.chats.map((item) => item.chat.title)).toEqual(['周报']);
   });
+
+  it('导入对话只接受对话包，配置包改走导入配置', async () => {
+    bridge.request.mockResolvedValue({
+      kind: 'steerable-config',
+      includeSecrets: false,
+      sections: [],
+    });
+    const picker = stubJsonPicker(JSON.stringify({ kind: 'steerable-config' }));
+
+    render(<PortableSettingsPanel />);
+    fireEvent.click(screen.getByTestId('portable-import-chats'));
+
+    expect((await screen.findByTestId('portable-error')).textContent).toContain('这是配置包，请用「导入配置」');
+    expect(screen.queryByTestId('portable-import-chat-form')).toBeNull();
+    picker.mockRestore();
+  });
+
+  it('导入对话选出对话包后确认导入', async () => {
+    bridge.request.mockImplementation(async (input: { method: string; path: string }) => {
+      if (input.method === 'POST' && input.path === '/api/v2/portable/preview') {
+        return {
+          kind: 'steerable-chat',
+          includeSecrets: false,
+          sections: [],
+          chat: {
+            title: '周报',
+            messageCount: 2,
+            attachmentCount: 0,
+            omittedAttachmentCount: 0,
+            truncated: false,
+          },
+        };
+      }
+      if (input.method === 'POST' && input.path === '/api/v2/portable/chats') {
+        return { chatId: 'new', title: '周报', messageCount: 2, attachmentsSaved: 0 };
+      }
+      throw new Error(`${input.method} ${input.path}`);
+    });
+    const picker = stubJsonPicker(JSON.stringify({ kind: 'steerable-chat' }));
+
+    render(<PortableSettingsPanel />);
+    fireEvent.click(screen.getByTestId('portable-import-chats'));
+    expect((await screen.findByTestId('portable-import-chat-form')).textContent).toContain('周报');
+    fireEvent.click(screen.getByTestId('portable-import-chat-confirm'));
+
+    expect((await screen.findByTestId('portable-status')).textContent).toContain('已导入对话「周报」');
+    picker.mockRestore();
+  });
 });
+
+function stubJsonPicker(text: string) {
+  const original = document.createElement.bind(document);
+  return vi.spyOn(document, 'createElement').mockImplementation((tag: string, options?: ElementCreationOptions) => {
+    const el = original(tag, options);
+    if (tag === 'input') {
+      const input = el as HTMLInputElement;
+      input.click = () => {
+        const file = new File([text], 'pack.json', { type: 'application/json' });
+        Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+        input.dispatchEvent(new Event('change'));
+      };
+    }
+    return el;
+  });
+}

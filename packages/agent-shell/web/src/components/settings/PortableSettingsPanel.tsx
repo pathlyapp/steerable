@@ -164,7 +164,7 @@ export function PortableSettingsPanel() {
     }
   };
 
-  const startImport = async () => {
+  const startImport = async (target: 'config' | 'chat') => {
     setError(null);
     setStatus(null);
     const text = await pickJsonFile();
@@ -177,13 +177,27 @@ export function PortableSettingsPanel() {
     setBusy(true);
     try {
       const next = await previewPortableDocument(parsed.value);
+      const isChat = next.kind === 'steerable-chat' || next.kind === 'steerable-chats';
+      if (target === 'chat' && !isChat) {
+        setPreview(null);
+        setDocument(null);
+        setMode('idle');
+        setError('这是配置包，请用「导入配置」');
+        return;
+      }
+      if (target === 'config' && isChat) {
+        setPreview(null);
+        setDocument(null);
+        setMode('idle');
+        setError('这是对话包，请用「导入对话」');
+        return;
+      }
       setDocument(parsed.value);
-      if (next.kind === 'steerable-chat' || next.kind === 'steerable-chats') {
-        setPreview(next);
+      setPreview(next);
+      if (isChat) {
         setMode('import-chat');
         return;
       }
-      setPreview(next);
       setSelected(new Set(next.sections.map((section) => section.id)));
       setMode('import');
     } catch (err) {
@@ -279,13 +293,23 @@ export function PortableSettingsPanel() {
         </button>
         <button
           type="button"
-          onClick={() => void startImport()}
+          onClick={() => void startImport('config')}
           disabled={busy}
           className="inline-flex h-7 items-center gap-1 rounded-full border border-agent-border px-2.5 text-xs text-agent-foreground hover:bg-agent-foreground/5 disabled:opacity-60"
           data-testid="portable-import-config"
         >
           <LuUpload className="h-3.5 w-3.5" />
-          导入
+          导入配置
+        </button>
+        <button
+          type="button"
+          onClick={() => void startImport('chat')}
+          disabled={busy}
+          className="inline-flex h-7 items-center gap-1 rounded-full border border-agent-border px-2.5 text-xs text-agent-foreground hover:bg-agent-foreground/5 disabled:opacity-60"
+          data-testid="portable-import-chats"
+        >
+          <LuUpload className="h-3.5 w-3.5" />
+          导入对话
         </button>
       </div>
 
@@ -404,7 +428,7 @@ export function PortableSettingsPanel() {
               className="h-7 rounded-full bg-agent-foreground px-2.5 text-xs text-agent-canvas disabled:opacity-60"
               data-testid="portable-import-chat-confirm"
             >
-              {busy ? '导入中' : '导入'}
+              {busy ? '导入中' : '导入对话'}
             </button>
             <button
               type="button"
@@ -441,7 +465,7 @@ export function PortableSettingsPanel() {
               className="h-7 rounded-full bg-agent-foreground px-2.5 text-xs text-agent-canvas disabled:opacity-60"
               data-testid="portable-import-confirm"
             >
-              {busy ? '导入中' : '导入'}
+              {busy ? '导入中' : '导入配置'}
             </button>
             <button
               type="button"
