@@ -9,7 +9,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
@@ -33,6 +33,34 @@ struct ProductRuntime {
 
 fn write_diag(dir: &Path, name: &str, body: &str) {
     let _ = std::fs::write(dir.join(name), body);
+}
+
+fn remember_line(recent: &Mutex<Vec<String>>, line: &str) {
+    let Ok(mut lines) = recent.lock() else {
+        return;
+    };
+    if lines.len() == 40 {
+        lines.remove(0);
+    }
+    lines.push(line.to_string());
+}
+
+fn format_host_exit(reason: &str, recent: &Mutex<Vec<String>>) -> String {
+    let detail = recent.lock().ok().and_then(|lines| {
+        lines
+            .iter()
+            .rev()
+            .find(|line| {
+                line.contains("failed to start")
+                    || line.contains("StoreAlreadyOwnedError")
+                    || line.contains("web build not found")
+            })
+            .cloned()
+    });
+    match detail {
+        Some(line) => format!("{reason}: {line}"),
+        None => reason.to_string(),
+    }
 }
 
 fn append_diag(dir: &Path, name: &str, line: &str) {
@@ -137,12 +165,16 @@ impl HostProcess {
             .ok_or_else(|| "Node host stderr was not piped".to_string())?;
 
         let (ready_tx, ready_rx) = mpsc::channel();
+        let (stderr_done_tx, stderr_done_rx) = mpsc::channel();
+        let recent = Arc::new(Mutex::new(Vec::<String>::new()));
         let stdout_dir = user_data.clone();
+        let stdout_recent = Arc::clone(&recent);
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 match line {
                     Ok(line) => {
                         println!("[node-host] {line}");
+                        remember_line(&stdout_recent, &line);
                         append_diag(&stdout_dir, "host-node.log", &line);
                         if let Some(record) = line.strip_prefix(READY_PREFIX) {
                             let parsed = serde_json::from_str::<ReadyRecord>(record)
@@ -163,11 +195,14 @@ impl HostProcess {
             }
         });
         let stderr_dir = user_data.clone();
+        let stderr_recent = Arc::clone(&recent);
         thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
                 eprintln!("[node-host] {line}");
+                remember_line(&stderr_recent, &line);
                 append_diag(&stderr_dir, "host-node.log", &line);
             }
+            let _ = stderr_done_tx.send(());
         });
 
         let started = Instant::now();
@@ -175,19 +210,28 @@ impl HostProcess {
             match ready_rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(result) => break result?,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = stderr_done_rx.recv_timeout(Duration::from_millis(500));
                     let _ = child.kill();
-                    return Err("Node host exited before reporting readiness".to_string());
+                    return Err(format_host_exit(
+                        "Node host exited before reporting readiness",
+                        &recent,
+                    ));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
             if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-                return Err(format!(
-                    "Node host exited before reporting readiness: {status}"
+                let _ = stderr_done_rx.recv_timeout(Duration::from_millis(500));
+                return Err(format_host_exit(
+                    &format!("Node host exited before reporting readiness: {status}"),
+                    &recent,
                 ));
             }
             if started.elapsed() >= START_TIMEOUT {
                 let _ = child.kill();
-                return Err("Node host did not become ready within 30 seconds".to_string());
+                return Err(format_host_exit(
+                    "Node host did not become ready within 30 seconds",
+                    &recent,
+                ));
             }
         };
         write_diag(

@@ -11,8 +11,11 @@ use python_runner::{
     python_runner_cancel, python_runner_download, python_runner_pick_local, python_runner_restart,
     python_runner_snapshot, python_runner_use_default, python_runner_use_local,
 };
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::Duration;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
@@ -100,6 +103,89 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+static REVEAL_WHEN_READY: AtomicBool = AtomicBool::new(false);
+static INSTANCE_PING: AtomicBool = AtomicBool::new(false);
+
+/// Shows the running desktop window.
+///
+/// Closing the macOS window hides it. `set_focus` then does nothing until
+/// `show` has run on the main thread, so the activation is posted again
+/// after that show.
+fn reveal_main_window(app: &tauri::AppHandle) {
+    if app.get_webview_window("main").is_none() {
+        REVEAL_WHEN_READY.store(true, Ordering::SeqCst);
+        return;
+    }
+    focus_main_window(app);
+    let later = app.clone();
+    let _ = app.run_on_main_thread(move || focus_main_window(&later));
+}
+
+fn focus_main_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+fn is_database_in_use(error: &str) -> bool {
+    error.contains("StoreAlreadyOwnedError") || error.contains("store already owned")
+}
+
+fn database_in_use_message(product_name: &str) -> String {
+    format!(
+        "再打开一次{product_name}时，会回到已经打开的窗口。\n\n\
+         这次没有回到那个窗口，是因为本地数据库正被另一个进程占用。\
+         如果终端里还在跑 pnpm dev:bs，先在那个终端按 Ctrl+C 停掉，再重新打开{product_name}。\n\n\
+         重新启动后的开发服务会使用单独的数据目录，之后可以和桌面版同时开。"
+    )
+}
+
+/// Asks an already running desktop app to reveal its window.
+///
+/// A ping that this process receives itself means the database is held by
+/// something other than a second copy of the app.
+fn wake_other_desktop_app(app: &tauri::AppHandle) -> bool {
+    #[cfg(unix)]
+    {
+        INSTANCE_PING.store(false, Ordering::SeqCst);
+        if ping_single_instance(&app.config().identifier).is_err() {
+            return false;
+        }
+        for _ in 0..10 {
+            if INSTANCE_PING.load(Ordering::SeqCst) {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        true
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = app;
+        false
+    }
+}
+
+#[cfg(unix)]
+fn ping_single_instance(identifier: &str) -> std::io::Result<()> {
+    let socket = PathBuf::from(format!(
+        "/tmp/{}_si.sock",
+        identifier.replace(['.', '-'], "_")
+    ));
+    let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
+    stream.set_write_timeout(Some(Duration::from_millis(200)))?;
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let args = std::env::args().collect::<Vec<_>>().join("\0");
+    stream.write_all(cwd.to_string_lossy().as_bytes())?;
+    stream.write_all(b"\0\0")?;
+    stream.write_all(args.as_bytes())?;
+    stream.flush()?;
+    Ok(())
+}
+
 /// Runs a Tauri desktop shell around the shared Node HostRuntime.
 pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
     let product_name = config.product_name.clone();
@@ -107,11 +193,8 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
         .manage(update::UpdateState::default())
         .manage(python_runner::PythonRunnerState::default())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            INSTANCE_PING.store(true, Ordering::SeqCst);
+            reveal_main_window(app);
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
@@ -139,12 +222,30 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
                 let (host, url) = match HostProcess::spawn(&handle, &config) {
                     Ok(started) => started,
                     Err(error) => {
+                        if is_database_in_use(&error) && wake_other_desktop_app(&handle) {
+                            handle.exit(0);
+                            return;
+                        }
+                        let database_in_use = is_database_in_use(&error);
+                        let message = if database_in_use {
+                            database_in_use_message(&config.product_name)
+                        } else {
+                            error
+                        };
                         let exit_handle = handle.clone();
                         handle
                             .dialog()
-                            .message(error)
-                            .title(format!("{} 无法启动", config.product_name))
-                            .kind(MessageDialogKind::Error)
+                            .message(message)
+                            .title(if database_in_use {
+                                format!("{} 无法再开一个", config.product_name)
+                            } else {
+                                format!("{} 无法启动", config.product_name)
+                            })
+                            .kind(if database_in_use {
+                                MessageDialogKind::Warning
+                            } else {
+                                MessageDialogKind::Error
+                            })
                             .show(move |_| exit_handle.exit(1));
                         return;
                     }
@@ -169,6 +270,9 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
                         .kind(MessageDialogKind::Error)
                         .show(move |_| exit_handle.exit(1));
                     return;
+                }
+                if REVEAL_WHEN_READY.swap(false, Ordering::SeqCst) {
+                    focus_main_window(&handle);
                 }
                 python_runner::maybe_prompt(&handle);
                 update::start(&handle);
@@ -204,12 +308,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
             app.exit(0);
         }
         #[cfg(target_os = "macos")]
-        RunEvent::Reopen { .. } => {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }
+        RunEvent::Reopen { .. } => reveal_main_window(app),
         _ => {}
     });
 }

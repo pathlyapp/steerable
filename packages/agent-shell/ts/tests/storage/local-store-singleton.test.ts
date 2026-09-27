@@ -47,8 +47,8 @@ describe('acquireWriteLeaseOrExit', () => {
     // The dialog + exit fire on the microtask after the throw.
     await vi.waitFor(() => {
       expect(showErrorBox).toHaveBeenCalledWith(
-        '无法启动',
-        expect.stringContaining('另一个实例正在运行'),
+        '无法再开一个',
+        expect.stringContaining('回到已经打开的窗口'),
       );
       expect(appExit).toHaveBeenCalledWith(1);
     });
