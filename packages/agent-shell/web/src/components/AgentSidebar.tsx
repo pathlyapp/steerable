@@ -936,7 +936,8 @@ export function AgentSidebar({
             </div>
           ) : (
             <>
-              {/* 1. 置顶 (Pinned) */}
+              {/* 1. 置顶 (Pinned)：没有置顶会话时整组不出现 */}
+              {pinnedChats.length > 0 && (
               <div className="mb-1.5">
                 <div className="group/section flex h-7 items-center justify-between rounded-agent-md px-1.5 text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground">
                   <button
@@ -954,16 +955,11 @@ export function AgentSidebar({
                 </div>
                 {isPinnedExpanded && (
                   <div className="space-y-0.5">
-                    {pinnedChats.length === 0 ? (
-                      <div className="px-2.5 py-1 text-[11px] text-agent-muted-foreground/60">
-                        暂无置顶会话
-                      </div>
-                    ) : (
-                      pinnedChats.map((chat) => renderChatRow(chat))
-                    )}
+                    {pinnedChats.map((chat) => renderChatRow(chat))}
                   </div>
                 )}
               </div>
+              )}
 
               {/* 2. 项目 (Projects) */}
               {showProjectsChrome && (

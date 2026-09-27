@@ -293,6 +293,14 @@ describe('AgentSidebar 会话列表渲染', () => {
     expect(chatRow('c-no-agent').textContent).toContain('无智能体会话');
   });
 
+  it('没有置顶会话时不显示置顶分组', () => {
+    renderSidebar('/agent', vi.fn(), {
+      data: { chats: [makeChat({ id: 'c-plain', title: '普通会话' })] },
+    });
+    expect(screen.queryByText('置顶')).toBeNull();
+    expect(screen.queryByText('暂无置顶会话')).toBeNull();
+  });
+
   it('同一日期分组内置顶会话排在普通会话之前', () => {
     const pinnedEarly = makeChat({
       id: 'c-pinned',
