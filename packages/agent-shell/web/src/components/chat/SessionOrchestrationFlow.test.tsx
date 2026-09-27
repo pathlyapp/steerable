@@ -109,5 +109,43 @@ describe('SessionOrchestrationFlow', () => {
     expect(screen.getByText('已完成')).toBeTruthy();
     expect(screen.getAllByText('过程').length).toBe(3);
   });
+
+  it('shows a stopped flow instead of waiting on join', () => {
+    const STOPPED_FLOW: OrchestrationFlowData = {
+      nodes: [
+        {
+          childId: '0.1',
+          task: '已完成的侦察',
+          status: 'completed',
+          answer: '结论',
+          steers: [],
+        },
+        {
+          childId: '0.2',
+          task: '被停掉的侦察',
+          status: 'cancelled',
+          steers: [],
+        },
+      ],
+      totalCount: 2,
+      completedCount: 1,
+      runningCount: 0,
+      failedCount: 0,
+      interruptedCount: 0,
+      closedCount: 1,
+      isAllCompleted: false,
+      hasActive: false,
+      summaryCopy: '1 完成 · 1 结束 (2 个子任务)',
+    };
+
+    render(<SessionOrchestrationFlow flow={STOPPED_FLOW} />);
+    fireEvent.click(screen.getByRole('button', { name: /协同编排已停止/ }));
+
+    expect(screen.getAllByText('已停止').length).toBeGreaterThan(0);
+    expect(screen.getByText('已完成')).toBeTruthy();
+    expect(screen.getAllByText('1 完成 · 1 结束 (2 个子任务)').length).toBeGreaterThan(0);
+    expect(screen.queryByText('等待分支就绪...')).toBeNull();
+    expect(screen.queryByText(/协同执行中/)).toBeNull();
+  });
 });
 

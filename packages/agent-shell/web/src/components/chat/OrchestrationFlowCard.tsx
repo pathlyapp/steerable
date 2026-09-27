@@ -35,6 +35,8 @@ function NodeStatusIcon({
       return <LuCircleDot className={`${cls} animate-pulse text-blue-600 dark:text-blue-400`} />;
     case 'interrupted':
       return <LuCirclePause className={`${cls} text-amber-600 dark:text-amber-400`} />;
+    case 'cancelled':
+      return <LuCircleX className={`${cls} text-agent-foreground`} />;
     case 'closed':
       return <LuCircleX className={`${cls} text-agent-muted-foreground`} />;
     case 'failed':
@@ -53,6 +55,8 @@ function statusBadgeText(status: OrchestrationNodeStatus): string {
       return '执行中';
     case 'interrupted':
       return '已暂停';
+    case 'cancelled':
+      return '已停止';
     case 'closed':
       return '已关闭';
     case 'failed':
@@ -71,6 +75,8 @@ function statusBadgeStyle(status: OrchestrationNodeStatus): string {
       return 'bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20';
     case 'interrupted':
       return 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20';
+    case 'cancelled':
+      return 'bg-agent-muted text-agent-foreground border-agent-border';
     case 'closed':
       return 'bg-agent-muted text-agent-muted-foreground border-agent-border';
     case 'failed':
@@ -415,10 +421,10 @@ export function OrchestrationFlowCard({
 
                       {/* 追加指令 */}
                       {node.steers.length > 0 ? (
-                        <div className="mt-1.5 space-y-0.5 rounded bg-amber-500/5 p-1 text-[10px] text-amber-800 dark:text-amber-200">
+                        <div className="mt-1.5 space-y-0.5 rounded border border-amber-800/20 bg-amber-100 px-1.5 py-1 text-[10px] text-amber-950">
                           {node.steers.map((s, sIdx) => (
                             <div key={sIdx} className="flex items-start gap-1">
-                              <LuMessageSquare className="mt-0.5 h-2.5 w-2.5 shrink-0 text-amber-600" />
+                              <LuMessageSquare className="mt-0.5 h-2.5 w-2.5 shrink-0 text-amber-900" />
                               <span className="truncate">{s.message}</span>
                             </div>
                           ))}
@@ -461,7 +467,11 @@ export function OrchestrationFlowCard({
               <LuCircleCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
               <span>结果汇聚 (Join)</span>
               <span className="text-[10px] opacity-80">
-                {isAllCompleted ? '所有分支已汇聚并完成回答' : '等待分支就绪...'}
+                {isAllCompleted
+                  ? '所有分支已汇聚并完成回答'
+                  : hasActive
+                    ? '等待分支就绪...'
+                    : '已停止'}
               </span>
             </div>
           </div>

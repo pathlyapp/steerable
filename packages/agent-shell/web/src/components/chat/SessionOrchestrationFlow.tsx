@@ -37,12 +37,35 @@ function FlowNodeStatusIcon({
       return <LuCircleDot className={`${cls} animate-pulse text-blue-600 dark:text-blue-400`} />;
     case 'interrupted':
       return <LuCirclePause className={`${cls} text-amber-600 dark:text-amber-400`} />;
+    case 'cancelled':
+      return <LuCircleX className={`${cls} text-agent-foreground`} />;
     case 'closed':
     case 'failed':
       return <LuCircleX className={`${cls} text-agent-destructive`} />;
     case 'pending':
     default:
       return <LuCircle className={`${cls} text-agent-muted-foreground/60`} />;
+  }
+}
+
+function statusBadgeText(status: OrchestrationNodeStatus): string {
+  switch (status) {
+    case 'completed':
+      return '已完成';
+    case 'running':
+      return '执行中';
+    case 'interrupted':
+      return '已暂停';
+    case 'cancelled':
+      return '已停止';
+    case 'closed':
+      return '已关闭';
+    case 'failed':
+      return '失败';
+    case 'pending':
+      return '等待中';
+    default:
+      return '等待中';
   }
 }
 
@@ -310,7 +333,7 @@ export function SessionOrchestrationFlow({
             ? 'border border-emerald-500/25 bg-emerald-500/[0.04] text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/[0.08]'
             : hasActive
               ? 'border border-violet-500/30 bg-violet-500/[0.06] text-violet-700 dark:text-violet-300 hover:bg-violet-500/10'
-              : 'border border-agent-border/80 bg-agent-canvas text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground',
+              : 'border border-agent-border/80 bg-agent-canvas text-agent-foreground hover:bg-agent-foreground/5',
         ].join(' ')}
         aria-expanded={expanded}
       >
@@ -327,7 +350,9 @@ export function SessionOrchestrationFlow({
         <span className="min-w-0 flex-1 truncate font-medium">
           {isAllCompleted
             ? '协同编排已就绪'
-            : (activeNode?.task ? activeNode.task : '协同编排流程')}
+            : hasActive
+              ? (activeNode?.task ? activeNode.task : '协同编排流程')
+              : '协同编排已停止'}
         </span>
 
         {summaryCopy ? (
@@ -337,7 +362,7 @@ export function SessionOrchestrationFlow({
                 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                 : hasActive
                   ? 'bg-violet-500/15 text-violet-700 dark:text-violet-300'
-                  : 'bg-agent-muted text-agent-muted-foreground'
+                  : 'bg-agent-muted text-agent-foreground'
             }`}
           >
             {summaryCopy}
@@ -374,7 +399,9 @@ export function SessionOrchestrationFlow({
                 className={`rounded-full px-1.5 py-0.2 text-[10px] font-medium ${
                   isAllCompleted
                     ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                    : 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
+                    : hasActive
+                      ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
+                      : 'bg-agent-muted text-agent-foreground'
                 }`}
               >
                 {summaryCopy}
@@ -410,6 +437,7 @@ export function SessionOrchestrationFlow({
                 {nodes.map((node, index) => {
                   const done = node.status === 'completed';
                   const active = node.status === 'running' || node.status === 'pending';
+                  const stopped = node.status === 'cancelled' || node.status === 'interrupted';
                   const canInspect = Boolean(chatId && onInspectTask && node.recordId);
 
                   return (
@@ -434,10 +462,12 @@ export function SessionOrchestrationFlow({
                                   ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
                                   : active
                                     ? 'border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300'
-                                    : 'border-agent-border bg-agent-muted text-agent-muted-foreground'
+                                    : stopped
+                                      ? 'border-agent-border bg-agent-muted text-agent-foreground'
+                                      : 'border-agent-border bg-agent-muted text-agent-muted-foreground'
                               }`}
                             >
-                              {done ? '已完成' : active ? '执行中' : '等待中'}
+                              {statusBadgeText(node.status)}
                             </span>
                             {canInspect && chatId ? (
                               <button
@@ -479,10 +509,10 @@ export function SessionOrchestrationFlow({
 
                         {/* 追加指令 (Steer) */}
                         {node.steers.length > 0 ? (
-                          <div className="mt-1.5 space-y-0.5 rounded bg-amber-500/5 p-1 text-[10px] text-amber-800 dark:text-amber-200">
+                          <div className="mt-1.5 space-y-0.5 rounded border border-amber-800/20 bg-amber-100 px-1.5 py-1 text-[10px] text-amber-950">
                             {node.steers.map((s, sIdx) => (
                               <div key={sIdx} className="flex items-start gap-1">
-                                <LuMessageSquare className="mt-0.5 h-2.5 w-2.5 shrink-0 text-amber-600" />
+                                <LuMessageSquare className="mt-0.5 h-2.5 w-2.5 shrink-0 text-amber-900" />
                                 <span className="truncate">{s.message}</span>
                               </div>
                             ))}
@@ -525,7 +555,11 @@ export function SessionOrchestrationFlow({
                 <LuCircleCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
                 <span>结果汇聚 (Join)</span>
                 <span className="text-[10px] opacity-80">
-                  {isAllCompleted ? '所有分支已汇聚并完成回答' : '等待分支就绪...'}
+                  {isAllCompleted
+                    ? '所有分支已汇聚并完成回答'
+                    : hasActive
+                      ? '等待分支就绪...'
+                      : '已停止'}
                 </span>
               </div>
             </div>

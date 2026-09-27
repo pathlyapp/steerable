@@ -341,6 +341,7 @@ export function LocalChatPanel({
         orchestrationChildrenByMessageId,
         timelineByMessageId,
         currentTurnTimeline,
+        turnActive: isStreaming,
       }),
     [
       messages,
@@ -350,6 +351,7 @@ export function LocalChatPanel({
       orchestrationChildrenByMessageId,
       timelineByMessageId,
       currentTurnTimeline,
+      isStreaming,
     ],
   );
 

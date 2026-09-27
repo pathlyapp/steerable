@@ -29,7 +29,8 @@ export type OrchestrationNodeStatus =
   | 'completed'
   | 'failed'
   | 'interrupted'
-  | 'closed';
+  | 'closed'
+  | 'cancelled';
 
 export interface OrchestrationSteer {
   message: string;
@@ -70,6 +71,77 @@ interface ActionLike {
   result?: unknown;
 }
 
+function toNodeStatus(raw: string | undefined): OrchestrationNodeStatus {
+  switch (raw) {
+    case 'pending':
+    case 'running':
+    case 'completed':
+    case 'failed':
+    case 'interrupted':
+    case 'closed':
+    case 'cancelled':
+      return raw;
+    case 'error':
+      return 'failed';
+    default:
+      return 'running';
+  }
+}
+
+function buildOrchestrationFlow(nodes: OrchestrationChildNode[]): OrchestrationFlowData | null {
+  if (nodes.length === 0) return null;
+
+  const totalCount = nodes.length;
+  const completedCount = nodes.filter((n) => n.status === 'completed').length;
+  const runningCount = nodes.filter((n) => n.status === 'running' || n.status === 'pending').length;
+  const failedCount = nodes.filter((n) => n.status === 'failed').length;
+  const interruptedCount = nodes.filter((n) => n.status === 'interrupted').length;
+  const closedCount = nodes.filter((n) => n.status === 'closed' || n.status === 'cancelled').length;
+  const isAllCompleted = totalCount > 0 && completedCount === totalCount;
+  const hasActive = runningCount > 0;
+
+  let summaryCopy = '';
+  if (isAllCompleted) {
+    summaryCopy = `${completedCount}/${totalCount} 全部完成`;
+  } else if (hasActive) {
+    summaryCopy = `协同执行中 (${completedCount}/${totalCount} 完成)...`;
+  } else {
+    summaryCopy = `${completedCount} 完成 · ${totalCount - completedCount} 结束 (${totalCount} 个子任务)`;
+  }
+
+  return {
+    nodes,
+    totalCount,
+    completedCount,
+    runningCount,
+    failedCount,
+    interruptedCount,
+    closedCount,
+    isAllCompleted,
+    hasActive,
+    summaryCopy,
+  };
+}
+
+/**
+ * 父回合已经结束时，还标着 running/pending 的分支不会再收到子代理终态
+ * （停止发生在流关闭之后）。把它们收成 cancelled，避免胶囊一直停在「协同执行中」。
+ */
+export function settleStoppedOrchestration(flow: OrchestrationFlowData): OrchestrationFlowData {
+  if (!flow.nodes.some((node) => node.status === 'running' || node.status === 'pending')) {
+    return flow;
+  }
+  return (
+    buildOrchestrationFlow(
+      flow.nodes.map((node) =>
+        node.status === 'running' || node.status === 'pending'
+          ? { ...node, status: 'cancelled' }
+          : node,
+      ),
+    ) ?? flow
+  );
+}
+
 function safeParseJson(value: unknown): Record<string, unknown> | null {
   if (!value) return null;
   if (typeof value === 'object' && !Array.isArray(value)) {
@@ -104,7 +176,7 @@ export function extractOrchestrationFlow(
       nodeMap.set(c.childId, {
         childId: c.childId,
         task: c.task || '',
-        status: (c.status as OrchestrationNodeStatus) || 'running',
+        status: toNodeStatus(c.status),
         recordId: c.recordId,
         steers: [],
       });
@@ -189,6 +261,14 @@ export function extractOrchestrationFlow(
         } else if (waitStatus === 'failed' || waitStatus === 'error' || envelope.success === false) {
           node.status = 'failed';
           node.error = envelope.error || '执行失败';
+        } else if (waitStatus === 'cancelled') {
+          node.status = 'cancelled';
+        } else if (waitStatus === 'interrupted') {
+          node.interrupted = true;
+          node.status = 'interrupted';
+        } else if (waitStatus === 'closed') {
+          node.closed = true;
+          if (node.status !== 'completed') node.status = 'closed';
         } else if (waitStatus === 'running') {
           node.status = 'running';
         }
@@ -232,19 +312,26 @@ export function extractOrchestrationFlow(
           if (rawChild && typeof rawChild === 'object') {
             const cid = typeof rawChild.childId === 'string' ? rawChild.childId : '';
             if (!cid) continue;
+            const listedStatus =
+              typeof rawChild.status === 'string' ? toNodeStatus(rawChild.status) : undefined;
+            const listedAnswer =
+              (typeof rawChild.answer === 'string' && rawChild.answer) ||
+              (typeof rawChild.answerPreview === 'string' && rawChild.answerPreview) ||
+              '';
             let node = nodeMap.get(cid);
             if (!node) {
               node = {
                 childId: cid,
                 task: typeof rawChild.task === 'string' ? rawChild.task : '',
-                status: (rawChild.status as OrchestrationNodeStatus) || 'running',
-                answer: typeof rawChild.answer === 'string' ? rawChild.answer : undefined,
+                status: listedStatus ?? 'running',
+                answer: listedAnswer || undefined,
                 steers: [],
               };
               nodeMap.set(cid, node);
             } else {
               if (!node.task && rawChild.task) node.task = String(rawChild.task);
-              if (!node.answer && rawChild.answer) node.answer = String(rawChild.answer);
+              if (!node.answer && listedAnswer) node.answer = listedAnswer;
+              if (listedStatus) node.status = listedStatus;
             }
           }
         }
@@ -256,39 +343,7 @@ export function extractOrchestrationFlow(
     return null;
   }
 
-  const nodes = Array.from(nodeMap.values());
-  if (nodes.length === 0) return null;
-
-  const totalCount = nodes.length;
-  const completedCount = nodes.filter((n) => n.status === 'completed').length;
-  const runningCount = nodes.filter((n) => n.status === 'running' || n.status === 'pending').length;
-  const failedCount = nodes.filter((n) => n.status === 'failed').length;
-  const interruptedCount = nodes.filter((n) => n.status === 'interrupted').length;
-  const closedCount = nodes.filter((n) => n.status === 'closed').length;
-  const isAllCompleted = totalCount > 0 && completedCount === totalCount;
-  const hasActive = runningCount > 0;
-
-  let summaryCopy = '';
-  if (isAllCompleted) {
-    summaryCopy = `${completedCount}/${totalCount} 全部完成`;
-  } else if (hasActive) {
-    summaryCopy = `协同执行中 (${completedCount}/${totalCount} 完成)...`;
-  } else {
-    summaryCopy = `${completedCount} 完成 · ${totalCount - completedCount} 结束 (${totalCount} 个子任务)`;
-  }
-
-  return {
-    nodes,
-    totalCount,
-    completedCount,
-    runningCount,
-    failedCount,
-    interruptedCount,
-    closedCount,
-    isAllCompleted,
-    hasActive,
-    summaryCopy,
-  };
+  return buildOrchestrationFlow(Array.from(nodeMap.values()));
 }
 
 function actionsFromTimeline(blocks?: ReadonlyArray<{ type: string; actions?: unknown[] }>): ActionLike[] {
@@ -314,22 +369,32 @@ export function resolveLatestSessionOrchestrationFlow(input: {
   orchestrationChildrenByMessageId?: Record<string, ChildInfo[]>;
   timelineByMessageId?: Record<string, Array<{ type: string; actions?: unknown[] }>>;
   currentTurnTimeline?: Array<{ type: string; actions?: unknown[] }>;
+  /** 父回合仍在流式输出。结束后残留的 running 分支收成已停止。 */
+  turnActive?: boolean;
 }): OrchestrationFlowData | null {
+  const finish = (flow: OrchestrationFlowData | null, active: boolean) => {
+    if (!flow || flow.totalCount === 0) return null;
+    return active ? flow : settleStoppedOrchestration(flow);
+  };
+
   // 1. 优先实时回合
   const liveActions =
     input.currentTurnActions ?? actionsFromTimeline(input.currentTurnTimeline);
-  const liveFlow = extractOrchestrationFlow(liveActions, input.currentTurnChildren);
-  if (liveFlow && liveFlow.totalCount > 0) return liveFlow;
+  const liveFlow = finish(
+    extractOrchestrationFlow(liveActions, input.currentTurnChildren),
+    input.turnActive !== false,
+  );
+  if (liveFlow) return liveFlow;
 
-  // 2. 倒序历史回合
+  // 2. 倒序历史回合。落库的回合已经结束，残留 running 同样收成已停止。
   for (let i = input.messages.length - 1; i >= 0; i -= 1) {
     const id = input.messages[i].id;
     const actions =
       input.executedActionsByMessageId?.[id] ??
       actionsFromTimeline(input.timelineByMessageId?.[id]);
     const children = input.orchestrationChildrenByMessageId?.[id];
-    const flow = extractOrchestrationFlow(actions, children);
-    if (flow && flow.totalCount > 0) return flow;
+    const flow = finish(extractOrchestrationFlow(actions, children), false);
+    if (flow) return flow;
   }
 
   return null;

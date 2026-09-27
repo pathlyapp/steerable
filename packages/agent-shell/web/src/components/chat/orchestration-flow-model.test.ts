@@ -158,5 +158,72 @@ describe('orchestration-flow-model', () => {
       currentTurnActions: liveActions,
     });
     expect(withLive?.nodes[0].task).toBe('实时子任务');
+    expect(withLive?.hasActive).toBe(true);
+  });
+
+  it('settles leftover running branches once the parent turn has stopped', () => {
+    const actions = [
+      {
+        tool: 'agent_spawn',
+        arguments: { task: '已完成的侦察' },
+        result: { success: true, message: JSON.stringify({ childId: '0.1' }) },
+      },
+      {
+        tool: 'agent_spawn',
+        arguments: { task: '还在跑的侦察' },
+        result: { success: true, message: JSON.stringify({ childId: '0.2' }) },
+      },
+      {
+        tool: 'agent_wait',
+        arguments: { childId: '0.1' },
+        result: {
+          success: true,
+          message: JSON.stringify({ childId: '0.1', status: 'completed', answer: '结论' }),
+        },
+      },
+    ];
+    const children = [
+      { childId: '0.1', task: '已完成的侦察', status: 'completed' },
+      { childId: '0.2', task: '还在跑的侦察', status: 'running' },
+    ];
+
+    const live = resolveLatestSessionOrchestrationFlow({
+      messages: [],
+      currentTurnActions: actions,
+      currentTurnChildren: children,
+      turnActive: true,
+    });
+    expect(live?.hasActive).toBe(true);
+    expect(live?.summaryCopy).toBe('协同执行中 (1/2 完成)...');
+    expect(live?.nodes.find((node) => node.childId === '0.2')?.status).toBe('running');
+
+    const stopped = resolveLatestSessionOrchestrationFlow({
+      messages: [],
+      currentTurnActions: actions,
+      currentTurnChildren: children,
+      turnActive: false,
+    });
+    expect(stopped?.hasActive).toBe(false);
+    expect(stopped?.isAllCompleted).toBe(false);
+    expect(stopped?.summaryCopy).toBe('1 完成 · 1 结束 (2 个子任务)');
+    expect(stopped?.nodes.find((node) => node.childId === '0.1')?.status).toBe('completed');
+    expect(stopped?.nodes.find((node) => node.childId === '0.1')?.answer).toBe('结论');
+    expect(stopped?.nodes.find((node) => node.childId === '0.2')?.status).toBe('cancelled');
+  });
+
+  it('keeps a cancelled child out of the executing count', () => {
+    const flow = extractOrchestrationFlow(
+      [
+        {
+          tool: 'agent_spawn',
+          arguments: { task: '侦察' },
+          result: { success: true, message: JSON.stringify({ childId: '0.1' }) },
+        },
+      ],
+      [{ childId: '0.1', task: '侦察', status: 'cancelled' }],
+    );
+    expect(flow?.nodes[0].status).toBe('cancelled');
+    expect(flow?.hasActive).toBe(false);
+    expect(flow?.summaryCopy).not.toContain('协同执行中');
   });
 });
