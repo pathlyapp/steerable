@@ -173,9 +173,7 @@ describe('AgentSidebar 宿主工具族 chrome', () => {
     settingsOff.add('skills');
     settingsOff.add('mcp');
     renderSidebar();
-    expect(screen.queryByTestId('sidebar-agent-settings')).toBeNull();
-    expect(screen.queryByTestId('sidebar-skill-settings')).toBeNull();
-    expect(screen.queryByTestId('sidebar-mcp-settings')).toBeNull();
+    expect(screen.queryByTestId('sidebar-plugins')).toBeNull();
     expect(screen.getByTestId('sidebar-llm-settings')).toBeTruthy();
   });
 });

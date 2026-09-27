@@ -15,7 +15,7 @@ import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
  * McpSettingsPanel — MCP 服务管理面板（JSON 导入 / 手动增改 / 启停 / 测试 /
  * 删除）。
  *
- * 渲染在 `/settings?section=mcp` 独立页（AgentLayout 右侧内容区）。
+ * 渲染在 `/settings?section=plugins` 的 MCP 分类（AgentLayout 右侧内容区）。
  *
  * 数据与状态完全自管理：挂载时拉一次列表，操作后刷新。后端走
  * local-backend REST（`/api/v2/mcp/servers*`），注册表持久化在 main 进程的

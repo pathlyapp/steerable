@@ -444,7 +444,7 @@ describe('ChatInput composer meta row', () => {
     );
     fireEvent.click(screen.getByTestId('agent-select'));
     fireEvent.click(screen.getByTestId('agent-manage'));
-    expect(screen.getByTestId('loc').textContent).toBe('/settings?section=agents');
+    expect(screen.getByTestId('loc').textContent).toBe('/settings?section=plugins&tab=agents');
   });
 
   it('turns an @mention into a chip that click-removes it', () => {

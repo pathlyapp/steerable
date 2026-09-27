@@ -44,27 +44,63 @@ import { settingsChrome } from '@/lib/host-tools';
 import { isPortableEnabled } from '@/lib/portable';
 import type { AgentOutletContext } from '@/layouts/AgentLayout';
 
-type SettingsSection = 'skills' | 'mcp' | 'agents' | 'general';
+type SettingsSection = 'plugins' | 'general';
+type PluginTab = 'agents' | 'skills' | 'mcp';
+
+const PLUGIN_TABS: readonly PluginTab[] = ['agents', 'skills', 'mcp'];
+
+const PLUGIN_TAB_META: Record<
+  PluginTab,
+  { label: string; Icon: typeof LuBot }
+> = {
+  agents: { label: '智能体', Icon: LuBot },
+  skills: { label: 'Skills', Icon: LuBlocks },
+  mcp: { label: 'MCP', Icon: LuPlug },
+};
+
+function enabledPluginTabs(): PluginTab[] {
+  return PLUGIN_TABS.filter((id) => settingsChrome(id));
+}
 
 function resolveSection(raw: string | null): SettingsSection {
-  if (raw === 'skills' && settingsChrome('skills')) return 'skills';
-  if (raw === 'mcp' && settingsChrome('mcp')) return 'mcp';
-  if (raw === 'agents' && settingsChrome('agents')) return 'agents';
+  if (raw === 'plugins') return enabledPluginTabs().length > 0 ? 'plugins' : 'general';
+  if ((raw === 'agents' || raw === 'skills' || raw === 'mcp') && settingsChrome(raw)) {
+    return 'plugins';
+  }
   return 'general';
+}
+
+/** `?section=agents|skills|mcp` 是旧深链，仍打开插件页上对应分类。 */
+function resolvePluginTab(section: string | null, tab: string | null): PluginTab | null {
+  const enabled = enabledPluginTabs();
+  const requested =
+    section === 'agents' || section === 'skills' || section === 'mcp' ? section : tab;
+  if (
+    (requested === 'agents' || requested === 'skills' || requested === 'mcp') &&
+    enabled.includes(requested)
+  ) {
+    return requested;
+  }
+  return enabled[0] ?? null;
 }
 
 /**
  * `/settings` — 右侧内容区的设置页，按 `?section=` 分成独立页面：
- *   - `skills`  侧栏「Skill 设置」
- *   - `mcp`     侧栏「MCP 设置」
- *   - `agents`  侧栏「智能体管理」
+ *   - `plugins`  侧栏「插件」。顶栏分类切换智能体 / Skills / MCP
+ *     （`?tab=`，旧的 `?section=agents|skills|mcp` 仍落到对应分类）
  *   - 缺省/`general`  侧栏底「设置」（界面 / 模型 / 搜索 / 用量 / 安全 / 洞察 / 遥测 / 关于）
  *
  * Panel 数据自管理（挂载即拉取），页面本身不持有后端状态。
  */
 export function SettingsPage() {
-  const [searchParams] = useSearchParams();
-  const section = resolveSection(searchParams.get('section'));
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawSection = searchParams.get('section');
+  const section = resolveSection(rawSection);
+  const pluginTab = section === 'plugins' ? resolvePluginTab(rawSection, searchParams.get('tab')) : null;
+  const pluginTabs = section === 'plugins' ? enabledPluginTabs() : [];
+  const selectPluginTab = useCallback((id: PluginTab) => {
+    setSearchParams({ section: 'plugins', tab: id });
+  }, [setSearchParams]);
   const catalog = useOutletContext<AgentOutletContext | null>();
   const release = useAppRelease();
   const llmPanelRef = useRef<LlmSettingsPanelHandle>(null);
@@ -227,19 +263,46 @@ export function SettingsPage() {
     }
   }, [menuItems]);
 
-  const title =
-    section === 'mcp'
-      ? 'MCP 设置'
-      : section === 'skills'
-        ? 'Skill 设置'
-        : section === 'agents'
-          ? '智能体管理'
-          : '设置';
+  const title = section === 'plugins' ? '插件' : '设置';
 
   return (
     <div ref={pageContainerRef} className="flex h-full w-full flex-col overflow-hidden">
       <header className="flex h-9 flex-shrink-0 items-center justify-between gap-2 border-b border-agent-border px-2.5">
-        <h1 className="text-xs font-semibold text-agent-foreground">{title}</h1>
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="shrink-0 text-xs font-semibold text-agent-foreground">{title}</h1>
+          {section === 'plugins' && pluginTabs.length > 1 && (
+            <div
+              role="tablist"
+              aria-label="插件"
+              data-testid="plugins-tabs"
+              className="flex min-w-0 items-center gap-1"
+            >
+              {pluginTabs.map((id) => {
+                const meta = PLUGIN_TAB_META[id];
+                const active = pluginTab === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    data-testid={`plugins-tab-${id}`}
+                    onClick={() => selectPluginTab(id)}
+                    className={[
+                      'flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors',
+                      active
+                        ? 'bg-agent-foreground/10 font-medium text-agent-foreground'
+                        : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground',
+                    ].join(' ')}
+                  >
+                    <meta.Icon className="h-3.5 w-3.5" />
+                    {meta.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
         {section === 'general' && settingsChrome('llm') && (
           <SettingsSaveButton
             testId="settings-header-save"
@@ -276,34 +339,39 @@ export function SettingsPage() {
               </p>
             )}
 
-          {section === 'skills' && (
-            <section className="space-y-2" data-testid="settings-section-skills">
-              <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
-                <LuBlocks className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                本地技能
-              </h2>
-              <SkillsSettingsPanel />
-            </section>
-          )}
-
-          {section === 'mcp' && (
-            <section className="space-y-2" data-testid="settings-section-mcp">
-              <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
-                <LuPlug className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                MCP 服务
-              </h2>
-              <McpSettingsPanel />
-            </section>
-          )}
-
-          {section === 'agents' && (
-            <section className="space-y-2" data-testid="settings-section-agents">
-              <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
-                <LuBot className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                智能体
-              </h2>
-              <AgentsSettingsPanel onCatalogChange={catalog?.refreshAgents} />
-            </section>
+          {section === 'plugins' && (
+            <>
+              <p className="text-xs text-agent-muted-foreground" data-testid="plugins-summary">
+                管理智能体、技能和 MCP 服务。
+              </p>
+              {pluginTab === 'skills' && (
+                <section className="space-y-2" data-testid="settings-section-skills">
+                  <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
+                    <LuBlocks className="h-3.5 w-3.5 text-agent-muted-foreground" />
+                    本地技能
+                  </h2>
+                  <SkillsSettingsPanel />
+                </section>
+              )}
+              {pluginTab === 'mcp' && (
+                <section className="space-y-2" data-testid="settings-section-mcp">
+                  <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
+                    <LuPlug className="h-3.5 w-3.5 text-agent-muted-foreground" />
+                    MCP 服务
+                  </h2>
+                  <McpSettingsPanel />
+                </section>
+              )}
+              {pluginTab === 'agents' && (
+                <section className="space-y-2" data-testid="settings-section-agents">
+                  <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
+                    <LuBot className="h-3.5 w-3.5 text-agent-muted-foreground" />
+                    智能体
+                  </h2>
+                  <AgentsSettingsPanel onCatalogChange={catalog?.refreshAgents} />
+                </section>
+              )}
+            </>
           )}
 
           {section === 'general' && (

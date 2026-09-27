@@ -5,7 +5,7 @@
  *     日期分组、空态 / 加载态 / 错误横幅、底部分页提示；
  *   - 会话行：点击导航、删除两段确认（第一次武装第二次才删）、
  *     删除当前会话回落地页、武装后点行解除武装；
- *   - 入口导航与高亮：智能体管理 / Skill / MCP / 综合设置随路由各自高亮；
+ *   - 入口导航与高亮：插件页（含旧深链）与综合设置随路由各自高亮；
  *   - 右侧面板：终端按钮快捷键提示随平台变化，包槽位渲染分段控件；
  *   - 副作用：进入会话路由同步 selectedAgentId、菜单 Cmd+N / Cmd+T 订阅与
  *     退订、滚动接近底部自动加载下一页；
@@ -280,10 +280,10 @@ describe('AgentSidebar 新对话不落库', () => {
     expect(screen.getAllByTestId('sidebar-chat-row')).toHaveLength(before);
   });
 
-  it('打开智能体管理页', () => {
+  it('打开插件页', () => {
     renderSidebar('/agent');
-    fireEvent.click(screen.getByTestId('sidebar-agent-settings'));
-    expect(screen.getByTestId('loc').textContent).toBe('/settings?section=agents');
+    fireEvent.click(screen.getByTestId('sidebar-plugins'));
+    expect(screen.getByTestId('loc').textContent).toBe('/settings?section=plugins');
   });
 });
 
@@ -601,19 +601,23 @@ describe('AgentSidebar 入口导航与高亮', () => {
     expect(screen.queryByTestId('settings-app-update')).toBeNull();
   });
 
-  it('Skill / MCP / 综合设置入口分别导航到对应设置页', () => {
+  it('插件入口打开插件页，综合设置仍走 /settings', () => {
     renderSidebar('/agent');
-    fireEvent.click(screen.getByTestId('sidebar-skill-settings'));
-    expect(screen.getByTestId('loc').textContent).toBe('/settings?section=skills');
-    fireEvent.click(screen.getByTestId('sidebar-mcp-settings'));
-    expect(screen.getByTestId('loc').textContent).toBe('/settings?section=mcp');
+    fireEvent.click(screen.getByTestId('sidebar-plugins'));
+    expect(screen.getByTestId('loc').textContent).toBe('/settings?section=plugins');
     fireEvent.click(screen.getByTestId('sidebar-llm-settings'));
     expect(screen.getByTestId('loc').textContent).toBe('/settings');
   });
 
-  it('当前路由对应的入口高亮：?section=skills 只亮 Skill 设置', () => {
+  it('插件页和旧深链都只高亮插件入口', () => {
+    renderSidebar('/settings?section=plugins&tab=skills');
+    expect(screen.getByTestId('sidebar-plugins').className).toContain('bg-agent-foreground/10');
+    expect(screen.getByTestId('sidebar-llm-settings').className).not.toContain(
+      'bg-agent-foreground/10',
+    );
+    cleanup();
     renderSidebar('/settings?section=skills');
-    expect(screen.getByTestId('sidebar-skill-settings').className).toContain('bg-agent-foreground/10');
+    expect(screen.getByTestId('sidebar-plugins').className).toContain('bg-agent-foreground/10');
     expect(screen.getByTestId('sidebar-llm-settings').className).not.toContain(
       'bg-agent-foreground/10',
     );
@@ -622,7 +626,7 @@ describe('AgentSidebar 入口导航与高亮', () => {
   it('/settings 无 section 时高亮底部综合设置', () => {
     renderSidebar('/settings');
     expect(screen.getByTestId('sidebar-llm-settings').className).toContain('bg-agent-foreground/10');
-    expect(screen.getByTestId('sidebar-skill-settings').className).not.toContain(
+    expect(screen.getByTestId('sidebar-plugins').className).not.toContain(
       'bg-agent-foreground/10',
     );
   });

@@ -41,7 +41,7 @@
  *
  *   • Active chat id comes from the URL (`useParams().chatId`) rather than
  *     a Context (we drive navigation, not vice versa).
- *   • Agent CRUD lives on `/settings?section=agents`（侧栏「智能体管理」），
+ *   • Agent CRUD lives on `/settings?section=plugins`（侧栏「插件」里的智能体分类），
  *     not a modal. Custom agents show up in ChatInput's expert picker.
  *   • Cmd+N / Cmd+T trigger `menu:new-chat` / `menu:open-terminal` via the
  *     preload bridge; we subscribe here so the shortcuts work regardless of
@@ -53,23 +53,14 @@
  *   ┌─────────────────────────────────┐
  *   │ ✨ Product Agent          +•   │ ← + has a color dot of the selected agent
  *   ├─────────────────────────────────┤
- *   │  v 专家团队 · 3                 │
- *   │   ● 教练         (selected)     │ ← highlight = selectedAgentId
- *   │   ● 文学顾问            · 当前  │ ← "当前" pill = activeChatAgentId
- *   │   ● 哲学家                      │
- *   │   + 用「教练」新建对话          │ ← inline CTA when sel ≠ current
- *   ├──── divider ────────────────────┤
  *   │ ✎ 新对话                        │  ← 只打开落地页，有内容才落库
- *   │ ⬡ 智能体管理                     │ ← /settings?section=agents（独立页）
- *   │ ⬡ Skill 设置                    │ ← /settings?section=skills（独立页）
- *   │ 🔌 MCP 设置                     │ ← /settings?section=mcp（独立页）
+ *   │ 🧩 插件                         │ ← /settings?section=plugins（智能体 / Skills / MCP）
  *   │  会话 v                     📁+ │ ← 📁+ 打开新建项目弹窗
  *   │  v 📁 项目A          (hover: ✎··)│ ← ✎ 新建对话；·· 菜单：重命名/换目录/访达/删
  *   │   ...（项目内对话）              │
  *   │   今天                          │
  *   │   ...（无项目对话，按日期分组）  │ ← 无项目排在项目分组之后
  *   ├─────────────────────────────────┤
- *   │ ▢_ 终端                 ⌘T     │
  *   │ ⚙ 设置                   v0.2.2 │ ← /settings；右侧是当前版本，检查更新在设置页
  *   └─────────────────────────────────┘
  *
@@ -91,12 +82,10 @@ import {
   LuSquarePen,
   LuPanelLeftClose,
   LuBlocks,
-  LuBot,
   LuFolder,
   LuFolderOpen,
   LuFolderPlus,
   LuPencil,
-  LuPlug,
   LuEllipsis,
   LuCircleHelp,
 } from "react-icons/lu";
@@ -304,16 +293,21 @@ export function AgentSidebar({
   const bridge = getElectronBridge();
   const release = useAppRelease();
   const onSettingsPage = location.pathname === "/settings";
-  // /settings?section=skills|mcp|agents|（缺省 = 综合设置）—— 各自高亮。
+  // 插件页（及旧的 agents/skills/mcp 深链）高亮「插件」；其余 /settings 高亮底部综合设置。
   const settingsSection = useMemo(
     () => new URLSearchParams(location.search).get("section"),
     [location.search],
   );
-  const onGeneralSettings =
+  const pluginsAvailable =
+    settingsChrome("agents") || settingsChrome("skills") || settingsChrome("mcp");
+  const onPluginsSettings =
+    pluginsAvailable &&
     onSettingsPage &&
-    settingsSection !== "skills" &&
-    settingsSection !== "mcp" &&
-    settingsSection !== "agents";
+    (settingsSection === "plugins" ||
+      settingsSection === "agents" ||
+      settingsSection === "skills" ||
+      settingsSection === "mcp");
+  const onGeneralSettings = onSettingsPage && !onPluginsSettings;
   const onNewChatHome = !currentChatId && !onSettingsPage;
 
   const {
@@ -897,7 +891,7 @@ export function AgentSidebar({
 
       {/* ───── 会话 ───── */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {/* 新对话 + 智能体 / Skill / MCP 设置入口 — 横版行按钮，各自打开独立设置页 */}
+        {/* 新对话 + 插件（智能体 / Skills / MCP 在同一页用分类切换） */}
         <div className="flex-shrink-0 space-y-0.5 px-2.5 pb-0.5">
           <button
             type="button"
@@ -914,55 +908,21 @@ export function AgentSidebar({
             <LuSquarePen className="h-3.5 w-3.5" />
             <span>新对话</span>
           </button>
-          {settingsChrome("agents") && (
+          {pluginsAvailable && (
           <button
             type="button"
-            onClick={() => navigate("/settings?section=agents")}
+            onClick={() => navigate("/settings?section=plugins")}
             className={[
               "flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
-              onSettingsPage && settingsSection === "agents"
+              onPluginsSettings
                 ? "bg-agent-foreground/10 font-medium text-agent-foreground"
                 : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground",
             ].join(" ")}
-            title="智能体管理"
-            data-testid="sidebar-agent-settings"
-          >
-            <LuBot className="h-3.5 w-3.5" />
-            <span>智能体管理</span>
-          </button>
-          )}
-          {settingsChrome("skills") && (
-          <button
-            type="button"
-            onClick={() => navigate("/settings?section=skills")}
-            className={[
-              "flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
-              onSettingsPage && settingsSection === "skills"
-                ? "bg-agent-foreground/10 font-medium text-agent-foreground"
-                : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground",
-            ].join(" ")}
-            title="Skill 设置"
-            data-testid="sidebar-skill-settings"
+            title="插件"
+            data-testid="sidebar-plugins"
           >
             <LuBlocks className="h-3.5 w-3.5" />
-            <span>Skill 设置</span>
-          </button>
-          )}
-          {settingsChrome("mcp") && (
-          <button
-            type="button"
-            onClick={() => navigate("/settings?section=mcp")}
-            className={[
-              "flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
-              onSettingsPage && settingsSection === "mcp"
-                ? "bg-agent-foreground/10 font-medium text-agent-foreground"
-                : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground",
-            ].join(" ")}
-            title="MCP 设置"
-            data-testid="sidebar-mcp-settings"
-          >
-            <LuPlug className="h-3.5 w-3.5" />
-            <span>MCP 设置</span>
+            <span>插件</span>
           </button>
           )}
         </div>

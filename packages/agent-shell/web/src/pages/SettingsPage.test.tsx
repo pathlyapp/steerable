@@ -72,14 +72,30 @@ describe('SettingsPage header save', () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
-  it('does not show the header save on skills, MCP, or agents pages', () => {
-    const skills = renderSettings('?section=skills');
+  it('does not show the header save on the plugins page', () => {
+    renderSettings('?section=plugins');
     expect(screen.queryByTestId('settings-header-save')).toBeNull();
-    skills.unmount();
-    const mcp = renderSettings('?section=mcp');
+    expect(screen.getByRole('heading', { name: '插件' })).toBeTruthy();
+    expect(screen.getByTestId('plugins-tabs')).toBeTruthy();
+    expect(screen.getByTestId('settings-section-agents')).toBeTruthy();
+    expect(screen.queryByTestId('settings-section-skills')).toBeNull();
+    expect(screen.queryByTestId('settings-section-mcp')).toBeNull();
+  });
+
+  it('switches plugin categories and keeps old section links on the matching tab', () => {
+    const view = renderSettings('?section=skills');
     expect(screen.queryByTestId('settings-header-save')).toBeNull();
-    mcp.unmount();
+    expect(screen.getByTestId('settings-section-skills')).toBeTruthy();
+    expect(screen.getByTestId('plugins-tab-skills').getAttribute('aria-selected')).toBe('true');
+    expect(screen.queryByTestId('settings-section-agents')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('plugins-tab-mcp'));
+    expect(screen.getByTestId('settings-section-mcp')).toBeTruthy();
+    expect(screen.queryByTestId('settings-section-skills')).toBeNull();
+    view.unmount();
+
     renderSettings('?section=agents');
+    expect(screen.getByTestId('settings-section-agents')).toBeTruthy();
     expect(screen.queryByTestId('settings-header-save')).toBeNull();
   });
 

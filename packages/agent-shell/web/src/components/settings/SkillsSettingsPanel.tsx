@@ -11,7 +11,7 @@ import { getPackHiddenSlashSkills } from '@/packs/registry';
 /**
  * SkillsSettingsPanel — 本地技能管理面板（导入目录 / 列表 / 卸载）。
  *
- * 渲染在 `/settings?section=skills` 独立页（AgentLayout 右侧内容区）。
+ * 渲染在 `/settings?section=plugins` 的 Skills 分类（AgentLayout 右侧内容区）。
  *
  * 数据与状态完全自管理：挂载时拉一次列表，操作后刷新。后端走
  * local-backend REST（`GET/POST /api/v2/chat-agents/skills*`），无专用 IPC。
