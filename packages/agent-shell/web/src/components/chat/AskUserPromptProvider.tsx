@@ -146,3 +146,17 @@ export function useAskUserPrompt(chatId?: string | null): AskUserPromptView | nu
     };
   }, [chatId, context]);
 }
+
+/** 返回存在未处理提问（需要用户回答）的会话 ID 集合。 */
+export function usePendingAskUserChatIds(): Set<string> {
+  const context = useContext(AskUserPromptContext);
+  return useMemo(() => {
+    if (!context) return new Set();
+    const set = new Set<string>();
+    for (const request of context.queue) {
+      if (request.chatId) set.add(request.chatId);
+    }
+    return set;
+  }, [context?.queue]);
+}
+

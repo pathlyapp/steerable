@@ -25,6 +25,10 @@ export interface LocalChat {
   isPinned: boolean;
   systemPrompt: string | null;
   pinnedRefs: unknown;
+  /** 是否正在流式生成/对话中。 */
+  isStreaming?: boolean;
+  /** 是否存在需要用户回答或审批的问题。 */
+  needsUserInput?: boolean;
 }
 
 /** 智能体的工具准入策略；`all` = 不限制。 */
@@ -130,6 +134,20 @@ export async function deleteChat(chatId: string) {
   }>({
     method: 'DELETE',
     path: `/api/v2/chats/${encodeURIComponent(chatId)}`,
+  });
+}
+
+/** 置顶或取消置顶指定会话。 */
+export async function setChatPinned(chatId: string, isPinned: boolean) {
+  return bridge().localBackend.request<{
+    success: boolean;
+    chatId: string;
+    isPinned: boolean;
+    message: string;
+  }>({
+    method: 'PUT',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/pin`,
+    body: { isPinned },
   });
 }
 

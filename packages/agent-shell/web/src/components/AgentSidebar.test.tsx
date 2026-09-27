@@ -1,7 +1,7 @@
 /**
  * AgentSidebar 交互契约：
  *   - 新对话只开落地页不落库（既有用例，见第一个 describe）；
- *   - 会话列表：置顶优先 + 时间倒序、[自动化] 标题解析、智能体首字母圆点、
+ *   - 会话列表：置顶优先 + 时间倒序、[自动化] 标题解析、
  *     日期分组、空态 / 加载态 / 错误横幅、底部分页提示；
  *   - 会话行：点击导航、删除两段确认（第一次武装第二次才删）、
  *     删除当前会话回落地页、武装后点行解除武装；
@@ -10,7 +10,7 @@
  *   - 副作用：进入会话路由同步 selectedAgentId、菜单 Cmd+N / Cmd+T 订阅与
  *     退订、滚动接近底部自动加载下一页；
  *   - 项目模式（Electron）：项目分组与折叠、孤儿会话回落日期分组、
- *     新建（弹窗填名称 + 可选源文件夹）；组头 hover 为 + 新建对话 / ·· 菜单
+ *     新建（弹窗填名称 + 可选源文件夹）；组头 hover 为 ✎ 新建对话 / ·· 菜单
  *     （重命名 / 编辑项目多源文件夹 / 访达或文件管理器 / 两段确认删除）。
  * 智能体挑选列表已迁到 ChatInput（见组件头注释），侧栏只剩同步副作用可测。
  */
@@ -36,6 +36,7 @@ const createProject = vi.fn();
 const updateProject = vi.fn();
 const deleteProject = vi.fn();
 const openLocalPath = vi.fn();
+const setChatPinned = vi.fn();
 
 vi.mock('@/lib/local-api', () => ({
   listProjects: (...args: unknown[]) => listProjects(...args),
@@ -43,6 +44,7 @@ vi.mock('@/lib/local-api', () => ({
   updateProject: (...args: unknown[]) => updateProject(...args),
   deleteProject: (...args: unknown[]) => deleteProject(...args),
   openLocalPath: (...args: unknown[]) => openLocalPath(...args),
+  setChatPinned: (...args: unknown[]) => setChatPinned(...args),
 }));
 
 vi.mock('@/brand', () => ({
@@ -62,8 +64,10 @@ beforeEach(() => {
   updateProject.mockReset();
   deleteProject.mockReset();
   openLocalPath.mockReset();
+  setChatPinned.mockReset();
   listProjects.mockResolvedValue({ projects: [] });
   openLocalPath.mockResolvedValue({ success: true });
+  setChatPinned.mockResolvedValue({ success: true, isPinned: true });
 });
 
 afterEach(() => {
@@ -281,16 +285,15 @@ describe('AgentSidebar 新对话不落库', () => {
 });
 
 describe('AgentSidebar 会话列表渲染', () => {
-  it('渲染会话标题与绑定智能体的首字母圆点，无智能体回落为 A', () => {
+  it('渲染会话标题', () => {
     const noAgent = makeChat({ id: 'c-no-agent', title: '无智能体会话', agentId: null });
     renderSidebar('/agent', vi.fn(), { data: { chats: [existingChat, noAgent] } });
 
     expect(chatRow('chat-with-content').textContent).toContain('已经聊过的对话');
-    expect(chatRow('chat-with-content').textContent).toContain('电');
-    expect(chatRow('c-no-agent').textContent).toContain('A');
+    expect(chatRow('c-no-agent').textContent).toContain('无智能体会话');
   });
 
-  it('同一日期分组内置顶会话排在普通会话之前并带图钉标记', () => {
+  it('同一日期分组内置顶会话排在普通会话之前', () => {
     const pinnedEarly = makeChat({
       id: 'c-pinned',
       title: '置顶的较早会话',
@@ -302,7 +305,6 @@ describe('AgentSidebar 会话列表渲染', () => {
 
     const ids = screen.getAllByTestId('sidebar-chat-row').map((r) => r.getAttribute('data-chat-id'));
     expect(ids).toEqual(['c-pinned', 'c-fresh']);
-    expect(screen.getByLabelText('已置顶')).toBeTruthy();
   });
 
   it('置顶会话跨日期分组也排在最前：独立「置顶」组优先于「今天」', () => {
@@ -434,13 +436,84 @@ describe('AgentSidebar 会话行交互', () => {
     expect(screen.getByTestId('sidebar-chat-delete').getAttribute('aria-label')).toBe('删除会话');
   });
 
-  it('会话区可折叠再展开', () => {
+  it('会话区（最近）可折叠再展开', () => {
     renderSidebar('/agent');
-    fireEvent.click(screen.getByRole('button', { name: /^会话/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^最近$/ }));
     expect(screen.queryByTestId('sidebar-chat-row')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /^会话/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^最近$/ }));
     expect(screen.getByTestId('sidebar-chat-row')).toBeTruthy();
+  });
+
+  it('置顶区可折叠再展开', () => {
+    const pinnedChat = makeChat({ id: 'c-pinned', title: '置顶会话', isPinned: true });
+    renderSidebar('/agent', vi.fn(), { data: { chats: [pinnedChat] } });
+    expect(screen.getByTestId('sidebar-chat-row')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /^置顶$/ }));
+    expect(screen.queryByTestId('sidebar-chat-row')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /^置顶$/ }));
+    expect(screen.getByTestId('sidebar-chat-row')).toBeTruthy();
+  });
+
+  it('点击置顶按钮切换会话置顶状态并刷新列表', async () => {
+    setChatPinned.mockResolvedValue({ success: true, isPinned: true });
+    const { data } = renderSidebar('/agent', vi.fn(), {
+      data: { chats: [existingChat] },
+    });
+
+    const pinBtn = screen.getByTestId('sidebar-chat-pin');
+    expect(pinBtn.getAttribute('aria-label')).toBe('置顶会话');
+
+    fireEvent.click(pinBtn);
+    await waitFor(() =>
+      expect(setChatPinned).toHaveBeenCalledWith('chat-with-content', true),
+    );
+    await waitFor(() => expect(data.refreshChats).toHaveBeenCalled());
+  });
+
+  it('已置顶会话显示取消置顶按钮，点击调用取消置顶', async () => {
+    setChatPinned.mockResolvedValue({ success: true, isPinned: false });
+    const pinnedChat = makeChat({
+      id: 'chat-pinned',
+      title: '已置顶会话',
+      isPinned: true,
+    });
+    const { data } = renderSidebar('/agent', vi.fn(), {
+      data: { chats: [pinnedChat] },
+    });
+
+    const pinBtn = screen.getByTestId('sidebar-chat-pin');
+    expect(pinBtn.getAttribute('aria-label')).toBe('取消置顶');
+
+    fireEvent.click(pinBtn);
+    await waitFor(() =>
+      expect(setChatPinned).toHaveBeenCalledWith('chat-pinned', false),
+    );
+    await waitFor(() => expect(data.refreshChats).toHaveBeenCalled());
+  });
+
+  it('会话正在对话中时渲染正在生成图标指示器', () => {
+    const streamingChat = makeChat({
+      id: 'c-streaming',
+      title: '正在流式的对话',
+      isStreaming: true,
+    });
+    renderSidebar('/agent', vi.fn(), { data: { chats: [streamingChat] } });
+
+    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+  });
+
+  it('会话有问题需要用户输入时渲染待输入指示器', () => {
+    const inputChat = makeChat({
+      id: 'c-needs-input',
+      title: '等待回复的对话',
+      needsUserInput: true,
+    });
+    renderSidebar('/agent', vi.fn(), { data: { chats: [inputChat] } });
+
+    expect(screen.getByLabelText('等待用户输入')).toBeTruthy();
   });
 });
 

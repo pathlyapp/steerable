@@ -15,6 +15,7 @@ import {
 } from '@/lib/electron-bridge';
 
 interface ApprovalPromptContextValue {
+  queue: ApprovalPromptRequest[];
   current: ApprovalPromptRequest | null;
   pendingCount: number;
   decide: (kind: ApprovalDecisionKind) => void;
@@ -78,11 +79,12 @@ export function ApprovalPromptProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(
     () => ({
+      queue,
       current,
       pendingCount: Math.max(0, queue.length - 1),
       decide,
     }),
-    [current, decide, queue.length],
+    [queue, current, decide],
   );
 
   return (
@@ -95,4 +97,17 @@ export function ApprovalPromptProvider({ children }: { children: ReactNode }) {
 /** Returns the approval prompt currently assigned to the chat composer. */
 export function useApprovalPrompt(): ApprovalPromptContextValue | null {
   return useContext(ApprovalPromptContext);
+}
+
+/** 返回存在未处理工具权限审批的会话 ID 集合。 */
+export function usePendingApprovalChatIds(): Set<string> {
+  const context = useContext(ApprovalPromptContext);
+  return useMemo(() => {
+    if (!context) return new Set();
+    const set = new Set<string>();
+    for (const request of context.queue) {
+      if (request.chatId) set.add(request.chatId);
+    }
+    return set;
+  }, [context?.queue]);
 }

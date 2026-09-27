@@ -48,6 +48,7 @@ export interface ApprovalPromptRequest {
   mode: string;
   category: string;
   round: number;
+  chatId?: string;
 }
 
 /**

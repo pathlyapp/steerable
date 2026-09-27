@@ -1042,6 +1042,22 @@ function AgentChatView({
     ];
   }, [messages, remoteContent, chatId]);
   const effectiveIsStreaming = isStreaming || remoteStreaming;
+
+  useEffect(() => {
+    if (!chatId) return;
+    window.dispatchEvent(
+      new CustomEvent("chat:streaming-change", {
+        detail: { chatId, isStreaming: effectiveIsStreaming },
+      }),
+    );
+    return () => {
+      window.dispatchEvent(
+        new CustomEvent("chat:streaming-change", {
+          detail: { chatId, isStreaming: false },
+        }),
+      );
+    };
+  }, [chatId, effectiveIsStreaming]);
   const effectiveCurrentTurnActions: ExecutedAction[] = remoteStreaming
     ? ((liveStream.executedActions as ExecutedAction[] | undefined) ?? [])
     : currentTurnActions;
