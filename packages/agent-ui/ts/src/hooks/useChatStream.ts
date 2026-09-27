@@ -107,8 +107,10 @@ export interface UseChatStreamReturn {
   /**
    * Steer the running turn with an extra user message. No-op resolving
    * `false` when not streaming or the transport has no `steer`. On success
-   * the message is appended to the visible transcript immediately (the loop
-   * consumes it at the next round boundary).
+   * the message is inserted immediately before the in-flight assistant
+   * message, matching the persisted order (hosts store the steer at
+   * acceptance, the reply at turn end), so the streaming assistant stays the
+   * list tail. The loop consumes it at the next round boundary.
    */
   steerUserMessage: (content: string) => Promise<boolean>;
   /**
@@ -142,6 +144,7 @@ export interface UseChatStreamReturn {
 type Action =
   | { type: 'reset'; messages: ChatMessage[] }
   | { type: 'append'; message: ChatMessage }
+  | { type: 'insert-before-last-assistant'; message: ChatMessage }
   | { type: 'patch-last-assistant'; patch: Partial<ChatMessage> }
   | { type: 'append-content'; delta: string }
   | { type: 'append-tool-call'; call: ToolCall }
@@ -158,6 +161,13 @@ function reducer(state: State, action: Action): State {
       return { messages: action.messages };
     case 'append':
       return { messages: [...state.messages, action.message] };
+    case 'insert-before-last-assistant': {
+      const idx = findLastAssistantIndex(state.messages);
+      if (idx === -1) return { messages: [...state.messages, action.message] };
+      const next = state.messages.slice();
+      next.splice(idx, 0, action.message);
+      return { messages: next };
+    }
     case 'patch-last-assistant': {
       const idx = findLastAssistantIndex(state.messages);
       if (idx === -1) return state;
@@ -453,7 +463,7 @@ export function useChatStream(
       }
       const ok = await steer(content);
       if (ok) {
-        dispatch({ type: 'append', message: newUserMessage(content) });
+        dispatch({ type: 'insert-before-last-assistant', message: newUserMessage(content) });
       }
       return ok;
     },
@@ -474,7 +484,7 @@ export function useChatStream(
       if (steer) {
         const ok = await steer(content);
         if (ok) {
-          dispatch({ type: 'append', message: newUserMessage(content) });
+          dispatch({ type: 'insert-before-last-assistant', message: newUserMessage(content) });
           return 'steered';
         }
         // The turn may have ended while the steer was in flight; its

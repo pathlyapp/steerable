@@ -384,9 +384,13 @@ describe('steerOrFollowUpUserMessage', () => {
       outcome = await result.current.steerOrFollowUpUserMessage('补充一句');
     });
     expect(outcome).toBe('steered');
-    expect(
-      result.current.messages.some((m) => m.role === 'user' && m.content === '补充一句'),
-    ).toBe(true);
+    // Inserted before the in-flight assistant (matches the persisted order),
+    // so the streaming assistant stays the list tail.
+    expect(result.current.messages.map((m) => [m.role, m.content])).toEqual([
+      ['user', 'start'],
+      ['user', '补充一句'],
+      ['assistant', ''],
+    ]);
     expect(result.current.pendingFollowUps).toEqual([]);
     expect(streams).toHaveLength(1);
 

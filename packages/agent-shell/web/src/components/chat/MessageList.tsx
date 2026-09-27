@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -245,6 +246,43 @@ export function MessageList({
     scrollToBottom('auto');
   }, [lastMessageId, lastContentLen, lastTimelineSig, suggestedSig, scrollToBottom]);
 
+  // Group consecutive user messages into turns (方案 A).
+  // A group of 2+ user messages renders as a single connected card with
+  // dividers and "↳ 追加" badges, instead of separate disconnected bubbles.
+  type MessageItem =
+    | { type: 'user-group'; messages: ChatMessage[]; key: string }
+    | { type: 'assistant'; message: ChatMessage; originalIndex: number };
+
+  const groupedItems = useMemo<MessageItem[]>(() => {
+    const items: MessageItem[] = [];
+    let currentUserGroup: ChatMessage[] = [];
+
+    for (let i = 0; i < visibleMessages.length; i++) {
+      const msg = visibleMessages[i];
+      if (msg.role === 'user') {
+        currentUserGroup.push(msg);
+      } else {
+        if (currentUserGroup.length > 0) {
+          items.push({
+            type: 'user-group',
+            messages: currentUserGroup,
+            key: `ug-${currentUserGroup[0].id}`,
+          });
+          currentUserGroup = [];
+        }
+        items.push({ type: 'assistant', message: msg, originalIndex: i });
+      }
+    }
+    if (currentUserGroup.length > 0) {
+      items.push({
+        type: 'user-group',
+        messages: currentUserGroup,
+        key: `ug-${currentUserGroup[0].id}`,
+      });
+    }
+    return items;
+  }, [visibleMessages]);
+
   return (
     <div className="relative flex-1 overflow-hidden">
       <div
@@ -255,11 +293,45 @@ export function MessageList({
           emptyState ?? null
         ) : (
           <div className="mx-auto w-full max-w-3xl space-y-4">
-            {visibleMessages.map((message, index) => {
-              const isLast = index === visibleMessages.length - 1;
-              if (message.role === 'user') {
-                return <UserMessage key={message.id} message={message} agents={agents} chats={chats} />;
+            {groupedItems.map((item) => {
+              if (item.type === 'user-group') {
+                if (item.messages.length === 1) {
+                  return (
+                    <UserMessage
+                      key={item.messages[0].id}
+                      message={item.messages[0]}
+                      agents={agents}
+                      chats={chats}
+                    />
+                  );
+                }
+                // Multiple consecutive user messages: render as a unified combined card.
+                return (
+                  <div
+                    key={item.key}
+                    className="group/user-group"
+                    data-message-role="user-group"
+                  >
+                    <div className="flex justify-start">
+                      <div className="mx-auto w-full max-w-[var(--chat-input-box-width)] overflow-hidden rounded-agent-lg border border-agent-border/80 bg-agent-muted/70 shadow-sm">
+                        {item.messages.map((msg, idx) => (
+                          <UserMessage
+                            key={msg.id}
+                            message={msg}
+                            agents={agents}
+                            chats={chats}
+                            isGrouped
+                            isAppended={idx > 0}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
               }
+
+              const message = item.message;
+              const isLast = item.originalIndex === visibleMessages.length - 1;
               // Action attribution: prefer the per-message map (set when the
               // backend's `message_id` event reconciles the stream-time queue
               // with the DB id). The framework keeps the in-flight assistant's
@@ -309,7 +381,7 @@ export function MessageList({
                   : undefined;
               let previousUser: ChatMessage | undefined;
               let previousUserCreatedAt: string | undefined;
-              for (let i = index - 1; i >= 0; i -= 1) {
+              for (let i = item.originalIndex - 1; i >= 0; i -= 1) {
                 if (visibleMessages[i].role === 'user') {
                   previousUser = visibleMessages[i];
                   previousUserCreatedAt = previousUser.createdAt;
