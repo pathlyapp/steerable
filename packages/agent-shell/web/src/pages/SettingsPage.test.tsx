@@ -93,6 +93,7 @@ describe('SettingsPage header save', () => {
       ),
     ).toEqual([
       'settings-section-appearance',
+      'settings-section-orchestration',
       'settings-section-llm',
       'settings-section-web-search',
       'settings-section-usage',

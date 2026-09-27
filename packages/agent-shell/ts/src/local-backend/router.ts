@@ -69,6 +69,7 @@ import {
   resolveRuntimeLlmSettings,
   resolveTurnApproval,
   resolveTurnChatMode,
+  resolveTurnOrchestration,
 } from '../host-tools-runtime.js';
 import { SidecarSupervisor } from '../sidecar/index.js';
 import { diagnoseLlmConnection } from './llm-diagnose.js';
@@ -3502,10 +3503,10 @@ export class LocalBackendRouter {
         // 子运行执行,生命周期经 onChildEvent → SSE 进 UI 编排卡片。
         subagent,
         // 六件套(agent_spawn/send/wait/close/list/interrupt)收缩为
-        // opt-in 高级模式:STEERABLE_ORCHESTRATION=1 开启;开启后与
-        // delegate 共享同一 AgentPool(同一 maxParallel 预算)。
-        ...(process.env.STEERABLE_ORCHESTRATION === '1'
-          ? { orchestration: { enabled: true, maxDepth: 1, maxParallel: 4 } }
+        // opt-in 高级模式:STEERABLE_ORCHESTRATION 环境变量、回合 payload 或 product.json.orchestration 开启;
+        // 开启后与 delegate 共享同一 AgentPool(同一 maxParallel 预算)。
+        ...(resolveTurnOrchestration(payload)
+          ? { orchestration: resolveTurnOrchestration(payload) }
           : {}),
         signal,
         onText: (delta) => {

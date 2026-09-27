@@ -4,6 +4,7 @@ import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { isElectron } from '@/lib/electron-bridge';
 import { AgentsSettingsPanel } from '@/components/settings/AgentsSettingsPanel';
 import { AppearanceSettingsPanel } from '@/components/settings/AppearanceSettingsPanel';
+import { OrchestrationSettingsPanel } from '@/components/settings/OrchestrationSettingsPanel';
 import { AppUpdateSettingsPanel } from '@/components/settings/AppUpdateSettingsPanel';
 import { PortableSettingsPanel } from '@/components/settings/PortableSettingsPanel';
 import { PythonRunnerSettingsPanel } from '@/components/settings/PythonRunnerSettingsPanel';
@@ -128,6 +129,14 @@ export function SettingsPage() {
                 <AppearanceSettingsPanel />
               </section>
               )}
+
+              <section className="space-y-2" data-testid="settings-section-orchestration">
+                <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
+                  <LuSettings className="h-3.5 w-3.5 text-agent-muted-foreground" />
+                  协同编排
+                </h2>
+                <OrchestrationSettingsPanel />
+              </section>
 
               {settingsChrome('llm') && (
               <section className="space-y-2" data-testid="settings-section-llm">

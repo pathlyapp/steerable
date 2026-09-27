@@ -15,6 +15,7 @@ import {
   resolveRuntimeLlmSettings,
   resolveTurnApproval,
   resolveTurnChatMode,
+  resolveTurnOrchestration,
 } from '../src/host-tools-runtime.js';
 import { DEFAULT_LLM_SETTINGS } from '../src/storage/llm-settings.js';
 
@@ -118,5 +119,36 @@ describe('resolveRuntimeLlmSettings', () => {
       model: 'deepseek-chat',
       apiKey: 'sk-product',
     });
+  });
+});
+
+describe('resolveTurnOrchestration', () => {
+  it('未配置时缺省为 undefined', () => {
+    expect(resolveTurnOrchestration()).toBeUndefined();
+  });
+
+  it('产品配置 orchestration: true 时开启', () => {
+    setProductConfig({ orchestration: true });
+    expect(resolveTurnOrchestration()).toEqual({
+      enabled: true,
+      maxDepth: 1,
+      maxParallel: 4,
+    });
+  });
+
+  it('STEERABLE_ORCHESTRATION 环境变量覆盖产品配置', () => {
+    setProductConfig({ orchestration: true });
+    process.env.STEERABLE_ORCHESTRATION = '0';
+    expect(resolveTurnOrchestration()).toBeUndefined();
+
+    resetProductConfigForTests();
+    delete process.env.STEERABLE_ORCHESTRATION;
+    process.env.STEERABLE_ORCHESTRATION = '1';
+    expect(resolveTurnOrchestration()).toEqual({
+      enabled: true,
+      maxDepth: 1,
+      maxParallel: 4,
+    });
+    delete process.env.STEERABLE_ORCHESTRATION;
   });
 });

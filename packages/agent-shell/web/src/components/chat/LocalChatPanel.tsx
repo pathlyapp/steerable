@@ -20,6 +20,8 @@ import type { TurnFile } from './turn-files';
 import type { LlmSpeedSnapshot } from './process-status';
 import { SessionTodoList } from './SessionTodoList';
 import { resolveLatestSessionTodos } from './todo-list-model';
+import { SessionOrchestrationFlow } from './SessionOrchestrationFlow';
+import { resolveLatestSessionOrchestrationFlow } from './orchestration-flow-model';
 import {
   appendAttachmentRefs,
   collectImageAttachments,
@@ -327,6 +329,28 @@ export function LocalChatPanel({
     ],
   );
 
+  const sessionOrchestrationFlow = useMemo(
+    () =>
+      resolveLatestSessionOrchestrationFlow({
+        messages,
+        executedActionsByMessageId,
+        currentTurnActions,
+        currentTurnChildren,
+        orchestrationChildrenByMessageId,
+        timelineByMessageId,
+        currentTurnTimeline,
+      }),
+    [
+      messages,
+      executedActionsByMessageId,
+      currentTurnActions,
+      currentTurnChildren,
+      orchestrationChildrenByMessageId,
+      timelineByMessageId,
+      currentTurnTimeline,
+    ],
+  );
+
   // Sync `chat-input-box-width` CSS var so bubbles match the input width
   // (mirrors the rendered input box width so message bubbles + input visually align in a column).
   const containerRef = useRef<HTMLDivElement>(null);
@@ -390,7 +414,20 @@ export function LocalChatPanel({
         onOpenSettings={onOpenSettings}
         toolbarExtras={inputToolbarExtras}
         leadingChrome={inputLeadingChrome}
-        trailingChrome={sessionTodos ? <SessionTodoList todos={sessionTodos} /> : undefined}
+        trailingChrome={
+          sessionOrchestrationFlow || sessionTodos ? (
+            <div className="flex items-center gap-1.5 min-w-0">
+              {sessionOrchestrationFlow ? (
+                <SessionOrchestrationFlow
+                  flow={sessionOrchestrationFlow}
+                  chatId={chatId}
+                  onInspectTask={onInspectTask}
+                />
+              ) : null}
+              {sessionTodos ? <SessionTodoList todos={sessionTodos} /> : null}
+            </div>
+          ) : undefined
+        }
         mode={mode}
         onModeChange={onModeChange}
         execPolicy={execPolicy}

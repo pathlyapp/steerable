@@ -61,6 +61,7 @@ import {
   setPendingFirstMessage,
   takePendingFirstMessage,
 } from "@/lib/pending-first-message";
+import { isOrchestrationSettingEnabled } from "@/lib/orchestration-settings";
 import { BRAND_NAME, pickDefaultAgentId } from "@/brand";
 import {
   appendAttachmentRefs,
@@ -869,6 +870,7 @@ function AgentChatView({
         ...(modelOverride ? { model: modelOverride } : {}),
         ...(effortOverride ? { reasoningEffort: effortOverride } : {}),
         ...(execPolicy === "full" ? { execPolicy: "full" } : {}),
+        orchestration: isOrchestrationSettingEnabled(),
       };
       return sendUserMessage({
         ...input,

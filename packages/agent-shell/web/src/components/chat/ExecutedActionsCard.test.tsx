@@ -344,3 +344,27 @@ describe('ToolsFlow / 后台任务跳转', () => {
     expect(onInspectTask).not.toHaveBeenCalled();
   });
 });
+
+describe('ToolsFlow / agent_* 多智能体编排六件套', () => {
+  it('保留朴素的工具卡片行，分别呈现 agent_spawn 与 agent_wait', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'agent_spawn',
+            arguments: { task: '心算 17+28' },
+            result: { success: true, message: JSON.stringify({ childId: '0.1', status: 'running' }) },
+          },
+          {
+            tool: 'agent_wait',
+            arguments: { childId: '0.1' },
+            result: { success: true, message: JSON.stringify({ childId: '0.1', status: 'completed', answer: '45' }) },
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('agent_spawn')).toBeTruthy();
+    expect(screen.getByText('agent_wait')).toBeTruthy();
+  });
+});

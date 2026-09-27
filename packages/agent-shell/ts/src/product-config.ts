@@ -106,6 +106,12 @@ export interface ProductConfig {
     cwd?: string;
     enabled?: boolean;
   }>;
+  /**
+   * P3.1 多智能体编排六件套 (agent_spawn / agent_wait / agent_send / agent_interrupt / agent_close / agent_list)。
+   * 缺省关（仅开 delegate_subagent）；设为 true 或配置对象时在回合中启用。
+   * STEERABLE_ORCHESTRATION 环境变量（'1' 开启，'0' 显式关闭）优先级更高。
+   */
+  orchestration?: boolean | { enabled?: boolean; maxDepth?: number; maxParallel?: number };
 }
 
 /** shell 内置智能体：只有产品显式 `true` 才开。 */

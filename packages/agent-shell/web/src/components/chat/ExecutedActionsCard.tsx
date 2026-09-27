@@ -61,7 +61,7 @@ export interface ExecutedAction {
   sandbox?: { backend?: string; enforcement: string };
 }
 
-interface ExecutedActionsCardProps {
+export interface ExecutedActionsCardProps {
   actions: ExecutedAction[];
   /** Drop the outer card chrome when nested in a turn-process group. */
   compact?: boolean;
