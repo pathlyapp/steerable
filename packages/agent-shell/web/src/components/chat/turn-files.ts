@@ -141,7 +141,7 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.tsv':
     case '.numbers':
       return {
-        label: 'Spreadsheet',
+        label: '电子表格',
         extBadge: extClean,
         kind: 'spreadsheet',
         themeColor: 'emerald',
@@ -150,7 +150,7 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.ppt':
     case '.key':
       return {
-        label: 'Presentation',
+        label: '演示文稿',
         extBadge: extClean,
         kind: 'presentation',
         themeColor: 'amber',
@@ -160,14 +160,14 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.pages':
     case '.rtf':
       return {
-        label: 'Document',
+        label: '文档',
         extBadge: extClean,
         kind: 'document',
         themeColor: 'blue',
       };
     case '.pdf':
       return {
-        label: 'Document',
+        label: '文档',
         extBadge: 'PDF',
         kind: 'pdf',
         themeColor: 'rose',
@@ -179,7 +179,7 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.webp':
     case '.svg':
       return {
-        label: 'Image',
+        label: '图像',
         extBadge: extClean,
         kind: 'image',
         themeColor: 'purple',
@@ -189,7 +189,7 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.gz':
     case '.7z':
       return {
-        label: 'Archive',
+        label: '压缩包',
         extBadge: extClean,
         kind: 'archive',
         themeColor: 'amber',
@@ -197,14 +197,14 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.html':
     case '.htm':
       return {
-        label: 'Webpage',
+        label: '网页',
         extBadge: 'HTML',
         kind: 'document',
         themeColor: 'blue',
       };
     default:
       return {
-        label: 'File',
+        label: '文件',
         extBadge: extClean,
         kind: 'file',
         themeColor: 'slate',

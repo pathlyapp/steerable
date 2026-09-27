@@ -118,25 +118,25 @@ describe('getTurnFileCategory & getDeliverableMeta', () => {
 
   it('提供正确的展示元数据', () => {
     expect(getDeliverableMeta('/work/报价.xlsx')).toEqual({
-      label: 'Spreadsheet',
+      label: '电子表格',
       extBadge: 'XLSX',
       kind: 'spreadsheet',
       themeColor: 'emerald',
     });
     expect(getDeliverableMeta('/work/演示.pptx')).toEqual({
-      label: 'Presentation',
+      label: '演示文稿',
       extBadge: 'PPTX',
       kind: 'presentation',
       themeColor: 'amber',
     });
     expect(getDeliverableMeta('/work/文档.pdf')).toEqual({
-      label: 'Document',
+      label: '文档',
       extBadge: 'PDF',
       kind: 'pdf',
       themeColor: 'rose',
     });
     expect(getDeliverableMeta('/work/图片.png')).toEqual({
-      label: 'Image',
+      label: '图像',
       extBadge: 'PNG',
       kind: 'image',
       themeColor: 'purple',

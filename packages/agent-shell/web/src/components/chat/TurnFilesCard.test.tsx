@@ -61,25 +61,25 @@ describe('TurnFilesCard', () => {
 
     // 最终文件卡片
     expect(screen.getByText('自我介绍.pptx')).toBeTruthy();
-    expect(screen.getByText('Presentation · PPTX')).toBeTruthy();
+    expect(screen.getByText('演示文稿 · PPTX')).toBeTruthy();
     expect(screen.getByText('2.0 KB')).toBeTruthy();
-    expect(screen.getByText('Open in')).toBeTruthy();
+    expect(screen.getByText('打开方式')).toBeTruthy();
     expect(document.querySelector('[data-deliverable-card]')).toBeTruthy();
 
-    // 中间修改文件卡片（默认折叠，点击 Review 展开）
-    expect(screen.getByText('Edited 1 file')).toBeTruthy();
-    expect(screen.getByText('Review')).toBeTruthy();
+    // 中间修改文件卡片（默认折叠，点击 查看详情 展开）
+    expect(screen.getByText('修改了 1 个文件')).toBeTruthy();
+    expect(screen.getByText('查看详情')).toBeTruthy();
     expect(document.querySelector('[data-edited-files-card]')).toBeTruthy();
     expect(screen.queryByText('review_work/build.mjs')).toBeNull();
 
-    // 点击 Review 展开文件列表
-    fireEvent.click(screen.getByText('Review'));
+    // 点击 查看详情 展开文件列表
+    fireEvent.click(screen.getByText('查看详情'));
     expect(screen.getAllByText('+110').length).toBeGreaterThan(0);
     expect(screen.getAllByText('-0').length).toBeGreaterThan(0);
     expect(screen.getByText('review_work/build.mjs')).toBeTruthy();
 
     // 再次点击折叠收起
-    fireEvent.click(screen.getByText('Review'));
+    fireEvent.click(screen.getByText('查看详情'));
     expect(screen.queryByText('review_work/build.mjs')).toBeNull();
   });
 
@@ -94,19 +94,19 @@ describe('TurnFilesCard', () => {
     );
 
     expect(screen.getByText('公司介绍 12 页')).toBeTruthy();
-    expect(screen.queryByText('Presentation · PPTX')).toBeNull();
+    expect(screen.queryByText('演示文稿 · PPTX')).toBeNull();
     expect(document.querySelectorAll('[data-deliverable-card]')).toHaveLength(1);
-    expect(screen.getByText('Edited 1 file')).toBeTruthy();
+    expect(screen.getByText('修改了 1 个文件')).toBeTruthy();
 
     // 展开查看 intermediate 文件
-    fireEvent.click(screen.getByText('Review'));
+    fireEvent.click(screen.getByText('查看详情'));
     expect(screen.getByText('proj/_预览_大事记页.png')).toBeTruthy();
   });
 
-  it('点击 Open in 按钮打开交付物文件', async () => {
+  it('点击 打开方式 按钮打开交付物文件', async () => {
     render(<TurnFilesCard files={[makeFile()]} />);
 
-    fireEvent.click(screen.getByText('Open in'));
+    fireEvent.click(screen.getByText('打开方式'));
     expect(openLocalPathMock).toHaveBeenCalledWith('/proj/自我介绍.pptx');
 
     // 成功后不出现行内错误
@@ -135,7 +135,7 @@ describe('TurnFilesCard', () => {
     );
 
     // 默认折叠，先展开
-    fireEvent.click(screen.getByText('Review'));
+    fireEvent.click(screen.getByText('查看详情'));
 
     fireEvent.click(screen.getByText('src/index.ts'));
     expect(openLocalPathMock).toHaveBeenCalledWith('/proj/src/index.ts');
@@ -145,7 +145,7 @@ describe('TurnFilesCard', () => {
     openLocalPathMock.mockResolvedValue({ success: false, error: '没有应用能打开该文件' });
     render(<TurnFilesCard files={[makeFile()]} />);
 
-    fireEvent.click(screen.getByText('Open in'));
+    fireEvent.click(screen.getByText('打开方式'));
     await screen.findByText(/没有应用能打开该文件/);
   });
 
@@ -153,11 +153,11 @@ describe('TurnFilesCard', () => {
     openLocalPathMock.mockRejectedValue(new Error('Electron bridge unavailable'));
     render(<TurnFilesCard files={[makeFile()]} />);
 
-    fireEvent.click(screen.getByText('Open in'));
+    fireEvent.click(screen.getByText('打开方式'));
     await screen.findByText(/Electron bridge unavailable/);
   });
 
-  it('Open in 下拉菜单提供更多操作选项', () => {
+  it('打开方式 下拉菜单提供更多操作选项', () => {
     render(<TurnFilesCard files={[makeFile()]} />);
 
     const moreButton = screen.getByLabelText('更多操作');

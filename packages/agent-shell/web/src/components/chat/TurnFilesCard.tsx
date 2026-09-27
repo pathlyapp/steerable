@@ -221,7 +221,7 @@ function DeliverableCard({
               {busy ? (
                 <LuLoaderCircle className="h-3.5 w-3.5 animate-spin text-agent-muted-foreground" />
               ) : null}
-              <span>Open in</span>
+              <span>打开方式</span>
             </button>
             <button
               type="button"
@@ -370,7 +370,7 @@ function EditedFilesCard({
           </div>
           <div className="min-w-0">
             <div className="truncate text-xs font-medium text-agent-foreground">
-              Edited {files.length} file{files.length === 1 ? '' : 's'}
+              修改了 {files.length} 个文件
             </div>
             {(totalAdditions > 0 || totalDeletions > 0) && (
               <div className="flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-agent-muted-foreground">
@@ -383,7 +383,7 @@ function EditedFilesCard({
           </div>
         </div>
 
-        {/* 右侧动作按钮：Undo 与 Review */}
+        {/* 右侧动作按钮：Undo 与 查看详情 */}
         <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
@@ -391,7 +391,7 @@ function EditedFilesCard({
             title="撤销本轮文件改动"
             className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-agent-muted-foreground/50 cursor-default"
           >
-            <span>Undo</span>
+            <span>撤销</span>
             <LuUndo2 className="h-3 w-3" />
           </button>
           <button
@@ -400,7 +400,7 @@ function EditedFilesCard({
             onClick={() => setExpanded(!expanded)}
             className="rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 py-0.5 text-xs font-medium text-agent-foreground hover:bg-agent-muted/50 transition-colors"
           >
-            Review
+            查看详情
           </button>
         </div>
       </div>
