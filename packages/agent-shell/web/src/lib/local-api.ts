@@ -387,7 +387,7 @@ export interface LocalProject {
   id: string;
   name: string;
   folderPath: string;
-  /** 附加源文件夹（只读）。缺省空。 */
+  /** 附加源文件夹（可读写，含其子目录）。缺省空。 */
   sourceFolders?: string[];
   /** W6-5: 信任后该项目目录里的规则文件才会注入模型上下文。缺省 false。 */
   trusted?: boolean;

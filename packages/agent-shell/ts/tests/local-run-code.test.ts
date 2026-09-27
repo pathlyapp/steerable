@@ -161,4 +161,31 @@ describe('ToolRouter / local_run_snippet', () => {
     expect((rejected as { success: boolean }).success).toBe(false);
     expect((rejected as { error: string }).error).toContain('路径越界');
   });
+
+  it('项目沙箱：源文件夹及其子目录可作为 cwd，同级目录仍拒绝', async () => {
+    let seenCwd: string | undefined;
+    const router = makeRouter(async (req) => {
+      seenCwd = req.cwd;
+      return { success: true };
+    });
+    const root = process.platform === 'win32' ? 'C:\\proj\\a' : '/tmp/proj-a';
+    const source = process.platform === 'win32' ? 'C:\\src\\lib' : '/tmp/src-lib';
+    const nested = process.platform === 'win32' ? 'C:\\src\\lib\\pkg' : '/tmp/src-lib/pkg';
+    await router.execute(
+      { name: 'local_run_snippet', arguments: { language: 'node', code: '1', cwd: nested } },
+      { projectRoot: root, additionalWriteRoots: [source] },
+    );
+    expect(seenCwd).toBe(nested);
+
+    const sibling = process.platform === 'win32' ? 'C:\\src\\other' : '/tmp/src-other';
+    const rejected = await router.execute(
+      {
+        name: 'local_run_snippet',
+        arguments: { language: 'node', code: '1', cwd: sibling },
+      },
+      { projectRoot: root, additionalWriteRoots: [source] },
+    );
+    expect((rejected as { success: boolean }).success).toBe(false);
+    expect((rejected as { error: string }).error).toContain('路径越界');
+  });
 });

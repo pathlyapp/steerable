@@ -45,10 +45,13 @@ export interface HostSidecarDeps {
   /** W4-2 围栏：chatId → 项目家目录或无项目对话工作区。 */
   resolveProjectRoot: (chatId: string) => Promise<string | null>;
   /**
-   * 项目模式之外额外放行的只读根（会话附件目录等）。文件写入仍只受
-   * projectRoot 围栏约束；这些根只放宽 local_read_file 的读取范围。
+   * 额外只读根（会话附件目录、源文件夹）。只放宽 local_read_file，含子目录。
    */
   resolveAdditionalReadRoots?: (chatId: string) => string[] | Promise<string[]>;
+  /**
+   * 额外可写根（项目源文件夹）。放宽写入、编辑和命令 cwd，含各自子目录。
+   */
+  resolveAdditionalWriteRoots?: (chatId: string) => string[] | Promise<string[]>;
   /** W4-1 审批反向通道处理器（宿主审批弹窗的应答入口）。 */
   approvalHandler: ReturnType<typeof createApprovalBridge>['handler'];
   /**
@@ -282,6 +285,7 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
         // root so ToolRouter's cwd/path confinement applies.
         resolveProjectRoot: deps.resolveProjectRoot,
         resolveAdditionalReadRoots: deps.resolveAdditionalReadRoots,
+        resolveAdditionalWriteRoots: deps.resolveAdditionalWriteRoots,
       }),
     );
 

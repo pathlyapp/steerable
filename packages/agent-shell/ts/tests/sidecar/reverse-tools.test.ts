@@ -123,6 +123,34 @@ describe('createToolInvokeHandler', () => {
     );
   });
 
+  it('passes source folders as additional write roots, including under a worktree fence', async () => {
+    const toolRouter = makeToolRouter('ok');
+    const handler = createToolInvokeHandler({
+      toolRouter,
+      resolveProjectRoot: () => '/repo/project',
+      resolveAdditionalWriteRoots: () => ['/repo/src'],
+    });
+
+    await handler({
+      name: 'local_write_file',
+      arguments: { path: '/repo/src/pkg/a.ts' },
+      context: {
+        mode: 'agent',
+        chatId: 'chat-9',
+        workspaceRoot: '/repo/project/.steerable/worktrees/demo',
+      },
+    });
+
+    expect(toolRouter.execute).toHaveBeenCalledWith(
+      { name: 'local_write_file', arguments: { path: '/repo/src/pkg/a.ts' } },
+      {
+        projectRoot: '/repo/project/.steerable/worktrees/demo',
+        chatId: 'chat-9',
+        additionalWriteRoots: ['/repo/src'],
+      },
+    );
+  });
+
   it('passes chatId-only exec context when the chat has no project binding', async () => {
     const toolRouter = makeToolRouter('ok');
     const handler = createToolInvokeHandler({

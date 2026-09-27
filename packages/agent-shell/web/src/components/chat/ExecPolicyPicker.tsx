@@ -6,7 +6,7 @@ import type { ExecPolicy } from '@/lib/exec-policy';
  * ExecPolicyPicker — 输入框上的命令沙箱切换（类 Codex 底部权限档）。
  *
  * 切档立刻记住，下一轮才生效：当前回合的 `execSandbox` 已经随流发出。
- * 工作区 = Seatbelt/bwrap 只允许写项目家目录或本对话工作区；完整权限
+ * 工作区 = Seatbelt/bwrap 只允许写项目家目录、源文件夹（含各自子目录）或本对话工作区；完整权限
  * = 不下发命令沙箱，本机路径（如 Downloads）不再被 Operation not permitted 拦住。
  */
 
@@ -19,7 +19,7 @@ const OPTIONS: Array<{
     id: 'workspace',
     label: '工作区',
     description:
-      '命令只能写入当前项目或本对话工作区（文稿/<应用名>/conversations/）；工作区外路径会被系统拒绝。',
+      '命令只能写入当前项目家目录、源文件夹，以及这些目录的子目录；未绑定项目时只能写入本对话工作区（文稿/<应用名>/conversations/）及其子目录。范围外的路径会被系统拒绝。',
   },
   {
     id: 'full',

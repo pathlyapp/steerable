@@ -2783,17 +2783,18 @@ export class LocalBackendRouter {
       ? chatProject.folderPath
       : await this.resolveChatWorkspaceRoot(chatId);
     if (chatProject) {
+      const sourceFolderLine =
+        chatProject.sourceFolders.length > 0
+          ? `源文件夹及其子目录也可读写：${chatProject.sourceFolders.join('、')}。`
+          : '如确需读写家目录外的目录，可请用户把该目录附加为源文件夹。';
       systemPrompt +=
         `\n\n【项目模式】当前对话绑定项目「${chatProject.name}」，家目录：${chatProject.folderPath}\n` +
-        `你的文件写入（local_write_file）和命令执行（local_exec_shell）都被限制在该家目录内：` +
-        `写入路径越界会被拒绝；命令默认在家目录下运行，显式指定的 cwd 越界也会被拒绝。` +
-        (chatProject.sourceFolders.length > 0
-          ? `另有源文件夹（只读）：${chatProject.sourceFolders.join('、')}。`
-          : '') +
-        `请一律使用项目目录内的路径（相对路径按家目录解析）。` +
-        `如确需读取项目外的文件，可请用户在项目里附加为源文件夹。\n` +
-        `例外：本会话的用户上传附件目录 ${chatAttachmentsDirPath(chatId)} 也在项目家目录外，` +
-        `但它已作为**只读放行根**开放给 local_read_file（用绝对路径可直接读取，不会被项目围栏拒绝）。` +
+        `文件写入（local_write_file / local_edit_file）和命令写入可以落在家目录及其全部子目录内。` +
+        `${sourceFolderLine}` +
+        `这些范围之外的写入会被拒绝。命令未指定 cwd 时在家目录运行；显式 cwd 必须落在上述可写目录（含子目录）内。` +
+        `相对路径按家目录解析。\n` +
+        `例外：本会话的用户上传附件目录 ${chatAttachmentsDirPath(chatId)} 只读，不在可写范围内，` +
+        `但 local_read_file 可以用绝对路径读取。` +
         /* shell-neutral:allow generic document extensions, not product identity */ `用户附到本条消息的文件都放在那里；需要转换（docx / pdf / xlsx / pptx 等）时，` +
         `把该绝对路径交给 local_exec_shell 的转换脚本处理即可，**不要**因为它在项目家目录外就拒绝读取或要求用户重新拷贝。`;
 
@@ -2816,7 +2817,7 @@ export class LocalBackendRouter {
     } else {
       systemPrompt +=
         `\n\n【对话工作区】当前对话没有绑定项目。工作区：${workspaceRoot}\n` +
-        `你的文件写入（local_write_file）和命令执行（local_exec_shell）都被限制在该目录内：` +
+        `你的文件写入（local_write_file）和命令执行（local_exec_shell）都被限制在该目录及其子目录内：` +
         `写入路径越界会被拒绝；命令默认在工作区下运行，显式指定的 cwd 越界也会被拒绝。` +
         `请一律使用工作区内的路径（相对路径按工作区解析）。` +
         `用户若要把对话绑到已有项目，可在输入框上方选择项目。`;
@@ -3349,7 +3350,7 @@ export class LocalBackendRouter {
     // spec (default.harness.yaml) is the single source of truth for
     // maxRounds / maxToolErrors, and an explicit request param overrides it.
     // W4-2: per-exec sandbox for shell tool calls, default-on. Writable
-    // roots = 项目家目录，或无项目时 Documents/<应用>/conversations/<chatId>。
+    // roots = 项目家目录（或无项目时的对话工作区）+ 源文件夹。每个根含其子目录。
     // `execPolicy: 'full'`（输入框「完整权限」）关闭这一层，让 mkdir
     // Downloads 这类工作区外写入不再被 Seatbelt 拦成 Operation not permitted。
     const chatProject = await this.resolveChatProject(chatId);
@@ -3362,6 +3363,7 @@ export class LocalBackendRouter {
         // 工作区）。
         ...collectPackExecWritableRoots(chatId),
         workspaceRoot,
+        ...(chatProject?.sourceFolders ?? []),
       ],
       { policy: clampExecPolicy(parseExecPolicy(payload.execPolicy), getResolvedHostTools()) },
     );
@@ -3404,6 +3406,7 @@ export class LocalBackendRouter {
     const turnFileRoots = [
       ...collectPackExecWritableRoots(chatId),
       workspaceRoot,
+      ...(chatProject?.sourceFolders ?? []),
     ];
 
     try {

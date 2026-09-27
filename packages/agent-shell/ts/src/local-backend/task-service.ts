@@ -75,7 +75,9 @@ export interface TaskServiceDeps {
   toolRouter: ToolRouter;
   worktreeService: WorktreeService;
   /** chatId → 绑定项目（无项目对话返回 null）。与 router.resolveChatProject 同源。 */
-  resolveChatProject: (chatId: string) => Promise<{ name: string; folderPath: string } | null>;
+  resolveChatProject: (
+    chatId: string,
+  ) => Promise<{ name: string; folderPath: string; sourceFolders?: string[] } | null>;
   /**
    * 无项目对话的可写根（Documents/<应用>/conversations/<chatId>）。
    * 测试可不传，围栏回落为仅 scratch。
@@ -407,7 +409,10 @@ export class TaskService {
       (this.deps.resolveChatWorkspaceRoot
         ? await this.deps.resolveChatWorkspaceRoot(chatId)
         : null);
-    const execSandbox = buildExecSandbox(fenceRoot ? [fenceRoot] : []);
+    const execSandbox = buildExecSandbox([
+      ...(fenceRoot ? [fenceRoot] : []),
+      ...(project?.sourceFolders ?? []),
+    ]);
     const approval: SidecarChatStreamRequest['approval'] = resolveTurnApproval();
 
     // depth-1：任务回合没有 task_run（不能再派生任务），其余工具面与

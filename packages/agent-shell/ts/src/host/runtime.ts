@@ -200,11 +200,19 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
   // 4.6a/4.6b：跨 turn 后台任务 + git worktree 隔离。任务流由宿主独立驱动
   // （不绑父 turn 生命周期，见 task-service.ts 模块头）；终态经广播推到
   // 用户面任务面板。
-  const resolveChatProjectRoot = async (chatId: string): Promise<{ name: string; folderPath: string } | null> => {
+  const resolveChatProjectRoot = async (
+    chatId: string,
+  ): Promise<{ name: string; folderPath: string; sourceFolders: string[] } | null> => {
     const projectId = (await defaultStore.getChat(chatId))?.projectId;
     if (!projectId) return null;
     const project = projectRegistry.get(projectId);
-    return project ? { name: project.name, folderPath: project.folderPath } : null;
+    return project
+      ? {
+          name: project.name,
+          folderPath: project.folderPath,
+          sourceFolders: project.sourceFolders ?? [],
+        }
+      : null;
   };
   // 场景包装配（2.3）：产品组装根（products/<id>/active.ts）在 import 期
   // 把包装配函数注册进 pack-assembly 注册表；这里统一装配。宿主不 import
@@ -304,14 +312,18 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
         toolRouter,
         resolveProjectRoot: async (chatId) =>
           localBackendRouter.resolveChatWorkspaceRoot(chatId),
-        // 项目模式下文件读写被围栏在项目目录内；会话附件目录是额外放行的
-        // 只读根，保证用户上传的文件即使在项目会话里也能被 agent 读回。
+        // 读：项目家目录之外，附件目录和源文件夹（含各自子目录）也可读。
+        // 写：源文件夹及其子目录与家目录同一档；附件目录保持只读。
         resolveAdditionalReadRoots: async (chatId) => {
           const project = await localBackendRouter.resolveChatProject(chatId);
           return [
             getChatAttachmentsDir(chatId),
             ...(project?.sourceFolders ?? []),
           ];
+        },
+        resolveAdditionalWriteRoots: async (chatId) => {
+          const project = await localBackendRouter.resolveChatProject(chatId);
+          return project?.sourceFolders ?? [];
         },
         approvalHandler: approvalBridge.handler,
         askUserHandler: askUserBridge.handler,

@@ -4,8 +4,8 @@
  * 项目 = 名字 + 托管家目录 + 可选源文件夹。家目录默认建在
  * `Documents/<应用名>/<项目名>/`（见 project-home.ts）。chat 通过
  * `chat_sessions.project_id` 绑定项目；绑定后文件读写与命令执行被硬限制
- * 在家目录内（见 tool-router.ts 的 ToolExecContext.projectRoot）；源文件夹
- * 只放宽 local_read_file。
+ * 在家目录及其子目录内（见 tool-router.ts 的 ToolExecContext.projectRoot）；
+ * 源文件夹及其子目录同样可写。
  *
  * 持久化在 userData/agent-projects.json。存储通过 {@link ProjectKvStore}
  * 接口注入：main.ts 用 electron-store 实现，单测用内存实现——本模块不
@@ -21,8 +21,8 @@ export interface ProjectRecord {
   /** 托管家目录（绝对路径）。默认 `Documents/<应用名>/<项目名>/`。 */
   folderPath: string;
   /**
-   * 附加源文件夹（已有代码目录）。只放宽读取，不替代家目录，也不放宽写入。
-   * 旧记录没有此字段，读取时按空列表处理。
+   * 附加源文件夹（已有代码目录）。与家目录一样可读写，范围含各自子目录。
+   * 不替代家目录。旧记录没有此字段，读取时按空列表处理。
    */
   sourceFolders?: string[];
   /**

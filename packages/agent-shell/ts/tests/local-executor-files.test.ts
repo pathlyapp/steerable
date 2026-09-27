@@ -14,7 +14,7 @@
  * Apple Maps URL 规范化 / 系统打开错误映射（mock runtime 边界，不真打开）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -243,17 +243,49 @@ describe('路径围栏 · read/write 集成', () => {
     });
   });
 
-  it('write：越界拒绝；additionalReadRoots 只放宽读、不放宽写', async () => {
-    await withRootAndOutside(async ({ root, outside }) => {
+  it('write：越界拒绝；只读根不放宽写；可写根含配置目录及其子目录', async () => {
+    await withRootAndOutside(async ({ root, outside, third }) => {
       const executor = new LocalExecutor();
-      // writeLocalFile 签名没有 additionalReadRoots——读/写围栏不对称是设计：
-      // 模型可以读参考目录，但只能写项目内。
-      const blocked = await executor.writeLocalFile(
+      const nested = path.join(outside, 'nested', 'deep');
+      await mkdir(nested, { recursive: true });
+
+      const blockedByReadRoot = await executor.writeLocalFile(
         { path: path.join(outside, 'f.txt'), content: 'x' },
         root,
       );
-      expect(blocked.success).toBe(false);
-      expect(blocked.error).toContain('路径越界');
+      expect(blockedByReadRoot.success).toBe(false);
+      expect(blockedByReadRoot.error).toContain('路径越界');
+
+      const onConfiguredDir = await executor.writeLocalFile(
+        { path: path.join(outside, 'f.txt'), content: 'x' },
+        root,
+        [outside],
+      );
+      expect(onConfiguredDir.success).toBe(true);
+
+      const inSubdir = await executor.writeLocalFile(
+        { path: path.join(nested, 'child.txt'), content: 'child', createDirs: true },
+        root,
+        [outside],
+      );
+      expect(inSubdir.success).toBe(true);
+
+      const sibling = await executor.writeLocalFile(
+        { path: path.join(third, 'nope.txt'), content: 'no' },
+        root,
+        [outside],
+      );
+      expect(sibling.success).toBe(false);
+      expect(sibling.error).toContain('路径越界');
+      expect(sibling.error).toContain(outside);
+
+      const prefix = await executor.writeLocalFile(
+        { path: path.join(outside + '-evil', 'x.txt'), content: 'no' },
+        root,
+        [outside],
+      );
+      expect(prefix.success).toBe(false);
+      expect(prefix.error).toContain('路径越界');
 
       const ok = await executor.writeLocalFile({ path: path.join(root, 'f.txt'), content: 'x' }, root);
       expect(ok.success).toBe(true);

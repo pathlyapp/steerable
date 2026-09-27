@@ -241,7 +241,7 @@ export function ChatProjectBadge({
         title={
           project
             ? `${project.folderPath}\n点击管理项目归属 / 修改绑定目录`
-            : '把当前对话关联到一个项目（Agent 的文件操作将限制在项目目录内）'
+            : '把当前对话关联到一个项目（文件写入限制在项目家目录、源文件夹，以及这些目录的子目录内）'
         }
       />
 

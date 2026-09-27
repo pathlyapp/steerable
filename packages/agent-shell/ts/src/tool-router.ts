@@ -3,7 +3,10 @@ import path from 'node:path';
 import {
   LocalExecutor,
   buildProjectRootViolation,
+  expandFencePath,
   isPathWithinRoot,
+  writableFenceRoots,
+  writableFenceViolation,
   type LocalExecRequest,
   type LocalExecResult,
 } from './local-executor.js';
@@ -60,17 +63,23 @@ export interface ToolCall {
  * 单次工具执行的调用上下文（按 chat 解析，随每次 execute 传入）。
  *
  * `projectRoot` 是项目模式的硬沙箱根：非空时
- *   - local_read_file / local_write_file 的路径必须落在根内（LocalExecutor 围栏）
- *   - local_exec_shell 的 cwd 默认改为项目根；显式给的 cwd 越界则直接拒绝
+ *   - 读路径必须落在根内，或落在 additionalReadRoots 内（含各自子目录）
+ *   - 写路径必须落在根内，或落在 additionalWriteRoots 内（含各自子目录）
+ *   - local_exec_shell 的 cwd 默认改为项目根；显式 cwd 必须落在上述可写根内
  * 无项目对话（null/缺省）行为与之前完全一致。
  */
 export interface ToolExecContext {
   projectRoot?: string | null;
   /**
-   * 项目模式之外额外放行的只读根（会话附件目录等）。只放宽
-   * local_read_file 的读取范围，写入/编辑仍只受 projectRoot 围栏约束。
+   * 额外只读根（会话附件目录、源文件夹）。只放宽 local_read_file。
+   * 每个根包含其全部子目录。
    */
   additionalReadRoots?: string[] | null;
+  /**
+   * 额外可写根（项目源文件夹）。放宽写入、编辑和命令 cwd。
+   * 每个根包含其全部子目录。附件目录不在这里。
+   */
+  additionalWriteRoots?: string[] | null;
   /**
    * 4.6a：调用发生的 chat。task_run / task_status / task_result 需要它把
    * 任务绑定到来源对话（任务表按 chatId 归组）；reverse-tools 从
@@ -911,6 +920,7 @@ export class ToolRouter {
             timeout: typeof args.timeout === 'number' ? args.timeout : undefined,
           },
           projectRoot,
+          context?.additionalWriteRoots ?? null,
         );
       case 'local_read_file':
         return await this.localExecutor.readLocalFile(
@@ -962,6 +972,7 @@ export class ToolRouter {
               typeof args.expectedVersion === 'string' ? args.expectedVersion : undefined,
           },
           projectRoot,
+          context?.additionalWriteRoots ?? null,
         );
         this.autoInstallSkillOnSuccess(written, args.path);
         return written;
@@ -983,6 +994,7 @@ export class ToolRouter {
               typeof args.expectedVersion === 'string' ? args.expectedVersion : undefined,
           },
           projectRoot,
+          context?.additionalWriteRoots ?? null,
         );
         this.autoInstallSkillOnSuccess(edited, args.path);
         return edited;
@@ -998,6 +1010,7 @@ export class ToolRouter {
         const sandboxed = this.applyProjectCwdSandbox(
           { cwd: typeof args.cwd === 'string' ? args.cwd : undefined },
           projectRoot,
+          context?.additionalWriteRoots ?? null,
         );
         if ('error' in sandboxed) return sandboxed.error;
         return await this.localExecutor.runCode({
@@ -1166,49 +1179,52 @@ export class ToolRouter {
   }
 
   /**
-   * 项目模式硬沙箱（cwd 维度）：projectRoot 非空时，cwd 默认收到项目根；
-   * 模型显式给的 cwd 越界则返回错误结果。相对 cwd 按项目根解析（而不是
-   * 进程 cwd），符合"在项目里干活"的直觉。
+   * 项目模式硬沙箱（cwd 维度）：有可写根时，cwd 默认收到项目家目录；
+   * 模型显式给的 cwd 必须落在家目录或额外可写根（源文件夹）内，含各自子目录。
+   * 相对 cwd 按家目录解析（而不是进程 cwd）。
    *
    * 注意边界：shell 命令文本里内嵌的绝对路径无法可靠解析，围栏只覆盖
-   * cwd 与文件读写工具——系统提示里已告知模型只在项目目录内操作。
+   * cwd 与文件读写工具。命令实际写盘还受 exec 沙箱的 writableRoots 约束，
+   * 那些根同样包含子目录。
    *
    * local_exec_shell 与 local_run_snippet 共用本 helper。
    */
   private applyProjectCwdSandbox<T extends { cwd?: string }>(
     request: T,
     projectRoot?: string | null,
+    additionalWriteRoots?: string[] | null,
   ): { request: T } | { error: LocalExecResult } {
-    if (!projectRoot) return { request };
-    const root = path.resolve(
-      projectRoot.startsWith('~') ? path.join(os.homedir(), projectRoot.slice(1)) : projectRoot,
-    );
+    const roots = writableFenceRoots(projectRoot, additionalWriteRoots);
+    if (roots.length === 0) return { request };
+    const home = projectRoot ? expandFencePath(projectRoot) : roots[0];
     if (request.cwd) {
       const expanded = request.cwd.startsWith('~')
         ? path.join(os.homedir(), request.cwd.slice(1))
         : request.cwd;
       const resolvedCwd = path.isAbsolute(expanded)
         ? path.resolve(expanded)
-        : path.resolve(root, expanded);
-      if (!isPathWithinRoot(resolvedCwd, root)) {
+        : path.resolve(home, expanded);
+      const violation = writableFenceViolation(resolvedCwd, roots);
+      if (violation) {
         return {
           error: {
             success: false,
-            error: buildProjectRootViolation(resolvedCwd, root),
+            error: violation,
             platform: process.platform,
           },
         };
       }
       return { request: { ...request, cwd: resolvedCwd } };
     }
-    return { request: { ...request, cwd: root } };
+    return { request: { ...request, cwd: home } };
   }
 
   private async executeShell(
     request: LocalExecRequest,
     projectRoot?: string | null,
+    additionalWriteRoots?: string[] | null,
   ): Promise<LocalExecResult> {
-    const sandboxed = this.applyProjectCwdSandbox(request, projectRoot);
+    const sandboxed = this.applyProjectCwdSandbox(request, projectRoot, additionalWriteRoots);
     if ('error' in sandboxed) return sandboxed.error;
     if (this.shellExecutor) {
       return this.shellExecutor(sandboxed.request);

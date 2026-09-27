@@ -322,12 +322,55 @@ export function isPathWithinRoot(resolvedPath: string, resolvedRoot: string): bo
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+/** `~` 展开后 resolve。围栏比较前路径与根都要过这一步。 */
+export function expandFencePath(inputPath: string): string {
+  const expanded = inputPath.startsWith('~')
+    ? path.join(os.homedir(), inputPath.slice(1))
+    : inputPath;
+  return path.resolve(expanded);
+}
+
+/**
+ * 可写根：项目家目录（或对话工作区）加上额外可写根（源文件夹）。
+ * 每个根都包含它自己和全部子目录。空列表表示不设围栏。
+ */
+export function writableFenceRoots(
+  projectRoot?: string | null,
+  additionalWriteRoots?: string[] | null,
+): string[] {
+  const roots: string[] = [];
+  const push = (raw: string | null | undefined) => {
+    if (!raw) return;
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const resolved = expandFencePath(trimmed);
+    if (!roots.includes(resolved)) roots.push(resolved);
+  };
+  push(projectRoot);
+  for (const extra of additionalWriteRoots ?? []) push(extra);
+  return roots;
+}
+
 /** 越界错误消息（给模型看，引导它把操作收回项目目录内）。 */
 export function buildProjectRootViolation(resolvedPath: string, resolvedRoot: string): string {
   return (
     `路径越界：${resolvedPath} 不在当前对话绑定的项目目录 ${resolvedRoot} 内。` +
-    `项目模式下文件操作被限制在项目目录中——请改用项目内的相对/绝对路径；` +
-    `如确需访问目录外文件，请告知用户该限制并请其把文件放进项目目录。`
+    `项目模式下文件操作被限制在项目目录及其子目录中——请改用项目内的相对/绝对路径；` +
+    `如确需访问目录外文件，请告知用户该限制并请其把目录附加为源文件夹。`
+  );
+}
+
+/**
+ * 路径不在任一可写根（含其子目录）内时返回给模型的错误；在围栏内或未设围栏时返回 null。
+ * `resolvedPath` 与 `roots` 都应已 resolve。
+ */
+export function writableFenceViolation(resolvedPath: string, roots: string[]): string | null {
+  if (roots.length === 0) return null;
+  if (roots.some((root) => isPathWithinRoot(resolvedPath, root))) return null;
+  if (roots.length === 1) return buildProjectRootViolation(resolvedPath, roots[0]);
+  return (
+    `路径越界：${resolvedPath} 不在可写目录内（${roots.join('、')}）。` +
+    `可写范围是这些目录及其子目录。请改用其中的路径。`
   );
 }
 
@@ -675,14 +718,14 @@ export class LocalExecutor {
   async writeLocalFile(
     request: LocalFileWriteRequest,
     projectRoot?: string | null,
+    additionalWriteRoots?: string[] | null,
   ): Promise<LocalFileWriteResult> {
     const filePath = this.resolvePath(request.path);
-    if (projectRoot) {
-      const root = this.resolvePath(projectRoot);
-      if (!isPathWithinRoot(filePath, root)) {
-        return { success: false, error: buildProjectRootViolation(filePath, root) };
-      }
-    }
+    const violation = writableFenceViolation(
+      filePath,
+      writableFenceRoots(projectRoot, additionalWriteRoots),
+    );
+    if (violation) return { success: false, error: violation };
     // 同文件串行化：读-改-写必须排队，否则并发写会互相覆盖（pi file-mutation-queue）。
     return this.serializeFileOp(filePath, async () => {
       try {
@@ -742,14 +785,14 @@ export class LocalExecutor {
   async editLocalFile(
     request: LocalFileEditRequest,
     projectRoot?: string | null,
+    additionalWriteRoots?: string[] | null,
   ): Promise<LocalFileEditResult> {
     const filePath = this.resolvePath(request.path);
-    if (projectRoot) {
-      const root = this.resolvePath(projectRoot);
-      if (!isPathWithinRoot(filePath, root)) {
-        return { success: false, error: buildProjectRootViolation(filePath, root) };
-      }
-    }
+    const violation = writableFenceViolation(
+      filePath,
+      writableFenceRoots(projectRoot, additionalWriteRoots),
+    );
+    if (violation) return { success: false, error: violation };
     return this.serializeFileOp(filePath, async () => {
       try {
         const encoding = request.encoding ?? 'utf-8';
@@ -1141,8 +1184,7 @@ export class LocalExecutor {
   }
 
   private resolvePath(inputPath: string): string {
-    const expanded = inputPath.startsWith('~') ? path.join(os.homedir(), inputPath.slice(1)) : inputPath;
-    return path.resolve(expanded);
+    return expandFencePath(inputPath);
   }
 
   private resolveCwd(cwd: string | undefined, shellType: ShellType): string {
