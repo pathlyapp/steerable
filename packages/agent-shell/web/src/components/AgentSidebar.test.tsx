@@ -57,7 +57,10 @@ const { AgentSidebar } = await import('./AgentSidebar');
 
 const originalPlatform = window.navigator.platform;
 
+const SIDEBAR_SECTIONS_KEY = 'deeppath.agent.sidebarSections';
+
 beforeEach(() => {
+  localStorage.removeItem(SIDEBAR_SECTIONS_KEY);
   bridgeStub = null;
   listProjects.mockReset();
   createProject.mockReset();
@@ -451,6 +454,61 @@ describe('AgentSidebar 会话行交互', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^最近$/ }));
     expect(screen.getByTestId('sidebar-chat-row')).toBeTruthy();
+  });
+
+  it('置顶、项目、最近的折叠在重新挂载后保持', async () => {
+    enterElectron([makeProject({ id: 'proj-1', name: '项目甲' })]);
+    const chats = [
+      makeChat({ id: 'c-pinned', title: '置顶会话', isPinned: true }),
+      existingChat,
+      makeChat({ id: 'c-in', title: '项目内会话', projectId: 'proj-1' }),
+    ];
+    const { unmount } = renderSidebar('/agent', vi.fn(), { data: { chats } });
+    await screen.findByText('项目甲');
+
+    fireEvent.click(screen.getByRole('button', { name: /^置顶$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^项目$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^最近$/ }));
+    expect(screen.queryByText('置顶会话')).toBeNull();
+    expect(screen.queryByText('项目甲')).toBeNull();
+    expect(screen.queryByText('已经聊过的对话')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(SIDEBAR_SECTIONS_KEY) ?? '{}')).toEqual({
+      pinned: false,
+      projects: false,
+      recents: false,
+    });
+
+    unmount();
+    renderSidebar('/agent', vi.fn(), { data: { chats } });
+    expect(screen.getByRole('button', { name: /^置顶$/ }).getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+    expect(screen.getByRole('button', { name: /^项目$/ }).getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+    expect(screen.getByRole('button', { name: /^最近$/ }).getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+    expect(screen.queryByText('置顶会话')).toBeNull();
+    expect(screen.queryByText('已经聊过的对话')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /^置顶$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^项目$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^最近$/ }));
+    expect(screen.getByText('置顶会话')).toBeTruthy();
+    await screen.findByText('项目甲');
+    expect(screen.getByText('已经聊过的对话')).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem(SIDEBAR_SECTIONS_KEY) ?? '{}')).toEqual({
+      pinned: true,
+      projects: true,
+      recents: true,
+    });
+  });
+
+  it('折叠记录损坏时按默认展开', () => {
+    localStorage.setItem(SIDEBAR_SECTIONS_KEY, '{');
+    renderSidebar('/agent');
+    expect(screen.getByText('已经聊过的对话')).toBeTruthy();
   });
 
   it('置顶区可折叠再展开', () => {

@@ -248,6 +248,40 @@ function ProjectOverflowMenu({
   );
 }
 
+/** 置顶 / 项目 / 最近 的展开状态。缺省键走组件内默认。 */
+const SIDEBAR_SECTIONS_KEY = "deeppath.agent.sidebarSections";
+
+type SidebarSectionId = "pinned" | "projects" | "recents";
+
+function readStoredSidebarSections(): Partial<Record<SidebarSectionId, boolean>> {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_SECTIONS_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const record = parsed as Record<string, unknown>;
+    const out: Partial<Record<SidebarSectionId, boolean>> = {};
+    for (const id of ["pinned", "projects", "recents"] as const) {
+      if (typeof record[id] === "boolean") out[id] = record[id];
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeSidebarSectionExpanded(id: SidebarSectionId, expanded: boolean) {
+  try {
+    const current = readStoredSidebarSections();
+    window.localStorage.setItem(
+      SIDEBAR_SECTIONS_KEY,
+      JSON.stringify({ ...current, [id]: expanded }),
+    );
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 interface AgentSidebarProps {
   data: UseChatsAndAgentsResult;
   /** 右侧栏当前打开的面板：null / 'terminal' / 包槽位 id（互斥）。 */
@@ -339,9 +373,17 @@ export function AgentSidebar({
     };
   }, []);
 
-  const [pinnedExpanded, setPinnedExpanded] = useState<boolean | null>(null);
-  const [projectsExpanded, setProjectsExpanded] = useState<boolean | null>(null);
-  const [recentsExpanded, setRecentsExpanded] = useState<boolean | null>(null);
+  // null = 用户还没点过这一组，走默认（置顶：有置顶会话才展开；项目、最近：展开）。
+  // 点过之后写入 localStorage，刷新和重启后保持。
+  const [pinnedExpanded, setPinnedExpanded] = useState<boolean | null>(
+    () => readStoredSidebarSections().pinned ?? null,
+  );
+  const [projectsExpanded, setProjectsExpanded] = useState<boolean | null>(
+    () => readStoredSidebarSections().projects ?? null,
+  );
+  const [recentsExpanded, setRecentsExpanded] = useState<boolean | null>(
+    () => readStoredSidebarSections().recents ?? null,
+  );
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
   // ───── 项目模式 ─────
@@ -942,7 +984,12 @@ export function AgentSidebar({
                 <div className="group/section flex h-7 items-center justify-between rounded-agent-md px-1.5 text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground">
                   <button
                     type="button"
-                    onClick={() => setPinnedExpanded(!isPinnedExpanded)}
+                    aria-expanded={isPinnedExpanded}
+                    onClick={() => {
+                      const next = !isPinnedExpanded;
+                      setPinnedExpanded(next);
+                      writeSidebarSectionExpanded("pinned", next);
+                    }}
                     className="flex flex-1 min-w-0 items-center gap-1 text-left font-medium text-agent-muted-foreground hover:text-agent-foreground"
                   >
                     <span>置顶</span>
@@ -967,7 +1014,12 @@ export function AgentSidebar({
                   <div className="group/section flex h-7 items-center justify-between rounded-agent-md px-1.5 text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground">
                     <button
                       type="button"
-                      onClick={() => setProjectsExpanded(!isProjectsExpanded)}
+                      aria-expanded={isProjectsExpanded}
+                      onClick={() => {
+                        const next = !isProjectsExpanded;
+                        setProjectsExpanded(next);
+                        writeSidebarSectionExpanded("projects", next);
+                      }}
                       className="flex flex-1 min-w-0 items-center gap-1 text-left font-medium text-agent-muted-foreground hover:text-agent-foreground"
                     >
                       <span>项目</span>
@@ -1105,7 +1157,12 @@ export function AgentSidebar({
                 <div className="group/section flex h-7 items-center justify-between rounded-agent-md px-1.5 text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground">
                   <button
                     type="button"
-                    onClick={() => setRecentsExpanded(!isRecentsExpanded)}
+                    aria-expanded={isRecentsExpanded}
+                    onClick={() => {
+                      const next = !isRecentsExpanded;
+                      setRecentsExpanded(next);
+                      writeSidebarSectionExpanded("recents", next);
+                    }}
                     className="flex flex-1 min-w-0 items-center gap-1 text-left font-medium text-agent-muted-foreground hover:text-agent-foreground"
                   >
                     <span>最近</span>
