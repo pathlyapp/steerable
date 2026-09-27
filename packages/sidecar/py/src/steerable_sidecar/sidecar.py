@@ -135,7 +135,7 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import (
 from ._version import __version__ as SIDECAR_VERSION
 from .file_edit import EditError, EditOp, apply_edits
 from .host_tools import HostApprover, HostAskUserHandler, HostToolExecutor
-from .loop_limits import resolve_loop_limits
+from .loop_limits import UNLIMITED_LOOP_LIMIT, resolve_loop_limits
 from .sandbox import select_exec_backend
 from .stream_chunks import RawChunkBridgeHooks
 
@@ -1990,8 +1990,8 @@ class Sidecar:
             # schema advertises the names as a ``subagent_type`` enum. An
             # unknown name fails closed listing the registered ones.
             # Round / tool-error walls inherit the parent loop unless a
-            # profile pins its own — a child must not die at 8/12 rounds
-            # while the parent still has the spec's 80.
+            # profile pins its own. The parent default is no cap, so an
+            # unpinned child is not stopped at SubagentConfig's 8 / 3.
             registry = None
             profiles = subagent_opts.get("profiles")
             if isinstance(profiles, dict) and profiles:
@@ -3077,41 +3077,36 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
             max_tool_calls=int(params.get("budgetMaxToolCalls", 10_000)),
         )
     else:
-        # Default cost guard (2026-08-26, production-calibrated). The desktop
-        # TS loop had a fixed 60k token budget; the CoreLoop path launched
-        # with none — a default-on regression. Production distribution over
-        # 31k api traces: mean 145k total tokens/trace ≈ 1.1× deepseek's
-        # 131k window, and the api's fixed 120k cap cut 6% of real tasks
-        # (budget_exhausted terminal). maxRounds is the primary runaway
-        # guard; only the token axis of BudgetLimit is consumed by the loop
-        # today (steps/tool_calls stay inert).
-        #
-        # The token axis is cumulative over the run while a context window is
+        # Only the token axis of BudgetLimit is consumed by the loop
+        # (steps/tool_calls stay inert). The token axis is cumulative over
+        # the run while a context window is
         # a per-request size, so a flat multiple of the window caps the round
         # count instead of the spend: an agentic turn re-sends its prompt
         # every round, and even a fully cache-hit window still bills
-        # ``cached_token_weight × window``. The former flat 2× therefore
-        # exhausted around round 13-20 of the bundled spec's max_rounds=80 —
-        # the backstop guard fired four times sooner than the primary one.
-        # Scaling with the round budget restores that order: the token axis
-        # binds only when rounds cost more than a cached full window. The 2×
-        # floor keeps short-round configs (subagent profiles) where they were.
+        # ``cached_token_weight × window``. Scaling with an explicit round
+        # cap keeps that cap primary and leaves the token axis a backstop.
+        # The default cap is unlimited — a derived token budget would just
+        # re-introduce the wall — so an uncapped run has no token budget
+        # unless the caller passed ``budgetTokens``.
         from steerable_agent_runtime.tokens import resolve_context_window
 
-        window = resolve_context_window(
-            params.get("model"),
-            explicit=int(params.get("maxContextTokens") or 0) or None,
-            provider=params.get("provider"),
-            base_url=params.get("baseUrl"),
-        )
-        budget = BudgetLimit(
-            max_tokens=max(
-                2 * window,
-                math.floor(max_rounds * window * DEFAULT_CACHED_TOKEN_WEIGHT),
-            ),
-            max_steps=max_rounds,
-            max_tool_calls=10_000,
-        )
+        if max_rounds >= UNLIMITED_LOOP_LIMIT:
+            budget = None
+        else:
+            window = resolve_context_window(
+                params.get("model"),
+                explicit=int(params.get("maxContextTokens") or 0) or None,
+                provider=params.get("provider"),
+                base_url=params.get("baseUrl"),
+            )
+            budget = BudgetLimit(
+                max_tokens=max(
+                    2 * window,
+                    math.floor(max_rounds * window * DEFAULT_CACHED_TOKEN_WEIGHT),
+                ),
+                max_steps=max_rounds,
+                max_tool_calls=10_000,
+            )
     return LoopConfig(
         max_rounds=max_rounds,
         max_tool_errors=max_tool_errors,

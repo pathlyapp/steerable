@@ -56,13 +56,16 @@ def test_missing_spec_answers_every_field_from_the_baseline() -> None:
 
 
 def test_baseline_matches_the_bundled_spec() -> None:
-    """A spec omission must not change behavior, so the two agree by value."""
+    """The bundled spec omits both caps, so a turn resolves to no cap."""
     from steerable_agent_runtime.harness_spec import load_harness_spec
     from steerable_sidecar.sidecar import _DEFAULT_HARNESS_SPEC_PATH
 
     pinned = load_harness_spec(_DEFAULT_HARNESS_SPEC_PATH).loop
     assert pinned is not None
-    assert (pinned.max_rounds, pinned.max_tool_errors) == (
+    assert pinned.max_rounds is None
+    assert pinned.max_tool_errors is None
+    resolved = resolve_loop_limits(pinned)
+    assert (resolved.max_rounds, resolved.max_tool_errors) == (
         BASELINE_MAX_ROUNDS,
         BASELINE_MAX_TOOL_ERRORS,
     )
@@ -75,7 +78,7 @@ def test_tool_dedup_false_in_the_spec_is_not_read_as_unset() -> None:
 
 
 def test_zero_override_is_honored_not_treated_as_unset() -> None:
-    """`max_rounds=0` from a caller means 0; `or` would silently give 80."""
+    """`max_rounds=0` from a caller means 0; `or` would treat it as unset."""
     assert resolve_loop_limits(_Loop(max_rounds=80), max_rounds=0).max_rounds == 0
 
 
@@ -89,4 +92,8 @@ def test_every_entrypoint_resolves_the_bundled_spec_identically(entrypoint: str)
     from steerable_sidecar.sidecar import _build_loop_config
 
     config = _build_loop_config({}) if entrypoint == "chat" else _default_loop_config()
-    assert (config.max_rounds, config.max_tool_errors, config.tool_dedup) == (80, 16, False)
+    assert (config.max_rounds, config.max_tool_errors, config.tool_dedup) == (
+        BASELINE_MAX_ROUNDS,
+        BASELINE_MAX_TOOL_ERRORS,
+        False,
+    )

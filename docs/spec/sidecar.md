@@ -175,8 +175,16 @@ applies to every executor, in-process or remote (reverse channel, future
 MCP). Default 300000 (5 min); the default is a hung-tool backstop, not a
 budget — set a tighter value for fast tools.
 
+`maxRounds` and `maxToolErrors` are optional walls. Unset, the turn has
+neither: a long task is not stopped for reaching a round count or a run
+of consecutive tool errors. Rust stores both as `u32` and stops at `>=`,
+so the no-cap value sent on the wire is `u32::MAX`. An explicit value,
+including `0`, is honored.
+
 `budgetTokens` is the run's cumulative token cap; exceeding it terminates
-the turn `budget_exhausted`. Unset, it defaults to
+the turn `budget_exhausted`. Unset on an uncapped turn, there is no token
+budget either — a derived budget would re-introduce the round wall. When
+`maxRounds` is set and `budgetTokens` is not, the token cap defaults to
 `max_rounds × window × cached_token_weight`, floored at `2 × window`.
 The scaling matters because the cap is cumulative while a context window
 is a per-request size: an agentic turn re-sends its prompt every round, so

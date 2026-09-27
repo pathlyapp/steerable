@@ -1054,19 +1054,22 @@ async def test_chat_fork_unknown_trace_errors() -> None:
 
 
 def test_build_loop_config_default_budget_scales_with_rounds_and_window() -> None:
-    """No explicit budgetTokens → enough for max_rounds rounds of a fully
-    cache-hit window, so the cumulative token axis stays a backstop behind
-    max_rounds instead of capping the round count. Explicit budgetTokens
-    still wins."""
+    """No round cap and no budgetTokens → no token budget, so a long task
+    is not stopped by a derived wall. An explicit maxRounds still scales
+    the token backstop with that cap. Explicit budgetTokens still wins."""
+    from steerable_sidecar.loop_limits import UNLIMITED_LOOP_LIMIT
     from steerable_sidecar.sidecar import _build_loop_config
 
     cfg = _build_loop_config({"model": "deepseek-v4"})
-    assert cfg.budget is not None
-    assert cfg.budget.max_tokens == 80 * 131_072 // 10
+    assert cfg.max_rounds == UNLIMITED_LOOP_LIMIT
+    assert cfg.budget is None
 
     cfg_unknown = _build_loop_config({})
-    assert cfg_unknown.budget is not None
-    assert cfg_unknown.budget.max_tokens == 80 * 60_000 // 10
+    assert cfg_unknown.budget is None
+
+    capped = _build_loop_config({"model": "deepseek-v4", "maxRounds": 80})
+    assert capped.budget is not None
+    assert capped.budget.max_tokens == 80 * 131_072 // 10
 
     cfg_explicit = _build_loop_config({"model": "deepseek-v4", "budgetTokens": 50_000})
     assert cfg_explicit.budget is not None
@@ -1094,16 +1097,17 @@ def test_build_loop_config_tool_timeout_wiring() -> None:
 
 def test_build_loop_config_loop_limits_follow_harness_spec() -> None:
     """W3.4.2.4 precedence: explicit request param > the bundled default
-    spec's `loop:` section (80/16/false) > the entrypoint baseline. The
-    budget's max_steps follows the resolved max_rounds."""
+    spec's `loop:` section > the entrypoint baseline. The bundled spec
+    omits both caps, so the baseline (no cap) is what a turn runs with.
+    An explicit round cap still sets the budget's max_steps."""
+    from steerable_sidecar.loop_limits import UNLIMITED_LOOP_LIMIT
     from steerable_sidecar.sidecar import _build_loop_config
 
     cfg = _build_loop_config({})
-    assert cfg.max_rounds == 80
-    assert cfg.max_tool_errors == 16
+    assert cfg.max_rounds == UNLIMITED_LOOP_LIMIT
+    assert cfg.max_tool_errors == UNLIMITED_LOOP_LIMIT
     assert cfg.tool_dedup is False
-    assert cfg.budget is not None
-    assert cfg.budget.max_steps == 80
+    assert cfg.budget is None
 
     explicit = _build_loop_config({"maxRounds": 12, "maxToolErrors": 5})
     assert explicit.max_rounds == 12
@@ -1363,7 +1367,7 @@ async def test_subagent_profiles_advertise_subagent_type_enum() -> None:
 async def test_subagent_profile_omitting_max_rounds_inherits_parent_loop(
     monkeypatch,
 ) -> None:
-    """A profile that does not pin maxRounds uses the parent spec (80 / 16),
+    """A profile that does not pin maxRounds uses the parent loop (no cap),
     not the SubagentConfig default of 8 rounds / 3 consecutive tool errors."""
     from steerable_agent_runtime.subagent import SubagentConfig, SubagentRegistry
 
@@ -1394,10 +1398,12 @@ async def test_subagent_profile_omitting_max_rounds_inherits_parent_loop(
         },
     )
 
+    from steerable_sidecar.loop_limits import UNLIMITED_LOOP_LIMIT
+
     researcher = captured["researcher"]
     writer = captured["writer"]
-    assert researcher.max_rounds == 80
-    assert researcher.max_tool_errors == 16
+    assert researcher.max_rounds == UNLIMITED_LOOP_LIMIT
+    assert researcher.max_tool_errors == UNLIMITED_LOOP_LIMIT
     assert writer.max_rounds == 4
 
 
@@ -1869,7 +1875,7 @@ async def test_coreloop_orchestration_spawn_wait_over_rpc() -> None:
 @pytest.mark.parametrize(
     ("orchestration", "expected"),
     [
-        ({"enabled": True}, (80, 16)),
+        ({"enabled": True}, None),
         (
             {"enabled": True, "childMaxRounds": 5, "childMaxToolErrors": 2},
             (5, 2),
@@ -1877,9 +1883,9 @@ async def test_coreloop_orchestration_spawn_wait_over_rpc() -> None:
     ],
 )
 async def test_orchestration_children_inherit_parent_loop_limits(
-    monkeypatch, orchestration: dict[str, Any], expected: tuple[int, int]
+    monkeypatch, orchestration: dict[str, Any], expected: tuple[int, int] | None
 ) -> None:
-    """Unpinned child limits use the parent spec (80 / 16), not the
+    """Unpinned child limits use the parent loop (no cap), not the
     OrchestrationConfig default of 8 rounds / 3 consecutive tool errors."""
     from steerable_sidecar import sidecar as sidecar_module
 
@@ -1906,8 +1912,11 @@ async def test_orchestration_children_inherit_parent_loop_limits(
         },
     )
 
+    from steerable_sidecar.loop_limits import UNLIMITED_LOOP_LIMIT
+
     [config] = captured
-    assert (config.child_max_rounds, config.child_max_tool_errors) == expected
+    want = expected or (UNLIMITED_LOOP_LIMIT, UNLIMITED_LOOP_LIMIT)
+    assert (config.child_max_rounds, config.child_max_tool_errors) == want
 
 
 @pytest.mark.asyncio

@@ -22,7 +22,9 @@ memory: stateless
 orchestration: single
 # Loop limits the harness pins (W3.4.2.4): entrypoints read these instead of
 # hardcoding knobs. Absent fields fall back to the entrypoint's baseline.
+# max_rounds and max_tool_errors are absent on purpose — a cap here ends a
+# long task at budget_exhausted / consecutive tool errors. The baseline is
+# no cap. A caller that wants a wall passes maxRounds / maxToolErrors, and
+# Harbor passes --max-rounds 250.
 loop:
-  max_rounds: 80
-  max_tool_errors: 16
   tool_dedup: false

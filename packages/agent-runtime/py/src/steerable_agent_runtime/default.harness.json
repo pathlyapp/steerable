@@ -23,8 +23,6 @@
   "memory": "stateless",
   "orchestration": "single",
   "loop": {
-    "max_rounds": 80,
-    "max_tool_errors": 16,
     "tool_dedup": false
   }
 }

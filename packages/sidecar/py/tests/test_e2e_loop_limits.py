@@ -11,14 +11,11 @@ the loop would run forever unless a limit stops it.
 
 What is proven through the real process:
 
-- with no explicit limits, the bundled spec's ``loop.max_tool_errors`` (16)
-  terminates the turn — the old hardcoded entrypoint default (3) would stop
-  it at 3 requests;
-- explicit ``maxToolErrors`` / ``maxRounds`` request params win over the
-  spec;
-- with the error ceiling lifted explicitly, the turn runs past the old
-  hardcoded ``maxRounds`` (32) — the spec's 80 governs the rounds axis —
-  without running 80 rounds.
+- with no explicit limits, 20 consecutive tool failures do not end the
+  turn — the old shipped cap (16) would have failed it first — and the
+  model can still finish;
+- explicit ``maxToolErrors`` / ``maxRounds`` request params still stop
+  the turn at that wall.
 """
 
 from __future__ import annotations
@@ -29,6 +26,7 @@ from typing import Any
 from e2e_harness import (
     MockOpenAI,
     SidecarClient,
+    sse_text,
     sse_tool_call,
 )
 
@@ -97,24 +95,32 @@ def _failed_tool_results(client: SidecarClient) -> list[dict[str, Any]]:
     return out
 
 
-async def test_spec_max_tool_errors_governs_over_entrypoint_baseline(
+def _fetch_then_finish(_body: dict[str, Any], index: int) -> list[dict[str, Any]]:
+    """20 failing fetches, then a normal completion.
+
+    The old shipped cap (16 consecutive tool errors) would fail the turn
+    before this finish is reached.
+    """
+    if index >= 20:
+        return sse_text("done")
+    return _always_fetch_loopback(_body, index)
+
+
+async def test_default_does_not_stop_at_the_old_error_cap(
     e2e_gate: None, sidecar_factory: Any, mock_openai: Any
 ) -> None:
-    """No explicit limits: the spec's 16 errors terminate, not the old 3."""
-    mock = mock_openai(_always_fetch_loopback)
+    """No explicit limits: 20 consecutive tool failures do not end the turn."""
+    mock = mock_openai(_fetch_then_finish)
     client = await sidecar_factory()
 
     done = await _run_turn(client, mock)
 
-    assert done["ok"] is False
-    assert done["status"] == "failed"
-    assert "too many consecutive tool errors" in done["reason"]
-    # 16 rounds = the bundled spec's loop.max_tool_errors; the pre-parity
-    # hardcoded default (3) would have stopped this turn at 3 requests.
-    assert len(mock.requests) == 16
-    # Every rejection surfaced on the wire as a failed tool result.
+    assert done["ok"] is True
+    assert done["status"] == "completed"
+    # indices 0..19 fail, index 20 finishes.
+    assert len(mock.requests) == 21
     failures = _failed_tool_results(client)
-    assert len(failures) == 16
+    assert len(failures) == 20
     assert all("non-public address" in (f.get("error") or "") for f in failures)
 
 
@@ -148,12 +154,11 @@ async def test_explicit_max_rounds_win_over_spec(
 async def test_spec_max_rounds_governs_over_entrypoint_baseline(
     e2e_gate: None, sidecar_factory: Any, mock_openai: Any
 ) -> None:
-    """The rounds axis defaults to the spec's 80, not the old hardcoded 32.
+    """An explicit error cap stops the turn; the default round cap does not.
 
-    Lifting the error ceiling explicitly (40) lets the turn run past 32;
-    the pre-parity default would have ended it at 32 with
-    ``budget_exhausted``. The spec's 80 is never reached — the breaker
-    terminates the turn first.
+    40 consecutive failures run to completion of that cap. The old
+    hardcoded round wall (32) would have ended the turn earlier with
+    ``budget_exhausted``.
     """
     mock = mock_openai(_always_fetch_loopback)
     client = await sidecar_factory()

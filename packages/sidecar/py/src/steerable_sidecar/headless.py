@@ -252,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         "--max-rounds",
         type=int,
         default=None,
-        help="Round cap; overrides the harness spec's loop.max_rounds. "
+        help="Round cap. Unset means no cap (the harness default). "
         "Harbor adapters pass 250 explicitly.",
     )
     parser.add_argument(

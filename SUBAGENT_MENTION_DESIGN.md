@@ -66,7 +66,7 @@
 | `systemPrompt` | `buildSystemPrompt({ personaPreamble: rolePrompt, pinnedSkillNames: skillIds, ignoreConditions: loadAllSkills, identityName: agent.name })` | 复用现有拼装器；子代理看不到主对话的系统提示，这就是它的全部角色设定 |
 | `toolFilter` | 由 `agent.toolPolicy` 解析：`allowlist` → 该清单；`denylist` → 全集减去；`all` → 不设。**W2 之前再与父的工具面取交集**（§9.3） | 收窄即权限边界，被过滤的调用 fail closed 报 `tool_not_delegated` |
 | `concurrent` | 工具域只读 → `true`；含写/执行 → `false` | 与内置 `coder` 画像的立场一致 |
-| `maxRounds` | **不下发** | 子代理跟父循环同一套 `default.harness.yaml` 轮次/连续工具失败上限（80 / 16）。父对话打满会自动续跑；再给子代理单独钉 12/16 轮会让侦察在父还远没停时就以 `budget_exhausted` 结束 |
+| `maxRounds` | **不下发** | 子代理跟父循环同一套上限。父循环默认不设轮次和连续工具失败上限；再给子代理单独钉 12/16 轮会让侦察在父还在跑时就以 `budget_exhausted` 结束 |
 
 两个必须处理的边界：
 

@@ -18,7 +18,7 @@ validator: self_critique
 tools: full
 memory: stateless
 orchestration: single
+# Same loop section as default.harness.yaml — this arm varies only the
+# validator.
 loop:
-  max_rounds: 80
-  max_tool_errors: 16
   tool_dedup: false

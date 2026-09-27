@@ -15,7 +15,7 @@ validator: "null"
 tools: minimal
 memory: stateless
 orchestration: single
+# Same loop section as default.harness.yaml — no round or tool-error cap.
+# Harbor still passes --max-rounds 250 on the eval path.
 loop:
-  max_rounds: 80
-  max_tool_errors: 16
   tool_dedup: false
