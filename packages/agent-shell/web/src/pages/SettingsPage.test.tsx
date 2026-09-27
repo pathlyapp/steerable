@@ -103,4 +103,49 @@ describe('SettingsPage header save', () => {
       'settings-section-telemetry',
     ]);
   });
+
+  it('hides side navigation when narrow, shows when wide', () => {
+    // 窄屏时不显示侧栏导航
+    const { unmount } = renderSettings();
+    expect(screen.queryByTestId('settings-side-nav')).toBeNull();
+    unmount();
+
+    // Mock ResizeObserver 触发宽屏宽度 (1024px)
+    const originalRO = window.ResizeObserver;
+    try {
+      window.ResizeObserver = class MockRO {
+        callback: ResizeObserverCallback;
+        constructor(callback: ResizeObserverCallback) {
+          this.callback = callback;
+        }
+        observe(target: Element) {
+          this.callback(
+            [{ target, contentRect: { width: 1024 } as DOMRectReadOnly } as ResizeObserverEntry],
+            this as unknown as ResizeObserver,
+          );
+        }
+        unobserve() {}
+        disconnect() {}
+      } as unknown as typeof ResizeObserver;
+
+      renderSettings();
+      expect(screen.getByTestId('settings-side-nav')).toBeTruthy();
+      expect(screen.getByText('设置导航')).toBeTruthy();
+      expect(screen.getByTestId('settings-nav-item-appearance')).toBeTruthy();
+      expect(screen.getByTestId('settings-nav-item-orchestration')).toBeTruthy();
+      // 右侧未挂载/隐藏的分段（如未支持的 python-runner 或无更新版本的 update），菜单一律不显示
+      expect(screen.queryByTestId('settings-nav-item-python-runner')).toBeNull();
+      expect(screen.queryByTestId('settings-nav-item-update')).toBeNull();
+
+      // 点击可触发 scrollIntoView
+      const scrollIntoViewMock = vi.fn();
+      const sectionEl = document.querySelector('[data-testid="settings-section-orchestration"]');
+      if (sectionEl) sectionEl.scrollIntoView = scrollIntoViewMock;
+
+      fireEvent.click(screen.getByTestId('settings-nav-item-orchestration'));
+      expect(scrollIntoViewMock).toHaveBeenCalled();
+    } finally {
+      window.ResizeObserver = originalRO;
+    }
+  });
 });

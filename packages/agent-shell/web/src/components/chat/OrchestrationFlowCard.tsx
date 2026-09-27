@@ -82,12 +82,12 @@ function statusBadgeStyle(status: OrchestrationNodeStatus): string {
 }
 
 function ForkLines({ count }: { count: number }) {
-  if (count === 1) {
+  if (count <= 1) {
     return (
-      <div className="flex h-5 w-full justify-center">
-        <svg className="h-5 w-6 text-violet-500/50" viewBox="0 0 24 20" fill="none">
-          <line x1="12" y1="0" x2="12" y2="16" stroke="currentColor" strokeWidth="1.5" />
-          <polygon points="9,14 12,19 15,14" fill="currentColor" />
+      <div className="flex h-5 w-full items-center justify-center">
+        <svg className="h-5 w-4 text-violet-500/70" viewBox="0 0 16 20" fill="none">
+          <line x1="8" y1="0" x2="8" y2="14" stroke="currentColor" strokeWidth="1.5" />
+          <polygon points="5,13 8,19 11,13" fill="currentColor" />
         </svg>
       </div>
     );
@@ -95,54 +95,90 @@ function ForkLines({ count }: { count: number }) {
 
   if (count === 2) {
     return (
-      <div className="h-6 w-full px-2">
-        <svg className="h-6 w-full text-violet-500/50" viewBox="0 0 100 24" preserveAspectRatio="none" fill="none">
+      <div className="relative h-6 w-full">
+        <svg
+          className="absolute inset-0 h-full w-full text-violet-500/70"
+          viewBox="0 0 100 24"
+          preserveAspectRatio="none"
+          fill="none"
+        >
           <path
-            d="M 50 0 L 50 10 M 25 10 L 75 10 M 25 10 L 25 20 M 75 10 L 75 20"
+            d="M 50 0 L 50 12 M 25 12 L 75 12 M 25 12 L 25 18 M 75 12 L 75 18"
             stroke="currentColor"
             strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
           />
-          <polygon points="23,17 25,22 27,17" fill="currentColor" />
-          <polygon points="73,17 75,22 77,17" fill="currentColor" />
         </svg>
+        <div className="absolute top-[17px] left-[25%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
+        <div className="absolute top-[17px] left-[75%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
       </div>
     );
   }
 
   if (count === 3) {
     return (
-      <div className="h-6 w-full px-2">
-        <svg className="h-6 w-full text-violet-500/50" viewBox="0 0 100 24" preserveAspectRatio="none" fill="none">
+      <div className="relative h-6 w-full">
+        <svg
+          className="absolute inset-0 h-full w-full text-violet-500/70"
+          viewBox="0 0 100 24"
+          preserveAspectRatio="none"
+          fill="none"
+        >
           <path
-            d="M 50 0 L 50 20 M 17 10 L 83 10 M 17 10 L 17 20 M 83 10 L 83 20"
+            d="M 50 0 L 50 18 M 17 12 L 83 12 M 17 12 L 17 18 M 83 12 L 83 18"
             stroke="currentColor"
             strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
           />
-          <polygon points="15,17 17,22 19,17" fill="currentColor" />
-          <polygon points="48,17 50,22 52,17" fill="currentColor" />
-          <polygon points="81,17 83,22 85,17" fill="currentColor" />
         </svg>
+        <div className="absolute top-[17px] left-[17%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
+        <div className="absolute top-[17px] left-[50%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
+        <div className="absolute top-[17px] left-[83%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-5 w-full justify-center">
-      <svg className="h-5 w-6 text-violet-500/50" viewBox="0 0 24 20" fill="none">
-        <line x1="12" y1="0" x2="12" y2="16" stroke="currentColor" strokeWidth="1.5" />
-        <polygon points="9,14 12,19 15,14" fill="currentColor" />
+    <div className="flex h-5 w-full items-center justify-center">
+      <svg className="h-5 w-4 text-violet-500/70" viewBox="0 0 16 20" fill="none">
+        <line x1="8" y1="0" x2="8" y2="14" stroke="currentColor" strokeWidth="1.5" />
+        <polygon points="5,13 8,19 11,13" fill="currentColor" />
       </svg>
     </div>
   );
 }
 
 function JoinLines({ count }: { count: number }) {
-  if (count === 1) {
+  if (count <= 1) {
     return (
-      <div className="flex h-5 w-full justify-center">
-        <svg className="h-5 w-6 text-violet-500/50" viewBox="0 0 24 20" fill="none">
-          <line x1="12" y1="0" x2="12" y2="16" stroke="currentColor" strokeWidth="1.5" />
-          <polygon points="9,14 12,19 15,14" fill="currentColor" />
+      <div className="flex h-5 w-full items-center justify-center">
+        <svg className="h-5 w-4 text-violet-500/70" viewBox="0 0 16 20" fill="none">
+          <line x1="8" y1="0" x2="8" y2="14" stroke="currentColor" strokeWidth="1.5" />
+          <polygon points="5,13 8,19 11,13" fill="currentColor" />
         </svg>
       </div>
     );
@@ -150,39 +186,63 @@ function JoinLines({ count }: { count: number }) {
 
   if (count === 2) {
     return (
-      <div className="h-6 w-full px-2">
-        <svg className="h-6 w-full text-violet-500/50" viewBox="0 0 100 24" preserveAspectRatio="none" fill="none">
+      <div className="relative h-6 w-full">
+        <svg
+          className="absolute inset-0 h-full w-full text-violet-500/70"
+          viewBox="0 0 100 24"
+          preserveAspectRatio="none"
+          fill="none"
+        >
           <path
-            d="M 25 0 L 25 10 M 75 0 L 75 10 M 25 10 L 75 10 M 50 10 L 50 20"
+            d="M 25 0 L 25 12 M 75 0 L 75 12 M 25 12 L 75 12 M 50 12 L 50 18"
             stroke="currentColor"
             strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
           />
-          <polygon points="48,17 50,22 52,17" fill="currentColor" />
         </svg>
+        <div className="absolute top-[17px] left-[50%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
       </div>
     );
   }
 
   if (count === 3) {
     return (
-      <div className="h-6 w-full px-2">
-        <svg className="h-6 w-full text-violet-500/50" viewBox="0 0 100 24" preserveAspectRatio="none" fill="none">
+      <div className="relative h-6 w-full">
+        <svg
+          className="absolute inset-0 h-full w-full text-violet-500/70"
+          viewBox="0 0 100 24"
+          preserveAspectRatio="none"
+          fill="none"
+        >
           <path
-            d="M 17 0 L 17 10 M 50 0 L 50 20 M 83 0 L 83 10 M 17 10 L 83 10"
+            d="M 17 0 L 17 12 M 50 0 L 50 18 M 83 0 L 83 12 M 17 12 L 83 12 M 50 12 L 50 18"
             stroke="currentColor"
             strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
           />
-          <polygon points="48,17 50,22 52,17" fill="currentColor" />
         </svg>
+        <div className="absolute top-[17px] left-[50%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-5 w-full justify-center">
-      <svg className="h-5 w-6 text-violet-500/50" viewBox="0 0 24 20" fill="none">
-        <line x1="12" y1="0" x2="12" y2="16" stroke="currentColor" strokeWidth="1.5" />
-        <polygon points="9,14 12,19 15,14" fill="currentColor" />
+    <div className="flex h-5 w-full items-center justify-center">
+      <svg className="h-5 w-4 text-violet-500/70" viewBox="0 0 16 20" fill="none">
+        <line x1="8" y1="0" x2="8" y2="14" stroke="currentColor" strokeWidth="1.5" />
+        <polygon points="5,13 8,19 11,13" fill="currentColor" />
       </svg>
     </div>
   );

@@ -55,14 +55,16 @@ export function currentActiveNode(nodes: OrchestrationChildNode[]): Orchestratio
 
 /**
  * 流程图分叉连线 (Fork Connector with directional arrows)
+ *
+ * 使用独立 SVG 容器与绝对定位，避免 viewBox 坐标在 stretch 时被水平拉伸成巨型扁箭头。
  */
 function ForkConnector({ count }: { count: number }) {
   if (count <= 1) {
     return (
-      <div className="flex h-6 w-full items-center justify-center">
-        <svg className="h-6 w-6 text-violet-500/70" viewBox="0 0 24 24" fill="none">
-          <line x1="12" y1="0" x2="12" y2="18" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          <polygon points="9,16 12,22 15,16" fill="currentColor" />
+      <div className="flex h-5 w-full items-center justify-center">
+        <svg className="h-5 w-4 text-violet-500/70" viewBox="0 0 16 20" fill="none">
+          <line x1="8" y1="0" x2="8" y2="14" stroke="currentColor" strokeWidth="1.5" />
+          <polygon points="5,13 8,19 11,13" fill="currentColor" />
         </svg>
       </div>
     );
@@ -70,60 +72,82 @@ function ForkConnector({ count }: { count: number }) {
 
   if (count === 2) {
     return (
-      <div className="h-7 w-full px-4">
+      <div className="relative h-6 w-full">
+        {/* 精确的连线条 */}
         <svg
-          className="h-7 w-full text-violet-500/70"
-          viewBox="0 0 100 28"
+          className="absolute inset-0 h-full w-full text-violet-500/70"
+          viewBox="0 0 100 24"
           preserveAspectRatio="none"
           fill="none"
         >
-          {/* 主分发线从中央向下，然后水平分成两路，垂直向下并带箭头 */}
           <path
-            d="M 50 0 L 50 12 M 25 12 L 75 12 M 25 12 L 25 21 M 75 12 L 75 21"
+            d="M 50 0 L 50 12 M 25 12 L 75 12 M 25 12 L 25 18 M 75 12 L 75 18"
             stroke="currentColor"
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
             vectorEffect="non-scaling-stroke"
           />
-          <polygon points="22,19 25,26 28,19" fill="currentColor" />
-          <polygon points="72,19 75,26 78,19" fill="currentColor" />
         </svg>
+        {/* 左分支精致小箭头 */}
+        <div className="absolute top-[17px] left-[25%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
+        {/* 右分支精致小箭头 */}
+        <div className="absolute top-[17px] left-[75%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
       </div>
     );
   }
 
   if (count === 3) {
     return (
-      <div className="h-7 w-full px-3">
+      <div className="relative h-6 w-full">
         <svg
-          className="h-7 w-full text-violet-500/70"
-          viewBox="0 0 100 28"
+          className="absolute inset-0 h-full w-full text-violet-500/70"
+          viewBox="0 0 100 24"
           preserveAspectRatio="none"
           fill="none"
         >
           <path
-            d="M 50 0 L 50 21 M 17 12 L 83 12 M 17 12 L 17 21 M 83 12 L 83 21"
+            d="M 50 0 L 50 18 M 17 12 L 83 12 M 17 12 L 17 18 M 83 12 L 83 18"
             stroke="currentColor"
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
             vectorEffect="non-scaling-stroke"
           />
-          <polygon points="14,19 17,26 20,19" fill="currentColor" />
-          <polygon points="47,19 50,26 53,19" fill="currentColor" />
-          <polygon points="80,19 83,26 86,19" fill="currentColor" />
         </svg>
+        <div className="absolute top-[17px] left-[17%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
+        <div className="absolute top-[17px] left-[50%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
+        <div className="absolute top-[17px] left-[83%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
       </div>
     );
   }
 
   // 多分支（4+）
   return (
-    <div className="flex h-6 w-full items-center justify-center">
-      <svg className="h-6 w-6 text-violet-500/70" viewBox="0 0 24 24" fill="none">
-        <line x1="12" y1="0" x2="12" y2="18" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        <polygon points="9,16 12,22 15,16" fill="currentColor" />
+    <div className="flex h-5 w-full items-center justify-center">
+      <svg className="h-5 w-4 text-violet-500/70" viewBox="0 0 16 20" fill="none">
+        <line x1="8" y1="0" x2="8" y2="14" stroke="currentColor" strokeWidth="1.5" />
+        <polygon points="5,13 8,19 11,13" fill="currentColor" />
       </svg>
     </div>
   );
@@ -135,10 +159,10 @@ function ForkConnector({ count }: { count: number }) {
 function JoinConnector({ count }: { count: number }) {
   if (count <= 1) {
     return (
-      <div className="flex h-6 w-full items-center justify-center">
-        <svg className="h-6 w-6 text-violet-500/70" viewBox="0 0 24 24" fill="none">
-          <line x1="12" y1="0" x2="12" y2="18" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          <polygon points="9,16 12,22 15,16" fill="currentColor" />
+      <div className="flex h-5 w-full items-center justify-center">
+        <svg className="h-5 w-4 text-violet-500/70" viewBox="0 0 16 20" fill="none">
+          <line x1="8" y1="0" x2="8" y2="14" stroke="currentColor" strokeWidth="1.5" />
+          <polygon points="5,13 8,19 11,13" fill="currentColor" />
         </svg>
       </div>
     );
@@ -146,56 +170,63 @@ function JoinConnector({ count }: { count: number }) {
 
   if (count === 2) {
     return (
-      <div className="h-7 w-full px-4">
+      <div className="relative h-6 w-full">
         <svg
-          className="h-7 w-full text-violet-500/70"
-          viewBox="0 0 100 28"
+          className="absolute inset-0 h-full w-full text-violet-500/70"
+          viewBox="0 0 100 24"
           preserveAspectRatio="none"
           fill="none"
         >
-          {/* 两路分支向下引出，水平汇聚到中央，再向下汇入 Join 节点 */}
           <path
-            d="M 25 0 L 25 12 M 75 0 L 75 12 M 25 12 L 75 12 M 50 12 L 50 21"
+            d="M 25 0 L 25 12 M 75 0 L 75 12 M 25 12 L 75 12 M 50 12 L 50 18"
             stroke="currentColor"
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
             vectorEffect="non-scaling-stroke"
           />
-          <polygon points="47,19 50,26 53,19" fill="currentColor" />
         </svg>
+        <div className="absolute top-[17px] left-[50%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
       </div>
     );
   }
 
   if (count === 3) {
     return (
-      <div className="h-7 w-full px-3">
+      <div className="relative h-6 w-full">
         <svg
-          className="h-7 w-full text-violet-500/70"
-          viewBox="0 0 100 28"
+          className="absolute inset-0 h-full w-full text-violet-500/70"
+          viewBox="0 0 100 24"
           preserveAspectRatio="none"
           fill="none"
         >
           <path
-            d="M 17 0 L 17 12 M 50 0 L 50 21 M 83 0 L 83 12 M 17 12 L 83 12 M 50 12 L 50 21"
+            d="M 17 0 L 17 12 M 50 0 L 50 18 M 83 0 L 83 12 M 17 12 L 83 12 M 50 12 L 50 18"
             stroke="currentColor"
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
             vectorEffect="non-scaling-stroke"
           />
-          <polygon points="47,19 50,26 53,19" fill="currentColor" />
         </svg>
+        <div className="absolute top-[17px] left-[50%] -translate-x-1/2">
+          <svg className="h-2 w-2.5 text-violet-500/70" viewBox="0 0 10 8" fill="none">
+            <polygon points="1,1 5,7 9,1" fill="currentColor" />
+          </svg>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-6 w-full items-center justify-center">
-      <svg className="h-6 w-6 text-violet-500/70" viewBox="0 0 24 24" fill="none">
-        <line x1="12" y1="0" x2="12" y2="18" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        <polygon points="9,16 12,22 15,16" fill="currentColor" />
+    <div className="flex h-5 w-full items-center justify-center">
+      <svg className="h-5 w-4 text-violet-500/70" viewBox="0 0 16 20" fill="none">
+        <line x1="8" y1="0" x2="8" y2="14" stroke="currentColor" strokeWidth="1.5" />
+        <polygon points="5,13 8,19 11,13" fill="currentColor" />
       </svg>
     </div>
   );

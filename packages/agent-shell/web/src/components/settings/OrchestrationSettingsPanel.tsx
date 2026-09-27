@@ -18,9 +18,6 @@ export function OrchestrationSettingsPanel() {
           <div className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
             <LuGitFork className="h-3.5 w-3.5 text-violet-600 dark:text-violet-400" />
             <span>多智能体协同编排 (Fork-Join)</span>
-            <span className="rounded-full bg-violet-500/10 px-1.5 py-0.2 text-[10px] font-medium text-violet-700 dark:text-violet-300">
-              默认开启
-            </span>
           </div>
           <p className="text-xs leading-relaxed text-agent-muted-foreground">
             允许主智能体通过派生子任务（agent_spawn）并行推理计算，并在输入框上方呈现流程图与实时协同进度看板。
