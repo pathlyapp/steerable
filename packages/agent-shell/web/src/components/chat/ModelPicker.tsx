@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { LuChevronDown, LuRefreshCw } from 'react-icons/lu';
+import { LuChevronDown, LuRefreshCw, LuSettings } from 'react-icons/lu';
 import { ModelCapabilityChips } from '@/components/settings/ModelCapabilityChips';
 import {
   getLlmModels,
@@ -32,6 +32,8 @@ export interface ModelPickerProps {
   reasoningEffort: string | null;
   onSelectModel: (model: string | null) => void;
   onSelectEffort: (effort: string | null) => void;
+  /** 打开 LLM 设置弹窗。 */
+  onOpenSettings?: () => void;
   disabled?: boolean;
 }
 
@@ -40,6 +42,7 @@ export function ModelPicker({
   reasoningEffort,
   onSelectModel,
   onSelectEffort,
+  onOpenSettings,
   disabled = false,
 }: ModelPickerProps) {
   const [catalog, setCatalog] = useState<GatewayModelCatalog | null>(null);
@@ -109,6 +112,7 @@ export function ModelPicker({
       <div className="relative flex min-w-0">
         <button
           type="button"
+          data-testid="model-picker"
           onClick={() => {
             const next = !modelMenuOpen;
             setModelMenuOpen(next);
@@ -155,6 +159,22 @@ export function ModelPicker({
                 >
                   <LuRefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
                 </button>
+                {onOpenSettings && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenSettings();
+                      setModelMenuOpen(false);
+                      setEffortMenuOpen(false);
+                    }}
+                    className="flex h-4 w-4 items-center justify-center rounded text-agent-muted-foreground transition-colors hover:text-agent-foreground"
+                    title="LLM 设置"
+                    aria-label="LLM 设置"
+                    data-testid="chat-llm-settings"
+                  >
+                    <LuSettings className="h-3 w-3" />
+                  </button>
+                )}
               </span>
             </div>
             <button

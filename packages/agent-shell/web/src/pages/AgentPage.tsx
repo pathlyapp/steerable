@@ -1169,6 +1169,11 @@ function AgentChatView({
             reasoningEffort={effortOverride}
             onSelectModel={setModelOverride}
             onSelectEffort={setEffortOverride}
+            onOpenSettings={
+              isElectron() && settingsChrome("llm")
+                ? () => setLlmSettingsOpen(true)
+                : undefined
+            }
             disabled={isStreaming}
           />
         }
@@ -1431,6 +1436,11 @@ function EmptyChatGate() {
                 reasoningEffort={effortOverride}
                 onSelectModel={setModelOverride}
                 onSelectEffort={setEffortOverride}
+                onOpenSettings={
+                  isElectron() && settingsChrome("llm")
+                    ? () => setLlmSettingsOpen(true)
+                    : undefined
+                }
                 disabled={!isElectron() || isCreating}
               />
             }

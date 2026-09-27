@@ -146,4 +146,26 @@ describe('ModelPicker', () => {
     fireEvent.click(await screen.findByText(/跟随设置/));
     expect(props.onSelectModel).toHaveBeenCalledWith(null);
   });
+
+  it('renders LLM settings button in menu when onOpenSettings is provided and calls it on click', async () => {
+    const onOpenSettings = vi.fn();
+    renderPicker({ onOpenSettings });
+    const trigger = await screen.findByTestId('model-picker');
+    fireEvent.click(trigger);
+
+    const settingsButton = screen.getByTestId('chat-llm-settings');
+    expect(settingsButton).toBeTruthy();
+    expect(settingsButton.getAttribute('title')).toBe('LLM 设置');
+
+    fireEvent.click(settingsButton);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('omits LLM settings button in menu when onOpenSettings is not provided', async () => {
+    renderPicker();
+    const trigger = await screen.findByTestId('model-picker');
+    fireEvent.click(trigger);
+    expect(screen.queryByTestId('chat-llm-settings')).toBeNull();
+  });
 });

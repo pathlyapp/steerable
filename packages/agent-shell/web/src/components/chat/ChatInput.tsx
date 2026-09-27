@@ -19,7 +19,6 @@ import {
   LuArrowUp,
   LuBot,
   LuChevronDown,
-  LuSettings,
   LuSquare,
   LuBlocks,
   LuPlug,
@@ -788,7 +787,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       chats = [],
       selectedAgentId,
       onSelectAgent,
-      onOpenSettings,
+      onOpenSettings: _onOpenSettings,
       toolbarExtras,
       leadingChrome,
       trailingChrome,
@@ -1993,18 +1992,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               />
                 </>
               )}
-              {onOpenSettings && (
-                <button
-                  type="button"
-                  onClick={onOpenSettings}
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
-                  title="LLM 设置"
-                  aria-label="LLM 设置"
-                  data-testid="chat-llm-settings"
-                >
-                  <LuSettings className="h-3 w-3" />
-                </button>
-              )}
             </div>
             {/* shrink-0：发送键是固定尺寸圆钮，窄容器下不允许被压扁；
                 收缩量由左侧可截断的选择器吸收。 */}
@@ -2291,7 +2278,7 @@ function AgentSelect({
             data-testid="agent-manage"
             onClick={() => {
               onOpenChange(false);
-              navigate('/settings?section=agents');
+              navigate('/settings?section=plugins&tab=agents');
             }}
             className="mt-0.5 flex w-full items-center gap-2 rounded border-t border-agent-border/50 px-2 py-2 text-left text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
           >
