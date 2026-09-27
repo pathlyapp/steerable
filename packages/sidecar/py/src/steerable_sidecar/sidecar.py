@@ -92,6 +92,7 @@ from steerable_agent_runtime import (
     ToolDispatchError,
     ToolRouter,
     TodoCompletionGate,
+    TodoPlanningNudge,
     TraceRecorder,
     WorldStateHooks,
     branch_label,
@@ -1711,6 +1712,10 @@ class Sidecar:
         from .todo_tools import todo_store
 
         hooks = ChainHooks(hooks, TodoCompletionGate(todo_store()))
+        # Planning nudge: one reminder per turn when a long run never wrote
+        # a task list. Per-run instance — it counts this turn's tool calls.
+        if self.tools.get("todo_write") is not None:
+            hooks = ChainHooks(hooks, TodoPlanningNudge(todo_store()))
         # The bundled spec's tools dimension governs the host-supplied tool
         # surface; the sidecar's own additions below (subagent / skills /
         # orchestration) are orthogonal dimensions advertised past

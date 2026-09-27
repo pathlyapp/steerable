@@ -16,7 +16,15 @@ from __future__ import annotations
 from typing import Any
 
 from .errors import ToolDispatchError
-from .hooks import CompletionAction, CompletionDraft, NoopHooks
+from .hooks import (
+    CompletionAction,
+    CompletionDraft,
+    NoopHooks,
+    PreStepAction,
+    TranscriptAppend,
+)
+from .llm import LLMMessage
+from .reminders import TodoPlanningReminder, reminder_entry
 
 #: The tool name the model calls.
 TODO_TOOL_NAME = "todo_write"
@@ -277,4 +285,64 @@ class TodoCompletionGate(NoopHooks):
                 "progress. If an item is genuinely done or no longer needed, "
                 "update the list with todo_write first, then finish."
             ),
+        )
+
+
+#: Non-todo tool calls in one turn before the planning reminder fires. Low
+#: enough to catch a long task early, high enough that ordinary 2-4 call
+#: lookups never see it.
+DEFAULT_TODO_NUDGE_AFTER_CALLS = 5
+
+
+class TodoPlanningNudge(NoopHooks):
+    """``pre_step`` hook: remind a long-running turn to start a task list.
+
+    The prompt alone leaves ``todo_write`` to the model's judgement, and a
+    follow-up message deep in a long chat reads as "continue", so a 40-round
+    task can run without a list — and without a list the completion gate has
+    nothing to hold the turn to. After ``after_calls`` non-todo tool calls in
+    one turn, with no ``todo_write`` call yet and no unfinished list carried
+    over for the chat, this appends one ``planning.todo_missing`` reminder at
+    the highest-recency position. It fires at most once per turn.
+
+    Per-turn state: construct one instance per run.
+    """
+
+    def __init__(
+        self, store: TodoStore, *, after_calls: int = DEFAULT_TODO_NUDGE_AFTER_CALLS
+    ) -> None:
+        self._store = store
+        self._after_calls = after_calls
+        self._calls = 0
+        self._planned = False
+        self._fired = False
+
+    async def post_tool_result(self, result: Any, call: Any, ctx: Any) -> Any:
+        if call.name == TODO_TOOL_NAME:
+            self._planned = True
+        else:
+            self._calls += 1
+        return result
+
+    async def pre_step(self, transcript: Any, ctx: Any) -> PreStepAction:
+        if self._fired or self._planned or self._calls < self._after_calls:
+            return PreStepAction(kind="proceed")
+        chat_id = str(getattr(ctx, "chat_id", None) or "")
+        if any(
+            item["status"] in _UNFINISHED_STATUSES for item in self._store.get(chat_id)
+        ):
+            return PreStepAction(kind="proceed")
+        self._fired = True
+        entry = reminder_entry("planning.todo_missing")
+        fragment = TodoPlanningReminder(self._calls)
+        return PreStepAction(
+            kind="proceed",
+            appends=[
+                TranscriptAppend(
+                    message=LLMMessage.text_of(fragment.role, fragment.render()),
+                    kind=entry.fragment.content_kind,
+                    fragment=fragment,
+                )
+            ],
+            append_action="reminder",
         )

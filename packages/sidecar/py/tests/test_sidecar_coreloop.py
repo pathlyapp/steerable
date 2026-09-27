@@ -2772,6 +2772,84 @@ async def test_todo_gate_retries_completion_until_list_is_finished() -> None:
     assert done[0]["status"] == "completed"
 
 
+def _todo_nudges(messages: list) -> int:
+    return sum("no task list yet" in str(message) for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_todo_planning_nudge_fires_once_on_a_long_turn_without_a_list() -> None:
+    """Five tool calls with no todo_write: the next request carries one
+    planning reminder, and it is not repeated on later rounds."""
+    from steerable_sidecar.todo_tools import register_todo_write
+
+    rounds = [
+        _tool_round(ToolCall(id=f"a{i}", name="add", arguments={"a": i, "b": 1}))
+        for i in range(6)
+    ]
+    provider = _ScriptedProvider([*rounds, _text_round("done")])
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    sidecar.tools.register(add)
+    register_todo_write(sidecar.tools)
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "add many"}],
+            "useCoreLoop": True,
+            "chatId": "nudge-chat",
+        },
+    )
+
+    assert [_todo_nudges(m) for m in provider.seen_messages] == [0, 0, 0, 0, 0, 1, 1]
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_todo_planning_nudge_stays_silent_once_the_turn_has_a_list() -> None:
+    from steerable_sidecar.todo_tools import register_todo_write
+
+    todo_round = _tool_round(
+        ToolCall(
+            id="t1",
+            name="todo_write",
+            arguments={"todos": [{"id": "a", "content": "add", "status": "completed"}]},
+        )
+    )
+    rounds = [
+        _tool_round(ToolCall(id=f"a{i}", name="add", arguments={"a": i, "b": 1}))
+        for i in range(6)
+    ]
+    provider = _ScriptedProvider([todo_round, *rounds, _text_round("done")])
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    sidecar.tools.register(add)
+    register_todo_write(sidecar.tools)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "add many"}],
+            "useCoreLoop": True,
+            "chatId": "planned-chat",
+        },
+    )
+
+    assert provider.attempts == 8
+    assert all(_todo_nudges(m) == 0 for m in provider.seen_messages)
+
+
 @pytest.mark.asyncio
 async def test_subagent_profile_system_prompt_seeds_child_and_roster_advertised() -> None:
     """profiles.<name>.systemPrompt seeds the child loop's first message
