@@ -235,6 +235,11 @@ export interface BrandSpec {
   readonly agentName: string;
   /** 一句话定位（fallback prompt 用）。 */
   readonly tagline: string;
+  /**
+   * 新对话落地页 / 空会话首屏副文案。省略用 shell 默认句；
+   * 空字符串表示不显示。只进渲染层，不进系统提示词。
+   */
+  readonly homeHint?: string;
   /** 新对话未显式选智能体时绑定的内置智能体 id。 */
   readonly defaultAgentId: string;
 }

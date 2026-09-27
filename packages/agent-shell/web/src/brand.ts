@@ -23,6 +23,13 @@ export const BRAND_NAME: string = import.meta.env.VITE_BRAND_NAME ?? 'Steerable 
 export const BRAND_TITLE: string =
   import.meta.env.VITE_BRAND_TITLE ?? import.meta.env.VITE_BRAND_NAME ?? 'Steerable Shell';
 
+/**
+ * 新对话落地页 / 空会话首屏的副文案。产品/包在 brand.homeHint 注入；
+ * 空字符串表示不显示这句。未 define 时用这句默认。
+ */
+export const BRAND_HOME_HINT: string =
+  import.meta.env.VITE_BRAND_HOME_HINT ?? '输入消息，直接开始一段新对话。';
+
 /** shell 默认 logo（Steerable 舵轮标）；包品牌 logo 由包 web 模块注册覆盖。 */
 let brandLogoUrl: string = shellLogoUrl;
 

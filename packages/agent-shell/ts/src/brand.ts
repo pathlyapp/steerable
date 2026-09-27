@@ -46,6 +46,11 @@ export interface Brand {
   agentName: string;
   /** 一句话定位（fallback prompt 用） */
   tagline: string;
+  /**
+   * 新对话落地页 / 空会话首屏副文案。省略用 shell 默认句；
+   * 空字符串表示不显示。只进渲染层，不进系统提示词。
+   */
+  homeHint?: string;
   /** 新对话 / 首页未选手动专家时绑定的内置智能体 id */
   defaultAgentId: string;
 }

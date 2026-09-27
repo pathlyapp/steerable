@@ -5,6 +5,8 @@ interface ImportMetaEnv {
   readonly VITE_BRAND_NAME?: string;
   readonly VITE_BRAND_TITLE?: string;
   readonly VITE_BRAND_TAGLINE?: string;
+  /** 新对话落地页副文案。空字符串表示不显示。 */
+  readonly VITE_BRAND_HOME_HINT?: string;
   readonly VITE_DEFAULT_AGENT_ID?: string;
   readonly VITE_HOST_TOOLS?: string;
   readonly VITE_APPROVAL?: string;

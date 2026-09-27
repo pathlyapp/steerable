@@ -9,6 +9,7 @@ import {
   regenerateChatMessage,
 } from "@/lib/chat-transport";
 import { ChatHeader } from "@/components/ChatHeader";
+import { EmptyChatHero } from "@/components/chat/EmptyChatHero";
 import { LocalChatPanel } from "@/components/chat/LocalChatPanel";
 import { ModelPicker } from "@/components/chat/ModelPicker";
 import {
@@ -62,7 +63,7 @@ import {
   takePendingFirstMessage,
 } from "@/lib/pending-first-message";
 import { isOrchestrationSettingEnabled } from "@/lib/orchestration-settings";
-import { BRAND_NAME, pickDefaultAgentId } from "@/brand";
+import { pickDefaultAgentId } from "@/brand";
 import {
   appendAttachmentRefs,
   collectImageAttachments,
@@ -1106,10 +1107,7 @@ function AgentChatView({
         pendingFollowUps={pendingFollowUps.map((m) => m.content)}
         onRemoveFollowUp={removeFollowUp}
         className="flex-1"
-        emptyHero={{
-          title: BRAND_NAME,
-          subtitle: '输入消息，直接开始一段新对话。',
-        }}
+        emptyHero
         header={
           <ChatHeader
             chat={chat}
@@ -1404,14 +1402,7 @@ function EmptyChatGate() {
       data-testid="empty-chat-home"
     >
       <div className="flex w-full max-w-3xl flex-col items-center gap-4">
-        <div className="text-center">
-          <h1 className="text-xl font-semibold tracking-tight text-agent-foreground">
-            {BRAND_NAME}
-          </h1>
-          <p className="mt-1.5 text-xs text-agent-muted-foreground">
-            输入消息，直接开始一段新对话。
-          </p>
-        </div>
+        <EmptyChatHero />
         <div className="w-full">
           <ChatInput
             ref={inputRef}

@@ -290,10 +290,11 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('AgentPage 落地页（EmptyChatGate）', () => {
-  it('无 chatId 时渲染落地页：品牌标题、副标题与输入框', async () => {
+  it('无 chatId 时渲染落地页：品牌 logo、副标题与输入框', async () => {
     renderPage('/agent', makeCtx());
     await screen.findByTestId('empty-chat-home');
-    expect(screen.getByText('Steerable Shell')).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Steerable Shell' })).toBeTruthy();
+    expect(screen.queryByText('Steerable Shell')).toBeNull();
     expect(screen.getByText('输入消息，直接开始一段新对话。')).toBeTruthy();
     expect(screen.getByRole('textbox')).toBeTruthy();
   });

@@ -11,6 +11,7 @@ import {
   type MentionReference,
 } from './ChatInput';
 import { EmptyChat } from './EmptyChat';
+import { EmptyChatHero } from './EmptyChatHero';
 import { MessageList } from './MessageList';
 import type { ExecutedAction } from './ExecutedActionsCard';
 import type { InspectTaskInput } from './executed-actions-model';
@@ -78,11 +79,11 @@ export interface LocalChatPanelProps {
   /** Slot rendered above the message list (header / agent picker / …). */
   header?: ReactNode;
   /**
-   * 空会话 hero 布局：提供后，当 messages 为空且未在流式时，整个面板渲染为
-   * 居中首屏（品牌标题 + 居中输入框，无 header）——与 /agent 落地页
-   * （EmptyChatGate）同款视觉。首条消息落地后自动切回常规布局。
+   * 空会话 hero 布局：为 true 时，当 messages 为空且未在流式时，整个面板渲染为
+   * 居中首屏（品牌 logo + brand.homeHint + 居中输入框，无 header）——与 /agent
+   * 落地页（EmptyChatGate）同款视觉。首条消息落地后自动切回常规布局。
    */
-  emptyHero?: { title: string; subtitle?: string };
+  emptyHero?: boolean;
   /** Override the default `EmptyChat` empty-state. */
   emptyState?: ReactNode;
   /** Disable the input (e.g. during initial chat-history load). */
@@ -453,16 +454,7 @@ export function LocalChatPanel({
         {showEmptyHero ? (
           <div className="flex min-h-0 flex-1 items-center justify-center p-3 sm:p-5">
             <div className="flex w-full max-w-3xl flex-col items-center gap-4">
-              <div className="text-center">
-                <h1 className="text-xl font-semibold tracking-tight text-agent-foreground">
-                  {emptyHero?.title}
-                </h1>
-                {emptyHero?.subtitle && (
-                  <p className="mt-1.5 text-xs text-agent-muted-foreground">
-                    {emptyHero.subtitle}
-                  </p>
-                )}
-              </div>
+              <EmptyChatHero />
               <div className="w-full">
                 {inputBanner}
                 {chatInputNode}
