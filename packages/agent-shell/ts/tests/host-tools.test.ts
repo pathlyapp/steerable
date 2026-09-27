@@ -90,8 +90,12 @@ describe('isHostRouteAllowed', () => {
 describe('isHostToolCapabilityEnabled / familyForHostToolName', () => {
   it('maps local_* / mcp__* / task_* to families', () => {
     expect(familyForHostToolName('local_exec_shell')).toBe('local-fs');
+    expect(familyForHostToolName('grep')).toBe('local-fs');
+    expect(familyForHostToolName('pwsh')).toBe('local-fs');
     expect(familyForHostToolName('mcp__docs__search')).toBe('mcp');
     expect(familyForHostToolName('task_run')).toBe('background-tasks');
+    expect(familyForHostToolName('job_kill')).toBe('background-tasks');
+    expect(familyForHostToolName('get_goal')).toBeNull();
     expect(familyForHostToolName('delegate_subagent')).toBeNull();
   });
 
@@ -99,7 +103,17 @@ describe('isHostToolCapabilityEnabled / familyForHostToolName', () => {
     const tools = resolveHostTools({ 'local-fs': false });
     expect(isHostToolCapabilityEnabled('local_read_file', tools)).toBe(false);
     expect(isHostToolCapabilityEnabled('view_image', tools)).toBe(false);
+    expect(isHostToolCapabilityEnabled('grep', tools)).toBe(false);
+    expect(isHostToolCapabilityEnabled('pwsh', tools)).toBe(false);
+    expect(isHostToolCapabilityEnabled('get_goal', tools)).toBe(true);
     expect(isHostToolCapabilityEnabled('domain_scan', tools)).toBe(true);
+  });
+
+  it('关掉后台任务族后 job_kill 也不再放行', () => {
+    const tools = resolveHostTools({ 'background-tasks': false });
+    expect(isHostToolCapabilityEnabled('job_kill', tools)).toBe(false);
+    expect(isHostToolCapabilityEnabled('task_run', tools)).toBe(false);
+    expect(isHostToolCapabilityEnabled('get_goal', tools)).toBe(true);
   });
 
   it('公文关掉 chrome 仍保留 local_* 能力', () => {

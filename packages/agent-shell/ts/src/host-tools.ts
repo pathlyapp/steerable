@@ -129,6 +129,9 @@ export const LOCAL_FS_TOOL_NAMES = [
   'local_run_snippet',
   'local_list_scripts',
   'local_run_script',
+  'grep',
+  'glob',
+  'pwsh',
 ] as const;
 
 const FAMILY_TOOL_PREFIX: Record<HostToolFamilyId, readonly string[]> = {
@@ -143,6 +146,9 @@ const FAMILY_TOOL_PREFIX: Record<HostToolFamilyId, readonly string[]> = {
     'worktree_create',
     'worktree_list',
     'worktree_remove',
+    'job_list',
+    'job_output',
+    'job_kill',
   ],
   mcp: ['mcp_list_tools', 'mcp_tool_exec'],
   web: ['web_search', 'web_fetch'],

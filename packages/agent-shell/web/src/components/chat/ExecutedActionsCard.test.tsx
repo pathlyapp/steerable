@@ -4,6 +4,40 @@ import { ToolsFlow } from './ExecutedActionsCard';
 
 afterEach(cleanup);
 
+describe('ToolsFlow / declared view', () => {
+  it('用声明的标题，不用参数名里先出现的 path', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'grep',
+            arguments: { path: '/tmp/secret', pattern: 'alpha' },
+            view: { card: 'search', kind: 'search', title: 'alpha', declared: true },
+            result: { success: true },
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText('alpha')).toBeTruthy();
+    expect(screen.queryByText('/tmp/secret')).toBeNull();
+  });
+
+  it('没有 view 的旧事件仍按参数名做摘要', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'grep',
+            arguments: { path: '/tmp/secret', pattern: 'alpha' },
+            result: { success: true },
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText('/tmp/secret')).toBeTruthy();
+  });
+});
+
 describe('ToolsFlow / todo_write', () => {
   it('keeps the compact tool row in the turn process, not a checklist', () => {
     render(

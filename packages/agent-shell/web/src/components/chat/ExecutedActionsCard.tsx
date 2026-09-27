@@ -59,6 +59,16 @@ export interface ExecutedAction {
    * port-only egress); none = no backend on this platform.
    */
   sandbox?: { backend?: string; enforcement: string };
+  /**
+   * 工具注册时声明的卡片。`declared` 为真时行标题用 `title`，
+   * 不再按工具名猜测。旧事件没有这个字段，仍走原来的摘要。
+   */
+  view?: {
+    card: 'generic' | 'terminal' | 'diff' | 'search' | 'read' | 'web';
+    kind: string;
+    title: string;
+    declared: boolean;
+  };
 }
 
 export interface ExecutedActionsCardProps {
@@ -124,18 +134,18 @@ function actionToTool(action: ExecutedAction, idx: number): ToolExecutionPayload
         ? humanizeDelegateError(env.error)
         : env.error
       : null;
-  // W5-2: web_search/web_fetch 用结构化中文摘要（查询词/URL + 结果计数/
-  // 状态码），其余工具走通用参数摘要。
-  const summary =
-    (action.tool === 'delegate_subagent'
-      ? summarizeDelegateSubagent(action.arguments)
-      : null) ??
-    (isTaskFamilyTool(action.tool)
-      ? summarizeTaskAction(action.tool, action.arguments, action.result)
-      : null) ??
-    summarizeRunCodeAction(action.tool, action.arguments, action.result) ??
-    summarizeWebAction(action.tool, action.arguments, action.result) ??
-    summarizeArguments(action.arguments);
+  // 声明过的工具用 view.title。没有 view 的旧事件仍按工具名做摘要。
+  const summary = action.view?.declared
+    ? action.view.title
+    : ((action.tool === 'delegate_subagent'
+        ? summarizeDelegateSubagent(action.arguments)
+        : null) ??
+      (isTaskFamilyTool(action.tool)
+        ? summarizeTaskAction(action.tool, action.arguments, action.result)
+        : null) ??
+      summarizeRunCodeAction(action.tool, action.arguments, action.result) ??
+      summarizeWebAction(action.tool, action.arguments, action.result) ??
+      summarizeArguments(action.arguments));
   const badge = sandboxBadge(action.sandbox);
   return {
     id: action.id ?? `${action.tool}-${idx}`,

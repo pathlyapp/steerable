@@ -226,7 +226,11 @@ describe('流式回合 SSE 序列', () => {
     // 第一帧：只有调用登记，还没有 result
     const first = (actionEvents[0].data as { actions: Array<Record<string, unknown>> }).actions;
     expect(first).toHaveLength(1);
-    expect(first[0]).toMatchObject({ id: 'call-1', tool: 'local_read_file' });
+    expect(first[0]).toMatchObject({
+      id: 'call-1',
+      tool: 'local_read_file',
+      view: { card: 'read', kind: 'read', title: '/a', declared: true },
+    });
     expect(first[0].result).toBeUndefined();
     // 第二帧：结果回填到同一行
     const second = (actionEvents[1].data as { actions: Array<Record<string, unknown>> }).actions;
@@ -235,7 +239,11 @@ describe('流式回合 SSE 序列', () => {
     // 落库 metadata 携带完整 executedActions 与 timeline
     const assistant = (await h.store.listMessages(chat.id, 10))[0];
     const metadata = JSON.parse(assistant.messageMetadata!);
-    expect(metadata.executedActions[0]).toMatchObject({ tool: 'local_read_file', success: true });
+    expect(metadata.executedActions[0]).toMatchObject({
+      tool: 'local_read_file',
+      success: true,
+      view: { card: 'read', declared: true, title: '/a' },
+    });
     expect(metadata.timeline.some((b: { type: string }) => b.type === 'tools')).toBe(true);
   });
 

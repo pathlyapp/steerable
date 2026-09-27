@@ -48,6 +48,7 @@ import {
   syncTimelineTools,
   type PersistedTurnBlock,
 } from './turn-timeline.js';
+import { presentToolCall } from '../tool-presentation.js';
 
 /** 任务表的最小异步读写面（生产注入 scoped store；测试注入内存实现）。 */
 export interface TaskStore {
@@ -129,6 +130,9 @@ interface RunningTask {
   promise: Promise<void>;
   /** sidecar 流建立后由 onStreamId 回填，task_send 用它 steer。 */
   streamId: string | null;
+  /** job_kill 已发出。终态回写必须保持 failed，不能被正常完成覆盖。 */
+  killed?: boolean;
+  killReason?: string;
   /** 已产出的推理时间线，过程栏的 live 数据源。 */
   timeline: PersistedTurnBlock[];
   /** 工具调用行（按 call id 就地更新），syncTimelineTools 的输入。 */
@@ -478,6 +482,7 @@ export class TaskService {
         askUser: false,
         onStreamId: (streamId) => {
           entry.streamId = streamId;
+          if (entry.killed) void supervisor.cancelChat(streamId);
         },
         onText: (delta) => {
           answer += delta;
@@ -493,6 +498,7 @@ export class TaskService {
             id: call.id,
             tool: call.tool,
             arguments: call.arguments,
+            view: presentToolCall(call.tool, call.arguments),
             threw: false,
           });
           syncTimelineTools(entry.timeline, entry.actions);
@@ -506,6 +512,7 @@ export class TaskService {
             id: action.id,
             tool: action.tool,
             arguments: action.arguments,
+            view: presentToolCall(action.tool, action.arguments, action.result),
             result: action.result,
             success: action.success,
             error: action.error,
@@ -531,6 +538,10 @@ export class TaskService {
       if (typeof failureTraceId === 'string' && failureTraceId) {
         traceId = failureTraceId;
       }
+    }
+    if (entry.killed) {
+      status = 'failed';
+      error = entry.killReason || 'killed by job_kill';
     }
 
     await this.store.updateTask(taskId, {
@@ -565,6 +576,38 @@ export class TaskService {
       total: tasks.length,
       tasks: tasks.map((t) => this.toModelView(t)),
     };
+  }
+
+  /**
+   * job_kill：结束 running 或 blocked 任务。running 先打标记再取消流，
+   * 终态回写看到标记后保持 failed，避免流的正常完成把杀死盖掉。
+   */
+  async kill(chatId: string, taskId: string, reason?: string): Promise<Record<string, unknown>> {
+    const task = await this.store.getTask(taskId);
+    if (!task || task.chatId !== chatId) {
+      return { success: false, error: `任务不存在：${taskId}` };
+    }
+    if (task.status === 'completed' || task.status === 'failed') {
+      return { success: false, error: `任务已终态（${task.status}），不能再结束。` };
+    }
+    const note = reason?.trim() || 'killed by job_kill';
+    const entry = this.running.get(taskId);
+    if (entry) {
+      entry.killed = true;
+      entry.killReason = note;
+    }
+    if (!entry || task.status === 'blocked') {
+      await this.store.updateTask(taskId, { status: 'failed', error: note });
+      this.deps.broadcast?.('task-updated', { chatId, taskId });
+      if (task.status === 'blocked') await this.maybeUnblock(chatId);
+      return { success: true, job_id: taskId, status: 'failed', killed: true };
+    }
+    const getSupervisor = this.deps.getSupervisor ?? getSidecarSupervisor;
+    const supervisor = getSupervisor();
+    if (entry.streamId && supervisor) {
+      await supervisor.cancelChat(entry.streamId);
+    }
+    return { success: true, job_id: taskId, status: 'failed', killed: true };
   }
 
   /** task_result 工具：取终态任务的完整结果。 */

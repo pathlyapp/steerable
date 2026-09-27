@@ -61,8 +61,12 @@ export interface MentionDelegateProfile {
 /** 只读工具域：探索与调研画像共享的「摸不到写操作」基线。 */
 const READ_ONLY_TOOLS = [
   'local_read_file',
+  'view_image',
   'local_list_scripts',
   'local_open_path',
+  'grep',
+  'glob',
+  'get_goal',
   'web_search',
   'web_fetch',
   'mcp_list_tools',

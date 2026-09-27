@@ -32,10 +32,9 @@ export interface UseToolCallStatusOptions {
   call: ToolCall;
   result?: ToolResult;
   /**
-   * Optional override; when omitted the hook infers the mode from the tool
-   * name pattern (`get_*` / `list_*` → read, `delete_*` / `archive_*` →
-   * destructive, `local_*` → local, etc.). Mirrors the framework's harness
-   * `decide_tool_mode`.
+   * Mode declared for this tool. First-party tools set this from registration.
+   * When omitted, the hook falls back to a name-prefix table. That fallback
+   * is only for undeclared third-party names.
    */
   mode?: ToolCallMode;
   /**

@@ -38,6 +38,8 @@ import {
 } from './present-files.js';
 import { isHostToolCapabilityEnabled } from './host-tools.js';
 import { getResolvedHostTools } from './host-tools-runtime.js';
+import { GoalStore, GOAL_ACTIONS } from './goal-store.js';
+import { searchGlob, searchGrep } from './workspace-search.js';
 
 /** 已注册 MCP 服务的动态工具名前缀：`mcp__<serverKey>__<toolName>`。 */
 export const MCP_DYNAMIC_TOOL_PREFIX = 'mcp__';
@@ -228,6 +230,18 @@ export class ToolRouter {
   setTaskServices(services: { taskService: TaskService; worktreeService: WorktreeService } | null): void {
     this.taskService = services?.taskService ?? null;
     this.worktreeService = services?.worktreeService ?? null;
+  }
+
+  /** 会话目标的持久化。缺省写到用户数据目录；测试注入临时文件。 */
+  private goalStore: GoalStore | null = null;
+
+  setGoalStore(store: GoalStore | null): void {
+    this.goalStore = store;
+  }
+
+  private goals(): GoalStore {
+    if (!this.goalStore) this.goalStore = GoalStore.default();
+    return this.goalStore;
   }
 
   setWebTools(delegate: WebToolDelegate | null, names: readonly string[] = []): void {
@@ -575,6 +589,7 @@ export class ToolRouter {
           additionalProperties: false,
         },
       },
+      ...this.listParityToolSchemas(),
       // ─── 4.6a/4.6b 跨 turn 后台任务 + git worktree 隔离 ─────────────
       // 服务未接线（CLI/test）时一个 schema 都不出——模型看不到不可用的工具。
       ...this.listTaskAndWorktreeSchemas(),
@@ -643,6 +658,112 @@ export class ToolRouter {
         mode: 'destructive',
         exposure: 'deferred',
         inputSchema: nameParam,
+      },
+    ];
+  }
+
+  /**
+   * 内容搜索、PowerShell、会话目标。后台任务的 job_* 跟 task 服务一起出场。
+   */
+  private listParityToolSchemas(): ToolSchema[] {
+    return [
+      {
+        name: 'grep',
+        description:
+          'Search file contents under the project (or an optional subdirectory). '
+          + 'pattern is a JavaScript regular expression. Optional glob limits which relative paths are scanned. '
+          + 'Skips dependency and VCS directories. Returns {path, line, text} hits. Prefer this over shell rg/grep.',
+        mode: 'read',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'JavaScript regular expression matched per line.' },
+            path: { type: 'string', description: 'Directory to search. Defaults to the project root.' },
+            glob: { type: 'string', description: 'Optional fnmatch, e.g. "*.ts" or "src/**/*.py".' },
+          },
+          required: ['pattern'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'glob',
+        description:
+          'List project files whose relative path matches a glob. A pattern without "/" matches any directory. '
+          + 'Prefer this over shell find or ls.',
+        mode: 'read',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'Glob, e.g. "*.ts" or "src/**/*.py".' },
+            path: { type: 'string', description: 'Directory to search. Defaults to the project root.' },
+          },
+          required: ['pattern'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'pwsh',
+        description:
+          'Run a PowerShell command. On Windows this is powershell.exe; elsewhere it runs pwsh '
+          + '(PowerShell 7) and fails clearly when that binary is not installed. '
+          + 'Use local_exec_shell for the platform default shell.',
+        mode: 'destructive',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            command: { type: 'string' },
+            cwd: { type: 'string' },
+            timeout: {
+              type: 'number',
+              description: 'Timeout in milliseconds. A small number like 30 is treated as seconds.',
+            },
+          },
+          required: ['command'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'get_goal',
+        description:
+          'Read this chat\'s persisted goal, including the id and revision that update_goal requires. '
+          + 'goal is null when none exists.',
+        mode: 'read',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      },
+      {
+        name: 'create_goal',
+        description:
+          'Create a persisted goal for this chat when the user\'s request is a long-running objective. '
+          + 'Not for single-turn work. Fails if an unfinished goal already exists — update that one instead.',
+        mode: 'safe_write',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objective: { type: 'string', description: 'What done looks like, as a result rather than an activity.' },
+          },
+          required: ['objective'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'update_goal',
+        description:
+          'Change the current goal. Pass the id and revision from get_goal. '
+          + 'action is edit (needs objective), pause, resume, complete, or blocked (needs reason). '
+          + 'A stale revision is rejected; re-read and retry.',
+        mode: 'safe_write',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            revision: { type: 'integer' },
+            action: { type: 'string', enum: [...GOAL_ACTIONS] },
+            objective: { type: 'string', description: 'Required for action=edit.' },
+            reason: { type: 'string', description: 'Required for action=blocked.' },
+          },
+          required: ['id', 'revision', 'action'],
+          additionalProperties: false,
+        },
       },
     ];
   }
@@ -763,6 +884,49 @@ export class ToolRouter {
         inputSchema: {
           type: 'object',
           properties: {},
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'job_list',
+        description:
+          'List this chat\'s background jobs (the same records task_run creates). '
+          + 'Each row includes job_id (the taskId), status, and the task text.',
+        mode: 'read',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'job_output',
+        description:
+          'Read the final answer of a background job. job_id is the taskId from task_run or job_list. '
+          + 'Fails with needsFollowup while the job is still running.',
+        mode: 'read',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            job_id: { type: 'string', description: 'taskId of the background job.' },
+          },
+          required: ['job_id'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'job_kill',
+        description:
+          'Stop a running or blocked background job. A finished job cannot be killed. '
+          + 'job_id is the taskId from task_run or job_list.',
+        mode: 'destructive',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            job_id: { type: 'string', description: 'taskId of the background job.' },
+            reason: { type: 'string', description: 'Optional note stored on the job.' },
+          },
+          required: ['job_id'],
           additionalProperties: false,
         },
       },
@@ -1068,6 +1232,53 @@ export class ToolRouter {
         return result;
       }
 
+      case 'grep':
+      case 'glob': {
+        const requested = typeof args.path === 'string' ? args.path.trim() : '';
+        const start = requested
+          ? this.resolveReadablePath(requested, projectRoot, context?.additionalReadRoots ?? null)
+          : { path: projectRoot ? expandFencePath(projectRoot) : process.cwd() };
+        if ('error' in start) {
+          return { success: false, error: start.error, needsFollowup: true };
+        }
+        if (call.name === 'grep') {
+          return searchGrep({
+            root: start.path,
+            pattern: String(args.pattern || ''),
+            glob: typeof args.glob === 'string' ? args.glob : undefined,
+          });
+        }
+        return searchGlob({ root: start.path, pattern: String(args.pattern || '') });
+      }
+      case 'pwsh': {
+        const script = String(args.command || '');
+        if (!script.trim()) {
+          return { success: false, error: 'command is required', needsFollowup: true };
+        }
+        const command =
+          process.platform === 'win32'
+            ? script
+            : `pwsh -NoProfile -NonInteractive -Command ${JSON.stringify(script)}`;
+        return await this.executeShell(
+          {
+            command,
+            cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
+            timeout: typeof args.timeout === 'number' ? args.timeout : undefined,
+            shell: process.platform === 'win32' ? 'powershell' : undefined,
+          },
+          projectRoot,
+          context?.additionalWriteRoots ?? null,
+        );
+      }
+      case 'get_goal':
+      case 'create_goal':
+      case 'update_goal':
+        return this.executeGoalTool(call.name, args, context);
+      case 'job_list':
+      case 'job_output':
+      case 'job_kill':
+        return this.executeJobTool(call.name, args, context);
+
       case 'task_run': {
         const chatId = this.requireTaskContext(context);
         const dependsOn = Array.isArray(args.dependsOn)
@@ -1151,6 +1362,52 @@ export class ToolRouter {
    * 项目围栏按 chat 解析）。schema 出场 ⇒ 服务已接线，这里只缺 chatId 时
    * 抛错（reverse-tools 总是透传；缺了就是接线 bug，响亮失败）。
    */
+  private async executeGoalTool(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecContext,
+  ): Promise<unknown> {
+    const chatId = context?.chatId;
+    if (!chatId) {
+      return { success: false, error: '目标工具需要 chatId 调用上下文', needsFollowup: true };
+    }
+    const store = this.goals();
+    if (name === 'get_goal') return store.get(chatId);
+    if (name === 'create_goal') return store.create(chatId, String(args.objective || ''));
+    return store.update({
+      chatId,
+      id: String(args.id || ''),
+      revision: typeof args.revision === 'number' ? args.revision : Number.NaN,
+      action: String(args.action || ''),
+      objective: typeof args.objective === 'string' ? args.objective : undefined,
+      reason: typeof args.reason === 'string' ? args.reason : undefined,
+    });
+  }
+
+  private async executeJobTool(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecContext,
+  ): Promise<unknown> {
+    const chatId = this.requireTaskContext(context);
+    const jobId = String(args.job_id || '');
+    if (name === 'job_list') {
+      const listed = await this.taskService!.status(chatId);
+      const tasks = Array.isArray(listed.tasks) ? listed.tasks : [];
+      return {
+        ...listed,
+        jobs: tasks.map((task) => {
+          const row = task as { taskId?: string };
+          return { ...row, job_id: row.taskId };
+        }),
+      };
+    }
+    if (!jobId) return { success: false, error: 'job_id 不能为空', needsFollowup: true };
+    if (name === 'job_output') return this.taskService!.result(chatId, jobId);
+    const reason = typeof args.reason === 'string' && args.reason.trim() ? args.reason.trim() : undefined;
+    return this.taskService!.kill(chatId, jobId, reason);
+  }
+
   private requireTaskContext(context?: ToolExecContext): string {
     if (!this.taskService || !this.worktreeService) {
       throw new Error('任务/worktree 服务未接线（main.ts setTaskServices）');

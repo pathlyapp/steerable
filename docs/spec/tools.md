@@ -36,19 +36,23 @@ the harness's `TraceSpan.attrs`, not into `ToolCall`.
 
 ## ToolMode (harness classifier)
 
-The harness's [`decide_tool_mode(name)`](../spec/architecture.md) returns
-one of:
+A tool's `ToolMode` is one of:
 
 | Mode          | Meaning                              | Default UI treatment       |
 | ------------- | ------------------------------------ | -------------------------- |
 | `read`        | Pure inspection (no side effects)    | Auto-run, no consent       |
 | `safe_write`  | Bounded mutation (e.g. update_event) | Auto-run with diff preview |
-| `destructive` | Irreversible (delete_*, drop_*, …)   | Auto-run, undo affordance  |
+| `destructive` | Irreversible mutation                | Auto-run, undo affordance  |
 | `local`       | Touches the user's machine           | **Requires consent**       |
 | `external`    | Calls outside services               | Auto-run, log              |
 
-Pattern rules (TypeScript regex equivalents in
-`@steerable/agent-ui/useToolCallStatus`):
+First-party tools declare their harness mode at registration (`mode=` on
+`@tool` / `ToolRouter.register`, or `mode` on the host `ToolSchema`).
+That declaration is what approval and plan-mode filtering read.
+
+`@steerable/agent-ui/useToolCallStatus` still falls back to these name
+patterns when a caller does not pass `mode`. That fallback is only for
+undeclared third-party names:
 
 ```
 ^get_  | ^list_  | ^read_  | ^search_   →  read
@@ -57,8 +61,34 @@ Pattern rules (TypeScript regex equivalents in
 ^local_ | ^shell_ | ^exec_              →  local
 ```
 
-You can override the inferred mode at registration time via the `@tool`
-decorator's `mode=` kwarg.
+## Tool presentation
+
+How a call is drawn (terminal, diff, search, read, web, or generic) is a
+separate declaration from `ToolMode`. First-party names are listed in
+`packages/agent-shell/ts/src/tool-presentation.ts` and
+`steerable_agent_runtime.tool_presentation`. Each entry names a `card`, a
+`kind` (`read | edit | delete | move | search | execute | fetch | other`),
+and how the row title is taken from the arguments. The host stamps that
+view onto `executed_actions`. The card uses `view.title` when
+`view.declared` is true.
+
+Names that are not in the table — MCP tools, plugins, scenario-pack tools —
+render as a generic card. The UI does not guess a card from a name prefix.
+
+`ToolRouter.register` copies the Python table into the tool's `metadata`
+under `presentation` unless the caller already set that key.
+
+## Host tools added for parity
+
+The desktop host (the list the model sees when `toolsViaHost` is on) also
+registers:
+
+| Tool | Role |
+| --- | --- |
+| `grep`, `glob` | Project search. Same jobs as the sidecar workspace tools. |
+| `pwsh` | PowerShell. Windows uses `powershell.exe`; other platforms run `pwsh` and report a missing binary as a failed command. |
+| `get_goal`, `create_goal`, `update_goal` | One persisted goal per chat, with a revision checked on update. |
+| `job_list`, `job_output`, `job_kill` | Inspect and stop the background jobs `task_run` creates. Present only when the task service is wired. `job_id` is that `taskId`. |
 
 ## Exposure tiers
 

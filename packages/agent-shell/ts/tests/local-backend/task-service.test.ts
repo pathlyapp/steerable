@@ -485,6 +485,100 @@ describe('task-service / status & result（模型面）', () => {
     expect(result.success).toBe(true);
     expect(result.answer).toBe('任务答案');
   });
+
+  it('kill 取消运行中的流，终态保持 failed', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started: () => void = () => {};
+    const startedGate = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const cancelled: string[] = [];
+    const hanging = new TaskService({
+      store: h.store,
+      worktreeService: h.worktree,
+      toolRouter: { listModelSchemas: () => [] } as never,
+      resolveChatProject: async () => null,
+      getSupervisor: () => ({
+        cancelChat: async (id: string) => {
+          cancelled.push(id);
+        },
+      }) as never,
+      runStream: async (options) => {
+        options.onStreamId?.('stream-9');
+        started();
+        await gate;
+        return { status: 'completed', traceId: 't' };
+      },
+    });
+    const running = await hanging.runTask({ chatId: 'chat-1', task: '慢任务' });
+    await startedGate;
+    const killed = await hanging.kill('chat-1', running.taskId);
+    expect(killed).toMatchObject({ success: true, killed: true, job_id: running.taskId });
+    expect(cancelled).toEqual(['stream-9']);
+    release();
+    const settled = await waitTaskTerminal(h.store, running.taskId);
+    expect(settled.status).toBe('failed');
+    expect(settled.error).toBe('killed by job_kill');
+  });
+
+  it('kill 结束 blocked 任务并记下原因；已终态的任务拒绝再杀', async () => {
+    const parent = await h.service.runTask({ chatId: 'chat-1', task: '先做这个' });
+    await waitTaskTerminal(h.store, parent.taskId);
+    await h.store.updateTask(parent.taskId, { status: 'running', error: null });
+    const child = await h.service.runTask({
+      chatId: 'chat-1',
+      task: '等它',
+      dependsOn: [parent.taskId],
+    });
+    expect(child.status).toBe('blocked');
+
+    const killed = await h.service.kill('chat-1', child.taskId, ' 不再需要 ');
+    expect(killed).toMatchObject({ success: true, killed: true });
+    expect(h.store.rows.get(child.taskId)).toMatchObject({
+      status: 'failed',
+      error: '不再需要',
+    });
+
+    const done = await h.service.runTask({ chatId: 'chat-1', task: '已经做完' });
+    await waitTaskTerminal(h.store, done.taskId);
+    const again = await h.service.kill('chat-1', done.taskId);
+    expect(again.success).toBe(false);
+  });
+
+  it('任务过程里的工具行带上声明的 view', async () => {
+    const service = new TaskService({
+      store: h.store,
+      worktreeService: h.worktree,
+      toolRouter: { listModelSchemas: () => [] } as never,
+      resolveChatProject: async () => null,
+      getSupervisor: () => ({}) as never,
+      runStream: async (options) => {
+        options.onToolStart?.({ id: 'c1', tool: 'grep', arguments: { pattern: 'alpha' } });
+        options.onToolAction?.({
+          id: 'c1',
+          tool: 'grep',
+          arguments: { pattern: 'alpha' },
+          success: true,
+        });
+        return { status: 'completed', traceId: 't' };
+      },
+    });
+    const task = await service.runTask({ chatId: 'chat-1', task: '搜一下' });
+    await waitTaskTerminal(h.store, task.taskId);
+    const timeline = JSON.parse(h.store.rows.get(task.taskId)?.processJson ?? '[]') as Array<{
+      type: string;
+      actions?: Array<{ view?: { card: string; title: string; declared: boolean } }>;
+    }>;
+    const tools = timeline.find((block) => block.type === 'tools');
+    expect(tools?.actions?.[0].view).toMatchObject({
+      card: 'search',
+      title: 'alpha',
+      declared: true,
+    });
+  });
 });
 
 describe('task-service / 编排（dependsOn 调度 + task_send 消息）', () => {

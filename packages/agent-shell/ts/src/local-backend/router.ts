@@ -31,6 +31,7 @@ import {
   type TurnSubagentParam,
 } from './subagent-profiles.js';
 import { resolveMentionedAgentIds } from './mention-targets.js';
+import { presentToolCall } from '../tool-presentation.js';
 import {
   readSidecarHistoryEntries,
   timelineFromHistoryEntries,
@@ -3531,6 +3532,7 @@ export class LocalBackendRouter {
             tool: call.tool,
             mode: chatMode,
             arguments: call.arguments,
+            view: presentToolCall(call.tool, call.arguments),
             threw: false,
           });
           syncTimelineTools(timeline, executedActions);
@@ -3545,6 +3547,7 @@ export class LocalBackendRouter {
             tool: action.tool,
             mode: chatMode,
             arguments: action.arguments,
+            view: presentToolCall(action.tool, action.arguments, action.result),
             result: action.result,
             success: action.success,
             error: action.error,
