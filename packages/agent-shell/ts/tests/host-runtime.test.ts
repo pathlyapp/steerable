@@ -211,6 +211,12 @@ describe('start · 生命周期', () => {
     expect(mocks.startHostSidecar).toHaveBeenCalledOnce();
   });
 
+  it('Python sidecar 启动失败时拒绝宿主启动', async () => {
+    mocks.startHostSidecar.mockRejectedValueOnce(new Error('python sidecar missing'));
+    const rt = await createHostRuntime(makeOptions());
+    await expect(rt.start()).rejects.toThrow('python sidecar missing');
+  });
+
   it('启动清扫 running 任务并记录原因；有清扫结果时打日志', async () => {
     mocks.failRunningTasks.mockReturnValue(3);
     const options = makeOptions();

@@ -33,13 +33,11 @@ done
 uv build --all-packages --out-dir dist/py >/dev/null
 rm -f dist/py/steerable_example_*.whl dist/py/steerable_example_*.tar.gz
 echo "    built $(ls dist/py | wc -l | tr -d ' ') Python files"
-# The native wheel and Rust sidecar are published by the private
-# repository. Download the host artifacts and verify their digests.
-mkdir -p dist/native dist/sidecar-bin
+# The native wheel is published by the private repository. Download the host
+# artifact and verify its digest.
+mkdir -p dist/native
 uv run python scripts/fetch_verified_artifacts.py wheel \
   --artifact-lock --platform host --out dist/native
-uv run python scripts/fetch_verified_artifacts.py sidecar \
-  --artifact-lock --target host --out dist/sidecar-bin
 echo "    fetched $(ls dist/native | wc -l | tr -d ' ') native files"
 
 echo "== 5/5  artifact summary"

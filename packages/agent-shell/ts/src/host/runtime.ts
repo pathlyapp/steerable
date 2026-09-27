@@ -297,9 +297,9 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
         onLog(`[task] swept ${sweptTasks} stale running task(s)`);
       }
       void localExecutor.init();
-      // Not awaited: sidecar boot (python import) must not delay readiness.
-      // A turn that races the boot falls back for that turn only.
-      void startHostSidecar({
+      // The complete Python sidecar is mandatory. Do not report host
+      // readiness or fall back to an in-process loop when it cannot start.
+      await startHostSidecar({
         store: defaultStore,
         toolRouter,
         resolveProjectRoot: async (chatId) =>

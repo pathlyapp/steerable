@@ -9,9 +9,7 @@
  *
  * This is the only chat path (the TS loop was deleted 2026-08-26). If the
  * sidecar failed to start, the router fails loud with a 503 — there is no
- * in-process fallback loop anymore. `STEERABLE_USE_SIDECAR=0` still
- * disables the sidecar process itself (auxiliary LLM calls then fall back
- * to the in-proc providers), but chat requires the sidecar.
+ * in-process fallback loop or sidecar opt-out.
  */
 
 import type {

@@ -33,6 +33,15 @@ const SHELL_REQUEST: ApprovalPromptRequest = {
   round: 0,
 };
 
+const SANDBOX_ESCALATION_REQUEST: ApprovalPromptRequest = {
+  requestId: 'req-sandbox-escalation',
+  toolName: 'local_exec_shell',
+  arguments: { command: 'rm -rf ~/.aroli/python-runner' },
+  mode: 'destructive',
+  category: 'sandbox_escalation',
+  round: 1,
+};
+
 describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
   it('以 host:port 标题 + 仿冒警示展示，并隐藏「始终」变体', () => {
     render(
@@ -63,5 +72,20 @@ describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
     expect(screen.getByText(/工作区沙箱/)).toBeTruthy();
     fireEvent.click(screen.getByText('允许一次'));
     expect(onDecide).toHaveBeenCalledWith('allow_once');
+  });
+
+  it('沙盒拒绝后询问是否在工作区外重试', () => {
+    render(
+      <ApprovalPromptMenu
+        request={SANDBOX_ESCALATION_REQUEST}
+        pendingCount={0}
+        onDecide={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Agent 请求在工作区外执行命令')).toBeTruthy();
+    expect(screen.getByText('rm -rf ~/.aroli/python-runner')).toBeTruthy();
+    expect(screen.getByText(/命令已在工作区沙箱中尝试/)).toBeTruthy();
+    expect(screen.queryByText(/把沙箱切到/)).toBeNull();
   });
 });

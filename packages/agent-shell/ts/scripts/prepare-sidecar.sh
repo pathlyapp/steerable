@@ -56,6 +56,13 @@ PYTHON_CMD="python3"
 if ! python3 --version &>/dev/null; then
   PYTHON_CMD="python"
 fi
+if ! "$PYTHON_CMD" -c 'import ssl' &>/dev/null; then
+  if ! command -v uv &>/dev/null; then
+    echo "ERROR: $PYTHON_CMD has no SSL support and uv is unavailable" >&2
+    exit 1
+  fi
+  PYTHON_CMD="$(uv python find 3.12)"
+fi
 "$PYTHON_CMD" "$FW/packages/sidecar/build/build_sidecar.py" \
   --target "$TARGET" \
   --from-wheels "$WHEELS_ABS" \

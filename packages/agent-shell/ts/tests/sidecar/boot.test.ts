@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   supervisorStart: vi.fn(),
   resolveSidecarPython: vi.fn(() => '/venv/bin/python3'),
-  rustSidecarEnabled: vi.fn(() => false),
   setSidecarSupervisor: vi.fn(),
   setSidecarSupervisorPending: vi.fn(),
   llmGetSettings: vi.fn(() => ({ baseUrl: 'https://llm.example/v1', apiKey: 'k' })),
@@ -40,7 +39,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../src/sidecar/supervisor.js', () => ({
   SidecarSupervisor: { start: mocks.supervisorStart },
   resolveSidecarPython: mocks.resolveSidecarPython,
-  rustSidecarEnabled: mocks.rustSidecarEnabled,
 }));
 vi.mock('../../src/llm/index.js', () => ({
   setSidecarSupervisor: mocks.setSidecarSupervisor,
@@ -118,7 +116,6 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 }
 
 const ENV_KEYS = [
-  'STEERABLE_USE_SIDECAR',
   'STEERABLE_EGRESS_PROXY',
   'STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS',
   'STEERABLE_PYTHON',
@@ -137,9 +134,7 @@ beforeEach(() => {
   mocks.storeGetWebSearchSettings.mockReturnValue(undefined);
   mocks.llmGetSettings.mockReturnValue({ baseUrl: 'https://llm.example/v1', apiKey: 'k' });
   mocks.deriveEgressAllowListFromBaseUrl.mockReturnValue(['llm.example']);
-  mocks.rustSidecarEnabled.mockReturnValue(false);
   savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
-  delete process.env.STEERABLE_USE_SIDECAR;
   delete process.env.STEERABLE_EGRESS_PROXY;
   delete process.env.STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS;
   delete process.env.STEERABLE_PYTHON;
@@ -154,13 +149,6 @@ afterEach(async () => {
 });
 
 describe('startHostSidecar · 开关与 spawn 计划', () => {
-  it('STEERABLE_USE_SIDECAR=0 → 完全不启动（opt-out）', async () => {
-    process.env.STEERABLE_USE_SIDECAR = '0';
-    await startHostSidecar(makeDeps());
-    expect(mocks.supervisorStart).not.toHaveBeenCalled();
-    expect(mocks.setSidecarSupervisorPending).not.toHaveBeenCalled();
-  });
-
   it('正常启动：storage path 参数、可写根、PTC/run_code 环境、全局句柄与 pending 登记', async () => {
     const sup = fakeSupervisor();
     mocks.supervisorStart.mockResolvedValue(sup);
@@ -178,22 +166,6 @@ describe('startHostSidecar · 开关与 spawn 计划', () => {
     expect(plan.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
     expect(mocks.setSidecarSupervisor).toHaveBeenCalledWith(sup);
     expect(mocks.setSidecarSupervisorPending).toHaveBeenCalledOnce();
-  });
-
-  it('Rust sidecar 只在受管 Python runner 可用时注册 run_code', async () => {
-    mocks.rustSidecarEnabled.mockReturnValue(true);
-    mocks.supervisorStart.mockResolvedValue(fakeSupervisor());
-    await startHostSidecar(makeDeps());
-    expect(mocks.supervisorStart.mock.calls[0][0].env.STEERABLE_RUN_CODE).toBe('0');
-    await shutdownHostSidecar();
-
-    process.env.STEERABLE_PYTHON = '/managed/python3';
-    mocks.supervisorStart.mockResolvedValue(fakeSupervisor());
-    await startHostSidecar(makeDeps());
-    expect(mocks.supervisorStart.mock.calls[1][0].env).toMatchObject({
-      STEERABLE_RUN_CODE: '1',
-      STEERABLE_PYTHON: '/managed/python3',
-    });
   });
 
   it('启动尚未 ready 时退出会立即关闭已创建的 supervisor', async () => {
@@ -447,26 +419,21 @@ describe('startHostSidecar · egress 代理', () => {
   });
 });
 
-describe('startHostSidecar · boot 失败与迟到补接线', () => {
-  it('start 拒绝且无 supervisor → setSidecarSupervisor(null)，不抛', async () => {
+describe('startHostSidecar · boot 失败', () => {
+  it('start 拒绝且无 supervisor → 清空句柄并拒绝启动', async () => {
     mocks.supervisorStart.mockRejectedValue(new Error('spawn ENOENT'));
-    await expect(startHostSidecar(makeDeps())).resolves.toBeUndefined();
+    await expect(startHostSidecar(makeDeps())).rejects.toThrow('spawn ENOENT');
     expect(mocks.setSidecarSupervisor).toHaveBeenCalledWith(null);
   });
 
-  it('start 失败但带 supervisor（SidecarBootFailure）→ 迟到 ready 时补接线', async () => {
+  it('start 失败但带 supervisor（SidecarBootFailure）→ 停止后台重试并拒绝启动', async () => {
     const late = fakeSupervisor();
     const failure = Object.assign(new Error('first boot failed'), { supervisor: late });
     mocks.supervisorStart.mockRejectedValue(failure);
-    await startHostSidecar(makeDeps());
+    await expect(startHostSidecar(makeDeps())).rejects.toThrow('first boot failed');
     expect(mocks.setSidecarSupervisor).toHaveBeenCalledWith(null);
     expect(late.onReverseRequest).not.toHaveBeenCalled();
-
-    late.emit('ready');
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
-    expect(mocks.setSidecarSupervisor).toHaveBeenCalledWith(late);
-    expect(late.onReverseRequest).toHaveBeenCalledWith('tool.invoke', 'tool-invoke-handler');
+    expect(late.shutdown).toHaveBeenCalledOnce();
   });
 });
 

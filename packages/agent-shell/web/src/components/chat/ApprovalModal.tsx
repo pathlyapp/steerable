@@ -99,6 +99,7 @@ export function ApprovalPromptMenu({
   // 出口没有意义——只给一次性/会话两档，且默认焦点在拒绝（安全默认：
   // 用户能认出 api.github.com，认不出 cdn.jsdelivr.net.evil.com）。
   const isEgress = current.category === 'network_egress';
+  const isSandboxEscalation = current.category === 'sandbox_escalation';
   const egressHost =
     typeof current.arguments.host === 'string' ? current.arguments.host : '';
   const egressPort =
@@ -125,6 +126,8 @@ export function ApprovalPromptMenu({
                     {egressPort !== null ? `:${egressPort}` : ''}
                   </span>
                 </>
+              ) : isSandboxEscalation ? (
+                <>Agent 请求在工作区外执行命令</>
               ) : (
                 <>
                   Agent 请求执行
@@ -152,6 +155,11 @@ export function ApprovalPromptMenu({
               该域名不在出网白名单内。放行前请核对完整域名拼写（仿冒域名常
               用相似拼写，如 cdn.jsdelivr.net.evil.com）。放行仅对本次会话
               生效；要持久放行请把域名加入设置的出网白名单。
+            </p>
+          ) : isSandboxEscalation ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+              命令已在工作区沙箱中尝试，但被系统拒绝。允许后会仅重试这条原始命令，
+              不再限制它只能写入当前项目或本对话工作区。
             </p>
           ) : (
             <>

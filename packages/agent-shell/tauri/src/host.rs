@@ -239,26 +239,23 @@ struct HostPaths {
     app_root: PathBuf,
     web_dist: PathBuf,
     engine_dir: Option<PathBuf>,
+    sidecar_python: Option<PathBuf>,
 }
 
 impl HostPaths {
     fn apply_runtime_env(&self, command: &mut Command, python_runner: Option<PathBuf>) {
-        let Some(engine_dir) = &self.engine_dir else {
-            return;
-        };
-        let rust_sidecar = engine_dir.join(platform_binary("steerable-sidecar"));
-        if rust_sidecar.exists() {
-            command
-                .env("STEERABLE_RUST_SIDECAR", "1")
-                .env("STEERABLE_RUST_SIDECAR_BIN", rust_sidecar);
+        if let Some(sidecar_python) = &self.sidecar_python {
+            command.env("STEERABLE_SIDECAR_PYTHON", sidecar_python);
         }
-        let egress_proxy = engine_dir.join(platform_binary("steerable-egress-proxy"));
-        if egress_proxy.exists() {
-            command.env("STEERABLE_EGRESS_PROXY_BIN", egress_proxy);
-        }
-        let win_spawn_helper = engine_dir.join("win-spawn-helper/win-spawn-helper.exe");
-        if win_spawn_helper.exists() {
-            command.env("DEEPPATH_WIN_SPAWN_HELPER", win_spawn_helper);
+        if let Some(engine_dir) = &self.engine_dir {
+            let egress_proxy = engine_dir.join(platform_binary("steerable-egress-proxy"));
+            if egress_proxy.exists() {
+                command.env("STEERABLE_EGRESS_PROXY_BIN", egress_proxy);
+            }
+            let win_spawn_helper = engine_dir.join("win-spawn-helper/win-spawn-helper.exe");
+            if win_spawn_helper.exists() {
+                command.env("DEEPPATH_WIN_SPAWN_HELPER", win_spawn_helper);
+            }
         }
         if let Some(python_runner) = python_runner {
             command.env("STEERABLE_PYTHON", python_runner);
@@ -368,6 +365,7 @@ impl HostPaths {
                     }),
                 app_root,
                 engine_dir: None,
+                sidecar_python: env::var_os("STEERABLE_SIDECAR_PYTHON").map(PathBuf::from),
             });
         }
 
@@ -378,6 +376,26 @@ impl HostPaths {
         let resource_dir = node_compatible_path(&resource_dir);
         let host_root = resource_dir.join("node-host");
         let app_root = host_root.join("app-dist");
+        let python_name = if cfg!(windows) {
+            "python.exe"
+        } else {
+            "python3"
+        };
+        let python_root = resource_dir.join("python-runtime").join(platform_tag());
+        let sidecar_python = [
+            python_root.join("python").join(python_name),
+            python_root.join("python/bin").join(python_name),
+            python_root.join(python_name),
+            python_root.join("bin").join(python_name),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| {
+            format!(
+                "packaged Python sidecar runtime is missing under {}",
+                python_root.display()
+            )
+        })?;
         Ok(Self {
             node: env::var_os("DEEPPATH_TAURI_NODE")
                 .map(PathBuf::from)
@@ -389,6 +407,7 @@ impl HostPaths {
             web_dist: host_root.join("web-dist"),
             app_root,
             engine_dir: Some(resource_dir.join("engine")),
+            sidecar_python: Some(sidecar_python),
         })
     }
 }

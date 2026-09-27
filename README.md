@@ -219,7 +219,7 @@ flowchart TB
 **The rules:**
 - Tier N never imports Tier N+1. Adopting any layer means inheriting only the layers below it.
 - TS↔Py for `agent-protocol` is **codegen, not parallel implementation** — `spec/*.schema.json` is the single source of truth.
-- The public npm and pure-Python packages release in framework lockstep. The private Rust bundle — the native CoreLoop wheel, Rust sidecar, and egress proxy — has its own version and immutable `rust-vX.Y.Z` Release. `rust-artifacts.lock.json` pins the reviewed bundle manifest and exact native dependency; framework releases reuse that pin until an explicit artifact update. Rust crates remain unpublished on crates.io (`publish = false`).
+- The public npm and Python sidecar packages release in framework lockstep. The private Rust bundle — the native CoreLoop wheel and egress proxy — has its own version and immutable `rust-vX.Y.Z` Release. `rust-artifacts.lock.json` pins the reviewed bundle manifest and exact native dependency; framework releases reuse that pin until an explicit artifact update. Rust crates remain unpublished on crates.io (`publish = false`).
 - Tier 5 is **product-neutral**: brand, telemetry endpoints, help links, and data-directory names are injected by the consuming product's assembly root (`setProductBrand` / `setProductConfig`), enforced by the `shell:neutral` gate in CI.
 
 ---
@@ -418,8 +418,8 @@ Steerable stands on the work of:
 ## License
 
 The source in this repository is licensed under the
-[Apache License 2.0](./LICENSE). The separately built native CoreLoop wheel,
-Rust sidecar, and egress proxy pinned by `rust-artifacts.lock.json` are
+[Apache License 2.0](./LICENSE). The separately built native CoreLoop wheel
+and egress proxy pinned by `rust-artifacts.lock.json` are
 source-unavailable binary artifacts licensed separately by their immutable
 Release. The lock records the reviewed license identifier. See
 [`NOTICE`](./NOTICE) for distribution terms and third-party attributions.

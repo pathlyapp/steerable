@@ -13,17 +13,12 @@ import {
 const fakeSupervisor = { note: 'stand-in' } as never;
 
 describe('sidecar handle / whenSidecarSupervisor', () => {
-  const savedEnv = process.env.STEERABLE_USE_SIDECAR;
-
   beforeEach(() => {
-    delete process.env.STEERABLE_USE_SIDECAR;
     setSidecarSupervisor(null);
     setSidecarSupervisorPending(null);
   });
 
   afterEach(() => {
-    if (savedEnv === undefined) delete process.env.STEERABLE_USE_SIDECAR;
-    else process.env.STEERABLE_USE_SIDECAR = savedEnv;
     setSidecarSupervisor(null);
     setSidecarSupervisorPending(null);
   });
@@ -62,18 +57,5 @@ describe('sidecar handle / whenSidecarSupervisor', () => {
 
   it('无 pending（未启动或已结束）返回 null', async () => {
     await expect(whenSidecarSupervisor(50)).resolves.toBeNull();
-  });
-
-  it('STEERABLE_USE_SIDECAR=0 时直接返回 null，不等 pending', async () => {
-    process.env.STEERABLE_USE_SIDECAR = '0';
-    setSidecarSupervisor(fakeSupervisor);
-    setSidecarSupervisorPending(new Promise(() => {}));
-    await expect(whenSidecarSupervisor(50)).resolves.toBeNull();
-  });
-
-  it('getSidecarSupervisor 在禁用时不透传 handle', () => {
-    process.env.STEERABLE_USE_SIDECAR = '0';
-    setSidecarSupervisor(fakeSupervisor);
-    expect(getSidecarSupervisor()).toBeNull();
   });
 });

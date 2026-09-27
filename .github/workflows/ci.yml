@@ -173,21 +173,6 @@ jobs:
             echo "::error::web-shell build did not produce dist/index.html"; exit 1;
           }
 
-  sidecar-bin:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Download and smoke the published Rust sidecar
-        run: |
-          python scripts/fetch_verified_artifacts.py sidecar \
-            --artifact-lock --target linux-x64 --out dist/sidecar-bin
-          binary=$(find dist/sidecar-bin -type f -name 'steerable-sidecar-bin-*-linux-x64' | head -1)
-          python scripts/fetch_verified_artifacts.py smoke-sidecar \
-            --artifact-lock --binary "$binary"
-
   sidecar-budget:
     # D3 (sidecar bundle size budget): enforces a hard upper bound on the
     # sidecar bundle size on every PR so a future dependency bump can't

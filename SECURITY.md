@@ -34,7 +34,7 @@ In scope:
 - Published artefacts on npm under the `@steerable/*` scope and on PyPI under
   the `steerable-*` prefix.
 - The portable Python sidecar binary built by `packages/sidecar/build/build_sidecar.py`.
-- The native CoreLoop wheel and Rust sidecar/egress binaries pinned by
+- The native CoreLoop wheel and egress proxy binary pinned by
   `rust-artifacts.lock.json`.
 
 Out of scope:

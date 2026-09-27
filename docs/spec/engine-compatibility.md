@@ -3,7 +3,8 @@
 Steerable publishes the framework source and consumes a separately built,
 source-unavailable Rust engine. `rust-artifacts.lock.json` is the reviewed pin
 for one immutable engine bundle; its manifest digest authenticates the native
-CoreLoop wheel, Rust sidecar and egress proxy downloaded by the framework.
+CoreLoop wheel and egress proxy downloaded by the framework. The complete
+sidecar remains Python and is published with the framework.
 The lock also records the engine license identifier; the corresponding Release
 contains the complete terms.
 
@@ -13,8 +14,8 @@ The framework-to-engine interface has three independently versioned parts:
 
 - `coreloopApi` identifies the PyO3 API used by
   `steerable_agent_runtime.native_bridge`.
-- `sidecarProtocol` identifies the JSON-RPC protocol implemented by both
-  sidecars.
+- `sidecarProtocol` identifies the JSON-RPC protocol implemented by the Python
+  sidecar.
 - `egressCli` identifies the egress proxy command-line and control endpoint
   interface.
 

@@ -2,10 +2,6 @@
  * `LlmProvider` implementation that delegates to the steerable-sidecar's
  * `agent.chat.stream` JSON-RPC method.
  *
- * Activation:
- *   Default-on once the sidecar is supervised (see `llm/index.ts`);
- *   `STEERABLE_USE_SIDECAR=0` opts back out to in-process providers.
- *
  * The sidecar must already be supervised by the main process (see
  * `src/sidecar/supervisor.ts`); this provider just routes calls through the
  * supplied supervisor handle and aggregates streamed chunks back into the

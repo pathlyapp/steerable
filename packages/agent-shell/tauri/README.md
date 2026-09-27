@@ -13,10 +13,11 @@ resource paths, and updates.
 The crate is source-distributed with the npm package and is not published to
 crates.io.
 
-Packaged products place the verified Rust sidecar and egress proxy at
-`engine/steerable-sidecar` and `engine/steerable-egress-proxy`. An optional
-`engine/python-runner` is only a child interpreter for `run_code`; it never
-hosts the sidecar. Products may set `pythonRunner` to `bundle` or `download`
+Packaged products place the complete portable Python sidecar at
+`python-runtime/<platform>` and the verified egress proxy at
+`engine/steerable-egress-proxy`. The Python runtime contains the native Rust
+CoreLoop engine. An optional `engine/python-runner` is only a child interpreter
+for `run_code`; it never hosts the sidecar. Products may set `pythonRunner` to `bundle` or `download`
 in `product.json`. Download mode starts the product without an interpreter and
 lets the settings UI install one in the background. The default
 python-build-standalone archive is checked against the packaged SHA-256; users

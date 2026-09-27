@@ -10,7 +10,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import log from 'electron-log';
 import {
-  rustSidecarEnabled,
   SidecarSupervisor,
   type SidecarBootFailure,
 } from './supervisor.js';
@@ -217,16 +216,14 @@ async function startEgressProxyIfEnabled(store: ScopedStore): Promise<{
 }
 
 /**
- * Default-on (2026-08-26): the sidecar hosts the CoreLoop, which is the
- * default chat path. Explicit STEERABLE_USE_SIDECAR=0 opts out (in-process
- * TS loop). Boot is registered synchronously so early RPC thin clients
- * (skill-loader et al.) can await it via whenSidecarSupervisor().
+ * The complete Python sidecar hosts the Rust CoreLoop and is mandatory.
+ * Boot is registered synchronously so early RPC thin clients (skill-loader
+ * et al.) can await it via whenSidecarSupervisor().
  */
 export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
-  if (process.env.STEERABLE_USE_SIDECAR === '0') return;
   const generation = ++sidecarGeneration;
   const pythonRunner = process.env.STEERABLE_PYTHON?.trim();
-  const runCodeEnabled = !rustSidecarEnabled() || Boolean(pythonRunner);
+  const runCodeEnabled = true;
   // ready 后的完整接线：注册全局 handle + reverse channels + web 工具握手。
   // 正常 boot 路径与「boot 失败后后台 restart 迟到就绪」路径共用。
   const wireSupervisor = async (supervisor: SidecarSupervisor): Promise<void> => {
@@ -407,19 +404,13 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
       await wireSupervisor(supervisor);
       return supervisor;
     } catch (err) {
-      log.error('[sidecar] failed to start, falling back to in-process providers', err);
+      log.error('[sidecar] failed to start; Python sidecar is required', err);
       setSidecarSupervisor(null);
-      // boot 失败后 supervisor 的 exit→restart 循环仍在后台重试（另一个
-      // 宿主暂时持有 sessions.lock 这类瞬态冲突会自愈）。迟到就绪时补
-      // 接线，否则 sidecar 进程活着但 router 永远 503。
       const late = (err as SidecarBootFailure).supervisor;
       if (late) {
-        late.once('ready', () => {
-          log.info('[sidecar] late ready after initial boot failure');
-          void wireSupervisor(late);
-        });
+        await late.shutdown();
       }
-      return null;
+      throw err;
     }
   })();
   setSidecarSupervisorPending(boot);

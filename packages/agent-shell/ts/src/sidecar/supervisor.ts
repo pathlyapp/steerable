@@ -58,8 +58,6 @@ const READY_PREFIX = '__SIDECAR_READY__:';
 const DEFAULT_BOOT_TIMEOUT_MS = 15_000;
 const DEFAULT_HEALTH_INTERVAL_MS = 5_000;
 const DEFAULT_RESTART_AFTER_FAILED_PINGS = 3;
-export const RUST_SIDECAR_ENV = 'STEERABLE_RUST_SIDECAR';
-export const RUST_SIDECAR_BIN_ENV = 'STEERABLE_RUST_SIDECAR_BIN';
 // Only /usr/bin/sandbox-exec is trusted — a PATH-relative lookup could
 // resolve to an attacker-planted binary (codex's rule).
 const SEATBELT_EXECUTABLE = '/usr/bin/sandbox-exec';
@@ -525,23 +523,10 @@ export class SidecarSupervisor extends EventEmitter {
   // ------------------------------------------------------------------
 
   private async boot(): Promise<void> {
-    const useRustSidecar = rustSidecarEnabled();
-    const rustBin = useRustSidecar
-      ? resolveRustSidecarBin(this.options.rustSidecarBin)
-      : undefined;
-    let spawnPlan: { command: string; args: string[]; env?: NodeJS.ProcessEnv };
-    if (rustBin) {
-      spawnPlan = await this.resolveSandboxedSpawn(rustBin, this.options.args ?? []);
-    } else if (useRustSidecar) {
-      throw new Error(
-        'STEERABLE_RUST_SIDECAR is enabled but the Rust sidecar binary is missing',
-      );
-    } else {
-      const py = this.resolvePythonBinary();
-      const entry = this.options.entryModule ?? 'steerable_sidecar';
-      const args = ['-m', entry, ...(this.options.args ?? [])];
-      spawnPlan = await this.resolveSandboxedSpawn(py, args);
-    }
+    const py = this.resolvePythonBinary();
+    const entry = this.options.entryModule ?? 'steerable_sidecar';
+    const args = ['-m', entry, ...(this.options.args ?? [])];
+    const spawnPlan = await this.resolveSandboxedSpawn(py, args);
     // Profile generation is asynchronous. A quit can begin while it runs;
     // never spawn a new child after shutdown has claimed the supervisor.
     if (this.shuttingDown) {
@@ -662,16 +647,11 @@ export class SidecarSupervisor extends EventEmitter {
         ...(webEgress ? ['--allow-web-egress'] : []),
         ...(allowResolver ? ['--allow-resolver'] : []),
       ];
-      const rustBin = rustSidecarEnabled()
-        ? resolveRustSidecarBin(this.options.rustSidecarBin)
-        : undefined;
-      const { stdout } = rustBin
-        ? await execFileAsync(rustBin, ['sandbox', 'profile', ...flags], { timeout: 10_000 })
-        : await execFileAsync(
-            command,
-            ['-m', 'steerable_sidecar.sandbox', 'profile', ...flags],
-            { timeout: 10_000 },
-          );
+      const { stdout } = await execFileAsync(
+        command,
+        ['-m', 'steerable_sidecar.sandbox', 'profile', ...flags],
+        { timeout: 10_000 },
+      );
       const profile = stdout.trim();
       if (!profile.includes('(deny default)')) {
         throw new Error('generated profile is not a Seatbelt policy');
@@ -725,29 +705,17 @@ export class SidecarSupervisor extends EventEmitter {
     // 都透传环境）+ sidecar 应用层域名名单强制，网络命名空间保持共享。
     // 这里如实记录，不假装接上了实际不强制的参数。
     const egressViaProxy = this.options.env?.STEERABLE_EGRESS_CONFINED === '1';
-    const rustBin = rustSidecarEnabled()
-      ? resolveRustSidecarBin(this.options.rustSidecarBin)
-      : undefined;
-    const wrapArgs = rustBin
-      ? [
-          'sandbox',
-          'linux-wrap',
-          ...writableRoots.flatMap((root) => ['--writable-root', root]),
-          '--',
-          command,
-          ...args,
-        ]
-      : [
-          '-m',
-          'steerable_sidecar.sandbox',
-          'linux-wrap',
-          ...writableRoots.flatMap((root) => ['--writable-root', root]),
-          '--',
-          command,
-          ...args,
-        ];
+    const wrapArgs = [
+      '-m',
+      'steerable_sidecar.sandbox',
+      'linux-wrap',
+      ...writableRoots.flatMap((root) => ['--writable-root', root]),
+      '--',
+      command,
+      ...args,
+    ];
     try {
-      const { stdout } = await execFileAsync(rustBin ?? command, wrapArgs, { timeout: 15_000 });
+      const { stdout } = await execFileAsync(command, wrapArgs, { timeout: 15_000 });
       const plan = JSON.parse(stdout.trim()) as {
         argv?: unknown;
         backend?: unknown;
@@ -1196,50 +1164,7 @@ export function resolveSidecarPython(pythonExecutable?: string): string {
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
-  // Fallback to system python (developer machines).
-  return process.platform === 'win32' ? 'python' : 'python3';
-}
-
-function envFlag(name: string): boolean {
-  const raw = (process.env[name] ?? '').trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
-}
-
-export function rustSidecarEnabled(): boolean {
-  if ((process.env[RUST_SIDECAR_ENV] ?? '').trim()) {
-    return envFlag(RUST_SIDECAR_ENV);
-  }
-  return resolveRustSidecarBin() !== undefined;
-}
-
-/**
- * Resolve the Rust sidecar binary from an explicit path, a packaged engine,
- * or a framework source checkout. Boot fails when Rust was explicitly
- * enabled but no binary resolves.
- */
-export function resolveRustSidecarBin(explicit?: string): string | undefined {
-  if (explicit) {
-    return existsSync(explicit) ? explicit : undefined;
-  }
-  const fromEnv = process.env[RUST_SIDECAR_BIN_ENV];
-  if (fromEnv) {
-    return existsSync(fromEnv) ? fromEnv : undefined;
-  }
-  const exe = process.platform === 'win32' ? 'steerable-sidecar.exe' : 'steerable-sidecar';
-  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  if (resourcesPath) {
-    const packaged = join(resourcesPath, 'engine', exe);
-    if (existsSync(packaged)) return packaged;
-  }
-  const relatives = [
-    join('..', '..', '..', '..', 'sidecar', 'rs', 'target', 'debug', exe),
-    join('..', '..', '..', '..', '..', 'sidecar', 'rs', 'target', 'debug', exe),
-    join('..', '..', '..', '..', 'sidecar', 'rs', 'target', 'release', exe),
-    join('..', '..', '..', '..', '..', 'sidecar', 'rs', 'target', 'release', exe),
-  ];
-  for (const rel of relatives) {
-    const candidate = join(__dirname, rel);
-    if (existsSync(candidate)) return candidate;
-  }
-  return undefined;
+  throw new Error(
+    'portable Python sidecar runtime not found; prepare python-runtime or set STEERABLE_SIDECAR_PYTHON',
+  );
 }

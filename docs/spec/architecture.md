@@ -159,7 +159,7 @@ neutral web app) or `pnpm agent-shell:client` (Electron window).
        └──────────────────┘
 ```
 
-## Why Python-only Tier 2 / 3
+## Why one Python sidecar facade
 
 The split avoids maintaining duplicate business logic:
 
@@ -170,14 +170,16 @@ The split avoids maintaining duplicate business logic:
 4. Embedding a portable Python sidecar in Electron lets the desktop app
    call the same harness + runtime the server uses, with zero drift.
 
-The TS facade for Tier 2 stays only as a parity test surface — your
-production TS code should not import from it.
+The Python sidecar owns the complete Tier 2 / 3 API and business behavior.
+Rust owns the CoreLoop execution engine loaded through the native bridge; it
+is not a second sidecar implementation.
 
 ### Official TS production entry: the embedded-sidecar runtime
 
-Python is the only production implementation of Tiers 2 / 3. There is no
-TS CoreLoop and there will not be one — a second loop implementation is
-the drift trap this architecture exists to avoid. The supported way for a
+Python is the only production sidecar implementation. Rust is the only
+production CoreLoop implementation. There is no TS CoreLoop or standalone
+Rust sidecar product path — either would recreate the drift trap this
+architecture exists to avoid. The supported way for a
 pure-TypeScript product to run the framework in production is
 `@steerable/agent-runtime` (`packages/agent-runtime/ts`): an official
 runtime package that owns the sidecar process lifecycle (spawn,
