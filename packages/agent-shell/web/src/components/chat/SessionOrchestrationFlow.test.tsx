@@ -55,4 +55,59 @@ describe('SessionOrchestrationFlow', () => {
     expect(screen.getByText('42')).toBeTruthy();
     expect(screen.getByText('结果汇聚 (Join)')).toBeTruthy();
   });
+
+  it('renders 3-branch orchestration flow without badge distortion', () => {
+    const THREE_BRANCH_FLOW: OrchestrationFlowData = {
+      nodes: [
+        {
+          childId: '0.1',
+          task: '只读代码侦察任务 1',
+          status: 'running',
+          recordId: 'rec-1',
+          steers: [],
+        },
+        {
+          childId: '0.2',
+          task: '只读代码侦察任务 2',
+          status: 'completed',
+          recordId: 'rec-2',
+          answer: '完成',
+          steers: [],
+        },
+        {
+          childId: '0.3',
+          task: '深度外部调研任务',
+          status: 'running',
+          recordId: 'rec-3',
+          steers: [],
+        },
+      ],
+      totalCount: 3,
+      completedCount: 1,
+      runningCount: 2,
+      failedCount: 0,
+      interruptedCount: 0,
+      closedCount: 0,
+      isAllCompleted: false,
+      hasActive: true,
+      summaryCopy: '协同执行中 (1/3 完成)',
+    };
+
+    render(
+      <SessionOrchestrationFlow
+        flow={THREE_BRANCH_FLOW}
+        chatId="chat-1"
+        onInspectTask={() => {}}
+      />
+    );
+
+    expect(screen.getByText('并发 3 分支')).toBeTruthy();
+    expect(screen.getByText('分支 #1')).toBeTruthy();
+    expect(screen.getByText('分支 #2')).toBeTruthy();
+    expect(screen.getByText('分支 #3')).toBeTruthy();
+    expect(screen.getAllByText('执行中').length).toBe(2);
+    expect(screen.getByText('已完成')).toBeTruthy();
+    expect(screen.getAllByText('过程').length).toBe(3);
+  });
 });
+

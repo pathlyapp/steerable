@@ -20,6 +20,7 @@ import {
   type OrchestrationNodeStatus,
 } from './orchestration-flow-model';
 import type { InspectTaskInput } from './executed-actions-model';
+import { useExclusiveExpand } from './composer-status-stack';
 
 function FlowNodeStatusIcon({
   status,
@@ -245,9 +246,11 @@ export function SessionOrchestrationFlow({
   const { nodes, isAllCompleted, hasActive, summaryCopy } = flow;
   const activeNode = useMemo(() => currentActiveNode(nodes), [nodes]);
 
-  // 执行中默认展开，全部完成默认收起为胶囊；支持用户手动点击切换展开状态
+  // 执行中默认展开，全部完成默认收起为胶囊；支持用户手动点击切换展开状态。
+  // 与任务清单同列时，展开浮层互斥。
   const [userToggled, setUserToggled] = useState<boolean | null>(null);
-  const expanded = userToggled ?? hasActive;
+  const desired = userToggled ?? hasActive;
+  const { expanded, requestOpen } = useExclusiveExpand('orchestration', desired);
 
   // 任务全部执行完成时自动收拢为胶囊
   useEffect(() => {
@@ -294,7 +297,13 @@ export function SessionOrchestrationFlow({
       {/* 输入框上方的胶囊触发器按钮 (类似 SessionTodoList) */}
       <button
         type="button"
-        onClick={() => setUserToggled(!expanded)}
+        onClick={() => {
+          if (expanded) setUserToggled(false);
+          else {
+            setUserToggled(true);
+            requestOpen();
+          }
+        }}
         className={[
           'flex h-6 max-w-[260px] sm:max-w-[340px] items-center gap-1.5 rounded-full px-2 text-left text-[11px] transition-all duration-200 select-none shadow-2xs',
           isAllCompleted
@@ -345,7 +354,11 @@ export function SessionOrchestrationFlow({
       {/* 展开浮层：呈现真正的多智能体 Fork-Join 流程图 (DAG Flowchart) */}
       {expanded && (
         <div
-          className="absolute bottom-full right-0 mb-1.5 w-[390px] sm:w-[480px] overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas/98 backdrop-blur-md shadow-xl z-40 animate-in fade-in slide-in-from-bottom-1 duration-150"
+          className={`absolute bottom-full right-0 mb-1.5 overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas/98 backdrop-blur-md shadow-xl z-40 animate-in fade-in slide-in-from-bottom-1 duration-150 ${
+            nodes.length >= 3
+              ? 'w-[440px] sm:w-[560px] max-w-[calc(100vw-2rem)]'
+              : 'w-[390px] sm:w-[480px] max-w-[calc(100vw-2rem)]'
+          }`}
         >
           {/* Header */}
           <div className="flex items-center justify-between border-b border-agent-border/60 bg-agent-muted/30 px-3 py-2">
@@ -407,16 +420,16 @@ export function SessionOrchestrationFlow({
                       <div>
                         {/* 节点顶栏：Todo 式勾选/圆点 + 分支编号 + 状态 */}
                         <div className="flex items-center justify-between gap-1 border-b border-agent-border/40 pb-1.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
+                          <div className="flex items-center gap-1 min-w-0 flex-1">
                             <FlowNodeStatusIcon status={node.status} />
-                            <span className="font-semibold text-agent-foreground text-[11px] truncate">
+                            <span className="font-semibold text-agent-foreground text-[11px] truncate whitespace-nowrap">
                               分支 #{index + 1}
                             </span>
                           </div>
 
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1 shrink-0">
                             <span
-                              className={`rounded-full border px-1.5 py-0.2 text-[10px] font-medium ${
+                              className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.2 text-[10px] font-medium leading-tight ${
                                 done
                                   ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
                                   : active
@@ -438,10 +451,10 @@ export function SessionOrchestrationFlow({
                                     title: node.task || '子代理执行过程',
                                   })
                                 }
-                                className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 text-[10px] text-agent-muted-foreground hover:bg-agent-muted hover:text-agent-foreground"
+                                className="inline-flex shrink-0 whitespace-nowrap items-center gap-0.5 rounded px-1 text-[10px] text-agent-muted-foreground hover:bg-agent-muted hover:text-agent-foreground"
                                 title="查看过程"
                               >
-                                <LuExternalLink className="h-2.5 w-2.5" />
+                                <LuExternalLink className="h-2.5 w-2.5 shrink-0" />
                                 <span>过程</span>
                               </button>
                             ) : null}

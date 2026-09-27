@@ -19,6 +19,7 @@ import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { TurnBlock } from './turn-timeline';
 import type { TurnFile } from './turn-files';
 import type { LlmSpeedSnapshot } from './process-status';
+import { ComposerStatusStack } from './composer-status-stack';
 import { SessionTodoList } from './SessionTodoList';
 import { resolveLatestSessionTodos } from './todo-list-model';
 import { SessionOrchestrationFlow } from './SessionOrchestrationFlow';
@@ -428,7 +429,7 @@ export function LocalChatPanel({
         leadingChrome={inputLeadingChrome}
         trailingChrome={
           sessionOrchestrationFlow || sessionTodos ? (
-            <div className="flex items-center gap-1.5 min-w-0">
+            <ComposerStatusStack>
               {sessionOrchestrationFlow ? (
                 <SessionOrchestrationFlow
                   flow={sessionOrchestrationFlow}
@@ -437,7 +438,7 @@ export function LocalChatPanel({
                 />
               ) : null}
               {sessionTodos ? <SessionTodoList todos={sessionTodos} /> : null}
-            </div>
+            </ComposerStatusStack>
           ) : undefined
         }
         mode={mode}

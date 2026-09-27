@@ -1709,7 +1709,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       <div className="chat-input-container @container relative px-2.5 pb-2.5 pt-1">
         {(leadingChrome || selectedAgent || trailingChrome) && (
           <div
-            className="relative mb-1.5 flex min-w-0 items-center gap-1.5"
+            className="relative mb-1.5 flex min-w-0 items-end gap-1.5"
             data-testid="composer-meta-row"
           >
             {leadingChrome}

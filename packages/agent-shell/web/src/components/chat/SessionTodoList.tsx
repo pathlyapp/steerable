@@ -8,6 +8,7 @@ import {
   LuLoaderCircle,
   LuX,
 } from 'react-icons/lu';
+import { useExclusiveExpand } from './composer-status-stack';
 import {
   summarizeTodos,
   type SessionTodo,
@@ -106,9 +107,11 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
     return summary.total > 0 && summary.completed === summary.total;
   }, [todos]);
 
-  // 执行中默认展开，全部完成默认折叠；允许用户手动点击收起或展开
+  // 执行中默认展开，全部完成默认折叠；允许用户手动点击收起或展开。
+  // 与编排胶囊同列时，展开浮层互斥。
   const [userToggled, setUserToggled] = useState<boolean | null>(null);
-  const expanded = userToggled ?? hasActive;
+  const desired = userToggled ?? hasActive;
+  const { expanded, requestOpen } = useExclusiveExpand('todos', desired);
 
   // 当任务全部执行完毕时，自动收起为紧凑胶囊
   useEffect(() => {
@@ -147,7 +150,13 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
     >
       <button
         type="button"
-        onClick={() => setUserToggled(!expanded)}
+        onClick={() => {
+          if (expanded) setUserToggled(false);
+          else {
+            setUserToggled(true);
+            requestOpen();
+          }
+        }}
         className={[
           'flex h-6 max-w-[240px] sm:max-w-[320px] items-center gap-1.5 rounded-full px-2 text-left text-[11px] transition-all duration-200 select-none shadow-2xs',
           isAllCompleted

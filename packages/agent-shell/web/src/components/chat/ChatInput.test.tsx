@@ -389,6 +389,7 @@ describe('ChatInput composer meta row', () => {
     const row = screen.getByTestId('composer-meta-row');
     const trailing = screen.getByTestId('test-todo');
     expect(row.contains(trailing)).toBe(true);
+    expect(row.className).toContain('items-end');
     expect(trailing.parentElement?.className).toContain('ml-auto');
   });
 
