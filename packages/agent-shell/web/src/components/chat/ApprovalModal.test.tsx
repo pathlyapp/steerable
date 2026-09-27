@@ -85,7 +85,7 @@ describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
 
     expect(screen.getByText('Agent 请求在工作区外执行命令')).toBeTruthy();
     expect(screen.getByText('rm -rf ~/.local/share/python-runner')).toBeTruthy();
-    expect(screen.getByText(/命令已在工作区沙箱中尝试/)).toBeTruthy();
+    expect(screen.getByText(/命令已在工作区沙箱中被拒绝/)).toBeTruthy();
     expect(screen.queryByText(/把沙箱切到/)).toBeNull();
   });
 });

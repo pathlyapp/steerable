@@ -1885,22 +1885,23 @@ class Sidecar:
             approver: Any
             approval_chat_id = _approval_prompt_chat_id(params)
             policy_path = approval.get("policyPath")
-            # In-project file targets do not ask. The prompt stays for calls
-            # that leave the writable roots, and for tools whose paths we
-            # cannot see (shell). allow_once is not cached, so the next call
-            # is judged on its own paths. Sits under policy rules so an
-            # explicit deny still wins.
+            # In-project file targets do not ask. Roots come from the host's
+            # project fence (still sent when 「完整权限」 turns the OS sandbox
+            # off). The exec sandbox list is the fallback for callers that
+            # only set that. The prompt stays for paths outside those roots
+            # and for tools whose paths we cannot see (shell). allow_once is
+            # not cached, so the next call is judged on its own paths. Sits
+            # under policy rules so an explicit deny still wins.
+            raw_roots = approval.get("writableRoots")
+            if (
+                not raw_roots
+                and isinstance(exec_sandbox, dict)
+                and exec_sandbox.get("enabled")
+            ):
+                raw_roots = exec_sandbox.get("writableRoots")
             writable_roots = (
-                [
-                    str(root)
-                    for root in (exec_sandbox.get("writableRoots") or [])
-                    if root
-                ]
-                if (
-                    approval["mode"] == "host"
-                    and isinstance(exec_sandbox, dict)
-                    and exec_sandbox.get("enabled")
-                )
+                [str(root) for root in (raw_roots or []) if root]
+                if approval["mode"] == "host"
                 else []
             )
 

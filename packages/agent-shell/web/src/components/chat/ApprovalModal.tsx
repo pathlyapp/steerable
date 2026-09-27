@@ -158,8 +158,7 @@ export function ApprovalPromptMenu({
             </p>
           ) : isSandboxEscalation ? (
             <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-              命令已在工作区沙箱中尝试，但被系统拒绝。允许后会仅重试这条原始命令，
-              不再限制它只能写入当前项目家目录、源文件夹及其子目录，或本对话工作区。
+              命令已在工作区沙箱中被拒绝。允许后只重试这条命令，不再限制写入范围。
             </p>
           ) : (
             <>
@@ -169,9 +168,7 @@ export function ApprovalPromptMenu({
                 </p>
               )}
               <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-                默认在工作区沙箱中执行（只能写入当前项目家目录、源文件夹，以及这些目录的子目录；
-                未绑定项目时为本对话工作区及其子目录）。范围外的写入会被系统拒绝；需要时在输入框把沙箱切到「完整权限」后再让
-                Agent 重试。
+                在工作区沙箱中执行，范围外的写入会被拒绝。需要写到外面时，把沙箱切到「完整权限」后再试。
               </p>
             </>
           )}

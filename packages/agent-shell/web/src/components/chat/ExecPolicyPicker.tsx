@@ -19,7 +19,7 @@ const OPTIONS: Array<{
     id: 'workspace',
     label: '工作区',
     description:
-      '命令只能写入当前项目家目录、源文件夹，以及这些目录的子目录；未绑定项目时只能写入本对话工作区（文稿/<应用名>/conversations/）及其子目录。范围外的路径会被系统拒绝。',
+      '只能写入当前工作区，范围外的路径会被拒绝。',
   },
   {
     id: 'full',

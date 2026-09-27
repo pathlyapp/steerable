@@ -455,6 +455,12 @@ export interface SidecarChatStreamRequest {
     mode: 'host' | 'auto';
     timeoutMs?: number;
     storePath?: string;
+    /**
+     * Project home, source folders, and other configured write roots.
+     * File tools whose targets all sit inside these directories skip the
+     * host prompt. Independent of whether the OS exec sandbox is on.
+     */
+    writableRoots?: string[];
   };
 }
 

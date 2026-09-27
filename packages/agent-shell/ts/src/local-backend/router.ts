@@ -3498,7 +3498,7 @@ export class LocalBackendRouter {
           ...(toolPolicy.mode === 'all' ? {} : { toolPolicy }),
         },
         execSandbox,
-        approval,
+        approval: approval ? { ...approval, writableRoots: turnFileRoots } : undefined,
         // delegate-on-pool 统一:模型的多代理面收敛为单工具
         // delegate_subagent(默认开)。内置画像集(explore/research/coder)
         // 带工具域/轮次/并发/系统提示,模型按画像 description 选委派

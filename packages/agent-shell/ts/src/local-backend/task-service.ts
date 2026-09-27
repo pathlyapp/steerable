@@ -409,10 +409,11 @@ export class TaskService {
       (this.deps.resolveChatWorkspaceRoot
         ? await this.deps.resolveChatWorkspaceRoot(chatId)
         : null);
-    const execSandbox = buildExecSandbox([
+    const writableRoots = [
       ...(fenceRoot ? [fenceRoot] : []),
       ...(project?.sourceFolders ?? []),
-    ]);
+    ];
+    const execSandbox = buildExecSandbox(writableRoots);
     const approval: SidecarChatStreamRequest['approval'] = resolveTurnApproval();
 
     // depth-1：任务回合没有 task_run（不能再派生任务），其余工具面与
@@ -468,7 +469,7 @@ export class TaskService {
           },
         }),
         execSandbox,
-        approval,
+        approval: approval ? { ...approval, writableRoots } : undefined,
         // 与主对话同一套内置画像（explore/research/coder）——任务回合的
         // 子代理编排语义不分叉。
         subagent: builtinSubagentParam(),
