@@ -215,6 +215,21 @@ describe('ChatInput IME composition (Pinyin)', () => {
     expect(editor.getAttribute('data-composing')).toBeNull();
   });
 
+  it('does not send or swallow Enter while an IME composition is open', () => {
+    const onSubmit = vi.fn();
+    render(<ChatInput value="你好" onChange={vi.fn()} onSubmit={onSubmit} />);
+    const editor = screen.getByRole('textbox');
+    fireEvent.compositionStart(editor);
+    const canceled = !fireEvent.keyDown(editor, {
+      key: 'Enter',
+      keyCode: 229,
+      isComposing: true,
+    });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(canceled).toBe(false);
+    expect(editor.getAttribute('data-composing')).toBe('true');
+  });
+
   it('leaves Backspace to the browser and keeps the typed text node', async () => {
     function Harness() {
       const [value, setValue] = useState('');

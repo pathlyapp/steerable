@@ -1496,11 +1496,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         requestHostPaste(event.currentTarget);
         return;
       }
-      // Honor IME composition (`isComposing` true while Chinese input is mid-
-      // selection) — only intercept on plain key events. Enter is exempt
-      // because WKWebView reports it with isComposing/keyCode 229 even after
-      // the candidate is committed.
-      if (event.key !== 'Enter' && (isComposingRef.current || event.nativeEvent.isComposing)) return;
+      // An open composition session owns the keystroke, including Enter used
+      // to confirm the highlighted candidate. Returning without
+      // preventDefault lets the IME commit the word. WKWebView can report
+      // isComposing / keyCode 229 on Enter after the session has already
+      // ended; that case is not an open session (`isComposingRef` is false)
+      // and must still send.
+      if (isComposingRef.current) return;
+      if (event.key !== 'Enter' && event.nativeEvent.isComposing) return;
 
       if (event.key === 'Backspace' || event.key === 'Delete') {
         const editor = editorRef.current;
