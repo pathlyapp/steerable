@@ -63,16 +63,18 @@ One command boots a full agent shell; every layer underneath ships as its own pa
 <div class="sf-run-copy">
 <span class="sf-pillar-kicker">Simple to start</span>
 <p class="sf-run-title">A full agent in one command</p>
-<p class="sf-run-text">Chat, an integrated terminal, bundled skills, a model picker, and a sandboxed sidecar, ready on first launch. Run it in the browser or as a desktop app — same shell, same code path. Bring any OpenAI-compatible, Anthropic, or Gemini key.</p>
+<p class="sf-run-text">Chat, an integrated terminal, bundled skills, a model picker, and a sandboxed sidecar, ready on first launch. Run it in the browser, as a desktop app, or from the command line — same shell, same data. Bring any OpenAI-compatible, Anthropic, or Gemini key.</p>
 <a href="#quickstart" class="md-button">More ways to install</a>
 </div>
 <div class="sf-run-term">
 <input type="radio" name="sf-run-mode" id="sf-run-web" class="sf-run-radio" checked>
 <input type="radio" name="sf-run-mode" id="sf-run-desktop" class="sf-run-radio">
+<input type="radio" name="sf-run-mode" id="sf-run-cli" class="sf-run-radio">
 <div class="sf-run-bar">
 <div class="sf-run-dots"><span></span><span></span><span></span></div>
 <label for="sf-run-web">Web</label>
 <label for="sf-run-desktop">Desktop app</label>
+<label for="sf-run-cli">Command line</label>
 </div>
 <div class="sf-run-pane sf-run-pane--web">
 <pre><code><span class="sf-cmd">git clone https://github.com/pathlyapp/steerable.git</span>
@@ -85,6 +87,11 @@ One command boots a full agent shell; every layer underneath ships as its own pa
 <span class="sf-cmd">cd steerable &amp;&amp; pnpm install</span>
 <span class="sf-cmd"><b>pnpm agent-shell:client</b></span></code></pre>
 <div class="sf-out">→ Steerable Shell opens in its own Electron window</div>
+</div>
+<div class="sf-run-pane sf-run-pane--cli">
+<pre><code><span class="sf-cmd">npm install -g @steerable/agent-cli</span>
+<span class="sf-cmd"><b>steerable-cli</b></span></code></pre>
+<div class="sf-out">→ steerable-cli opens a terminal session. Node 22.</div>
 </div>
 </div>
 </div>
@@ -441,6 +448,7 @@ graph BT
 | [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | Portable CPython binary — boots in <1s, macOS notarised, Windows signed — plus the bundled per-host CONNECT allow-list egress proxy |
 | [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | `ChatPanel`, `MessageList`, `AgentSelector`, `ModelSelector`, `OrchestrationPlanCard`, `ToolCallRenderer`, `SSEStreamView` + 14-card `/cards` subpath + hooks + Tailwind preset |
 | `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri + headless host shell, shared Node HostRuntime, sidecar supervision, product-neutral renderer — published to npm (`dist` / source / pure-types respectively) |
+| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) | 5 | Product-neutral command line and terminal session. `npm install -g @steerable/agent-cli`, then `steerable-cli`. It shares the host database with the desktop app. |
 
 <h2 class="sf-section">How it compares</h2>
 

@@ -632,13 +632,15 @@
 }
 
 #sf-run-web:checked ~ .sf-run-bar label[for="sf-run-web"],
-#sf-run-desktop:checked ~ .sf-run-bar label[for="sf-run-desktop"] {
+#sf-run-desktop:checked ~ .sf-run-bar label[for="sf-run-desktop"],
+#sf-run-cli:checked ~ .sf-run-bar label[for="sf-run-cli"] {
   color: #e4e4f0;
   background: rgba(129, 140, 248, 0.22);
 }
 
 #sf-run-web:focus-visible ~ .sf-run-bar label[for="sf-run-web"],
-#sf-run-desktop:focus-visible ~ .sf-run-bar label[for="sf-run-desktop"] {
+#sf-run-desktop:focus-visible ~ .sf-run-bar label[for="sf-run-desktop"],
+#sf-run-cli:focus-visible ~ .sf-run-bar label[for="sf-run-cli"] {
   outline: 0.1rem solid #a5b4fc;
 }
 
@@ -647,7 +649,8 @@
 }
 
 #sf-run-web:checked ~ .sf-run-pane--web,
-#sf-run-desktop:checked ~ .sf-run-pane--desktop {
+#sf-run-desktop:checked ~ .sf-run-pane--desktop,
+#sf-run-cli:checked ~ .sf-run-pane--cli {
   display: block;
 }
 
