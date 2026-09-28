@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 
@@ -12,13 +13,23 @@ import type {
 } from './driver.js';
 import { LOCAL_SCOPE } from './driver.js';
 import { SqliteScopedStore } from './index.js';
+import {
+  HOST_SCHEMA_VERSION,
+  OPEN_LOCK_WAIT_MS,
+  StorageUpgradeBlockedError,
+  openLockPath,
+} from './process-locks.js';
 import type { ScopedStore } from './scoped-store.js';
 import {
+  acquireSharedLease,
   acquireWriteLease,
   lockPathForDb,
+  StoreAlreadyOwnedError,
   type HeldWriteLease,
 } from './write-lease.js';
 import { acquireWriteLeaseOrExit } from './write-lease-error.js';
+
+const MAIN_DB_BUSY_TIMEOUT_MS = 5_000;
 
 function invokeStatement(
   statement: Database.Statement,
@@ -101,10 +112,27 @@ class SqlitePackDbAccess implements PackDbAccess {
   }
 }
 
+function readUserVersion(dbPath: string): number {
+  if (!existsSync(dbPath)) return 0;
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true, timeout: 5_000 });
+  try {
+    return Number(db.pragma('user_version', { simple: true }));
+  } finally {
+    db.close();
+  }
+}
+
+function blockUpgrade(message: string): never {
+  console.error(`[bs] storage upgrade blocked: ${message}`);
+  queueMicrotask(() => process.exit(75));
+  throw new StorageUpgradeBlockedError(message);
+}
+
 /** Default local SQLite storage driver. */
 export class SqliteStorageDriver implements StorageDriver {
   private db: Database.Database | null = null;
-  private writeLease: HeldWriteLease | null = null;
+  private openLease: HeldWriteLease | null = null;
+  private changeTimer: ReturnType<typeof setInterval> | null = null;
   private localSqliteStore: SqliteScopedStore | null = null;
   private readonly stores = new Map<string, ScopedStore>();
 
@@ -114,23 +142,66 @@ export class SqliteStorageDriver implements StorageDriver {
       getUserDataDir(),
       getProductConfig().dbFileName ?? 'agent-shell.db',
     );
-    this.writeLease = acquireWriteLeaseOrExit(() =>
-      acquireWriteLease(lockPathForDb(dbPath)),
-    );
+    // A previous build held this lock for the whole process. If it is still
+    // held, that process cannot share the database, so refuse to migrate
+    // or to open alongside it.
+    acquireWriteLeaseOrExit(() => {
+      const legacy = acquireWriteLease(lockPathForDb(dbPath));
+      legacy.release();
+    });
+
+    const gate = openLockPath(dbPath);
+    let version = readUserVersion(dbPath);
+    if (version > HOST_SCHEMA_VERSION) {
+      blockUpgrade(
+        `本地数据库版本 ${version} 高于本程序支持的版本 ${HOST_SCHEMA_VERSION}。请升级后再打开。`,
+      );
+    }
+
+    let exclusive: HeldWriteLease | null = null;
+    if (version === HOST_SCHEMA_VERSION) {
+      // Make sure the open-lock table exists, then register as a shared holder.
+      // A live shared holder rejects this exclusive probe immediately.
+      try {
+        acquireWriteLease(gate).release();
+      } catch (error) {
+        if (!(error instanceof StoreAlreadyOwnedError)) throw error;
+      }
+    } else {
+      try {
+        exclusive = acquireWriteLease(gate, OPEN_LOCK_WAIT_MS);
+      } catch (error) {
+        if (!(error instanceof StoreAlreadyOwnedError)) throw error;
+        version = readUserVersion(dbPath);
+        if (version !== HOST_SCHEMA_VERSION) {
+          blockUpgrade(
+            '本地数据库需要升级，但仍被另一个进程打开。请先关闭正在运行的应用及其命令行任务后再升级。',
+          );
+        }
+      }
+    }
+
     let db: Database.Database | null = null;
     try {
-      db = new Database(dbPath);
+      db = new Database(dbPath, { timeout: MAIN_DB_BUSY_TIMEOUT_MS });
+      db.pragma(`busy_timeout = ${MAIN_DB_BUSY_TIMEOUT_MS}`);
       db.pragma('journal_mode = WAL');
       db.pragma('foreign_keys = ON');
       this.db = db;
       const local = new SqliteScopedStore(db, LOCAL_SCOPE);
       await local.initialize();
+      db.pragma(`user_version = ${HOST_SCHEMA_VERSION}`);
       this.localSqliteStore = local;
       this.stores.set(this.scopeKey(LOCAL_SCOPE), local);
+      exclusive?.release();
+      exclusive = null;
+      this.openLease = acquireSharedLease(gate);
     } catch (error) {
+      exclusive?.release();
       db?.close();
-      this.writeLease.release();
-      this.writeLease = null;
+      this.db = null;
+      this.openLease?.release();
+      this.openLease = null;
       throw error;
     }
   }
@@ -153,13 +224,30 @@ export class SqliteStorageDriver implements StorageDriver {
     this.localSqliteStore?.applyPackMigrations();
   }
 
+  watchChanges(onChange: () => void): void {
+    const db = this.requireDb();
+    if (this.changeTimer) return;
+    let version = Number(db.pragma('data_version', { simple: true }));
+    this.changeTimer = setInterval(() => {
+      const next = Number(db.pragma('data_version', { simple: true }));
+      if (next === version) return;
+      version = next;
+      onChange();
+    }, 1_000);
+    this.changeTimer.unref?.();
+  }
+
   async close(): Promise<void> {
+    if (this.changeTimer) {
+      clearInterval(this.changeTimer);
+      this.changeTimer = null;
+    }
     this.stores.clear();
     this.db?.close();
     this.db = null;
     this.localSqliteStore = null;
-    this.writeLease?.release();
-    this.writeLease = null;
+    this.openLease?.release();
+    this.openLease = null;
   }
 
   private requireDb(): Database.Database {

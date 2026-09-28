@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import path from 'node:path';
 import type Database from 'better-sqlite3';
 import {
   ALL_ROUND_ASSISTANT_AGENT_ID,
@@ -14,6 +15,10 @@ import {
   type LlmSettings,
 } from './llm-settings.js';
 import { MESSAGE_ORDER_DESC } from './message-order.js';
+import {
+  currentStorageInstanceId,
+  instanceOwnerIsLive,
+} from './process-locks.js';
 import {
   mergeTelemetrySettings,
   type TelemetrySettings,
@@ -508,6 +513,10 @@ export class SqliteScopedStore implements ScopedStore {
     this.ensureColumn('tasks', 'depends_on', 'TEXT');
     // 后台任务推理过程：流事件回写，不bump updated_at（见 saveTaskProcess）。
     this.ensureColumn('tasks', 'process_json', 'TEXT');
+    // 创建该任务的宿主实例。清扫只处理所属实例已经退出的任务。
+    this.ensureColumn('tasks', 'owner_instance_id', 'TEXT');
+    this.ensureColumn('insights_outbox', 'claimed_by', 'TEXT');
+    this.ensureColumn('insights_outbox', 'claimed_at', 'TEXT');
 
     // 智能体技能面（增量迁移）：load_all_skills = 无视触发条件全量加载。
     // 此前这个行为是 router 里 `chatAgentId === 'all-round-assistant'` 的
@@ -1409,8 +1418,8 @@ export class SqliteScopedStore implements ScopedStore {
         tenant_id, user_id,
         id, chat_id, task, status, answer, error,
         worktree_path, worktree_branch, worktree_state, record_id, trace_id,
-        depends_on, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?)
+        depends_on, owner_instance_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
     `).run(
       this.scope.tenantId,
       this.scope.userId,
@@ -1425,6 +1434,7 @@ export class SqliteScopedStore implements ScopedStore {
       input.worktreePath ? 'pending' : null,
       input.recordId ?? null,
       input.dependsOn?.length ? JSON.stringify(input.dependsOn) : null,
+      currentStorageInstanceId(),
       now,
       now,
     );
@@ -1505,29 +1515,34 @@ export class SqliteScopedStore implements ScopedStore {
   }
 
   /**
-   * 启动清扫：running 任务只可能属于上一个已死的进程（任务流不跨进程
-   * 存活），全部落成 failed/interrupted——与 W7-1 turn_active 检测器同
-   * 理，残留 running 是崩溃签名，不是真相。
+   * 启动清扫：只把所属实例已经退出的 running / blocked 任务标成 failed。
+   * 没有 owner 的旧行视为已退出。仍被实例锁占住的任务保持原状态。
    */
   async failRunningTasks(reason: string): Promise<number> {
-    const info = this.db
-      .prepare(`UPDATE tasks SET status = 'failed', error = ?, updated_at = ?
-                WHERE tenant_id = ? AND user_id = ? AND status = 'running'`)
-      .run(reason, new Date().toISOString(), this.scope.tenantId, this.scope.userId);
-    // 级联：blocked 任务的点火能力在 TaskService（进程内），不跨进程存活；
-    // 重启后统一标 failed，模型经 task_status 看到原因后可重跑。
-    const blocked = this.db
-      .prepare(`SELECT id FROM tasks
-                WHERE tenant_id = ? AND user_id = ? AND status = 'blocked'`)
-      .all(this.scope.tenantId, this.scope.userId) as Array<{ id: string }>;
+    const rows = this.db
+      .prepare(`SELECT id, status, owner_instance_id AS owner
+                FROM tasks
+                WHERE tenant_id = ? AND user_id = ? AND status IN ('running', 'blocked')`)
+      .all(this.scope.tenantId, this.scope.userId) as Array<{
+        id: string;
+        status: string;
+        owner: string | null;
+      }>;
+    const dataDir = path.dirname(this.db.name);
     const now = new Date().toISOString();
-    for (const row of blocked) {
-      this.db
+    let swept = 0;
+    for (const row of rows) {
+      if (row.owner && instanceOwnerIsLive(dataDir, row.owner)) continue;
+      const error = row.status === 'blocked'
+        ? '进程重启中断了编排等待（依赖任务已随进程终止）；请重新 task_run。'
+        : reason;
+      const info = this.db
         .prepare(`UPDATE tasks SET status = 'failed', error = ?, updated_at = ?
-                  WHERE tenant_id = ? AND user_id = ? AND id = ?`)
-        .run(`进程重启中断了编排等待（依赖任务已随进程终止）；请重新 task_run。`, now, this.scope.tenantId, this.scope.userId, row.id);
+                  WHERE tenant_id = ? AND user_id = ? AND id = ? AND status = ?`)
+        .run(error, now, this.scope.tenantId, this.scope.userId, row.id, row.status);
+      swept += info.changes;
     }
-    return info.changes + blocked.length;
+    return swept;
   }
 
   // ─── W6-9 用量与成本归因 ─────────────────────────────────────────────
@@ -1710,6 +1725,52 @@ export class SqliteScopedStore implements ScopedStore {
     params.push(limit);
     const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
     return rows.map((row) => this.mapInsightOutbox(row));
+  }
+
+  /**
+   * Claims pending outbox rows for this process before upload.
+   * A row owned by a live instance is left alone. Without a bound instance
+   * this falls back to a plain list (single-process callers and tests).
+   */
+  async claimInsightsForUpload(limit: number): Promise<InsightOutboxRow[]> {
+    const me = currentStorageInstanceId();
+    if (!me) return this.listInsightOutbox({ uploaded: false, limit });
+    const capped = Math.max(1, Math.min(limit, 500));
+    const pending = this.db.prepare(
+      `SELECT id, claimed_by AS claimedBy FROM insights_outbox
+       WHERE tenant_id = ? AND user_id = ? AND uploaded_at IS NULL
+       ORDER BY created_at ASC LIMIT ?`,
+    ).all(this.scope.tenantId, this.scope.userId, capped) as Array<{
+      id: string;
+      claimedBy: string | null;
+    }>;
+    const dataDir = path.dirname(this.db.name);
+    const now = new Date().toISOString();
+    const claimed: InsightOutboxRow[] = [];
+    for (const row of pending) {
+      if (row.claimedBy && row.claimedBy !== me && instanceOwnerIsLive(dataDir, row.claimedBy)) {
+        continue;
+      }
+      const info = this.db.prepare(
+        `UPDATE insights_outbox SET claimed_by = ?, claimed_at = ?
+         WHERE tenant_id = ? AND user_id = ? AND id = ? AND uploaded_at IS NULL
+           AND (claimed_by IS NULL OR claimed_by = ? OR claimed_by IS ?)`,
+      ).run(
+        me,
+        now,
+        this.scope.tenantId,
+        this.scope.userId,
+        row.id,
+        me,
+        row.claimedBy,
+      );
+      if (info.changes !== 1) continue;
+      const stored = this.db.prepare(
+        `SELECT * FROM insights_outbox WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+      ).get(this.scope.tenantId, this.scope.userId, row.id) as Record<string, unknown> | undefined;
+      if (stored) claimed.push(this.mapInsightOutbox(stored));
+    }
+    return claimed;
   }
 
   async markInsightUploaded(id: string): Promise<void> {

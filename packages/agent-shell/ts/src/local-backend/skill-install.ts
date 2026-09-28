@@ -6,6 +6,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { getUserDataDir } from '../runtime.js';
+import { fileLockPath } from '../storage/process-locks.js';
+import { acquireWriteLease } from '../storage/write-lease.js';
 import { getSkillsDir, getUserSkillsDir, listSkillRoots } from './skill-loader.js';
 
 export function resolveUserPath(inputPath: string): string {
@@ -45,8 +48,13 @@ export function installSkillFromDirectory(sourceDir: string): { name: string; de
     path.basename(sourceDir),
   );
   const dest = path.join(getUserSkillsDir(), skillName);
-  fs.mkdirSync(dest, { recursive: true });
-  fs.cpSync(sourceDir, dest, { recursive: true });
+  const lease = acquireWriteLease(fileLockPath(getUserDataDir(), 'user-skills'), 5_000);
+  try {
+    fs.mkdirSync(dest, { recursive: true });
+    fs.cpSync(sourceDir, dest, { recursive: true });
+  } finally {
+    lease.release();
+  }
   return { name: skillName, dest };
 }
 

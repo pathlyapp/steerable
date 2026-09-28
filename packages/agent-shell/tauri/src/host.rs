@@ -53,6 +53,7 @@ fn format_host_exit(reason: &str, recent: &Mutex<Vec<String>>) -> String {
             .find(|line| {
                 line.contains("failed to start")
                     || line.contains("StoreAlreadyOwnedError")
+                    || line.contains("storage upgrade blocked")
                     || line.contains("web build not found")
             })
             .cloned()

@@ -240,6 +240,11 @@ export interface HostBridge {
     callback: (payload: { chatId: string; agentId?: string | null }) => void,
   ) => () => void;
   /**
+   * 另一个进程提交了宿主库。侧栏据此重新拉会话列表。
+   * 载荷为空；渲染端不依赖里面的字段。
+   */
+  onStoreChanged?: (callback: () => void) => () => void;
+  /**
    * 4.6a 后台任务状态推送。任务到达终态或 worktree 合并/丢弃完成时主进程
    * 广播；载荷只有 chatId/taskId，面板收到后重新拉列表。
    */

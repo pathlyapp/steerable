@@ -3,7 +3,12 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
-import { getAppRootDir, shellOpenPath } from '../runtime.js';
+import { getAppRootDir, getUserDataDir, shellOpenPath } from '../runtime.js';
+import {
+  acquireChatWriteLock,
+  ChatBusyError,
+} from '../storage/process-locks.js';
+import type { HeldWriteLease } from '../storage/write-lease.js';
 import { llmService, getSidecarSupervisor, whenSidecarSupervisor } from '../llm/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -862,23 +867,29 @@ export class LocalBackendRouter {
         };
       }
       if (method === 'DELETE') {
-        if (url.searchParams.get('onlyIfEmpty') === '1') {
-          const deleted = await this.store.deleteChatIfEmpty(chatId);
+        const lease = this.tryChatLock(chatId);
+        if (!lease) return this.chatBusy();
+        try {
+          if (url.searchParams.get('onlyIfEmpty') === '1') {
+            const deleted = await this.store.deleteChatIfEmpty(chatId);
+            return {
+              status: 200,
+              data: { success: true, deleted, chatId },
+            };
+          }
+          const ok = await this.store.deleteChat(chatId);
+          if (!ok) return this.notFound('Chat not found');
           return {
             status: 200,
-            data: { success: true, deleted, chatId },
+            data: {
+              success: true,
+              message: '删除成功',
+              chatId,
+            },
           };
+        } finally {
+          lease.release();
         }
-        const ok = await this.store.deleteChat(chatId);
-        if (!ok) return this.notFound('Chat not found');
-        return {
-          status: 200,
-          data: {
-            success: true,
-            message: '删除成功',
-            chatId,
-          },
-        };
       }
     }
 
@@ -886,7 +897,14 @@ export class LocalBackendRouter {
     if (chatPinMatch && method === 'PUT') {
       const chatId = chatPinMatch[1];
       const payload = this.toRecord(request.body);
-      const updated = await this.store.updateChat(chatId, { isPinned: Boolean(payload.isPinned) });
+      const lease = this.tryChatLock(chatId);
+      if (!lease) return this.chatBusy();
+      let updated;
+      try {
+        updated = await this.store.updateChat(chatId, { isPinned: Boolean(payload.isPinned) });
+      } finally {
+        lease.release();
+      }
       if (!updated) return this.notFound('Chat not found');
       return {
         status: 200,
@@ -922,12 +940,19 @@ export class LocalBackendRouter {
           return this.badRequest('projectId 必须是项目 id 字符串或 null');
         }
       }
-      const updated = await this.store.updateChat(chatId, {
-        title: typeof payload.title === 'string' ? payload.title : undefined,
-        systemPrompt: typeof payload.systemPrompt === 'string' ? payload.systemPrompt : undefined,
-        pinnedRefs: Array.isArray(payload.pinnedRefs) ? payload.pinnedRefs : undefined,
-        projectId: projectIdUpdate,
-      });
+      const lease = this.tryChatLock(chatId);
+      if (!lease) return this.chatBusy();
+      let updated;
+      try {
+        updated = await this.store.updateChat(chatId, {
+          title: typeof payload.title === 'string' ? payload.title : undefined,
+          systemPrompt: typeof payload.systemPrompt === 'string' ? payload.systemPrompt : undefined,
+          pinnedRefs: Array.isArray(payload.pinnedRefs) ? payload.pinnedRefs : undefined,
+          projectId: projectIdUpdate,
+        });
+      } finally {
+        lease.release();
+      }
       if (!updated) return this.notFound('Chat not found');
       return {
         status: 200,
@@ -2202,6 +2227,7 @@ export class LocalBackendRouter {
       return { status: 404 };
     }
 
+    return this.withChatWriteLock(chatId, emit, async () => {
     // W7-1: resume=true（仅 send 路由）续跑 durable record 里被中断的 turn，
     // 不追加新用户消息；与 regenerate 互斥（regenerate 有自己的路径参数语义）。
     const isResume = !regenerateMatch && payload.resume === true;
@@ -2471,6 +2497,7 @@ export class LocalBackendRouter {
         Object.fromEntries(ambientRoster.map((row) => [row.profileName, row.profile])),
       ),
       parentAgentId: turnAgents.parent?.id ?? null,
+    });
     });
   }
 
@@ -3337,6 +3364,39 @@ export class LocalBackendRouter {
       return `{${keys.length} keys}`;
     }
     return String(value);
+  }
+
+  private chatBusy(): { status: 409; data: { code: 'chat_busy'; message: string } } {
+    return {
+      status: 409,
+      data: { code: 'chat_busy', message: '该会话正在另一个进程中运行' },
+    };
+  }
+
+  private tryChatLock(chatId: string): HeldWriteLease | null {
+    try {
+      return acquireChatWriteLock(getUserDataDir(), chatId);
+    } catch (error) {
+      if (error instanceof ChatBusyError) return null;
+      throw error;
+    }
+  }
+
+  private async withChatWriteLock(
+    chatId: string,
+    emit: StreamEmit,
+    body: () => Promise<StreamResult>,
+  ): Promise<StreamResult> {
+    const lease = this.tryChatLock(chatId);
+    if (!lease) {
+      emit(this.sse('error', { code: 'chat_busy', message: '该会话正在另一个进程中运行' }));
+      return { status: 409 };
+    }
+    try {
+      return await body();
+    } finally {
+      lease.release();
+    }
   }
 
   private sse(event: string, data: unknown): string {

@@ -9,6 +9,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  acquireInstanceLease,
+  bindStorageInstance,
+} from '../../src/storage/process-locks.js';
+import {
   cleanupTestStores,
   createTestStore,
   loadStorageModule,
@@ -173,6 +177,25 @@ describe('LocalStore / failRunningTasks（启动清扫）', () => {
     expect(await store.getTask(done.id)).toMatchObject({ status: 'completed', answer: '好' });
     // 再扫一次没有可清扫的（幂等）。
     expect(await store.failRunningTasks('进程已重启')).toBe(0);
+  });
+
+  it('keeps a task whose owner process is still alive', async () => {
+    const { store, dir } = await createTestStore();
+    const lease = acquireInstanceLease(dir);
+    bindStorageInstance(lease.instanceId);
+    try {
+      const chat = await store.createChat('x');
+      const running = await store.createTask({ chatId: chat.id, task: '别人的' });
+      bindStorageInstance(null);
+      expect(await store.failRunningTasks('进程已重启')).toBe(0);
+      expect(await store.getTask(running.id)).toMatchObject({ status: 'running' });
+      lease.release();
+      expect(await store.failRunningTasks('进程已重启')).toBe(1);
+      expect(await store.getTask(running.id)).toMatchObject({ status: 'failed' });
+    } finally {
+      lease.release();
+      bindStorageInstance(null);
+    }
   });
 });
 

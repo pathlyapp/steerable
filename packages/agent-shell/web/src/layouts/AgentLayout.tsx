@@ -189,6 +189,14 @@ function AgentLayoutContent() {
     return unsubscribe;
   }, []);
   useEffect(() => {
+    const bridge = getHostBridge();
+    if (!bridge?.onStoreChanged) return;
+    const unsubscribe = bridge.onStoreChanged(() => {
+      void refreshChatsRef.current();
+    });
+    return unsubscribe;
+  }, []);
+  useEffect(() => {
     const onImported = () => {
       void refreshChatsRef.current();
     };

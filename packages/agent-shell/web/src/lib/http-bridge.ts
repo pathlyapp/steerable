@@ -266,6 +266,8 @@ export function createHttpBridge(): HostBridge {
     onChatCreated: (callback) =>
       subscribeChannel<{ chatId: string; agentId?: string | null }>('chat-created', callback),
 
+    onStoreChanged: (callback) => subscribeChannel('store:changed', () => callback()),
+
     onTaskUpdated: (callback) =>
       subscribeChannel<{ chatId: string; taskId: string }>(
         'task-updated',

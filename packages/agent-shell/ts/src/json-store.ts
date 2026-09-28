@@ -9,6 +9,8 @@
  */
 import ConfImport from 'conf';
 import { getUserDataDir } from './runtime.js';
+import { fileLockPath } from './storage/process-locks.js';
+import { acquireWriteLease } from './storage/write-lease.js';
 
 export interface JsonStore<T extends Record<string, unknown>> {
   get<Key extends keyof T>(key: Key): T[Key];
@@ -28,9 +30,22 @@ export function createJsonStore<T extends Record<string, unknown>>(options: {
   name: string;
   defaults?: Partial<T>;
 }): JsonStore<T> {
-  return new Conf<T>({
+  const store = new Conf<T>({
     cwd: getUserDataDir(),
     name: options.name,
     defaults: options.defaults,
   });
+  const lockPath = fileLockPath(getUserDataDir(), options.name);
+  return {
+    get: store.get.bind(store) as JsonStore<T>['get'],
+    // set is wrapped below so two processes cannot clobber a read-modify-write.
+    set(key, value) {
+      const lease = acquireWriteLease(lockPath, 5_000);
+      try {
+        store.set(key, value);
+      } finally {
+        lease.release();
+      }
+    },
+  };
 }

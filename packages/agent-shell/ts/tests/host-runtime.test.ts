@@ -9,7 +9,12 @@
  *  - read_state.seed 处理器校验入参形状并返回 seeded 计数；
  *  - shutdown 逆序停包装配、杀终端、停 sidecar。
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+process.env.DEEPPATH_USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'host-runtime-'));
 
 const mocks = vi.hoisted(() => ({
   setDefaultExecTimeoutMs: vi.fn(),
@@ -94,6 +99,7 @@ vi.mock('../src/storage/driver.js', () => {
   return {
     LOCAL_SCOPE: { tenantId: 'local', userId: 'local' },
     initializeStorage: vi.fn(async () => {}),
+    watchStorageChanges: vi.fn(),
     closeStorage: vi.fn(async () => {}),
     getScopedStore: () => store,
     getPackDbAccess: () => ({ scope: { tenantId: 'local', userId: 'local' } }),

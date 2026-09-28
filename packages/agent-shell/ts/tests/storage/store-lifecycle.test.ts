@@ -8,7 +8,6 @@ import { LOCAL_SCOPE } from '../../src/storage/driver.js';
 import { registerPackMigrations } from '../../src/storage/pack-migrations.js';
 import { registerPackAgentSeeds } from '../../src/storage/pack-seeds.js';
 import { SqliteStorageDriver } from '../../src/storage/sqlite-driver.js';
-import { StoreAlreadyOwnedError } from '../../src/storage/write-lease.js';
 
 const handles: Array<{ driver: SqliteStorageDriver; dir: string }> = [];
 
@@ -77,21 +76,44 @@ describe('SqliteStorageDriver lifecycle', () => {
     }
   });
 
-  it('rejects a second driver for the same database', async () => {
+  it('lets a second driver share the same database', async () => {
     const first = await createDriver();
     const previous = process.env.DEEPPATH_USER_DATA_DIR;
     process.env.DEEPPATH_USER_DATA_DIR = first.dir;
     const second = new SqliteStorageDriver();
-    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     try {
-      await expect(second.initialize()).rejects.toBeInstanceOf(StoreAlreadyOwnedError);
-      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+      await second.initialize();
+      handles.push({ driver: second, dir: first.dir });
+      const secondStore = second.scoped(LOCAL_SCOPE);
+      await first.store.createChat('from first');
+      await secondStore.createChat('from second');
+      expect((await first.store.listChats()).total).toBe(2);
+      expect((await secondStore.listChats()).total).toBe(2);
+    } finally {
+      if (previous === undefined) delete process.env.DEEPPATH_USER_DATA_DIR;
+      else process.env.DEEPPATH_USER_DATA_DIR = previous;
+    }
+  });
+
+  it('refuses a database newer than this program and exits 75', async () => {
+    const first = await createDriver();
+    await first.driver.close();
+    const db = new Database(path.join(first.dir, 'agent-shell.db'));
+    db.pragma('user_version = 99');
+    db.close();
+    const previous = process.env.DEEPPATH_USER_DATA_DIR;
+    process.env.DEEPPATH_USER_DATA_DIR = first.dir;
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const second = new SqliteStorageDriver();
+    try {
+      await expect(second.initialize()).rejects.toThrow(/高于本程序/);
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(75));
     } finally {
       exit.mockRestore();
       if (previous === undefined) delete process.env.DEEPPATH_USER_DATA_DIR;
       else process.env.DEEPPATH_USER_DATA_DIR = previous;
+      handles.push({ driver: second, dir: first.dir });
     }
-    expect((await first.store.createChat('still alive')).title).toBe('still alive');
   });
 
   it('keeps independent database directories isolated', async () => {

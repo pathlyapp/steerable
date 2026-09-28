@@ -5,10 +5,12 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { getUserDataDir } from './runtime.js';
+import { fileLockPath } from './storage/process-locks.js';
+import { acquireWriteLease } from './storage/write-lease.js';
 
 export type GoalPhase = 'active' | 'paused' | 'blocked' | 'complete';
 
@@ -124,7 +126,15 @@ export class GoalStore {
   }
 
   private queue<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.pending.then(fn, fn);
+    const runLocked = async () => {
+      const lease = acquireWriteLease(fileLockPath(getUserDataDir(), 'goals'), 5_000);
+      try {
+        return await fn();
+      } finally {
+        lease.release();
+      }
+    };
+    const run = this.pending.then(runLocked, runLocked);
     this.pending = run.then(
       () => undefined,
       () => undefined,
@@ -151,7 +161,9 @@ export class GoalStore {
 
   private async write(data: FileShape): Promise<void> {
     await mkdir(path.dirname(this.filePath), { recursive: true });
-    await writeFile(this.filePath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+    const tmp = `${this.filePath}.${process.pid}.tmp`;
+    await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+    await rename(tmp, this.filePath);
   }
 }
 

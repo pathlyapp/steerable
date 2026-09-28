@@ -68,6 +68,7 @@ export interface ScopedStore {
   setInsightsSettings(settings: InsightsSettingsPatch): Promise<InsightsSettings>;
   enqueueInsight(kind: InsightKind, payload: Record<string, unknown>): Promise<InsightOutboxRow>;
   listInsightOutbox(opts?: { uploaded?: boolean; kind?: InsightKind; limit?: number }): Promise<InsightOutboxRow[]>;
+  claimInsightsForUpload(limit: number): Promise<InsightOutboxRow[]>;
   markInsightUploaded(id: string): Promise<void>;
   markInsightUploadError(id: string, error: string): Promise<void>;
   insightStats(): Promise<{ events: number; turns: number; profile: number; pending: number }>;

@@ -8,6 +8,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  acquireInstanceLease,
+  bindStorageInstance,
+} from '../../src/storage/process-locks.js';
+import {
   cleanupTestStores,
   createTestStore,
   loadStorageModule,
@@ -210,5 +214,26 @@ describe('LocalStore / insightStats 与导出包', () => {
     expect(bundle.schema).toBe('deeppath-agent-insights/v1');
     expect(bundle.records).toEqual([]);
     expect(bundle.stats).toEqual({ events: 0, turns: 0, profile: 0, pending: 0 });
+  });
+});
+
+describe('claimInsightsForUpload', () => {
+  it('does not hand the same pending row to a second live instance', async () => {
+    const { store, dir } = await createTestStore();
+    const first = acquireInstanceLease(dir);
+    const second = acquireInstanceLease(dir);
+    try {
+      bindStorageInstance(first.instanceId);
+      await store.enqueueInsight('event', { name: 'once' });
+      expect(await store.claimInsightsForUpload(10)).toHaveLength(1);
+      bindStorageInstance(second.instanceId);
+      expect(await store.claimInsightsForUpload(10)).toEqual([]);
+      first.release();
+      expect(await store.claimInsightsForUpload(10)).toHaveLength(1);
+    } finally {
+      first.release();
+      second.release();
+      bindStorageInstance(null);
+    }
   });
 });

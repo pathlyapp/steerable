@@ -52,6 +52,8 @@ export interface StorageDriver {
   scoped(scope: TenantScope): ScopedStore;
   packAccess(scope: TenantScope): PackDbAccess;
   applyPackMigrations(): Promise<void>;
+  /** Notifies when another connection commits. Optional for non-sqlite drivers. */
+  watchChanges?(onChange: () => void): void;
   close(): Promise<void>;
 }
 
@@ -145,6 +147,11 @@ export function getPackDbAccess(scope: TenantScope): PackDbAccess {
     throw new Error('[storage] initializeStorage() must complete before use');
   }
   return activeDriver.packAccess(scope);
+}
+
+/** Forwards another connection's commits to the host event bus. */
+export function watchStorageChanges(onChange: () => void): void {
+  activeDriver?.watchChanges?.(onChange);
 }
 
 /** Closes the active driver. Mainly used by host shutdown and tests. */

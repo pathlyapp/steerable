@@ -36,11 +36,18 @@ import {
   getPackDbAccess,
   getScopedStore,
   initializeStorage,
+  watchStorageChanges,
   type PackDbAccess,
   type PackDbParams,
   type PackDbRunResult,
   type TenantScope,
 } from '../storage/driver.js';
+import { getUserDataDir } from '../runtime.js';
+import {
+  acquireInstanceLease,
+  bindStorageInstance,
+  type InstanceLease,
+} from '../storage/process-locks.js';
 import { createApprovalBridge } from '../sidecar/reverse-approval.js';
 import { createAskUserBridge } from '../sidecar/reverse-ask-user.js';
 import { startHostSidecar, shutdownHostSidecar } from '../sidecar/boot.js';
@@ -110,6 +117,7 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
   const { broadcast, hasWindow, onLog } = options;
   const broadcastMain = options.broadcastMain ?? broadcast;
   await initializeStorage();
+  watchStorageChanges(() => broadcast('store:changed', {}));
   const scope = options.scope ?? LOCAL_SCOPE;
   const defaultStore = getScopedStore(scope);
   let localBackendRouter: LocalBackendRouter | undefined;
@@ -278,6 +286,7 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
   });
 
   let started = false;
+  let instanceLease: InstanceLease | null = null;
 
   return {
     store: defaultStore,
@@ -299,8 +308,9 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
       if (started) return;
       started = true;
 
-      // 4.6a：上次进程崩溃/强杀留下的 running 任务不是真相——任务流随进程
-      // 一起死了，启动时落成 failed，任务面板据此显示"重启中断"。
+      instanceLease = acquireInstanceLease(getUserDataDir());
+      bindStorageInstance(instanceLease.instanceId);
+      // 只清扫所属进程已经退出的任务。本进程的实例锁还在，不会扫到自己。
       const sweptTasks = await defaultStore.failRunningTasks(options.taskSweepReason);
       if (sweptTasks > 0) {
         onLog(`[task] swept ${sweptTasks} stale running task(s)`);
@@ -361,6 +371,9 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
       }
       await mcpExecutor.shutdownAll();
       await shutdownHostSidecar();
+      instanceLease?.release();
+      instanceLease = null;
+      bindStorageInstance(null);
       await closeStorage();
     },
   };
