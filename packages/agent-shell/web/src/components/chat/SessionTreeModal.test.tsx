@@ -14,7 +14,7 @@ import { SessionTreeModal } from './SessionTreeModal';
 
 afterEach(() => {
   cleanup();
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 const TREE_RESPONSE: ChatBranchTreeResponse = {
@@ -67,7 +67,7 @@ function installBridge(treeResponse: ChatBranchTreeResponse | null = TREE_RESPON
     }
     return Promise.reject(new Error(`unexpected request: ${input.method} ${input.path}`));
   });
-  (window as { electron?: unknown }).electron = { localBackend: { request } };
+  (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
   return { request };
 }
 

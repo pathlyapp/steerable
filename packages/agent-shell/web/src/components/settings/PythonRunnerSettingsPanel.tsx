@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { LuCodeXml } from 'react-icons/lu';
 import { t } from '@/i18n';
 import {
-  getElectronBridge,
+  getHostBridge,
   type PythonRunnerSnapshot,
-} from '@/lib/electron-bridge';
+} from '@/lib/host-bridge';
 
 type Source = PythonRunnerSnapshot['source'];
 
@@ -20,7 +20,7 @@ export function PythonRunnerSettingsPanel() {
   const [localPath, setLocalPath] = useState('');
 
   useEffect(() => {
-    const runner = getElectronBridge()?.pythonRunner;
+    const runner = getHostBridge()?.pythonRunner;
     if (!runner) return;
     let alive = true;
     void runner.snapshot().then((next) => {
@@ -39,7 +39,7 @@ export function PythonRunnerSettingsPanel() {
   }, []);
 
   if (!snapshot?.supported) return null;
-  const runner = getElectronBridge()?.pythonRunner;
+  const runner = getHostBridge()?.pythonRunner;
   const busy =
     snapshot.phase === 'downloading'
     || snapshot.phase === 'verifying'

@@ -1,5 +1,5 @@
 import { Outlet } from 'react-router-dom';
-import { isElectron } from './lib/electron-bridge';
+import { hasHostBridge } from './lib/host-bridge';
 import { isDemoMode } from './lib/demo-flag';
 
 export function AppShell() {
@@ -13,9 +13,9 @@ export function AppShell() {
           Demo &middot; simulated data, no live model
         </div>
       ) : (
-        !isElectron() && (
+        !hasHostBridge() && (
           <div className="border-t border-agent-border bg-agent-muted px-3 py-1 text-xs text-agent-muted-foreground">
-            Browser preview mode &middot; running outside Electron, IPC bridge unavailable
+            Browser preview mode &middot; no host bridge
           </div>
         )
       )}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LuLoaderCircle, LuActivity } from 'react-icons/lu';
 import { t } from '@/i18n';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 
 /**
  * TelemetrySettingsPanel — W6-6 遥测合规化的桌面 collector 配置面板。
@@ -36,11 +36,11 @@ export function TelemetrySettingsPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchSettings = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<TelemetrySettingsWire | null>({
+      const res = await getHostBridge()!.localBackend.request<TelemetrySettingsWire | null>({
         method: 'GET',
         path: '/api/v2/local-settings/telemetry',
       });
@@ -58,12 +58,12 @@ export function TelemetrySettingsPanel() {
   }, [fetchSettings]);
 
   const handleSave = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setSaving(true);
     setError(null);
     setStatus(null);
     try {
-      const saved = await getElectronBridge()!.localBackend.request<TelemetrySettingsWire>({
+      const saved = await getHostBridge()!.localBackend.request<TelemetrySettingsWire>({
         method: 'POST',
         path: '/api/v2/local-settings/telemetry',
         body: { endpoint: endpoint.trim(), privacyMode },

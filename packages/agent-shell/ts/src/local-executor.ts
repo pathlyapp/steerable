@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
 import { spawn, execSync } from 'child_process';
-import log from 'electron-log';
+import { log } from './log.js';
 import { constants as fsConstants } from 'fs';
 import { adaptCommandForPowerShell } from './shell-adapt.js';
 import {

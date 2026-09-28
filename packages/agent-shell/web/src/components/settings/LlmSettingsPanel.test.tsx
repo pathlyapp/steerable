@@ -29,9 +29,9 @@ const getCatalogProviders = vi.fn();
 const getLlmModels = vi.fn();
 const electronState = { active: true };
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => electronState.active,
-  getElectronBridge: () => undefined,
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => electronState.active,
+  getHostBridge: () => undefined,
 }));
 vi.mock('@/lib/local-api', () => ({
   getLlmSettings: () => getLlmSettings(),

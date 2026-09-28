@@ -10,7 +10,7 @@
  * 返回的落盘路径会重写消息正文里的文件引用与图像附件元数据。
  */
 import { t } from '@/i18n';
-import { getElectronBridge } from './electron-bridge';
+import { getHostBridge } from './host-bridge';
 
 export interface AttachmentFile {
   name: string;
@@ -83,7 +83,7 @@ export async function saveChatAttachments(
   files: AttachmentFile[],
 ): Promise<SaveChatAttachmentsResult> {
   if (!chatId || files.length === 0) return { files, failures: [] };
-  const bridge = getElectronBridge();
+  const bridge = getHostBridge();
   if (!bridge?.attachments?.save) return { files, failures: [] };
   try {
     // 有真实路径走 path 拷贝（Electron）；没有则读字节走 data 上传（BS/browser）。

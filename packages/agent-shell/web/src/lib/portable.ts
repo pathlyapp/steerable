@@ -4,7 +4,7 @@
  */
 
 import { t } from '@/i18n';
-import { getElectronBridge } from '@/lib/electron-bridge';
+import { getHostBridge } from '@/lib/host-bridge';
 import { listChats } from '@/lib/local-api';
 import { persistExecPolicy, readStoredExecPolicy, type ExecPolicy } from '@/lib/exec-policy';
 import {
@@ -139,7 +139,7 @@ export function isClientSection(id: string): boolean {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const bridge = getElectronBridge();
+  const bridge = getHostBridge();
   if (!bridge) throw new Error(t('No local backend in this environment'));
   return bridge.localBackend.request<T>(body === undefined ? { method, path } : { method, path, body });
 }
@@ -189,7 +189,7 @@ export async function importChatDocument(document: unknown): Promise<PortableCha
 
 export async function saveJsonFile(filename: string, data: unknown): Promise<string | null> {
   const content = `${JSON.stringify(data, null, 2)}\n`;
-  const save = getElectronBridge()?.local?.saveTextFile;
+  const save = getHostBridge()?.local?.saveTextFile;
   if (save) {
     const saved = await save({ title: t('Export'), defaultPath: filename, content });
     if (saved.canceled || !saved.filePath) return null;

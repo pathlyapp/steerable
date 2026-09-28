@@ -5,7 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { LuListTodo } from 'react-icons/lu';
 import '@xterm/xterm/css/xterm.css';
 import { DockHeaderButton, DockPanelHeader } from '@/components/DockPanelHeader';
-import { getElectronBridge } from '@/lib/electron-bridge';
+import { getHostBridge } from '@/lib/host-bridge';
 import { BRAND_NAME } from '@/brand';
 import { t } from '@/i18n';
 
@@ -14,7 +14,7 @@ import { t } from '@/i18n';
  * `terminal.*` bridge. Ported from `deeppath/apps/web/src/app/agent/terminal/
  * TerminalView.tsx`, with these adaptations:
  *
- *   - `window.electron` direct access → `getElectronBridge()` helper so the
+ *   - `window.steerableHost` direct access → `getHostBridge()` helper so the
  *     "no bridge" path is type-safe.
  *   - Removed `'use client'` directive (not a Next.js project).
  *   - Container is `h-full` instead of `h-screen` so the component is
@@ -45,11 +45,11 @@ export function TerminalView({
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     const terminal = bridge?.terminal;
     if (!terminal) {
       setStatus('error');
-      setStatusMsg(t('window.electron.terminal is unavailable'));
+      setStatusMsg(t('The host terminal is unavailable'));
       return;
     }
 

@@ -3,7 +3,7 @@
  * 任一侧新建、改名或改目录后调用 refresh，其它订阅者一起更新。
  */
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
-import { isElectron } from '@/lib/electron-bridge';
+import { hasHostBridge } from '@/lib/host-bridge';
 import { hostToolChrome } from '@/lib/host-tools';
 import { listProjects, type LocalProject } from '@/lib/local-api';
 
@@ -36,7 +36,7 @@ export function getProjectsSnapshot(): ProjectsSnapshot {
 /** 重新拉取项目列表并通知所有订阅者。非 Electron 或关掉项目入口时清空。 */
 export async function refreshProjects(): Promise<void> {
   const seq = ++requestSeq;
-  if (!isElectron() || !hostToolChrome('projects')) {
+  if (!hasHostBridge() || !hostToolChrome('projects')) {
     if (snapshot.projects.length > 0 || snapshot.error) {
       snapshot = EMPTY_SNAPSHOT;
       emit();

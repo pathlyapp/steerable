@@ -8,7 +8,7 @@ import { TaskProcessPanel } from './TaskProcessPanel';
 
 afterEach(() => {
   cleanup();
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
   vi.restoreAllMocks();
 });
 
@@ -32,7 +32,7 @@ function installBridge(timeline: unknown[], live = false, stale = false) {
   const listeners: Array<
     (payload: { chatId: string; taskId: string; timeline: unknown; live: boolean }) => void
   > = [];
-  (window as { electron?: unknown }).electron = {
+  (window as { steerableHost?: unknown }).steerableHost = {
     localBackend: { request },
     onTaskProcess: (
       cb: (payload: { chatId: string; taskId: string; timeline: unknown; live: boolean }) => void,

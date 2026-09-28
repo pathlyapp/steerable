@@ -2,7 +2,7 @@ import { LuShieldAlert, LuTriangleAlert } from 'react-icons/lu';
 import {
   type ApprovalDecisionKind,
   type ApprovalPromptRequest,
-} from '@/lib/electron-bridge';
+} from '@/lib/host-bridge';
 import { t } from '@/i18n';
 
 /**

@@ -1,5 +1,5 @@
 import { t } from '@/i18n';
-import type { AppReleasePhase, AppReleaseSnapshot } from './electron-bridge';
+import type { AppReleasePhase, AppReleaseSnapshot } from './host-bridge';
 
 export interface AppReleaseView {
   version: string | null;

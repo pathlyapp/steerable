@@ -33,7 +33,7 @@ import { modelCapabilityChips } from '@/components/settings/model-capabilities';
 import { ModelIdCombobox } from '@/components/settings/ModelIdCombobox';
 import { SettingsSaveButton } from '@/components/settings/SettingsSaveButton';
 import { t } from '@/i18n';
-import { isElectron } from '@/lib/electron-bridge';
+import { hasHostBridge } from '@/lib/host-bridge';
 import {
   COMPAT_AUTO,
   formStateFromOverrides,
@@ -124,7 +124,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
   const [resolvedPreset, setResolvedPreset] = useState<ProviderPresetOverride | null>(null);
 
   const reload = useCallback(async () => {
-    if (!isElectron()) {
+    if (!hasHostBridge()) {
       setError(t('Open this in the desktop app'));
       return;
     }
@@ -344,7 +344,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
   };
 
   const handleSave = async () => {
-    if (!isElectron()) {
+    if (!hasHostBridge()) {
       setError(t('Open this in the desktop app'));
       return;
     }

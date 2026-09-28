@@ -150,11 +150,11 @@ describe('TurnFilesCard', () => {
   });
 
   it('bridge 抛错时同样落成行内错误', async () => {
-    openLocalPathMock.mockRejectedValue(new Error('Electron bridge unavailable'));
+    openLocalPathMock.mockRejectedValue(new Error('Host bridge unavailable'));
     render(<TurnFilesCard files={[makeFile()]} />);
 
     fireEvent.click(screen.getByText('Open with'));
-    await screen.findByText(/Electron bridge unavailable/);
+    await screen.findByText(/Host bridge unavailable/);
   });
 
   it('打开方式 下拉菜单提供更多操作选项', () => {

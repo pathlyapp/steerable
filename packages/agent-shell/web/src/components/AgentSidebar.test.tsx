@@ -17,19 +17,19 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ElectronBridge } from '@/lib/electron-bridge';
+import type { HostBridge } from '@/lib/host-bridge';
 import type { UseChatsAndAgentsResult } from '@/hooks/useChatsAndAgents';
 import type { LocalChat, LocalChatAgent, LocalProject } from '@/lib/local-api';
 import type { RightPanelState } from '@/layouts/AgentLayout';
 import { resetProjectsStoreForTests } from '@/hooks/useProjects';
 
-// 可控桥桩：bridgeStub 为 null 时 isElectron() = false（纯浏览器预览路径），
+// 可控桥桩：bridgeStub 为 null 时 hasHostBridge() = false（纯浏览器预览路径），
 // 项目模式用例经 enterElectron() 装上带 selectDirectory 的桥。
-let bridgeStub: ElectronBridge | null = null;
+let bridgeStub: HostBridge | null = null;
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => bridgeStub !== null,
-  getElectronBridge: () => bridgeStub,
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => bridgeStub !== null,
+  getHostBridge: () => bridgeStub,
 }));
 
 const listProjects = vi.fn();
@@ -156,7 +156,7 @@ function setPlatform(platform: string) {
   Object.defineProperty(window.navigator, 'platform', { value: platform, configurable: true });
 }
 
-function baseElectronBridge(overrides: Partial<ElectronBridge> = {}): ElectronBridge {
+function baseHostBridge(overrides: Partial<HostBridge> = {}): HostBridge {
   return {
     runtime: 'local',
     platform: 'darwin',
@@ -166,7 +166,7 @@ function baseElectronBridge(overrides: Partial<ElectronBridge> = {}): ElectronBr
     },
     localBackend: {
       // 侧栏用例不对 request 做断言；vi.fn 保不住泛型签名，这里按接口收窄。
-      request: vi.fn() as unknown as ElectronBridge['localBackend']['request'],
+      request: vi.fn() as unknown as HostBridge['localBackend']['request'],
       startStream: vi.fn(async () => null),
       cancelStream: vi.fn(),
     },
@@ -178,7 +178,7 @@ function baseElectronBridge(overrides: Partial<ElectronBridge> = {}): ElectronBr
 function enterElectron(projects: LocalProject[]) {
   listProjects.mockResolvedValue({ projects });
   const selectDirectory = vi.fn(async () => ({ canceled: true, filePaths: [] as string[] }));
-  bridgeStub = baseElectronBridge();
+  bridgeStub = baseHostBridge();
   bridgeStub.local!.selectDirectory = selectDirectory;
   return { selectDirectory };
 }
@@ -659,7 +659,7 @@ describe('AgentSidebar 会话行交互', () => {
 
 describe('AgentSidebar 入口导航与高亮', () => {
   it('设置按钮右侧显示当前版本，侧栏没有检查更新', async () => {
-    bridgeStub = baseElectronBridge({
+    bridgeStub = baseHostBridge({
       app: {
         snapshot: async () => ({ version: '0.2.2', enabled: true, phase: 'idle' }),
         check: vi.fn(),
@@ -750,7 +750,7 @@ describe('AgentSidebar 副作用', () => {
   it('订阅菜单新建对话事件：回调导航落地页，卸载时退订', () => {
     let menuCb: (() => void) | null = null;
     const offMenuNewChat = vi.fn();
-    bridgeStub = baseElectronBridge({
+    bridgeStub = baseHostBridge({
       onMenuNewChat: (cb) => {
         menuCb = cb;
       },
@@ -773,7 +773,7 @@ describe('AgentSidebar 副作用', () => {
 
   it('未触发导航直接卸载时，菜单订阅恰好退订一次', () => {
     const offMenuNewChat = vi.fn();
-    bridgeStub = baseElectronBridge({
+    bridgeStub = baseHostBridge({
       onMenuNewChat: () => {},
       offMenuNewChat,
     });
@@ -1007,7 +1007,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     listProjects.mockReset();
     listProjects.mockRejectedValue(new Error('存储读取失败'));
-    bridgeStub = baseElectronBridge();
+    bridgeStub = baseHostBridge();
     renderSidebar('/agent');
 
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('存储读取失败'));

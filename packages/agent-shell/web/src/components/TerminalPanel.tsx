@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 import { t } from '@/i18n';
 
 // 把 xterm 那一坨 (~300KB) 拆到独立 chunk —— 用户没打开终端就不下载。
@@ -17,7 +17,7 @@ const TerminalView = lazy(() =>
  * xterm 视图，不杀 shell；重新打开时通过 `terminal:ensure` 的 replay
  * buffer 补回面板关闭期间的输出。
  *
- * Electron 检测保留给浏览器预览 / dev 模式（没有 `window.electron` 就
+ * Electron 检测保留给浏览器预览 / dev 模式（没有 `window.steerableHost` 就
  * 连不到本地 PTY）。延迟到首个 effect 再渲染，避免检测闪烁。
  */
 export function TerminalPanel({
@@ -33,7 +33,7 @@ export function TerminalPanel({
   const [hasElectron, setHasElectron] = useState<boolean | null>(null);
 
   useEffect(() => {
-    setHasElectron(isElectron() && !!getElectronBridge()?.terminal);
+    setHasElectron(hasHostBridge() && !!getHostBridge()?.terminal);
   }, []);
 
   if (hasElectron === null) {

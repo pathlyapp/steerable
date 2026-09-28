@@ -10,7 +10,7 @@ import {
   LuTrash2,
 } from 'react-icons/lu';
 import { t } from '@/i18n';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 
 /**
  * McpSettingsPanel — MCP 服务管理面板（JSON 导入 / 手动增改 / 启停 / 测试 /
@@ -19,8 +19,8 @@ import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
  * 渲染在 `/settings?section=plugins` 的 MCP 分类（AgentLayout 右侧内容区）。
  *
  * 数据与状态完全自管理：挂载时拉一次列表，操作后刷新。后端走
- * local-backend REST（`/api/v2/mcp/servers*`），注册表持久化在 main 进程的
- * electron-store（`agent-mcp-servers.json`），无专用 IPC channel。
+ * local-backend REST（`/api/v2/mcp/servers*`），注册表持久化在用户数据目录的
+ * `agent-mcp-servers.json`。
  */
 
 /** GET /api/v2/mcp/servers 返回的服务条目（含工具缓存状态）。 */
@@ -68,11 +68,11 @@ export function McpSettingsPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchMcpServers = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setMcpLoading(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<{ servers: McpServerInfo[] }>({
+      const res = await getHostBridge()!.localBackend.request<{ servers: McpServerInfo[] }>({
         method: 'GET',
         path: '/api/v2/mcp/servers',
       });
@@ -116,7 +116,7 @@ export function McpSettingsPanel() {
   };
 
   const handleSaveMcpServer = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setMcpSaving(true);
     setError(null);
     try {
@@ -142,13 +142,13 @@ export function McpSettingsPanel() {
             bearerTokenEnvVar: mcpFormBearerEnv.trim() || undefined,
           };
       if (mcpEditingId) {
-        await getElectronBridge()!.localBackend.request({
+        await getHostBridge()!.localBackend.request({
           method: 'PUT',
           path: `/api/v2/mcp/servers/${encodeURIComponent(mcpEditingId)}`,
           body,
         });
       } else {
-        await getElectronBridge()!.localBackend.request({
+        await getHostBridge()!.localBackend.request({
           method: 'POST',
           path: '/api/v2/mcp/servers',
           body,
@@ -188,7 +188,7 @@ export function McpSettingsPanel() {
   const handleToggleMcpServer = async (server: McpServerInfo) => {
     setError(null);
     try {
-      await getElectronBridge()!.localBackend.request({
+      await getHostBridge()!.localBackend.request({
         method: 'PUT',
         path: `/api/v2/mcp/servers/${encodeURIComponent(server.id)}`,
         body: { enabled: !server.enabled },
@@ -203,7 +203,7 @@ export function McpSettingsPanel() {
     setMcpDeletingId(server.id);
     setError(null);
     try {
-      await getElectronBridge()!.localBackend.request({
+      await getHostBridge()!.localBackend.request({
         method: 'DELETE',
         path: `/api/v2/mcp/servers/${encodeURIComponent(server.id)}`,
       });
@@ -219,7 +219,7 @@ export function McpSettingsPanel() {
     setMcpTestingId(server.id);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<{
+      const res = await getHostBridge()!.localBackend.request<{
         success: boolean;
         toolCount: number;
         tools: { name: string }[];
@@ -245,7 +245,7 @@ export function McpSettingsPanel() {
     setMcpImporting(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<{
+      const res = await getHostBridge()!.localBackend.request<{
         added: { name: string }[];
         skipped: string[];
       }>({

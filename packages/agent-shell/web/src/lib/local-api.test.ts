@@ -1,33 +1,33 @@
 /**
  * local-api 传输契约：每个 helper 只是把调用翻译成
- * `window.electron.localBackend.request({ method, path, body? })`，自身不含
+ * `window.steerableHost.localBackend.request({ method, path, body? })`，自身不含
  * 业务逻辑。这里逐字锁定方法 / 路径 / 查询串 / body 的形状，以及：
- *   - 桥缺失时 fail-loud（调用方应先 isElectron() 判断降级）；
+ *   - 桥缺失时 fail-loud（调用方应先 hasHostBridge() 判断降级）；
  *   - 路径参数一律 encodeURIComponent（id 里的 `/`、空格不破坏路由）；
  *   - request 拒绝时错误原样抛出（不包装、不吞）；
  *   - 响应按原样透传（泛型只是编译期标注）。
- * 桥走真实的 getElectronBridge() → window.electron 路径，不 mock 模块。
+ * 桥走真实的 getHostBridge() → window.steerableHost 路径，不 mock 模块。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as api from './local-api';
 
 type RequestInput = { method: string; path: string; body?: unknown };
 
-/** 安装最小可用的 window.electron 桥，返回可断言的 request 替身。 */
+/** 安装最小可用的 window.steerableHost 桥，返回可断言的 request 替身。 */
 function installBridge() {
   const request = vi.fn<(input: RequestInput) => Promise<unknown>>();
-  (window as { electron?: unknown }).electron = { localBackend: { request } };
+  (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
   return request;
 }
 
 afterEach(() => {
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 describe('local-api 桥接前置', () => {
   it('桥缺失时 GET / POST helper 都拒绝并提示只能在桌面壳内使用', async () => {
-    await expect(api.listChats()).rejects.toThrow(/Electron bridge unavailable/);
-    await expect(api.createChat()).rejects.toThrow(/Electron bridge unavailable/);
+    await expect(api.listChats()).rejects.toThrow(/Host bridge unavailable/);
+    await expect(api.createChat()).rejects.toThrow(/Host bridge unavailable/);
   });
 
   it('request 拒绝时错误原样抛出，不包装', async () => {

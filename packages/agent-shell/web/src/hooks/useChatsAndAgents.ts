@@ -8,7 +8,7 @@
  * adapter:
  *   - It wires the framework hook to the local-backend transport
  *     (`@/lib/local-api`).
- *   - It gates everything behind `isElectron()` so a renderer running in a
+ *   - It gates everything behind `hasHostBridge()` so a renderer running in a
  *     plain browser doesn't fire requests.
  *   - It keeps the legacy `UseChatsAndAgentsResult` shape so callers
  *     (`AgentLayout`, `useChatsAndAgents()` consumers) don't change.
@@ -35,7 +35,7 @@ import {
   type LocalChat,
   type LocalChatAgent,
 } from '@/lib/local-api';
-import { isElectron } from '@/lib/electron-bridge';
+import { hasHostBridge } from '@/lib/host-bridge';
 import { pickDefaultAgentId } from '@/brand';
 
 const CHAT_PAGE_SIZE = 50;
@@ -66,12 +66,12 @@ export interface UseChatsAndAgentsResult {
 }
 
 export function useChatsAndAgents(): UseChatsAndAgentsResult {
-  const isElectronRef = useRef(isElectron());
+  const hasHostBridgeRef = useRef(hasHostBridge());
 
   const transport = useMemo<ChatListTransport<LocalChat, LocalChatAgent>>(
     () => ({
       listChats: async ({ page, pageSize }) => {
-        if (!isElectronRef.current) return { chats: [], hasMore: false };
+        if (!hasHostBridgeRef.current) return { chats: [], hasMore: false };
         const data = await listChats({ page, limit: pageSize });
         return {
           chats: data.chats,
@@ -79,13 +79,13 @@ export function useChatsAndAgents(): UseChatsAndAgentsResult {
         };
       },
       listAgents: async () => {
-        if (!isElectronRef.current) return [];
+        if (!hasHostBridgeRef.current) return [];
         const data = await listChatAgents(false);
         return data.agents;
       },
       createChat: async ({ agentId, projectId }) => {
-        if (!isElectronRef.current) {
-          throw new Error('not in electron');
+        if (!hasHostBridgeRef.current) {
+          throw new Error('not connected to the host');
         }
         const res = await apiCreateChat({
           ...(agentId ? { agentId } : {}),
@@ -94,7 +94,7 @@ export function useChatsAndAgents(): UseChatsAndAgentsResult {
         return res.chatId;
       },
       deleteChat: async (chatId) => {
-        if (!isElectronRef.current) return false;
+        if (!hasHostBridgeRef.current) return false;
         await apiDeleteChat(chatId);
         return true;
       },
@@ -110,7 +110,7 @@ export function useChatsAndAgents(): UseChatsAndAgentsResult {
     pageSize: CHAT_PAGE_SIZE,
     // The renderer mounts before electron decides whether the bridge is live;
     // skip the auto-fetch and trigger it manually after the SSR no-op check.
-    skipInitialLoad: !isElectronRef.current,
+    skipInitialLoad: !hasHostBridgeRef.current,
   });
 
   // Default-select this flavor's builtin expert once the catalog loads.

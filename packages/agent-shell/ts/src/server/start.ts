@@ -7,12 +7,11 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import log from 'electron-log';
+import { log } from '../log.js';
 
 import { getBrand } from '../brand.js';
 import { registerPackHttpRoutes } from '../host/http-routes.js';
 import { createHostRuntime } from '../host/runtime.js';
-import { getUserDataDir } from '../runtime.js';
 import type { TenantScope } from '../storage/driver.js';
 import {
   createBsServer,
@@ -27,9 +26,6 @@ for (const file of ['.env.local', '.env']) {
   const fullPath = path.join(path.resolve(__dirname, '..', '..'), file);
   if (existsSync(fullPath)) dotenv.config({ path: fullPath, override: false });
 }
-
-log.transports.file.resolvePathFn = () =>
-  path.join(getUserDataDir(), 'logs', 'main.log');
 
 export interface BsHostOptions {
   host?: string;

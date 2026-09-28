@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 import { useChatStream, type SteerOutcome } from "@steerable/agent-ui";
 import type { ChatMessage, SSEEvent } from "@steerable/agent-protocol";
-import { getElectronBridge, isElectron } from "@/lib/electron-bridge";
+import { getHostBridge, hasHostBridge } from "@/lib/host-bridge";
 import { trackBehavior } from "@/lib/insights";
 import {
-  createElectronChatTransport,
+  createHostChatTransport,
   regenerateChatMessage,
 } from "@/lib/chat-transport";
 import { ChatHeader } from "@/components/ChatHeader";
@@ -264,12 +264,12 @@ function AgentChatLoader({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      if (!isElectron()) {
+      if (!hasHostBridge()) {
         if (!cancelled) setInitialMessages([]);
         return;
       }
       try {
-        const bridge = getElectronBridge()!;
+        const bridge = getHostBridge()!;
         const [response, live] = await Promise.all([
           bridge.localBackend.request<{
             messages?: ChatMessageWithMetadata[];
@@ -387,7 +387,7 @@ function AgentChatView({
     ? (projects.find((p) => p.id === chat.projectId) ?? null)
     : null;
   const transport = useMemo(
-    () => createElectronChatTransport(chatId),
+    () => createHostChatTransport(chatId),
     [chatId],
   );
 
@@ -890,7 +890,7 @@ function AgentChatView({
         updateRemoteFollowUps(() => []);
         void (async () => {
           try {
-            const response = await getElectronBridge()?.localBackend.request<{
+            const response = await getHostBridge()?.localBackend.request<{
               messages?: ChatMessageWithMetadata[];
             }>({
               method: "GET",
@@ -923,7 +923,7 @@ function AgentChatView({
   ]);
 
   useEffect(() => {
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     if (!bridge?.onSuggestedReplies) return;
     return bridge.onSuggestedReplies((payload) => {
       if (payload.chatId !== chatId) return;
@@ -1048,8 +1048,8 @@ function AgentChatView({
   // 分享当前对话：截取整个聊天面板区域（含 header + 消息 + 输入框），
   // 由主进程 capturePage 后写入系统剪贴板，用户可直接粘贴到任何地方。
   const handleShare = useCallback(async (): Promise<boolean> => {
-    if (!isElectron()) return false;
-    const bridge = getElectronBridge()!;
+    if (!hasHostBridge()) return false;
+    const bridge = getHostBridge()!;
     const panel = document.querySelector('.chat-panel-container');
     const rect = panel?.getBoundingClientRect();
     const result = await bridge.local?.captureScreenshot(
@@ -1173,7 +1173,7 @@ function AgentChatView({
         header={
           <ChatHeader
             chat={chat}
-            onBranchSwitched={isElectron() ? onBranchTick : undefined}
+            onBranchSwitched={hasHostBridge() ? onBranchTick : undefined}
             onInspectTask={ctx.inspectTask}
             tasks={tasks}
             chatSlots={ctx.chatSlots}
@@ -1183,7 +1183,7 @@ function AgentChatView({
           />
         }
         onRegenerate={
-          isElectron()
+          hasHostBridge()
             ? async (messageId) => {
                 // 后端 regenerate 流跑完后桌面 store 已是新分支投影；
                 // bump tick 重挂消息列表。
@@ -1217,11 +1217,11 @@ function AgentChatView({
         finishedTasks={finishedTasks}
         onInspectTask={handleInspectTask}
         onDismissFinishedTask={dismissFinished}
-        onShare={isElectron() ? handleShare : undefined}
+        onShare={hasHostBridge() ? handleShare : undefined}
         suggestedReplies={visibleSuggestedReplies}
         onSelectSuggestion={handleSelectSuggestion}
         onOpenSettings={
-          isElectron() && settingsChrome("llm")
+          hasHostBridge() && settingsChrome("llm")
             ? () => setLlmSettingsOpen(true)
             : undefined
         }
@@ -1232,7 +1232,7 @@ function AgentChatView({
             onSelectModel={setModelOverride}
             onSelectEffort={setEffortOverride}
             onOpenSettings={
-              isElectron() && settingsChrome("llm")
+              hasHostBridge() && settingsChrome("llm")
                 ? () => setLlmSettingsOpen(true)
                 : undefined
             }
@@ -1298,7 +1298,7 @@ function AgentChatView({
           </>
         }
       />
-      {isElectron() && settingsChrome("llm") && (
+      {hasHostBridge() && settingsChrome("llm") && (
         <LocalLlmSettingsModal
           open={llmSettingsOpen}
           onClose={() => setLlmSettingsOpen(false)}
@@ -1466,7 +1466,7 @@ function EmptyChatGate() {
             value={inputValue}
             onChange={setInputValue}
             onSubmit={handleSubmit}
-            disabled={!isElectron() || isCreating}
+            disabled={!hasHostBridge() || isCreating}
             placeholder={
               mode === "plan"
                 ? t("Describe your goal. The Agent will make a plan first…")
@@ -1478,7 +1478,7 @@ function EmptyChatGate() {
             selectedAgentId={ctx.selectedAgentId}
             onSelectAgent={handleSelectAgent}
             onOpenSettings={
-              isElectron() && settingsChrome("llm")
+              hasHostBridge() && settingsChrome("llm")
                 ? () => setLlmSettingsOpen(true)
                 : undefined
             }
@@ -1489,15 +1489,15 @@ function EmptyChatGate() {
                 onSelectModel={setModelOverride}
                 onSelectEffort={setEffortOverride}
                 onOpenSettings={
-                  isElectron() && settingsChrome("llm")
+                  hasHostBridge() && settingsChrome("llm")
                     ? () => setLlmSettingsOpen(true)
                     : undefined
                 }
-                disabled={!isElectron() || isCreating}
+                disabled={!hasHostBridge() || isCreating}
               />
             }
             leadingChrome={
-              isElectron() && showProjectsChrome ? (
+              hasHostBridge() && showProjectsChrome ? (
                 <ProjectPickerButton
                   projects={projects}
                   value={selectedProjectId}
@@ -1527,15 +1527,15 @@ function EmptyChatGate() {
             {createError}
           </p>
         )}
-        {!isElectron() && (
+        {!hasHostBridge() && (
           <p className="text-xs text-agent-destructive">
             {t(
-              "Browser preview mode: no Electron IPC bridge, so the chat list and streaming responses are unavailable.",
+              "Browser preview mode: no host bridge, so the chat list and streaming responses are unavailable.",
             )}
           </p>
         )}
       </div>
-      {isElectron() && settingsChrome("llm") && (
+      {hasHostBridge() && settingsChrome("llm") && (
         <LocalLlmSettingsModal
           open={llmSettingsOpen}
           onClose={() => setLlmSettingsOpen(false)}

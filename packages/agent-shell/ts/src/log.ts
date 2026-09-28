@@ -1,14 +1,44 @@
 /**
- * 宿主日志单例出口：electron-log 的 main 模块在 import 时注册
- * `__ELECTRON_LOG__` IPC handler——同一个 Electron 进程里只能有一个
- * 物理副本完成注册。shell 与场景包若各自从所属仓库的 node_modules
- * 解析 electron-log（link: 依赖下是两个物理路径），第二个 import
- * 会抛 "Attempted to register a second handler"。因此 electron-log
- * 只由 shell 直接依赖，场景包/产品代码一律经本模块拿同一个实例：
+ * 宿主日志单例。场景包和产品代码从这里拿同一个实例：
  *
  *   import { log } from '@steerable/agent-shell/log';
+ *
+ * 文件落在 `<userData>/logs/main.log`。写失败只留在 stderr，不拖垮宿主。
  */
-import log from 'electron-log';
+import fs from 'node:fs';
+import path from 'node:path';
+import { getUserDataDir } from './runtime.js';
 
-export { log };
-export type { Logger, LogMessage, LogLevel } from 'electron-log';
+export type LogLevel = 'error' | 'warn' | 'info' | 'debug';
+
+function formatArg(part: unknown): string {
+  if (typeof part === 'string') return part;
+  if (part instanceof Error) return part.stack ?? part.message;
+  try {
+    return JSON.stringify(part);
+  } catch {
+    return String(part);
+  }
+}
+
+function write(level: LogLevel, args: unknown[]): void {
+  const line = `${new Date().toISOString()} [${level}] ${args.map(formatArg).join(' ')}`;
+  if (level === 'error') console.error(line);
+  else if (level === 'warn') console.warn(line);
+  else if (level === 'debug') console.debug(line);
+  else console.info(line);
+  try {
+    const file = path.join(getUserDataDir(), 'logs', 'main.log');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, `${line}\n`);
+  } catch (error) {
+    console.error('[log] failed to write main.log', error);
+  }
+}
+
+export const log = {
+  error: (...args: unknown[]) => write('error', args),
+  warn: (...args: unknown[]) => write('warn', args),
+  info: (...args: unknown[]) => write('info', args),
+  debug: (...args: unknown[]) => write('debug', args),
+};

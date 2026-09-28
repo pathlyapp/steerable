@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LuLoaderCircle, LuShieldCheck } from 'react-icons/lu';
 import { t } from '@/i18n';
-import { isElectron } from '@/lib/electron-bridge';
+import { hasHostBridge } from '@/lib/host-bridge';
 import {
   getSidecarSandboxPosture,
   type EgressPosture,
@@ -109,7 +109,7 @@ export function SecuritySettingsPanel() {
   const [unavailable, setUnavailable] = useState<string | null>(null);
 
   const fetchPosture = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     setUnavailable(null);
     try {
@@ -141,7 +141,7 @@ export function SecuritySettingsPanel() {
         {t('Sidecar process sandbox')}
       </h4>
 
-      {!isElectron() ? (
+      {!hasHostBridge() ? (
         <p className="text-[11px] text-agent-muted-foreground">{t('Open this in the desktop app')}</p>
       ) : loading ? (
         <div className="flex items-center gap-2 py-2 text-xs text-agent-muted-foreground">

@@ -15,9 +15,9 @@ vi.mock('@/lib/local-api', () => ({
   updateProject: (...args: unknown[]) => updateProject(...args),
 }));
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
-  getElectronBridge: () => ({
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => ({
     local: { selectDirectory: vi.fn() },
   }),
 }));

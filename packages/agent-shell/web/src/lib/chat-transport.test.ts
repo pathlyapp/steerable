@@ -4,16 +4,16 @@
  *   - LocalBackendSseAdapter（经 __test__ 导出）：legacy 帧归一化、
  *     budget_exhausted 降级护栏（已有内容流过时降级为普通结束，避免
  *     框架 hook 把已渲染文本冲掉）、done 恰好一次、turn_timeline 旁路。
- *   - createElectronChatTransport：请求形状（路径编码、metadata 并入
+ *   - createHostChatTransport：请求形状（路径编码、metadata 并入
  *     body）、错误路径（startStream 拒绝 / error 载荷都会 reject 并
  *     发 error 事件）、cancelActive 双路径（有 streamId 走 cancelStream，
  *     否则按 chatId 打取消端点）、steer 的软失败。
- * 桥走真实的 window.electron 路径，不 mock 模块。
+ * 桥走真实的 window.steerableHost 路径，不 mock 模块。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import {
-  createElectronChatTransport,
+  createHostChatTransport,
   regenerateChatMessage,
   __test__,
 } from './chat-transport';
@@ -21,7 +21,7 @@ import {
 const { LocalBackendSseAdapter } = __test__;
 
 afterEach(() => {
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 function collectEvents(): { events: SSEEvent[]; onEvent: (e: SSEEvent) => void } {
@@ -161,7 +161,7 @@ describe('LocalBackendSseAdapter 帧归一化', () => {
   });
 });
 
-describe('createElectronChatTransport', () => {
+describe('createHostChatTransport', () => {
   function installStreamBridge() {
     const captured: {
       input?: { method: string; path: string; body?: unknown };
@@ -179,22 +179,22 @@ describe('createElectronChatTransport', () => {
         return Promise.resolve('stream-1');
       },
     );
-    (window as { electron?: unknown }).electron = {
+    (window as { steerableHost?: unknown }).steerableHost = {
       localBackend: { request, startStream, cancelStream },
     };
     return { captured, cancelStream, request, startStream };
   }
 
   it('桥缺失时 stream 直接拒绝', async () => {
-    const transport = createElectronChatTransport('chat-1');
+    const transport = createHostChatTransport('chat-1');
     await expect(
       transport.stream({ content: 'hi' }, () => {}),
-    ).rejects.toThrow(/Electron bridge unavailable/);
+    ).rejects.toThrow(/Host bridge unavailable/);
   });
 
   it('请求形状：路径编码 chatId，metadata 并入 body', async () => {
     const { captured } = installStreamBridge();
-    const transport = createElectronChatTransport('chat 1');
+    const transport = createHostChatTransport('chat 1');
     const { onEvent } = collectEvents();
     const p = transport.stream({ content: 'hi', metadata: { foo: 1 } }, onEvent);
     await vi.waitFor(() => expect(captured.cb).toBeDefined());
@@ -209,7 +209,7 @@ describe('createElectronChatTransport', () => {
 
   it('data → end 载荷驱动适配器，end 后 stream resolve 且返回取消句柄', async () => {
     const { captured, cancelStream } = installStreamBridge();
-    const transport = createElectronChatTransport('chat-1');
+    const transport = createHostChatTransport('chat-1');
     const { events, onEvent } = collectEvents();
     const p = transport.stream({ content: 'hi' }, onEvent);
     await vi.waitFor(() => expect(captured.cb).toBeDefined());
@@ -227,7 +227,7 @@ describe('createElectronChatTransport', () => {
   it('startStream 拒绝时发 error 事件并 reject', async () => {
     const { startStream } = installStreamBridge();
     startStream.mockRejectedValueOnce(new Error('ipc dead'));
-    const transport = createElectronChatTransport('chat-1');
+    const transport = createHostChatTransport('chat-1');
     const { events, onEvent } = collectEvents();
     await expect(transport.stream({ content: 'hi' }, onEvent)).rejects.toThrow('ipc dead');
     expect(ofType(events, 'error')).toHaveLength(1);
@@ -235,7 +235,7 @@ describe('createElectronChatTransport', () => {
 
   it('error 载荷发 error 事件并 reject', async () => {
     const { captured } = installStreamBridge();
-    const transport = createElectronChatTransport('chat-1');
+    const transport = createHostChatTransport('chat-1');
     const { events, onEvent } = collectEvents();
     const p = transport.stream({ content: 'hi' }, onEvent);
     await vi.waitFor(() => expect(captured.cb).toBeDefined());
@@ -246,7 +246,7 @@ describe('createElectronChatTransport', () => {
 
   it('cancelActive 有进行中流时走 cancelStream，否则按 chatId 打取消端点', async () => {
     const { captured, cancelStream, request } = installStreamBridge();
-    const transport = createElectronChatTransport('chat-1');
+    const transport = createHostChatTransport('chat-1');
     const { onEvent } = collectEvents();
     const p = transport.stream({ content: 'hi' }, onEvent);
     await vi.waitFor(() => expect(captured.cb).toBeDefined());
@@ -266,14 +266,14 @@ describe('createElectronChatTransport', () => {
 
   it('steer 在桥无 steerChat 能力时软失败为 false', async () => {
     installStreamBridge();
-    const transport = createElectronChatTransport('chat-1');
+    const transport = createHostChatTransport('chat-1');
     await expect(transport.steer!('换个方向')).resolves.toBe(false);
   });
 
   it('steer 透传桥的返回值', async () => {
     const steerChat = vi.fn().mockResolvedValue(true);
-    (window as { electron?: unknown }).electron = { localBackend: { steerChat } };
-    const transport = createElectronChatTransport('chat-1');
+    (window as { steerableHost?: unknown }).steerableHost = { localBackend: { steerChat } };
+    const transport = createHostChatTransport('chat-1');
     await expect(transport.steer!('换个方向')).resolves.toBe(true);
     expect(steerChat).toHaveBeenCalledWith('chat-1', '换个方向');
   });
@@ -293,7 +293,7 @@ describe('regenerateChatMessage', () => {
         return Promise.resolve('stream-r');
       },
     );
-    (window as { electron?: unknown }).electron = { localBackend: { startStream } };
+    (window as { steerableHost?: unknown }).steerableHost = { localBackend: { startStream } };
     return captured;
   }
 
@@ -324,7 +324,7 @@ describe('regenerateChatMessage', () => {
 
   it('桥缺失时拒绝', async () => {
     await expect(regenerateChatMessage('chat-1', 'msg-1')).rejects.toThrow(
-      /Electron bridge unavailable/,
+      /Host bridge unavailable/,
     );
   });
 });

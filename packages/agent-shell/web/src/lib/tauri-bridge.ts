@@ -12,7 +12,7 @@ import type {
   AppReleaseSnapshot,
   HostBridge,
   PythonRunnerSnapshot,
-} from './electron-bridge';
+} from './host-bridge';
 import { createHttpBridge } from './http-bridge';
 
 type VoidCallback = () => void;

@@ -8,7 +8,7 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import log from 'electron-log';
+import { log } from '../log.js';
 import {
   SidecarSupervisor,
   type SidecarBootFailure,

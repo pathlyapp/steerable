@@ -18,7 +18,7 @@ import {
   mergeTaskWorktree,
   type LocalTask,
 } from '@/lib/local-api';
-import { getElectronBridge } from '@/lib/electron-bridge';
+import { getHostBridge } from '@/lib/host-bridge';
 import { t } from '@/i18n';
 
 /**
@@ -81,7 +81,7 @@ export function TaskPanelModal({
   // 任务终态推送 → 重拉列表。preload 只透传 chatId/taskId/status，
   // 记录本体以 SQLite 为准。
   useEffect(() => {
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     if (!bridge?.onTaskUpdated) return;
     return bridge.onTaskUpdated((payload) => {
       if (payload.chatId === chatId) void refresh();

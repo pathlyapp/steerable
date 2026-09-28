@@ -3,13 +3,13 @@
  */
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ElectronBridge } from '@/lib/electron-bridge';
+import type { HostBridge } from '@/lib/host-bridge';
 
-let bridgeStub: ElectronBridge | null = null;
+let bridgeStub: HostBridge | null = null;
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => bridgeStub !== null,
-  getElectronBridge: () => bridgeStub,
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => bridgeStub !== null,
+  getHostBridge: () => bridgeStub,
 }));
 
 vi.mock('@/brand', () => ({
@@ -44,7 +44,7 @@ describe('CreateProjectModal', () => {
         captureScreenshot: vi.fn(async () => ({ success: false as const, error: '未实现' })),
       },
       localBackend: {
-        request: vi.fn() as unknown as ElectronBridge['localBackend']['request'],
+        request: vi.fn() as unknown as HostBridge['localBackend']['request'],
         startStream: vi.fn(async () => null),
         cancelStream: vi.fn(),
       },

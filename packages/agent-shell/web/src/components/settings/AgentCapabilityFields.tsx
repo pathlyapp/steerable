@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LuLoaderCircle, LuSearch } from 'react-icons/lu';
 import { t } from '@/i18n';
-import { isElectron } from '@/lib/electron-bridge';
+import { hasHostBridge } from '@/lib/host-bridge';
 import {
   listChatAgentSkills,
   listChatAgentTools,
@@ -154,7 +154,7 @@ export function AgentCapabilityFields({
   const [toolFilter, setToolFilter] = useState('');
 
   const fetchCatalogs = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     try {
       const [skillRes, toolRes] = await Promise.all([

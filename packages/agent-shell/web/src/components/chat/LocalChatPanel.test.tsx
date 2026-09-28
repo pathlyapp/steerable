@@ -13,20 +13,20 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: vi.fn(() => true),
-  getElectronBridge: vi.fn(),
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: vi.fn(() => true),
+  getHostBridge: vi.fn(),
   runLocalBackend: vi.fn(),
 }));
 
-import { getElectronBridge } from '@/lib/electron-bridge';
+import { getHostBridge } from '@/lib/host-bridge';
 import { LocalChatPanel } from './LocalChatPanel';
 
 const saveMock = vi.fn();
 
 beforeEach(() => {
   saveMock.mockReset();
-  vi.mocked(getElectronBridge).mockReturnValue({
+  vi.mocked(getHostBridge).mockReturnValue({
     attachments: { save: saveMock },
     // ChatInput 挂载时会拉 skills / MCP 列表；给个空实现避免测试噪音。
     localBackend: { request: vi.fn().mockResolvedValue({ skills: [], mcpTools: [] }) },

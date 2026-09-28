@@ -15,7 +15,7 @@ import { TaskPanelModal } from './TaskPanelModal';
 
 afterEach(() => {
   cleanup();
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 function makeTask(overrides: Partial<LocalTask> = {}): LocalTask {
@@ -48,7 +48,7 @@ function installBridge(tasks: LocalTask[]) {
   const taskUpdatedListeners: Array<
     (payload: { chatId: string; taskId: string }) => void
   > = [];
-  (window as { electron?: unknown }).electron = {
+  (window as { steerableHost?: unknown }).steerableHost = {
     localBackend: { request },
     onTaskUpdated: (
       cb: (payload: { chatId: string; taskId: string }) => void,

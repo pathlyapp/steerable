@@ -39,10 +39,9 @@ const getLlmModels = vi.fn();
 const getLlmSettings = vi.fn();
 const trackBehavior = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => electronState.active,
-  getHostBridge: () => null,
-  getElectronBridge: () =>
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => electronState.active,
+  getHostBridge: () =>
     electronState.active
       ? {
           runtime: 'local',
@@ -103,7 +102,7 @@ vi.mock('@/lib/local-api', () => ({
 }));
 
 vi.mock('@/lib/chat-transport', () => ({
-  createElectronChatTransport: () => ({
+  createHostChatTransport: () => ({
     stream: (
       input: { content: string; metadata?: Record<string, unknown> },
       onEvent: (event: SSEEvent) => void,

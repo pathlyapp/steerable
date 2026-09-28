@@ -6,7 +6,7 @@ import {
   LuTrash2,
 } from 'react-icons/lu';
 import { t } from '@/i18n';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 import { getPackHiddenSlashSkills } from '@/packs/registry';
 
 /**
@@ -59,11 +59,11 @@ export function SkillsSettingsPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchSkills = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setSkillsLoading(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<{ skills: any[] }>({
+      const res = await getHostBridge()!.localBackend.request<{ skills: any[] }>({
         method: 'GET',
         path: '/api/v2/chat-agents/skills',
       });
@@ -81,9 +81,9 @@ export function SkillsSettingsPanel() {
   }, [fetchSkills]);
 
   const handleBrowseFolder = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     try {
-      const bridge = getElectronBridge();
+      const bridge = getHostBridge();
       if (bridge?.local?.selectDirectory) {
         setImportStatus(t('Opening folder picker...'));
         const result = await bridge.local.selectDirectory();
@@ -110,7 +110,7 @@ export function SkillsSettingsPanel() {
     setError(null);
     setImportStatus(t('Importing local skill...'));
     try {
-      const res = await getElectronBridge()!.localBackend.request<{ success: boolean; name: string }>({
+      const res = await getHostBridge()!.localBackend.request<{ success: boolean; name: string }>({
         method: 'POST',
         path: '/api/v2/chat-agents/skills/import',
         body: { path: trimmed },
@@ -137,7 +137,7 @@ export function SkillsSettingsPanel() {
     setDeletingName(name);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<{ success: boolean }>({
+      const res = await getHostBridge()!.localBackend.request<{ success: boolean }>({
         method: 'DELETE',
         path: `/api/v2/chat-agents/skills/delete/${encodeURIComponent(name)}`,
       });

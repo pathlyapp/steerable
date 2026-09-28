@@ -18,9 +18,9 @@ const resolveProviderPreset = vi.fn();
 const getCatalogProviders = vi.fn();
 const getLlmModels = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
-  getElectronBridge: () => undefined,
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => undefined,
 }));
 vi.mock('@/lib/local-api', () => ({
   getLlmSettings: () => getLlmSettings(),

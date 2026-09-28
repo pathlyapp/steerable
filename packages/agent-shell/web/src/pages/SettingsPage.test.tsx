@@ -4,9 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const { save } = vi.hoisted(() => ({ save: vi.fn(async () => {}) }));
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
-  getElectronBridge: () => null,
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => null,
 }));
 
 vi.mock('@/components/settings/LlmSettingsPanel', async () => {

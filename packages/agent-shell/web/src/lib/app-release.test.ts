@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sidebarReleaseView, sidebarUpdateLabel } from './app-release';
-import type { AppReleaseSnapshot } from './electron-bridge';
+import type { AppReleaseSnapshot } from './host-bridge';
 
 function snap(overrides: Partial<AppReleaseSnapshot> = {}): AppReleaseSnapshot {
   return {

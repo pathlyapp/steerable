@@ -1,8 +1,8 @@
 import type {
-  ElectronBridge,
+  HostBridge,
   LocalBackendRequestInput,
   LocalBackendStreamEvent,
-} from './electron-bridge';
+} from './host-bridge';
 import type {
   ChatAgentWriteInput,
   LocalChat,
@@ -155,7 +155,7 @@ function createInitialState(): BrowserMockState {
           chatId: 'chat-browser-demo',
           role: 'assistant',
           content:
-            'You can debug the chat UI in a normal browser here. This reply comes from the dev mock bridge and does not use Electron IPC.',
+            'You can debug the chat UI in a normal browser here. This reply comes from the dev mock bridge and does not call a live model.',
           minutesAgo: 7,
         }),
         createMessage({
@@ -608,13 +608,13 @@ function cancelStream(streamId: string) {
   state.activeStreams.delete(streamId);
 }
 
-export function installBrowserDevElectronMock() {
-  if (typeof window === 'undefined' || window.electron) return;
+export function installBrowserDevHostMock() {
+  if (typeof window === 'undefined' || window.steerableHost) return;
   // DEV 浏览器预览自动安装；官网静态 demo 构建（app-demo 入口）经 demo flag
   // 显式安装。普通 prod 构建两条路都不通，本模块根本不会进产物。
   if (!import.meta.env.DEV && !isDemoMode()) return;
 
-  window.electron = {
+  window.steerableHost = {
     runtime: 'local',
     platform: 'win32',
     local: {
@@ -622,10 +622,10 @@ export function installBrowserDevElectronMock() {
         canceled: false,
         filePaths: ['C:\\browser-preview\\mock-skill'],
       }),
-      // 浏览器 dev 模式没有 Electron capturePage/clipboard，如实返回失败。
+      // 浏览器 dev 模式没有桌面截图和剪贴板，如实返回失败。
       captureScreenshot: async () => ({
         success: false as const,
-        error: 'Browser dev mode cannot capture a window screenshot (it needs the Electron runtime).',
+        error: 'Browser dev mode cannot capture a window screenshot.',
       }),
     },
     localBackend: {
@@ -644,10 +644,10 @@ export function installBrowserDevElectronMock() {
         suggestedReplyListeners.delete(callback);
       };
     },
-  } satisfies ElectronBridge;
+  } satisfies HostBridge;
 
   console.info(
-    '[browser-dev-electron-mock] Installed mock window.electron bridge.',
+    '[browser-dev-host-mock] Installed mock window.steerableHost bridge.',
     state.source === 'fixture'
       ? { source: state.fixtureMeta?.source, exportedAt: state.fixtureMeta?.exportedAt }
       : { source: 'built-in fallback' },

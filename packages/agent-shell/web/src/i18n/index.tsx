@@ -35,7 +35,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       t,
       setLocale: (next) => {
         if (!setLocale(next)) return;
-        window.electron?.setLocale?.(next);
+        window.steerableHost?.setLocale?.(next);
       },
     }),
     [locale],

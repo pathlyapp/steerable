@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LuLoaderCircle, LuSearch } from 'react-icons/lu';
 import { t } from '@/i18n';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 
 /**
  * Search backend settings. `ddg` registers `web_search` with no key.
@@ -33,11 +33,11 @@ export function WebSearchSettingsPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchSettings = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<WebSearchSettingsWire | null>({
+      const res = await getHostBridge()!.localBackend.request<WebSearchSettingsWire | null>({
         method: 'GET',
         path: '/api/v2/local-settings/web-search',
       });
@@ -55,13 +55,13 @@ export function WebSearchSettingsPanel() {
   }, [fetchSettings]);
 
   const handleSave = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setSaving(true);
     setError(null);
     setStatus(null);
     try {
       const posted = provider;
-      const saved = await getElectronBridge()!.localBackend.request<WebSearchSettingsWire>({
+      const saved = await getHostBridge()!.localBackend.request<WebSearchSettingsWire>({
         method: 'POST',
         path: '/api/v2/local-settings/web-search',
         body: { provider: posted, apiKey: apiKey.trim() },

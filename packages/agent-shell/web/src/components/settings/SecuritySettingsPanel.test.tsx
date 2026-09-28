@@ -9,7 +9,7 @@ import type { SidecarSandboxPosture } from '@/lib/local-api';
 
 const getSidecarSandboxPosture = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({ isElectron: () => true }));
+vi.mock('@/lib/host-bridge', () => ({ hasHostBridge: () => true }));
 vi.mock('@/lib/local-api', () => ({
   getSidecarSandboxPosture: () => getSidecarSandboxPosture(),
 }));

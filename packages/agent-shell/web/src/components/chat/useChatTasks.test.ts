@@ -12,7 +12,7 @@ import type { LocalTask } from '@/lib/local-api';
 import { useChatTasks } from './useChatTasks';
 
 afterEach(() => {
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 function makeTask(overrides: Partial<LocalTask> = {}): LocalTask {
@@ -35,7 +35,7 @@ function makeTask(overrides: Partial<LocalTask> = {}): LocalTask {
 function installBridge(initial: LocalTask[]) {
   let current = initial;
   const listeners: Array<(p: { chatId: string; taskId: string }) => void> = [];
-  (window as { electron?: unknown }).electron = {
+  (window as { steerableHost?: unknown }).steerableHost = {
     localBackend: {
       request: vi.fn((input: { method: string; path: string }) => {
         if (input.method === 'GET' && input.path.endsWith('/tasks')) {
@@ -124,7 +124,7 @@ describe('useChatTasks', () => {
   });
 
   it('任务表读不到时按「没有任务」处理', async () => {
-    (window as { electron?: unknown }).electron = {
+    (window as { steerableHost?: unknown }).steerableHost = {
       localBackend: { request: vi.fn(() => Promise.reject(new Error('sidecar 离线'))) },
       onTaskUpdated: () => () => {},
     };

@@ -94,8 +94,8 @@ export async function bootstrap(): Promise<void> {
   if (import.meta.env.DEV) {
     // 动态 import：prod 构建里 Rollup 把 DEV 分支连同 mock（含其 fixtures）
     // 整体树摇掉，浏览器 dev mock 数据不进产物。
-    const { installBrowserDevElectronMock } = await import('./lib/browser-dev-electron-mock');
-    installBrowserDevElectronMock();
+    const { installBrowserDevHostMock } = await import('./lib/browser-dev-host-mock');
+    installBrowserDevHostMock();
   }
 
   // 标题与 favicon 在 bootstrap 时设置——此刻产品入口已完成包注册
@@ -105,7 +105,7 @@ export async function bootstrap(): Promise<void> {
     defaultLocale: import.meta.env.VITE_DEFAULT_LOCALE || 'en',
   });
   document.documentElement.lang = getLocale() === 'zh' ? 'zh-CN' : getLocale();
-  window.electron?.setLocale?.(getLocale());
+  window.steerableHost?.setLocale?.(getLocale());
   document.title = BRAND_NAME;
   document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute('href', getBrandLogoUrl());
   installHostPaste();

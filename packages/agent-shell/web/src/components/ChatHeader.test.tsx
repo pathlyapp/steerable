@@ -17,7 +17,7 @@ import type { PackChatSlotContribution } from '@/packs/registry';
 
 afterEach(() => {
   cleanup();
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 const CHAT: LocalChat = {
@@ -52,7 +52,7 @@ function makeTask(overrides: Partial<LocalTask> = {}): LocalTask {
 
 /** 弹层自带订阅：展开它的用例需要一个能应答 GET /tasks 的 bridge。 */
 function installBridge(tasks: LocalTask[]) {
-  (window as { electron?: unknown }).electron = {
+  (window as { steerableHost?: unknown }).steerableHost = {
     localBackend: {
       request: vi.fn((input: { method: string; path: string }) => {
         if (input.method === 'GET' && input.path.endsWith('/tasks')) {

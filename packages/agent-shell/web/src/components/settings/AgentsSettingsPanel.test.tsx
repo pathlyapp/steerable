@@ -9,9 +9,9 @@ const archiveChatAgent = vi.fn();
 const listChatAgentSkills = vi.fn();
 const listChatAgentTools = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
-  getElectronBridge: () => ({
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => ({
     localBackend: { request: vi.fn() },
     local: {},
   }),

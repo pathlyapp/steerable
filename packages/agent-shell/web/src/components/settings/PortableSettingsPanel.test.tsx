@@ -6,8 +6,8 @@ const bridge = vi.hoisted(() => ({
   saveTextFile: vi.fn(),
 }));
 
-vi.mock('@/lib/electron-bridge', () => ({
-  getElectronBridge: () => ({
+vi.mock('@/lib/host-bridge', () => ({
+  getHostBridge: () => ({
     localBackend: { request: bridge.request },
     local: { saveTextFile: bridge.saveTextFile },
   }),

@@ -9,10 +9,10 @@ import {
   type ReactNode,
 } from 'react';
 import {
-  getElectronBridge,
+  getHostBridge,
   type ApprovalDecisionKind,
   type ApprovalPromptRequest,
-} from '@/lib/electron-bridge';
+} from '@/lib/host-bridge';
 import { bindPromptToActiveChat, promptVisibleInChat } from './prompt-chat-scope';
 
 interface ApprovalPromptContextValue {
@@ -37,7 +37,7 @@ export function ApprovalPromptProvider({ children }: { children: ReactNode }) {
   const decidedRequestIds = useRef(new Set<string>());
 
   useEffect(() => {
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     if (!bridge?.approval) return;
     let active = true;
     const addRequests = (
@@ -76,7 +76,7 @@ export function ApprovalPromptProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const decide = useCallback((requestId: string, kind: ApprovalDecisionKind) => {
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     decidedRequestIds.current.add(requestId);
     setQueue((previous) => previous.filter((request) => request.requestId !== requestId));
     void bridge?.approval?.decide({ requestId, kind });

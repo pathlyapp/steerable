@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PythonRunnerSnapshot } from '@/lib/electron-bridge';
+import type { PythonRunnerSnapshot } from '@/lib/host-bridge';
 
 const base: PythonRunnerSnapshot = {
   supported: true,
@@ -21,8 +21,8 @@ const pythonRunner = vi.hoisted(() => ({
   onState: vi.fn(() => () => {}),
 }));
 
-vi.mock('@/lib/electron-bridge', () => ({
-  getElectronBridge: () => ({ pythonRunner }),
+vi.mock('@/lib/host-bridge', () => ({
+  getHostBridge: () => ({ pythonRunner }),
 }));
 
 const { PythonRunnerSettingsPanel } = await import('./PythonRunnerSettingsPanel');

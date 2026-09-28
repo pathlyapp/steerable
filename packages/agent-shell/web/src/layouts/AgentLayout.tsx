@@ -8,7 +8,7 @@ import { AskUserPromptProvider } from '@/components/chat/AskUserPromptProvider';
 import { ApprovalPromptProvider } from '@/components/chat/ApprovalPromptProvider';
 import { InsightsConsentBanner } from '@/components/settings/InsightsSettingsPanel';
 import { trackBehavior } from '@/lib/insights';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 import { deleteChatIfEmpty, pruneEmptyChats } from '@/lib/local-api';
 import { PORTABLE_CHATS_CHANGED_EVENT } from '@/lib/portable';
 import { getPackChatSlots, type PackChatSlotContribution } from '@/packs/registry';
@@ -170,7 +170,7 @@ function AgentLayoutContent() {
     refreshChatsRef.current = data.refreshChats;
   }, [data.refreshChats]);
   useEffect(() => {
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     if (!bridge?.onChatTitleUpdated) return;
     const unsubscribe = bridge.onChatTitleUpdated((payload) => {
       patchChatTitleRef.current(payload.chatId, payload.title);
@@ -181,7 +181,7 @@ function AgentLayoutContent() {
   // 现场补建（见 router.handleStream），随后广播 `chat-created`。这里刷一次
   // 侧栏把这条会话拉出来——否则会出现"URL 能聊、列表里却查无此会话"。
   useEffect(() => {
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     if (!bridge?.onChatCreated) return;
     const unsubscribe = bridge.onChatCreated(() => {
       void refreshChatsRef.current();
@@ -199,7 +199,7 @@ function AgentLayoutContent() {
   // 空会话不进侧栏：启动时清掉从未发过消息的残骸；离开一段空对话时丢掉它。
   // except / 离开检测都避开当前打开的 chatId，避免和首页首条发送抢跑。
   useEffect(() => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     let cancelled = false;
     void pruneEmptyChats(chatId)
       .then((res) => {
@@ -217,7 +217,7 @@ function AgentLayoutContent() {
   useEffect(() => {
     const prev = prevChatIdRef.current;
     prevChatIdRef.current = chatId;
-    if (!isElectron() || !prev || prev === chatId) return;
+    if (!hasHostBridge() || !prev || prev === chatId) return;
     void deleteChatIfEmpty(prev)
       .then((res) => {
         if (res.deleted) return refreshChatsRef.current();
@@ -416,7 +416,7 @@ function AgentLayoutContent() {
   // so this flips the layout state owned by AgentLayout.
   useEffect(() => {
     if (!hostToolChrome('terminal')) return;
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     if (!bridge?.onMenuOpenTerminal) return;
     bridge.onMenuOpenTerminal(() => {
       toggleRightPanel('terminal');

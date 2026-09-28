@@ -92,7 +92,7 @@ import {
 import { RiPushpin2Fill, RiPushpin2Line } from "react-icons/ri";
 import { parseChatTitle } from "@/lib/chat-title";
 import { getDateGroupLabel, getDateGroupPriority } from "@/lib/date-groups";
-import { getElectronBridge, isElectron } from "@/lib/electron-bridge";
+import { getHostBridge, hasHostBridge } from "@/lib/host-bridge";
 import { hasGeneralSettingsChrome, hostToolChrome, settingsChrome } from "@/lib/host-tools";
 import {
   createProject,
@@ -290,7 +290,7 @@ export function AgentSidebar({
   const navigate = useNavigate();
   const location = useLocation();
   const { chatId: currentChatId } = useParams<{ chatId?: string }>();
-  const bridge = getElectronBridge();
+  const bridge = getHostBridge();
   const release = useAppRelease();
   const onSettingsPage = location.pathname === "/settings";
   // 插件页（及旧的 agents/skills/mcp 深链）高亮「插件」；其余 /settings 高亮底部综合设置。
@@ -385,7 +385,7 @@ export function AgentSidebar({
     const backgroundIds = [...streamingChatIds].filter(
       (id) => id !== currentChatId,
     );
-    if (backgroundIds.length === 0 || !isElectron()) return;
+    if (backgroundIds.length === 0 || !hasHostBridge()) return;
 
     let cancelled = false;
     let ticking = false;
@@ -908,7 +908,7 @@ export function AgentSidebar({
     normalizedChats.length,
   ]);
 
-  const hasElectron = isElectron();
+  const hasElectron = hasHostBridge();
 
   return (
     <div className="flex h-full w-full flex-col border-r border-agent-border/60 bg-agent-muted/70 backdrop-blur-md">

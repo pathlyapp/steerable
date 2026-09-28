@@ -7,7 +7,7 @@ import {
 } from 'react-icons/lu';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { t } from '@/i18n';
-import { isElectron } from '@/lib/electron-bridge';
+import { hasHostBridge } from '@/lib/host-bridge';
 import {
   archiveChatAgent,
   createChatAgent,
@@ -101,7 +101,7 @@ export function AgentsSettingsPanel({
   const [error, setError] = useState<string | null>(null);
 
   const fetchAgents = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     setError(null);
     try {
@@ -151,7 +151,7 @@ export function AgentsSettingsPanel({
 
   const handleSave = async () => {
     const trimmedName = name.trim();
-    if (!trimmedName || !isElectron()) return;
+    if (!trimmedName || !hasHostBridge()) return;
     setSaving(true);
     setError(null);
     try {

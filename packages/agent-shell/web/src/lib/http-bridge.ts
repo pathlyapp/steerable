@@ -1,6 +1,6 @@
 /**
  * BS 模式的宿主 bridge：与 Electron preload（src/preload.ts）暴露的
- * `window.electron` 同一接口（ElectronBridge），但传输换成 HTTP + SSE：
+ * `window.steerableHost` 同一接口（HostBridge），但传输换成 HTTP + SSE：
  *
  *   localBackend.request   → fetch /api/v2/*
  *   localBackend.startStream → fetch（ReadableStream 逐 chunk 喂 onEvent）
@@ -12,17 +12,17 @@
  * onPackEvent（= subscribeChannel）订阅。
  *
  * server 在 index.html 里注入 `window.__DEEPPATH_BS__`（platform/brand），
- * getElectronBridge() 据此在浏览器里选中本实现。
+ * getHostBridge() 据此在浏览器里选中本实现。
  */
 import type {
   ApprovalPromptRequest,
   AskUserPromptRequest,
-  ElectronBridge,
+  HostBridge,
   LocalBackendRequestInput,
   LocalBackendStreamEvent,
   TerminalSession,
   TerminalSpawnOptions,
-} from './electron-bridge';
+} from './host-bridge';
 import { t } from '@/i18n';
 
 interface BsBootstrap {
@@ -198,9 +198,9 @@ async function terminalEnsure(options?: TerminalSpawnOptions): Promise<TerminalS
   return session;
 }
 
-export function createHttpBridge(): ElectronBridge {
+export function createHttpBridge(): HostBridge {
   const boot = bootstrap();
-  const bridge: ElectronBridge = {
+  const bridge: HostBridge = {
     runtime: 'local',
     platform: boot.platform,
 
@@ -321,9 +321,9 @@ export function createHttpBridge(): ElectronBridge {
   return bridge;
 }
 
-let singleton: ElectronBridge | null = null;
+let singleton: HostBridge | null = null;
 
-export function getHttpBridge(): ElectronBridge {
+export function getHttpBridge(): HostBridge {
   if (!singleton) singleton = createHttpBridge();
   return singleton;
 }

@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHttpBridge } from './http-bridge';
-import type { LocalBackendStreamEvent } from './electron-bridge';
+import type { LocalBackendStreamEvent } from './host-bridge';
 
 afterEach(() => {
   vi.unstubAllGlobals();

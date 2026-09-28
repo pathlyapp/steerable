@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AppReleaseSnapshot } from '@/lib/electron-bridge';
+import type { AppReleaseSnapshot } from '@/lib/host-bridge';
 
 const app = vi.hoisted(() => ({
   snapshot: vi.fn<() => Promise<AppReleaseSnapshot>>(),
@@ -9,8 +9,8 @@ const app = vi.hoisted(() => ({
   onState: vi.fn(() => () => {}),
 }));
 
-vi.mock('@/lib/electron-bridge', () => ({
-  getElectronBridge: () => ({ app }),
+vi.mock('@/lib/host-bridge', () => ({
+  getHostBridge: () => ({ app }),
 }));
 
 const { AppUpdateSettingsPanel } = await import('./AppUpdateSettingsPanel');

@@ -7,7 +7,7 @@ import { createPortal } from 'react-dom';
 import { LuFolder, LuFolderPlus, LuX } from 'react-icons/lu';
 import { BRAND_NAME } from '@/brand';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { getElectronBridge } from '@/lib/electron-bridge';
+import { getHostBridge } from '@/lib/host-bridge';
 import { t } from '@/i18n';
 
 export interface ProjectFormValues {
@@ -83,7 +83,7 @@ export function CreateProjectModal({
       addSourceFolder(typed);
       return;
     }
-    const picker = getElectronBridge()?.local?.selectDirectory;
+    const picker = getHostBridge()?.local?.selectDirectory;
     if (!picker) {
       setError(t('Enter a folder path'));
       return;

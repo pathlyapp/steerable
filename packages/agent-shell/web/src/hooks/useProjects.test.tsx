@@ -7,8 +7,8 @@ import type { LocalProject } from '@/lib/local-api';
 
 const listProjects = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
 }));
 
 vi.mock('@/lib/local-api', () => ({

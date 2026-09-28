@@ -1,18 +1,18 @@
 /**
- * Typed wrappers around `window.electron.localBackend.request` for the
+ * Typed wrappers around `window.steerableHost.localBackend.request` for the
  * endpoints that apps/web actually consumes today. Shapes follow what
  * `src/local-backend/router.ts` returns — see the corresponding route
  * handlers there if you need to add fields.
  *
  * Conventions:
- *   - Every helper throws if the bridge is missing (caller should `isElectron()`
+ *   - Every helper throws if the bridge is missing (caller should `hasHostBridge()`
  *     check first if a graceful degradation is needed).
  *   - We deliberately keep the local return shapes (not Pydantic / protocol
  *     types) — they're the contract between local-backend and renderer, and
  *     may drift from any public cloud API. Aligning the two is out of scope.
  */
 
-import { getElectronBridge } from './electron-bridge';
+import { getHostBridge } from './host-bridge';
 
 export interface LocalChat {
   id: string;
@@ -100,10 +100,10 @@ interface CreateChatResponse {
 }
 
 function bridge() {
-  const b = getElectronBridge();
+  const b = getHostBridge();
   if (!b) {
     throw new Error(
-      'Electron bridge unavailable — local API can only be used inside the desktop shell.',
+      'Host bridge unavailable — local API can only be used inside the desktop shell.',
     );
   }
   return b;

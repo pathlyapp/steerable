@@ -20,7 +20,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
-import log from 'electron-log';
+import { log } from '../log.js';
 import type { SidecarReverseHandler } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);

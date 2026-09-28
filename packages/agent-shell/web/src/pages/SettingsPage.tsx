@@ -16,7 +16,7 @@ import {
   LuShieldCheck,
 } from 'react-icons/lu';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
-import { isElectron } from '@/lib/electron-bridge';
+import { hasHostBridge } from '@/lib/host-bridge';
 import { getLocale, t } from '@/i18n';
 import { useAppRelease } from '@/components/SidebarRelease';
 import { AgentsSettingsPanel } from '@/components/settings/AgentsSettingsPanel';
@@ -228,7 +228,7 @@ export function SettingsPage() {
     if (isPortableEnabled()) {
       list.push({ id: 'portable', label: t('Backup and migration'), Icon: LuDownload });
     }
-    if (isElectron()) {
+    if (hasHostBridge()) {
       list.push({ id: 'python-runner', label: t('Python runtime'), Icon: LuCodeXml });
     }
     if (release.version) {
@@ -347,9 +347,9 @@ export function SettingsPage() {
           ) : null}
 
           <div ref={contentRef} className="min-w-0 flex-1 max-w-3xl space-y-4">
-            {!isElectron() && (
+            {!hasHostBridge() && (
               <p className="rounded-agent-md border border-agent-destructive/20 bg-agent-destructive/10 p-2.5 text-xs text-agent-destructive">
-                {t('Browser preview mode: no Electron IPC bridge, so some settings are unavailable.')}
+                {t('Browser preview mode: no host bridge, so some settings are unavailable.')}
               </p>
             )}
 

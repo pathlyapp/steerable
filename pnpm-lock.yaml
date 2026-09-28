@@ -141,9 +141,6 @@ importers:
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
-      electron-log:
-        specifier: ^5.4.3
-        version: 5.4.4
       he:
         specifier: ^1.2.0
         version: 1.2.0
@@ -2581,10 +2578,6 @@ packages:
 
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
-
-  electron-log@5.4.4:
-    resolution: {integrity: sha512-istWgaXjBfURBSS8LWVW9C3jsc6+ac+tY1lXrQEOTp0lVj+a4OlO1Tmqb36GgnEUDv92DGC9VI1HNXwJinWpgA==}
-    engines: {node: '>= 14'}
 
   electron-to-chromium@1.5.355:
     resolution: {integrity: sha512-LUPZhKzZPYSPme1jEYohpkA+ybYCJztr1quAdBd7E7h3+VOBVcKkwwtBJu41nrjawrRzfb8mtMfzWozoaK0ZIQ==}
@@ -7195,8 +7188,6 @@ snapshots:
   eastasianwidth@0.2.0: {}
 
   ee-first@1.1.1: {}
-
-  electron-log@5.4.4: {}
 
   electron-to-chromium@1.5.355: {}
 

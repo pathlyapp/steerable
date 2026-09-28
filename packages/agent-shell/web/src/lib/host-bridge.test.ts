@@ -1,43 +1,28 @@
 /**
- * 宿主桥选择逻辑：显式 HostBridge、Electron、Tauri、BS 依次降级。
+ * 宿主桥选择：显式 HostBridge、Tauri、BS 依次降级。
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  getElectronBridge,
-  getHostBridge,
-  isDesktopHost,
-  isElectron,
-} from './electron-bridge';
+import { getHostBridge, hasHostBridge, isDesktopHost } from './host-bridge';
 
 afterEach(() => {
   delete (window as { steerableHost?: unknown }).steerableHost;
-  delete (window as { electron?: unknown }).electron;
   delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   delete (window as { __DEEPPATH_BS__?: unknown }).__DEEPPATH_BS__;
 });
 
 describe('getHostBridge', () => {
-  it('两种桥都不存在时返回 null（纯浏览器演示态）', () => {
+  it('没有宿主时返回 null', () => {
     expect(getHostBridge()).toBeNull();
     expect(isDesktopHost()).toBe(false);
-    expect(isElectron()).toBe(false);
+    expect(hasHostBridge()).toBe(false);
   });
 
-  it('显式 HostBridge 优先于兼容桥', () => {
+  it('显式 HostBridge 原样返回', () => {
     const host = { runtime: 'local', platform: 'darwin' };
-    const electron = { runtime: 'local', platform: 'win32' };
     (window as { steerableHost?: unknown }).steerableHost = host;
-    (window as { electron?: unknown }).electron = electron;
     expect(getHostBridge()).toBe(host);
-    expect(getElectronBridge()).toBe(host);
+    expect(hasHostBridge()).toBe(true);
     expect(isDesktopHost()).toBe(true);
-  });
-
-  it('window.electron 存在时原样返回', () => {
-    const fake = { runtime: 'local', platform: 'darwin' };
-    (window as { electron?: unknown }).electron = fake;
-    expect(getElectronBridge()).toBe(fake);
-    expect(isElectron()).toBe(true);
   });
 
   it('仅 __DEEPPATH_BS__ 时落到 HTTP 桥，平台取自注入的引导信息', () => {
@@ -46,26 +31,26 @@ describe('getHostBridge', () => {
       flavor: 'generic',
       brandName: 'Test',
     };
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     expect(bridge).not.toBeNull();
     expect(bridge!.runtime).toBe('local');
     expect(bridge!.platform).toBe('linux');
-    // HTTP 桥的传输面齐全（fetch 实现，无需 Electron）。
     expect(typeof bridge!.localBackend.request).toBe('function');
-    expect(isElectron()).toBe(true);
-    // 单例：再次取桥是同一个对象。
-    expect(getElectronBridge()).toBe(bridge);
+    expect(hasHostBridge()).toBe(true);
+    expect(isDesktopHost()).toBe(false);
+    expect(getHostBridge()).toBe(bridge);
   });
 
-  it('window.electron 优先于 __DEEPPATH_BS__', () => {
+  it('显式 HostBridge 优先于 __DEEPPATH_BS__', () => {
     const fake = { runtime: 'local', platform: 'darwin' };
-    (window as { electron?: unknown }).electron = fake;
+    (window as { steerableHost?: unknown }).steerableHost = fake;
     (window as { __DEEPPATH_BS__?: unknown }).__DEEPPATH_BS__ = {
       platform: 'linux',
       flavor: 'generic',
       brandName: 'Test',
     };
-    expect(getElectronBridge()).toBe(fake);
+    expect(getHostBridge()).toBe(fake);
+    expect(isDesktopHost()).toBe(true);
   });
 
   it('Tauri loopback 页面使用 Tauri 桥并保留 HTTP 后端', () => {
@@ -80,5 +65,6 @@ describe('getHostBridge', () => {
     expect(bridge!.platform).toBe('darwin');
     expect(typeof bridge!.localBackend.request).toBe('function');
     expect(isDesktopHost()).toBe(true);
+    expect(hasHostBridge()).toBe(true);
   });
 });

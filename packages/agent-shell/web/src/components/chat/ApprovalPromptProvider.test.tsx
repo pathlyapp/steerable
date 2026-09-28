@@ -1,19 +1,19 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ApprovalPromptRequest } from '@/lib/electron-bridge';
+import type { ApprovalPromptRequest } from '@/lib/host-bridge';
 import { ChatInput } from './ChatInput';
 import { ApprovalPromptProvider } from './ApprovalPromptProvider';
 
 afterEach(() => {
   cleanup();
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 function installBridge(pendingRequests: ApprovalPromptRequest[] = []) {
   const listeners = new Set<(request: ApprovalPromptRequest) => void>();
   const decide = vi.fn().mockResolvedValue(undefined);
   const pending = vi.fn().mockResolvedValue(pendingRequests);
-  (window as { electron?: unknown }).electron = {
+  (window as { steerableHost?: unknown }).steerableHost = {
     approval: {
       onRequest: (callback: (request: ApprovalPromptRequest) => void) => {
         listeners.add(callback);

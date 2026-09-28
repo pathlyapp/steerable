@@ -15,7 +15,7 @@ export interface HostClipboard {
   text: string;
   files: HostClipboardFile[];
 }
-import { getHostBridge } from './electron-bridge';
+import { getHostBridge } from './host-bridge';
 
 let pending = false;
 let lastEditable: HTMLElement | null = null;

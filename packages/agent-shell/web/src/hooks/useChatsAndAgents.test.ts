@@ -7,7 +7,7 @@
  *   - createChat 成功返回 id、失败返回 null 且错误上浮为字符串；
  *   - deleteChat 成功后重置回 page 1 重新拉取；
  *   - patchChatTitle 只改内存、不打后端（SSE 标题推送的配套路径）。
- * 桥走真实的 window.electron 路径，不 mock 模块。
+ * 桥走真实的 window.steerableHost 路径，不 mock 模块。
  */
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -50,12 +50,12 @@ function installBridge(overrides: {
     }
     return Promise.reject(new Error(`unexpected ${input.method} ${input.path}`));
   });
-  (window as { electron?: unknown }).electron = { localBackend: { request } };
+  (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
   return { calls, request };
 }
 
 afterEach(() => {
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 describe('非 Electron 环境', () => {
@@ -74,7 +74,7 @@ describe('非 Electron 环境', () => {
       created = await result.current.createChat();
     });
     expect(created).toBeNull();
-    expect(result.current.error).toBe('not in electron');
+    expect(result.current.error).toBe('not connected to the host');
     let deleted = true;
     await act(async () => {
       deleted = await result.current.deleteChat('c1');

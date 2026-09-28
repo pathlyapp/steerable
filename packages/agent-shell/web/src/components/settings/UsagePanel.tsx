@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LuLoaderCircle, LuChartBar, LuRefreshCw } from 'react-icons/lu';
 import { t } from '@/i18n';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 
 /**
  * UsagePanel — W6-9 用量与成本归因的桌面面板。
@@ -66,11 +66,11 @@ export function UsagePanel() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchSummary = useCallback(async (windowDays: number) => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<UsageSummaryWire>({
+      const res = await getHostBridge()!.localBackend.request<UsageSummaryWire>({
         method: 'GET',
         path: `/api/v2/usage/summary?days=${windowDays}`,
       });

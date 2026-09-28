@@ -13,7 +13,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SteerOutcome } from '@steerable/agent-ui';
 import { ChatInput, type ChatInputProps } from './ChatInput';
-import * as electronBridge from '@/lib/electron-bridge';
+import * as electronBridge from '@/lib/host-bridge';
 
 const tauriDrop = vi.hoisted(() => ({
   handler: null as

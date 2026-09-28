@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { LuChartBar } from 'react-icons/lu';
 import { BRAND_NAME } from '@/brand';
 import { t } from '@/i18n';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 
 type InsightsWire = {
   installId: string;
@@ -34,8 +34,8 @@ export function InsightsConsentBanner() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!isElectron()) return;
-    void getElectronBridge()!
+    if (!hasHostBridge()) return;
+    void getHostBridge()!
       .localBackend.request<InsightsWire>({ method: 'GET', path: '/api/v2/local-settings/insights' })
       .then((data) => {
         if (!data.promptedAt) setOpen(true);
@@ -44,10 +44,10 @@ export function InsightsConsentBanner() {
   }, []);
 
   const save = useCallback(async (upload: boolean) => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setSaving(true);
     try {
-      await getElectronBridge()!.localBackend.request({
+      await getHostBridge()!.localBackend.request({
         method: 'POST',
         path: '/api/v2/local-settings/insights',
         body: {
@@ -112,11 +112,11 @@ export function InsightsSettingsPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<InsightsWire>({
+      const res = await getHostBridge()!.localBackend.request<InsightsWire>({
         method: 'GET',
         path: '/api/v2/local-settings/insights',
       });
@@ -133,11 +133,11 @@ export function InsightsSettingsPanel() {
   }, [load]);
 
   const save = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setSaving(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<InsightsWire>({
+      const res = await getHostBridge()!.localBackend.request<InsightsWire>({
         method: 'POST',
         path: '/api/v2/local-settings/insights',
         body: {
@@ -162,15 +162,15 @@ export function InsightsSettingsPanel() {
   };
 
   const exportFile = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setError(null);
     try {
-      const bundle = await getElectronBridge()!.localBackend.request<unknown>({
+      const bundle = await getHostBridge()!.localBackend.request<unknown>({
         method: 'GET',
         path: '/api/v2/insights/export',
       });
       const text = `${JSON.stringify(bundle, null, 2)}\n`;
-      const saved = await getElectronBridge()!.local?.saveTextFile?.({
+      const saved = await getHostBridge()!.local?.saveTextFile?.({
         title: t('Export local insight records'),
         defaultPath: `deeppath-insights-${new Date().toISOString().slice(0, 10)}.json`,
         content: text,
@@ -182,10 +182,10 @@ export function InsightsSettingsPanel() {
   };
 
   const uploadNow = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<{ ok: boolean; detail: string }>({
+      const res = await getHostBridge()!.localBackend.request<{ ok: boolean; detail: string }>({
         method: 'POST',
         path: '/api/v2/insights/upload-local',
       });
@@ -214,7 +214,7 @@ export function InsightsSettingsPanel() {
             'Even if the user does not agree to upload, records stay on this device. You can export JSON and send it to the product team, or click "Upload now" once.',
           )}
         </p>
-        {!isElectron() ? (
+        {!hasHostBridge() ? (
           <p className="text-[11px] text-agent-muted-foreground">{t('Open this in the desktop app')}</p>
         ) : loading ? (
           <p className="text-[11px] text-agent-muted-foreground">{t('Loading…')}</p>

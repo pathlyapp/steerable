@@ -10,7 +10,7 @@ import {
   LuPlus,
 } from 'react-icons/lu';
 import { CreateProjectModal } from '@/components/CreateProjectModal';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 import {
   createProject,
   updateChatProject,
@@ -219,8 +219,8 @@ export function ChatProjectBadge({
 
   const changeFolder = () =>
     run(async () => {
-      if (!isElectron() || !project) return;
-      const result = await getElectronBridge()!.local?.selectDirectory({
+      if (!hasHostBridge() || !project) return;
+      const result = await getHostBridge()!.local?.selectDirectory({
         title: t('Choose a new folder for "{name}"', { name: project.name }),
       });
       if (!result || result.canceled || result.filePaths.length === 0) return;

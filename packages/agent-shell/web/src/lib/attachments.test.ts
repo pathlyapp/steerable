@@ -18,15 +18,15 @@ import {
   type AttachmentFile,
 } from './attachments';
 
-vi.mock('./electron-bridge', () => ({
-  isElectron: vi.fn(),
-  getElectronBridge: vi.fn(),
+vi.mock('./host-bridge', () => ({
+  hasHostBridge: vi.fn(),
+  getHostBridge: vi.fn(),
 }));
 
-import { getElectronBridge, isElectron } from './electron-bridge';
+import { getHostBridge, hasHostBridge } from './host-bridge';
 
-const isElectronMock = vi.mocked(isElectron);
-const getBridgeMock = vi.mocked(getElectronBridge);
+const hasHostBridgeMock = vi.mocked(hasHostBridge);
+const getBridgeMock = vi.mocked(getHostBridge);
 
 const CHAT_ID = 'chat-1';
 
@@ -35,7 +35,7 @@ function browserFile(name: string): AttachmentFile {
 }
 
 function attachBridge(save: ReturnType<typeof vi.fn>): void {
-  isElectronMock.mockReturnValue(true);
+  hasHostBridgeMock.mockReturnValue(true);
   getBridgeMock.mockReturnValue({ attachments: { save } } as never);
 }
 
@@ -50,7 +50,7 @@ beforeEach(() => {
 
 describe('saveChatAttachments', () => {
   it('空 chatId / 空列表原样返回，不报失败', async () => {
-    isElectronMock.mockReturnValue(true);
+    hasHostBridgeMock.mockReturnValue(true);
     getBridgeMock.mockReturnValue(null);
     const files = [browserFile('a.docx')];
 

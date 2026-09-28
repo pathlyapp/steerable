@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { LuArrowDown, LuLoaderCircle, LuTerminal } from 'react-icons/lu';
 import { DockHeaderButton, DockPanelHeader } from '@/components/DockPanelHeader';
 import { getChildProcess, getTaskProcess } from '@/lib/local-api';
-import { getElectronBridge } from '@/lib/electron-bridge';
+import { getHostBridge } from '@/lib/host-bridge';
 import { t } from '@/i18n';
 import { Markdown } from '@/components/chat/Markdown';
 import { TurnProcessGroup } from '@/components/chat/TurnProcessGroup';
@@ -154,7 +154,7 @@ export function TaskProcessPanel({
 
   useEffect(() => {
     if (childRecordId) return;
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     if (!bridge?.onTaskProcess) return;
     return bridge.onTaskProcess((payload) => {
       if (payload.taskId !== inspected.id) return;

@@ -28,7 +28,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import log from 'electron-log';
+import { log } from '../log.js';
 import type { LocalBackendRouter } from '../local-backend/router.js';
 import { getActiveCoreLoopStreamId } from '../local-backend/coreloop-stream.js';
 import { getSidecarSupervisor } from '../llm/index.js';

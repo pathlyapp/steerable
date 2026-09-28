@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import os from 'os';
 import { randomUUID } from 'crypto';
-import log from 'electron-log';
+import { log } from './log.js';
 import * as pty from 'node-pty';
 import { adaptCommandForPowerShell } from './shell-adapt.js';
 
