@@ -160,6 +160,9 @@ pnpm agent-shell:web       # BS mode: builds shell + neutral web app, boots the 
 # → http://127.0.0.1:4787  (Steerable Shell)
 
 pnpm agent-shell:client    # desktop client mode: same build, launched as an Electron window
+
+npm install -g @steerable/agent-cli
+steerable-cli              # command line and terminal session; Node 22
 ```
 
 Both are the production code path (prod web build, shell default preload) — the browser-dev Electron mock is dev-server-only and tree-shaken out of prod builds, so it never appears here.
@@ -293,6 +296,7 @@ flowchart TB
 - **Renderer SPA source** (`agent-shell-web`): product-neutral React app consumed by product web entries via the `@/` alias + `createProductViteConfig` factory
 - **Packaging helpers**: `scripts/prepare-sidecar.sh` / `prepare-framework-wheels.sh` build the embedded Python runtime for product installers
 - **Neutrality gate**: `pnpm --filter @steerable/agent-shell shell:neutral` fails CI on any product hardcoding in shell sources or skill text
+- **Command line** (`@steerable/agent-cli`): `steerable-cli` runs a turn or a terminal session in-process and shares the host database with the desktop app. Products supply their own command name.
 - 615 node-side unit tests + 220 renderer component tests
 
 </details>
