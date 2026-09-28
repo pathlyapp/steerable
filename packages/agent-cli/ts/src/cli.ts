@@ -1,5 +1,7 @@
+import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { getBrand } from '@steerable/agent-shell/brand';
+import { restoreLogConsole, silenceLogConsole } from '@steerable/agent-shell/log';
 import {
   collectPackCliCommands,
   type CliCommandSpec,
@@ -32,6 +34,16 @@ export interface CliOptions {
 }
 
 export async function createCli(options: CliOptions = {}): Promise<number> {
+  const ownsTerminal = (options.stdout ?? process.stdout) === process.stdout;
+  if (ownsTerminal) silenceLogConsole('routine');
+  try {
+    return await runCli(options);
+  } finally {
+    if (ownsTerminal) restoreLogConsole();
+  }
+}
+
+async function runCli(options: CliOptions): Promise<number> {
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
   let packCommands: CliCommandSpec[];
@@ -191,6 +203,7 @@ async function tuiCommand(
     stderr.write(`tui needs a terminal. Use run for piped input.\n${tuiHelp()}\n`);
     return 2;
   }
+  if ((options.stdout ?? process.stdout) === process.stdout) silenceLogConsole('all');
   return withClient(parsed, options, async (client) => runTui({
     client,
     product: getBrand().displayName,
@@ -211,6 +224,7 @@ async function doctorCommand(
   const dataDir = dataDirFrom(parsed, options.env ?? process.env);
   const report = applyHostRuntimeEnv(dataDir, options.env ?? process.env);
   stdout.write(`data dir: ${dataDir}\n`);
+  stdout.write(`log file: ${path.join(dataDir, 'logs', 'main.log')}\n`);
   stdout.write(`runtime file: ${report.fileFound ? report.filePath : 'missing'}\n`);
   for (const entry of report.entries) {
     stdout.write(`${entry.key}: ${entry.source}${entry.path ? ` ${entry.path}` : ''}\n`);

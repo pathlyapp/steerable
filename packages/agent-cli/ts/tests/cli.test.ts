@@ -173,6 +173,31 @@ describe('createCli', () => {
     expect(stdout.text()).toContain('Notes');
   });
 
+  it('keeps host logs off the terminal while a command writes to stdout', async () => {
+    const info = console.info;
+    const error = console.error;
+    const seen: Array<{ info: boolean; error: boolean }> = [];
+    const code = await createCli({
+      argv: ['probe', '--data-dir', tempDir()],
+      stdout: process.stdout,
+      stderr: capture().stream,
+      env: {},
+      createClient: async () => client(),
+      commands: [{
+        name: 'probe',
+        summary: 'records console state',
+        run: () => {
+          seen.push({ info: console.info === info, error: console.error === error });
+          return 0;
+        },
+      }],
+    });
+    expect(code).toBe(0);
+    expect(seen).toEqual([{ info: false, error: true }]);
+    expect(console.info).toBe(info);
+    expect(console.error).toBe(error);
+  });
+
   it('reports a busy chat from the data directory', async () => {
     const dir = tempDir();
     const lease = acquireChatWriteLock(dir, 'chat-busy');
@@ -186,6 +211,7 @@ describe('createCli', () => {
       });
       expect(code).toBe(0);
       expect(stdout.text()).toContain(`data dir: ${dir}`);
+      expect(stdout.text()).toContain(`log file: ${path.join(dir, 'logs', 'main.log')}`);
       expect(stdout.text()).toContain('chat-busy');
       expect(stdout.text()).toContain('missing: run_code');
     } finally {

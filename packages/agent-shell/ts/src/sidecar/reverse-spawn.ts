@@ -116,8 +116,11 @@ function runHelper(
 }> {
   return new Promise((resolve, reject) => {
     const child = spawn(helperPath, [], {
-      stdio: ['pipe', 'pipe', 'inherit'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+    });
+    createInterface({ input: child.stderr }).on('line', (line) => {
+      if (line.trim()) log.warn('[host-spawn] helper', line);
     });
     let stdout = '';
     let stderr = '';
