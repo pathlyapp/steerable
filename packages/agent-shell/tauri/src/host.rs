@@ -146,7 +146,12 @@ impl HostProcess {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        paths.apply_runtime_env(&mut command, python_runner.ok().flatten());
+        let python_path = python_runner
+            .as_ref()
+            .ok()
+            .and_then(|runner| runner.as_deref())
+            .map(Path::to_path_buf);
+        paths.apply_runtime_env(&mut command, python_path.clone());
 
         let mut child = spawn_group(&mut command).map_err(|error| {
             format!(
@@ -239,6 +244,16 @@ impl HostProcess {
             &user_data,
             "host-ready.json",
             &serde_json::to_string(&ready).map_err(|error| error.to_string())?,
+        );
+        write_diag(
+            &user_data,
+            "host-runtime.json",
+            &host_runtime_document(
+                &paths.web_dist,
+                paths.sidecar_python.as_deref(),
+                python_path.as_deref(),
+                paths.engine_dir.as_deref(),
+            ),
         );
         let url = Url::parse(&format!("http://{}:{}/", ready.host, ready.port))
             .map_err(|error| error.to_string())?;
@@ -476,6 +491,49 @@ impl HostPaths {
     }
 }
 
+fn host_runtime_document(
+    web_dist: &Path,
+    sidecar_python: Option<&Path>,
+    python: Option<&Path>,
+    engine_dir: Option<&Path>,
+) -> String {
+    let mut doc = serde_json::Map::new();
+    doc.insert(
+        "webDist".to_string(),
+        serde_json::Value::String(web_dist.display().to_string()),
+    );
+    if let Some(path) = sidecar_python.filter(|path| path.is_file()) {
+        doc.insert(
+            "sidecarPython".to_string(),
+            serde_json::Value::String(path.display().to_string()),
+        );
+    }
+    if let Some(path) = python.filter(|path| path.is_file()) {
+        doc.insert(
+            "python".to_string(),
+            serde_json::Value::String(path.display().to_string()),
+        );
+    }
+    if let Some(engine_dir) = engine_dir {
+        let egress = engine_dir.join(platform_binary("steerable-egress-proxy"));
+        if egress.is_file() {
+            doc.insert(
+                "egressProxyBin".to_string(),
+                serde_json::Value::String(egress.display().to_string()),
+            );
+        }
+        let helper = engine_dir.join("win-spawn-helper/win-spawn-helper.exe");
+        if helper.is_file() {
+            doc.insert(
+                "winSpawnHelper".to_string(),
+                serde_json::Value::String(helper.display().to_string()),
+            );
+        }
+    }
+    serde_json::to_string_pretty(&serde_json::Value::Object(doc))
+        .unwrap_or_else(|_| "{}".to_string())
+}
+
 fn platform_binary(name: &str) -> String {
     if cfg!(windows) {
         format!("{name}.exe")
@@ -535,5 +593,37 @@ fn spawn_group(command: &mut Command) -> std::io::Result<GroupChild> {
     #[cfg(not(windows))]
     {
         command.group_spawn()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_runtime_document;
+
+    #[test]
+    fn host_runtime_document_records_files_that_exist() {
+        let dir = std::env::temp_dir().join(format!(
+            "host-runtime-doc-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let python = dir.join("python");
+        std::fs::write(&python, "").unwrap();
+        let missing = dir.join("missing-python");
+        let json = host_runtime_document(
+            &dir.join("web"),
+            Some(python.as_path()),
+            Some(missing.as_path()),
+            None,
+        );
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["webDist"], dir.join("web").display().to_string());
+        assert_eq!(value["sidecarPython"], python.display().to_string());
+        assert!(value.get("python").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

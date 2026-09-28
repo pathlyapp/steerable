@@ -38,6 +38,8 @@ TS_PACKAGES: list[tuple[str, str]] = [
     # pack-sdk / agent-shell / agent-shell-web 随 lockstep 一起 bump 并上 npm
     #（pack-sdk 纯类型、agent-shell-web 源码包，均为 agent-shell 的发布依赖）。
     ("@steerable/pack-sdk",       "packages/pack-sdk/ts/package.json"),
+    ("@steerable/agent-client",   "packages/agent-client/ts/package.json"),
+    ("@steerable/agent-cli",      "packages/agent-cli/ts/package.json"),
     ("@steerable/agent-shell",    "packages/agent-shell/ts/package.json"),
     ("@steerable/agent-shell-web", "packages/agent-shell/web/package.json"),
     ("@steerable/agent-shell-tauri", "packages/agent-shell/tauri/package.json"),

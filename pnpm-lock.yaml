@@ -68,6 +68,47 @@ importers:
         specifier: ^5.4.21
         version: 5.4.21(@types/node@22.19.19)(lightningcss@1.32.0)
 
+  packages/agent-cli/ts:
+    dependencies:
+      '@steerable/agent-client':
+        specifier: workspace:*
+        version: link:../../agent-client/ts
+      '@steerable/agent-protocol':
+        specifier: workspace:*
+        version: link:../../agent-protocol/ts
+      '@steerable/agent-shell':
+        specifier: workspace:*
+        version: link:../../agent-shell/ts
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.19)(happy-dom@15.11.7)(lightningcss@1.32.0)
+
+  packages/agent-client/ts:
+    dependencies:
+      '@steerable/agent-protocol':
+        specifier: workspace:*
+        version: link:../../agent-protocol/ts
+      '@steerable/agent-shell':
+        specifier: workspace:*
+        version: link:../../agent-shell/ts
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.19)(happy-dom@15.11.7)(lightningcss@1.32.0)
+
   packages/agent-harness/ts:
     dependencies:
       '@steerable/agent-protocol':

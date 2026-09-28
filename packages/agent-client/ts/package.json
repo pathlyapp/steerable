@@ -1,0 +1,51 @@
+{
+  "name": "@steerable/agent-client",
+  "version": "0.6.56",
+  "description": "In-process client for a Steerable host: HTTP-shaped requests, turn streams, and approval replies.",
+  "license": "Apache-2.0",
+  "homepage": "https://steerableframework.com/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pathlyapp/steerable.git",
+    "directory": "packages/agent-client/ts"
+  },
+  "bugs": {
+    "url": "https://github.com/pathlyapp/steerable/issues"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "gen": "echo agent-client",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "check:drift": "echo ok"
+  },
+  "dependencies": {
+    "@steerable/agent-protocol": "workspace:*",
+    "@steerable/agent-shell": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
