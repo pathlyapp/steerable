@@ -43,6 +43,7 @@
     "check:drift": "echo ok"
   },
   "dependencies": {
+    "@earendil-works/pi-tui": "0.87.1",
     "@steerable/agent-client": "workspace:*",
     "@steerable/agent-protocol": "workspace:*",
     "@steerable/agent-shell": "workspace:*"

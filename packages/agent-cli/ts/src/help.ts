@@ -9,6 +9,7 @@ Examples:
   <product> mcp list
   <product> config get model
   <product> doctor
+  <product> tui
 `.trim();
 
 export function rootHelp(): string {
@@ -22,6 +23,7 @@ Usage:
   <product> mcp list | add <name> -- <cmd...> | rm <name>
   <product> config get <key> | set <key> <value>
   <product> doctor
+  <product> tui
 
 ${EXAMPLES}
 `.trim();
@@ -91,6 +93,21 @@ maxTotalTokens, execTimeoutSeconds.
 Examples:
   <product> config get model
   <product> config set model demo-model
+`.trim();
+}
+
+export function tuiHelp(): string {
+  return `
+Usage:
+  <product> tui [--data-dir <dir>]
+
+Starts the terminal interface. When stdin is not a terminal, use run instead.
+
+/new  /model  /clear  /help
+Ctrl+C interrupts the current turn. Ctrl+L lists chats.
+
+Examples:
+  <product> tui
 `.trim();
 }
 

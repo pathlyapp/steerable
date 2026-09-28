@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import { getBrand } from '@steerable/agent-shell/brand';
 import { getUserDataDir } from '@steerable/agent-shell/runtime';
 import {
   applyHostRuntimeEnv,
@@ -10,8 +11,9 @@ import {
 
 import { parseApprovePolicy } from './approve.js';
 import { chatCommand, configCommand, mcpCommand, skillsCommand, type CommandIO } from './commands.js';
-import { chatHelp, configHelp, doctorHelp, mcpHelp, rootHelp, runHelp, skillsHelp } from './help.js';
+import { chatHelp, configHelp, doctorHelp, mcpHelp, rootHelp, runHelp, skillsHelp, tuiHelp } from './help.js';
 import { runTurn, type RunRequest } from './run.js';
+import { runTui } from './tui/run.js';
 
 export interface CliOptions {
   argv?: string[];
@@ -68,6 +70,7 @@ export async function createCli(options: CliOptions = {}): Promise<number> {
   if (command === 'mcp') return dispatch(parsed, options, stdout, stderr, mcpHelp(), mcpCommand);
   if (command === 'config') return dispatch(parsed, options, stdout, stderr, configHelp(), configCommand);
   if (command === 'doctor') return doctorCommand(parsed, options, stdout, stderr);
+  if (command === 'tui') return tuiCommand(parsed, options, stdout, stderr);
   stderr.write(`unknown command: ${command}\n${rootHelp()}\n`);
   return 2;
 }
@@ -139,6 +142,28 @@ async function dispatch(
   ) => Promise<number>,
 ): Promise<number> {
   return command(commandIO(parsed), stdout, stderr, (body) => withClient(parsed, options, body, stderr), help);
+}
+
+async function tuiCommand(
+  parsed: ReturnType<typeof parseArgs>,
+  options: CliOptions,
+  stdout: NodeJS.WritableStream,
+  stderr: NodeJS.WritableStream,
+): Promise<number> {
+  if (parsed.values.help) {
+    stdout.write(`${tuiHelp()}\n`);
+    return 0;
+  }
+  const tty = options.stdinIsTTY ?? Boolean(process.stdin.isTTY);
+  if (!tty) {
+    stderr.write(`tui needs a terminal. Use run for piped input.\n${tuiHelp()}\n`);
+    return 2;
+  }
+  return withClient(parsed, options, async (client) => runTui({
+    client,
+    product: getBrand().displayName,
+    dataDir: dataDirFrom(parsed, options.env ?? process.env),
+  }), stderr);
 }
 
 async function doctorCommand(
