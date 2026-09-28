@@ -498,7 +498,7 @@ export class SqliteScopedStore implements ScopedStore {
     // 列成为无人读写的孤儿列（SQLite 不易 drop，保留无害）。
 
     // 项目模式（增量迁移）：chat 可绑定 ProjectRegistry 里的项目 id。
-    // 项目记录本身存在 electron-store（agent-projects.json），这里只存外键；
+    // 项目记录本身存在 json-store（agent-projects.json），这里只存外键；
     // 删项目时由路由层把本列置 NULL（会话降级为无项目对话）。
     this.ensureColumn('chat_sessions', 'project_id', 'TEXT');
 

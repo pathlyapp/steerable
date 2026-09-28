@@ -1,12 +1,10 @@
 /**
  * Friendly handling of a held write lease.
  *
- * `acquireWriteLeaseOrExit` takes injectable acquisition, electron loader, and
- * exit precisely so this path is testable in a plain-node vitest worker: the
- * real `new LocalStore()` loads better-sqlite3 (Electron ABI) and `electron`
- * does not resolve here. The behavior under test is the error mapping — a
- * `StoreAlreadyOwnedError` becomes a readable dialog + exit, any other error
- * propagates unchanged.
+ * `acquireWriteLeaseOrExit` takes injectable acquisition and exit so this
+ * path is testable without opening a real SQLite store. The behavior under
+ * test is the error mapping — a `StoreAlreadyOwnedError` becomes a readable
+ * log line + exit, any other error propagates unchanged.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -29,45 +27,21 @@ describe('acquireWriteLeaseOrExit', () => {
     ).toThrow(boom);
   });
 
-  it('shows a readable dialog and exits on StoreAlreadyOwnedError', async () => {
-    const showErrorBox = vi.fn();
-    const appExit = vi.fn();
-    const loadElectron = vi.fn().mockResolvedValue({
-      app: { exit: appExit },
-      dialog: { showErrorBox },
-    });
-    expect(() =>
-      acquireWriteLeaseOrExit(
-        () => {
-          throw new StoreAlreadyOwnedError('/tmp/x.lock');
-        },
-        loadElectron,
-      ),
-    ).toThrow(StoreAlreadyOwnedError);
-    // The dialog + exit fire on the microtask after the throw.
-    await vi.waitFor(() => {
-      expect(showErrorBox).toHaveBeenCalledWith(
-        '无法再开一个',
-        expect.stringContaining('回到已经打开的窗口'),
-      );
-      expect(appExit).toHaveBeenCalledWith(1);
-    });
-  });
-
-  it('falls back to process.exit when electron does not resolve', async () => {
+  it('logs and exits on StoreAlreadyOwnedError', async () => {
     const exitProcess = vi.fn();
-    const loadElectron = vi.fn().mockRejectedValue(new Error('not electron'));
-    expect(() =>
-      acquireWriteLeaseOrExit(
-        () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() =>
+        acquireWriteLeaseOrExit(() => {
           throw new StoreAlreadyOwnedError('/tmp/x.lock');
-        },
-        loadElectron,
-        exitProcess,
-      ),
-    ).toThrow(StoreAlreadyOwnedError);
-    await vi.waitFor(() => {
-      expect(exitProcess).toHaveBeenCalledWith(1);
-    });
+        }, exitProcess),
+      ).toThrow(StoreAlreadyOwnedError);
+      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('/tmp/x.lock'));
+      await vi.waitFor(() => {
+        expect(exitProcess).toHaveBeenCalledWith(1);
+      });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });

@@ -22,8 +22,7 @@ import { SseBus } from './sse-bus.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Match the Electron entry's dotenv precedence: local file first, existing
-// process variables always win.
+// dotenv precedence: local file first, existing process variables always win.
 for (const file of ['.env.local', '.env']) {
   const fullPath = path.join(path.resolve(__dirname, '..', '..'), file);
   if (existsSync(fullPath)) dotenv.config({ path: fullPath, override: false });

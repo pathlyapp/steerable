@@ -3,9 +3,9 @@
  * actually see, replacing the old behavior of dropping only the file *path*
  * into the prompt text.
  *
- * Runs in the Electron main process and uses `nativeImage` to decode /
- * downscale — no native dependency, works in the packaged app. Two caps are
- * enforced before the image ever reaches the model:
+ * Decoding / downscaling runs only when an {@link ImageDecoder} is supplied;
+ * otherwise the original bytes pass through under the encoded cap. These caps
+ * are enforced before the image ever reaches the model:
  *
  *   - source bytes  (`IMAGE_MAX_SOURCE_BYTES`) — refuse to read huge files;
  *   - long-edge px  (`IMAGE_MAX_DIMENSION`)    — downscale so the provider's
@@ -17,8 +17,6 @@
  * line so the caller can inject it into the model-visible context — the model
  * should know an image was attached even when it was too large to send.
  */
-import { getNativeImage } from './runtime.js';
-import type { NativeImageLike } from './runtime.js';
 import { readFileSync, statSync } from 'fs';
 import { basename, extname } from 'path';
 import type { LlmImage } from './llm/types.js';
@@ -31,6 +29,24 @@ export const IMAGE_MAX_DIMENSION = 1568;
 export const IMAGE_MAX_ENCODED_BYTES = 5 * 1024 * 1024;
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
+
+/** A decoded raster that can be cropped, resized, and re-encoded synchronously. */
+export interface DecodedImage {
+  isEmpty(): boolean;
+  getSize(): { width: number; height: number };
+  crop(rect: { x: number; y: number; width: number; height: number }): DecodedImage;
+  resize(o: { width?: number; height?: number; quality?: string }): DecodedImage;
+  toPNG(): Buffer;
+  toJPEG(quality: number): Buffer;
+}
+
+/**
+ * Optional image decoder. Without one, images pass through as the original
+ * bytes and crop / resize / transcode requests are refused.
+ */
+export interface ImageDecoder {
+  createFromPath(p: string): DecodedImage;
+}
 
 export interface ImageAttachmentInput {
   path: string;
@@ -122,7 +138,7 @@ export function computeTargetSize(
  */
 export function processViewImage(
   input: ViewImageInput,
-  nativeImage: NativeImageLike | null = getNativeImage(),
+  decoder: ImageDecoder | null = null,
 ): ViewImageResult {
   if (!isImagePath(input.path)) {
     return {
@@ -155,11 +171,11 @@ export function processViewImage(
     };
   }
 
-  if (!nativeImage) {
+  if (!decoder) {
     return viewImageWithoutDecoder(input, sourceBytes, maxEdge);
   }
 
-  let rendered = nativeImage.createFromPath(input.path);
+  let rendered = decoder.createFromPath(input.path);
   if (rendered.isEmpty()) {
     return { success: false, error: '不是可识别的图片', needsFollowup: true };
   }
@@ -333,11 +349,12 @@ function formatMb(bytes: number): string {
 }
 
 /**
- * Process a batch of image attachments. Synchronous: `nativeImage` decode /
+ * Process a batch of image attachments. Synchronous: decoder decode /
  * resize / encode are all synchronous, and the byte check uses `statSync`.
  */
 export function processImageAttachments(
   files: ImageAttachmentInput[],
+  decoder: ImageDecoder | null = null,
 ): ProcessedImageAttachments {
   const images: LlmImage[] = [];
   const notes: string[] = [];
@@ -345,8 +362,7 @@ export function processImageAttachments(
   for (const file of files) {
     const label = file.name || basename(file.path);
 
-    // Existence + source-size guards run before the decoder so they're
-    // exercisable in a non-Electron (test) host too.
+    // Existence + source-size guards run before the decoder.
     let sourceBytes = 0;
     try {
       sourceBytes = statSync(file.path).size;
@@ -359,12 +375,9 @@ export function processImageAttachments(
       continue;
     }
 
-    const nativeImage = getNativeImage();
-    if (!nativeImage) {
-      // Tauri and the browser server run plain Node, which has no Electron
-      // nativeImage. The bytes are already a PNG/JPEG the provider can read;
-      // pass them through when they fit the encoded cap. Resize stays on the
-      // Electron path.
+    if (!decoder) {
+      // The bytes are already an image the provider can read; pass them
+      // through when they fit the encoded cap.
       if (sourceBytes > IMAGE_MAX_ENCODED_BYTES) {
         notes.push(`- ${label}：源文件 ${formatMb(sourceBytes)}MB 超过 ${formatMb(IMAGE_MAX_ENCODED_BYTES)}MB，当前环境不能缩放，未附加`);
         continue;
@@ -384,7 +397,7 @@ export function processImageAttachments(
       continue;
     }
 
-    const image = nativeImage.createFromPath(file.path);
+    const image = decoder.createFromPath(file.path);
     if (image.isEmpty()) {
       notes.push(`- ${label}：不是可识别的图片，未附加`);
       continue;

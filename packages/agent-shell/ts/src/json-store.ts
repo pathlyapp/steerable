@@ -1,10 +1,7 @@
 /**
- * JSON 键值存储工厂（agent-mcp-servers.json / agent-projects.json / window-state）。
- *
- * 历史上用 electron-store；它只在构造时读 `app.getPath('userData')` 当 cwd，
- * 而 conf（electron-store 的底层，已是本项目直接依赖）API 完全覆盖用到的
- * get/set + name + defaults 子集。统一走 conf + getUserDataDir()，Electron
- * 与 BS server 得到同一个文件路径，两种模式共享同一份数据。
+ * JSON 键值存储工厂（agent-mcp-servers.json / agent-projects.json /
+ * agent-local-scripts.json）。文件在 getUserDataDir() 下，由 conf 读写；
+ * 桌面与 BS server 得到同一个文件路径。
  *
  * conf@10 的 d.ts 是 ESM 风格但包本身没有 `type: module`，NodeNext 下类型
  * 解析会塌成 namespace——所以这里声明用到的最小接口并做一次强转，不依赖

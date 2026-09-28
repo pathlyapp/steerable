@@ -278,7 +278,7 @@ function buildLocalAgent() {
     platform: process.platform,
     hostname: 'localhost',
     shell: process.platform === 'win32' ? 'powershell' : 'zsh',
-    osVersion: process.versions.electron || null,
+    osVersion: null,
     osArch: process.arch,
     isOnline: true,
     lastHeartbeat: now,
@@ -643,7 +643,7 @@ export class LocalBackendRouter {
     }
 
     // ───── 项目模式：projects CRUD ─────
-    // 项目记录存 electron-store（agent-projects.json），chat.project_id 存
+    // 项目记录存 json-store（agent-projects.json），chat.project_id 存
     // SQLite。删除项目不删会话——会话降级为无项目对话。
     if (
       (pathname === '/api/v2/projects' || pathname.startsWith('/api/v2/projects/')) &&

@@ -1,5 +1,5 @@
-import Store from 'electron-store';
 import { randomUUID } from 'crypto';
+import { createJsonStore, type JsonStore } from './json-store.js';
 
 export interface LocalScript {
   id: string;
@@ -13,9 +13,9 @@ export interface LocalScript {
   updatedAt: string;
 }
 
-interface LocalScriptStore {
+type LocalScriptStore = {
   localScripts: LocalScript[];
-}
+};
 
 export interface CreateLocalScriptInput {
   name: string;
@@ -27,10 +27,10 @@ export interface CreateLocalScriptInput {
 }
 
 export class LocalScriptRegistry {
-  private readonly store: Store<LocalScriptStore>;
+  private readonly store: JsonStore<LocalScriptStore>;
 
   constructor() {
-    this.store = new Store<LocalScriptStore>({
+    this.store = createJsonStore<LocalScriptStore>({
       name: 'agent-local-scripts',
       defaults: {
         localScripts: [],

@@ -8,8 +8,8 @@
  * 源文件夹及其子目录同样可写。
  *
  * 持久化在 userData/agent-projects.json。存储通过 {@link ProjectKvStore}
- * 接口注入：main.ts 用 electron-store 实现，单测用内存实现——本模块不
- * import electron，保持纯 Node 可测（与 mcp-server-registry.ts 同一模式）。
+ * 接口注入：宿主用 json-store 实现，单测用内存实现（与
+ * mcp-server-registry.ts 同一模式）。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -43,7 +43,7 @@ export interface CreateProjectInput {
   sourceFolders?: string[];
 }
 
-/** 最小 KV 存储接口，避免本模块直接依赖 electron-store。 */
+/** 最小 KV 存储接口，避免本模块直接依赖具体存储实现。 */
 export interface ProjectKvStore {
   get(key: 'projects'): ProjectRecord[] | undefined;
   set(key: 'projects', value: ProjectRecord[]): void;

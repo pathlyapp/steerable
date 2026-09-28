@@ -10,8 +10,9 @@ import {
   processViewImage,
   IMAGE_MAX_ENCODED_BYTES,
   IMAGE_MAX_SOURCE_BYTES,
+  type DecodedImage,
+  type ImageDecoder,
 } from '../src/image-attachment.js';
-import type { NativeImageInstance, NativeImageLike } from '../src/runtime.js';
 
 function fakeNativeImage(
   width: number,
@@ -23,7 +24,7 @@ function fakeNativeImage(
     jpeg?: Buffer;
     empty?: boolean;
   } = {},
-): NativeImageInstance {
+): DecodedImage {
   return {
     isEmpty: () => options.empty ?? false,
     getSize: () => ({ width, height }),
@@ -149,7 +150,7 @@ describe('processImageAttachments（非 Electron 宿主）', () => {
       const p = join(dir, 'ok.png');
       writeFileSync(p, Buffer.from([137, 80, 78, 71])); // PNG magic, 内容无所谓
       const r = processImageAttachments([{ path: p, name: 'ok.png' }]);
-      // 无 nativeImage 时原样把字节交给模型，不再只留路径。
+      // 无解码器时原样把字节交给模型，不再只留路径。
       expect(r.images).toEqual([{
         data: Buffer.from([137, 80, 78, 71]).toString('base64'),
         mediaType: 'image/png',
@@ -166,7 +167,7 @@ describe('processViewImage', () => {
     withImageFile((imagePath) => {
       const crops: unknown[] = [];
       const resizes: unknown[] = [];
-      const decoder: NativeImageLike = {
+      const decoder: ImageDecoder = {
         createFromPath: () => fakeNativeImage(2000, 1000, { crops, resizes }),
       };
 

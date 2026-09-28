@@ -5,8 +5,8 @@
  * 持久化在 userData/agent-mcp-servers.json。已启用服务的工具会经
  * ToolRouter 以 `mcp__<serverKey>__<toolName>` 一等工具身份暴露给模型。
  *
- * 存储通过 {@link McpServerKvStore} 接口注入：main.ts 用 electron-store
- * 实现，单测用内存实现——本模块不 import electron，保持纯 Node 可测。
+ * 存储通过 {@link McpServerKvStore} 接口注入：宿主用 json-store 实现，
+ * 单测用内存实现。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -93,7 +93,7 @@ export interface UpdateMcpServerInput {
   enabled?: boolean;
 }
 
-/** 最小 KV 存储接口，避免本模块直接依赖 electron-store。 */
+/** 最小 KV 存储接口，避免本模块直接依赖具体存储实现。 */
 export interface McpServerKvStore {
   get(key: 'mcpServers'): McpServerEntry[] | undefined;
   set(key: 'mcpServers', value: McpServerEntry[]): void;

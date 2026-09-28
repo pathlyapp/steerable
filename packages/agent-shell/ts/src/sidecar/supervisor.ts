@@ -19,8 +19,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { onAppWillQuit, offAppWillQuit } from '../runtime.js';
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -113,7 +111,6 @@ export class SidecarSupervisor extends EventEmitter {
   private healthTimer: NodeJS.Timeout | null = null;
   private failedPings = 0;
   private shuttingDown = false;
-  private quitListener: (() => void) | null = null;
   private reverseHandlers = new Map<string, SidecarReverseHandler>();
 
   private constructor(private readonly options: SidecarStartOptions) {
@@ -495,10 +492,6 @@ export class SidecarSupervisor extends EventEmitter {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
     this.stopHealthTimer();
-    if (this.quitListener) {
-      offAppWillQuit(this.quitListener);
-      this.quitListener = null;
-    }
     const child = this.child;
     if (!child) return;
     try {
@@ -548,7 +541,6 @@ export class SidecarSupervisor extends EventEmitter {
       throw err;
     }
 
-    this.installAppQuitHook();
     this.startHealthTimer();
     this.emit('ready', this.readyHealth);
   }
@@ -839,14 +831,6 @@ export class SidecarSupervisor extends EventEmitter {
     });
   }
 
-  private installAppQuitHook(): void {
-    const hook = () => {
-      void this.shutdown();
-    };
-    this.quitListener = hook;
-    onAppWillQuit(hook);
-  }
-
   private async waitForReady(timeoutMs: number): Promise<SidecarHealthSnapshot> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -1122,22 +1106,13 @@ export function resolveSidecarPython(pythonExecutable?: string): string {
   // build_sidecar.py 的产物布局是 <platform>/python/<exe>（Windows：
   // python/python.exe；POSIX：python/bin/python3，见 build_sidecar.py 的
   // python_binary()）。保留无 python/ 层的旧布局候选做向后兼容。
-  const runtimeBases: string[] = [];
-  try {
-    const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-    if (resourcesPath) {
-      runtimeBases.push(join(resourcesPath, 'python-runtime'));
-    }
-  } catch { /* not in Electron */ }
-  runtimeBases.push(join(__dirname, '..', '..', 'python-runtime'));
-
-  const candidates: string[] = [];
-  for (const base of runtimeBases) {
-    candidates.push(join(base, platformTag, 'python', binaryName));
-    candidates.push(join(base, platformTag, 'python', 'bin', binaryName));
-    candidates.push(join(base, platformTag, binaryName));
-    candidates.push(join(base, platformTag, 'bin', binaryName));
-  }
+  const runtimeBase = join(__dirname, '..', '..', 'python-runtime');
+  const candidates = [
+    join(runtimeBase, platformTag, 'python', binaryName),
+    join(runtimeBase, platformTag, 'python', 'bin', binaryName),
+    join(runtimeBase, platformTag, binaryName),
+    join(runtimeBase, platformTag, 'bin', binaryName),
+  ];
 
   // Dev-layout convenience: the framework repo root .venv (uv sync). The
   // shell lives inside the framework repo (packages/agent-shell/ts), so the

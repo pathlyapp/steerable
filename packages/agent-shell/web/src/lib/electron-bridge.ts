@@ -1,11 +1,8 @@
 /**
  * Host-neutral bridge used by the renderer in desktop and browser modes.
  *
- * This file MUST stay a subset / aligned shape with `ElectronAPI` in
- * `../../../src/preload.ts`. We intentionally don't TypeScript-reference that
- * file across workspaces — it would drag the whole main-process source tree
- * into the renderer's compile graph. Treat this as a contract surface and
- * extend it lazily as apps/web starts using new bridge methods.
+ * Implementations are `tauri-bridge.ts` (desktop) and `http-bridge.ts`
+ * (browser server); both must satisfy {@link HostBridge}.
  *
  * `window.electron` and `getElectronBridge()` remain compatibility aliases for
  * existing products. New integrations should use `window.steerableHost` and
