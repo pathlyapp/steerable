@@ -6,6 +6,8 @@
  * 为 true 时原样写入，导入方要自己确认。
  */
 
+import { t } from '../i18n.js';
+
 export const PORTABLE_SCHEMA_VERSION = 1;
 export const PORTABLE_MESSAGE_LIMIT = 1000;
 
@@ -253,16 +255,16 @@ export function readPortableProject(raw: unknown): PortableProject | null {
 }
 
 function thinkingLabel(mode: unknown): string {
-  if (mode === 'hidden') return '隐藏';
-  if (mode === 'full') return '完整显示';
-  if (mode === 'peek') return '显示5行';
-  return '未识别的显示档位';
+  if (mode === 'hidden') return t('Hide');
+  if (mode === 'full') return t('Show all');
+  if (mode === 'peek') return t('Show 5 lines');
+  return t('Unrecognized display mode');
 }
 
 function execLabel(policy: unknown): string {
-  if (policy === 'full') return '完整权限';
-  if (policy === 'workspace') return '工作区';
-  return '未识别的权限';
+  if (policy === 'full') return t('Full access');
+  if (policy === 'workspace') return t('Workspace');
+  return t('Unrecognized permission');
 }
 
 export function llmSectionFromSettings(

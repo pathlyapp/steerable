@@ -97,33 +97,33 @@ function createInitialState(): BrowserMockState {
     {
       id: 'coach',
       slug: 'coach',
-      name: '行动教练',
+      name: 'Action coach',
       icon: null,
       color: '#2563eb',
-      description: '把目标拆成可执行计划，适合调试标准聊天路径。',
-      rolePrompt: '你是一个行动教练。',
+      description: 'Breaks a goal into an executable plan. Useful for debugging the standard chat path.',
+      rolePrompt: 'You are an action coach.',
       isBuiltin: true,
       sortOrder: 1,
     },
     {
       id: 'tool-demo',
       slug: 'tool-demo',
-      name: '工具演示专家',
+      name: 'Tool demo',
       icon: null,
       color: '#7c3aed',
-      description: '模拟本地工具调用和执行摘要，适合调试工具卡片。',
-      rolePrompt: '你是工具演示智能体。',
+      description: 'Simulates local tool calls and execution summaries. Useful for debugging tool cards.',
+      rolePrompt: 'You are the tool-demo agent.',
       isBuiltin: true,
       sortOrder: 2,
     },
     {
       id: 'writer',
       slug: 'writer',
-      name: '文案顾问',
+      name: 'Writing advisor',
       icon: null,
       color: '#16a34a',
-      description: '偏长文本回复样例，适合调试 markdown 与滚动。',
-      rolePrompt: '你是一个文案顾问。',
+      description: 'Longer text replies, for debugging markdown and scrolling.',
+      rolePrompt: 'You are a writing advisor.',
       isBuiltin: true,
       sortOrder: 3,
     },
@@ -132,14 +132,14 @@ function createInitialState(): BrowserMockState {
   const chats = [
     createChatRecord({
       id: 'chat-browser-demo',
-      title: '浏览器 UI 调试样例',
+      title: 'Browser UI debug sample',
       agentId: 'coach',
       minutesAgo: 8,
       isPinned: true,
     }),
     createChatRecord({
       id: 'chat-tool-demo',
-      title: '工具调用卡片预览',
+      title: 'Tool-call card preview',
       agentId: 'tool-demo',
       minutesAgo: 64,
     }),
@@ -155,14 +155,14 @@ function createInitialState(): BrowserMockState {
           chatId: 'chat-browser-demo',
           role: 'assistant',
           content:
-            '可以在这里调试普通浏览器里的聊天 UI。这个回复来自 dev mock bridge，不依赖 Electron IPC。',
+            'You can debug the chat UI in a normal browser here. This reply comes from the dev mock bridge and does not use Electron IPC.',
           minutesAgo: 7,
         }),
         createMessage({
           id: 'msg-demo-user-1',
           chatId: 'chat-browser-demo',
           role: 'user',
-          content: '我想在浏览器里调试聊天界面。',
+          content: 'I want to debug the chat UI in the browser.',
           minutesAgo: 8,
         }),
       ],
@@ -171,7 +171,7 @@ function createInitialState(): BrowserMockState {
           id: 'msg-tool-assistant-1',
           chatId: 'chat-tool-demo',
           role: 'assistant',
-          content: '我已经模拟执行了一次本地命令，并把结果展示在工具卡片里。',
+          content: 'I simulated a local command and put the result in a tool card.',
           minutesAgo: 63,
           messageMetadata: JSON.stringify({
             executedActions: [
@@ -187,7 +187,7 @@ function createInitialState(): BrowserMockState {
           id: 'msg-tool-user-1',
           chatId: 'chat-tool-demo',
           role: 'user',
-          content: '帮我看一下最近的工具调用记录。',
+          content: 'Show me the recent tool-call records.',
           minutesAgo: 64,
         }),
       ],
@@ -201,9 +201,9 @@ function createInitialState(): BrowserMockState {
       maxTotalTokens: 60_000,
     },
     skills: [
-      { name: 'tool-demo', description: '模拟查询与回放工具。', builtin: true },
-      { name: 'local-exec', description: '模拟本地命令执行。', builtin: true },
-      { name: 'anti-deferred', description: '模拟防拖延执行策略。', builtin: true },
+      { name: 'tool-demo', description: 'Simulates query and replay tools.', builtin: true },
+      { name: 'local-exec', description: 'Simulates local command execution.', builtin: true },
+      { name: 'anti-deferred', description: 'Simulates the anti-deferral execution policy.', builtin: true },
     ],
     activeStreams: new Map(),
     source: 'fallback',
@@ -235,8 +235,8 @@ function createStateFromFixture(fixture: BrowserDevFixture): BrowserMockState | 
       Array.isArray(fixture.skills) && fixture.skills.length > 0
         ? fixture.skills
         : [
-            { name: 'tool-demo', description: '查询与回放工具。', builtin: true },
-            { name: 'local-exec', description: '本地命令执行。', builtin: true },
+            { name: 'tool-demo', description: 'Query and replay tools.', builtin: true },
+            { name: 'local-exec', description: 'Local command execution.', builtin: true },
           ],
     activeStreams: new Map(),
     source: 'fixture',
@@ -318,7 +318,7 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
     const agent: LocalChatAgent = {
       id,
       slug: null,
-      name: (body.name || '新助手').trim() || '新助手',
+      name: (body.name || 'New assistant').trim() || 'New assistant',
       icon: null,
       color: body.color ?? '#4f46e5',
       description: body.description ?? null,
@@ -392,10 +392,10 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
   if (method === 'GET' && cleanPath === '/api/v2/chat-agents/tools') {
     return {
       tools: [
-        { name: 'local_exec_shell', description: '执行本地 shell 命令。', category: 'local' },
-        { name: 'local_read_file', description: '读取本地文本文件。', category: 'local' },
-        { name: 'local_write_file', description: '写入本地文件。', category: 'local' },
-        { name: 'web_search', description: '联网搜索。', category: 'local' },
+        { name: 'local_exec_shell', description: 'Run a local shell command.', category: 'local' },
+        { name: 'local_read_file', description: 'Read a local text file.', category: 'local' },
+        { name: 'local_write_file', description: 'Write a local file.', category: 'local' },
+        { name: 'web_search', description: 'Search the web.', category: 'local' },
       ],
     } as T;
   }
@@ -404,7 +404,7 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
     const body = input.body as { path?: string } | undefined;
     const name = body?.path?.split(/[\\/]/).filter(Boolean).pop() || 'browser-skill';
     if (!state.skills.some((skill) => skill.name === name)) {
-      state.skills.push({ name, description: '浏览器预览中导入的 mock skill。' });
+      state.skills.push({ name, description: 'Mock skill imported in the browser preview.' });
     }
     return { success: true, name } as T;
   }
@@ -444,7 +444,7 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
     const chatId = `chat-browser-${Date.now()}`;
     const chat = createChatRecord({
       id: chatId,
-      title: '新会话',
+      title: 'New chat',
       agentId,
       minutesAgo: 0,
     });
@@ -515,7 +515,7 @@ async function startStream(
   }
 
   const body = input.body as { message?: string } | undefined;
-  const message = body?.message?.trim() || '请演示一下浏览器 mock 回复。';
+  const message = body?.message?.trim() || 'Please demo a browser mock reply.';
   const streamId = `browser-stream-${Date.now()}`;
   state.activeStreams.set(streamId, []);
 
@@ -530,10 +530,10 @@ async function startStream(
   state.messagesByChatId[chatId] = [...(state.messagesByChatId[chatId] ?? []), userMessage];
 
   const reply =
-    `这是浏览器 dev mock 的流式回复。你刚才输入的是：「${message}」。` +
-    ' 这里可以调试消息气泡、滚动、停止按钮、工具执行卡片和后续状态。';
+    `This is a streaming reply from the browser dev mock. You wrote: "${message}".` +
+    ' Use it to debug message bubbles, scrolling, the stop button, tool cards, and later status.';
   const chunks = reply.match(/.{1,8}/g) ?? [reply];
-  const reasoning = '先调用一次 mock 工具，再把回复按调用流程交错显示。';
+  const reasoning = 'Call one mock tool, then interleave the reply with that call.';
   const mockAction = {
     id: 'browser-mock-1',
     tool: 'browser_mock',
@@ -580,7 +580,7 @@ async function startStream(
           { type: 'text', content: reply },
         ],
         durationMs: 1_200,
-        suggestedReplies: ['继续完善这份结果', '换一种呈现方式', '告诉我下一步怎么做'],
+        suggestedReplies: ['Keep improving this result', 'Try another presentation', 'Tell me the next step'],
       }),
     });
     assistantMessage.createdAt = new Date().toISOString();
@@ -593,7 +593,7 @@ async function startStream(
     pushSse(onEvent, '[DONE]');
     onEvent({ type: 'end', status: 200 });
     state.activeStreams.delete(streamId);
-    const suggestions = ['继续完善这份结果', '换一种呈现方式', '告诉我下一步怎么做'];
+    const suggestions = ['Keep improving this result', 'Try another presentation', 'Tell me the next step'];
     for (const listener of suggestedReplyListeners) {
       listener({ chatId, messageId: assistantMessage.id, suggestions });
     }
@@ -625,7 +625,7 @@ export function installBrowserDevElectronMock() {
       // 浏览器 dev 模式没有 Electron capturePage/clipboard，如实返回失败。
       captureScreenshot: async () => ({
         success: false as const,
-        error: '浏览器开发模式不支持窗口截图（需要 Electron 运行时）',
+        error: 'Browser dev mode cannot capture a window screenshot (it needs the Electron runtime).',
       }),
     },
     localBackend: {

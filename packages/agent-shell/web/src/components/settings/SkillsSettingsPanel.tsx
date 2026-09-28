@@ -5,6 +5,7 @@ import {
   LuLoaderCircle,
   LuTrash2,
 } from 'react-icons/lu';
+import { t } from '@/i18n';
 import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
 import { getPackHiddenSlashSkills } from '@/packs/registry';
 
@@ -68,7 +69,7 @@ export function SkillsSettingsPanel() {
       });
       setSkills(res.skills || []);
     } catch (err) {
-      console.error('获取技能列表失败:', err);
+      console.error('Failed to load skill list:', err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSkillsLoading(false);
@@ -84,20 +85,20 @@ export function SkillsSettingsPanel() {
     try {
       const bridge = getElectronBridge();
       if (bridge?.local?.selectDirectory) {
-        setImportStatus('正在打开文件夹选择器...');
+        setImportStatus(t('Opening folder picker...'));
         const result = await bridge.local.selectDirectory();
         if (result && !result.canceled && result.filePaths.length > 0) {
           const selectedPath = result.filePaths[0];
           setImportPath(selectedPath);
-          setImportStatus(`已选择路径: ${selectedPath}`);
+          setImportStatus(t('Selected path: {path}', { path: selectedPath }));
         } else {
-          setImportStatus('已取消选择文件夹');
+          setImportStatus(t('Folder selection canceled'));
         }
       } else {
-        setError('当前版本的客户端不支持文件夹选择器');
+        setError(t('This version of the app does not support the folder picker'));
       }
     } catch (err) {
-      console.error('选择文件夹失败:', err);
+      console.error('Failed to select folder:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
   };
@@ -107,7 +108,7 @@ export function SkillsSettingsPanel() {
     if (!trimmed) return;
     setImporting(true);
     setError(null);
-    setImportStatus('正在导入本地技能...');
+    setImportStatus(t('Importing local skill...'));
     try {
       const res = await getElectronBridge()!.localBackend.request<{ success: boolean; name: string }>({
         method: 'POST',
@@ -116,16 +117,16 @@ export function SkillsSettingsPanel() {
       });
       if (res.success) {
         setImportPath('');
-        setImportStatus(`导入成功! 已添加技能 "${res.name}"`);
+        setImportStatus(t('Import succeeded. Added skill "{name}"', { name: res.name }));
         await fetchSkills();
       } else {
-        setError('导入技能失败');
-        setImportStatus('导入失败: 无法将技能拷贝到运行目录');
+        setError(t('Failed to import skill'));
+        setImportStatus(t('Import failed: could not copy the skill to the runtime directory'));
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       setError(errMsg);
-      setImportStatus(`导入出错: ${errMsg}`);
+      setImportStatus(t('Import error: {error}', { error: errMsg }));
     } finally {
       setImporting(false);
     }
@@ -143,7 +144,7 @@ export function SkillsSettingsPanel() {
       if (res.success) {
         await fetchSkills();
       } else {
-        setError('删除技能失败');
+        setError(t('Failed to delete skill'));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -158,11 +159,15 @@ export function SkillsSettingsPanel() {
       <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-2.5 space-y-2">
         <h4 className="text-xs font-semibold text-agent-foreground flex items-center gap-1.5">
           <LuBlocks className="h-3.5 w-3.5 text-agent-muted-foreground" />
-          导入本地技能目录 (Import Local Skill Directory)
+          {t('Import local skill directory')}
         </h4>
         <p className="text-[11px] text-agent-muted-foreground">
-          写到当前项目（或工作目录）下 <code>skills/技能名/</code> 的技能会自动出现在下方列表，无需导入。
-          也可以在这里导入其它本地目录（包含 <code>SKILL.md</code> 的文件夹，例如：<code>my-team/sql-tools</code>）。
+          {t('Skills saved in the current project (or working directory) under')}{' '}
+          <code>skills/{t('skill-name')}/</code>{' '}
+          {t('appear in the list below automatically. No import needed.')}{' '}
+          {t('You can also import other local directories here (any folder with')}{' '}
+          <code>SKILL.md</code> {t('inside, for example')} <code>my-team/sql-tools</code>
+          {t(').')}
         </p>
         <div className="flex gap-2">
           <div className="relative flex-1 flex items-center">
@@ -170,7 +175,7 @@ export function SkillsSettingsPanel() {
               type="text"
               value={importPath}
               onChange={(e) => setImportPath(e.target.value)}
-              placeholder="请输入技能路径，或点击右侧选择文件夹"
+              placeholder={t('Enter a skill path, or click the button on the right to choose a folder')}
               className="w-full pl-3 pr-8 h-8 text-xs bg-agent-canvas text-agent-foreground border border-agent-border rounded-agent-md focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
               disabled={importing}
               data-testid="skills-import-path"
@@ -180,7 +185,7 @@ export function SkillsSettingsPanel() {
               onClick={handleBrowseFolder}
               disabled={importing}
               className="absolute right-2.5 text-agent-muted-foreground hover:text-agent-foreground transition-colors"
-              title="选择本地文件夹"
+              title={t('Choose a local folder')}
               data-testid="skills-import-browse"
             >
               <LuFolderOpen className="h-4 w-4" />
@@ -200,7 +205,7 @@ export function SkillsSettingsPanel() {
             {importing ? (
               <LuLoaderCircle className="h-3 w-3 animate-spin" />
             ) : (
-              '导入'
+              t('Import')
             )}
           </button>
         </div>
@@ -217,16 +222,16 @@ export function SkillsSettingsPanel() {
       {/* Skills List */}
       <div className="space-y-2">
         <h4 className="text-xs font-semibold text-agent-muted-foreground uppercase tracking-wide">
-          已加载技能
+          {t('Loaded skills')}
         </h4>
         {skillsLoading ? (
           <div className="flex items-center gap-2 py-4 text-xs text-agent-muted-foreground">
             <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            获取已加载技能...
+            {t('Fetching loaded skills...')}
           </div>
         ) : skills.length === 0 ? (
           <div className="text-center py-6 text-xs text-agent-muted-foreground">
-            暂无已加载技能
+            {t('No loaded skills yet')}
           </div>
         ) : (
           <div className="divide-y divide-agent-border/40 pr-1">
@@ -257,38 +262,38 @@ export function SkillsSettingsPanel() {
                       )}
                       {isBuiltin && (
                         <span className="px-1 py-0.2 rounded bg-agent-muted text-[9px] text-agent-muted-foreground font-medium flex-shrink-0 scale-95 origin-left">
-                          内置
+                          {t('Built-in')}
                         </span>
                       )}
                       {isWorkspace && (
                         <span
                           className="px-1 py-0.2 rounded bg-agent-muted text-[9px] text-agent-muted-foreground font-medium flex-shrink-0 scale-95 origin-left"
-                          title="来自项目或工作目录的 skills/ 文件夹，写进去即出现在此列表"
+                          title={t('From the skills/ folder of the project or working directory. Anything saved there appears in this list.')}
                         >
-                          工作区
+                          {t('Workspace')}
                         </span>
                       )}
                       {skill.layer === 'eager' ? (
                         <span
                           className="px-1 py-0.2 rounded bg-agent-muted text-[9px] text-agent-muted-foreground font-medium flex-shrink-0 scale-95 origin-left"
-                          title="常驻层：正文始终注入系统提示词"
+                          title={t('Always-on layer: the body is always injected into the system prompt')}
                         >
-                          常驻
+                          {t('Always on')}
                         </span>
                       ) : (
                         <span
                           className="px-1 py-0.2 rounded bg-agent-muted text-[9px] text-agent-muted-foreground font-medium flex-shrink-0 scale-95 origin-left"
-                          title="按需层：仅在目录中列出，模型经 skill 工具按需加载"
+                          title={t('On-demand layer: only listed in the catalog. The model loads it through the skill tool when needed.')}
                         >
-                          按需
+                          {t('On demand')}
                         </span>
                       )}
                       {skill.modelInvocable === false && (
                         <span
                           className="px-1 py-0.2 rounded bg-agent-muted text-[9px] text-agent-muted-foreground font-medium flex-shrink-0 scale-95 origin-left"
-                          title="disable-model-invocation：模型不可调用，只能用 /名称 手动触发"
+                          title={t('disable-model-invocation: the model cannot call it. Trigger it manually with /name.')}
                         >
-                          仅手动
+                          {t('Manual only')}
                         </span>
                       )}
                     </div>
@@ -304,7 +309,7 @@ export function SkillsSettingsPanel() {
                       onClick={() => handleDeleteSkill(skill.name)}
                       disabled={deletingName === skill.name}
                       className="text-agent-muted-foreground hover:text-agent-destructive p-1 rounded-full hover:bg-agent-muted transition-colors"
-                      title="卸载此技能"
+                      title={t('Uninstall this skill')}
                       data-testid={`skill-uninstall-${skill.name}`}
                     >
                       {deletingName === skill.name ? (

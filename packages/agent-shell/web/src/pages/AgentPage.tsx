@@ -63,6 +63,7 @@ import {
 } from "@/lib/pending-first-message";
 import { isOrchestrationSettingEnabled } from "@/lib/orchestration-settings";
 import { pickDefaultAgentId } from "@/brand";
+import { t } from "@/i18n";
 import {
   appendAttachmentRefs,
   collectImageAttachments,
@@ -318,7 +319,7 @@ function AgentChatLoader({
   if (initialMessages === null) {
     return (
       <div className="flex h-full w-full items-center justify-center text-xs text-agent-muted-foreground">
-        加载对话历史…
+        {t("Loading chat history…")}
       </div>
     );
   }
@@ -1041,7 +1042,7 @@ function AgentChatView({
   const handleExecutePlan = useCallback(() => {
     handleModeChange("agent");
     setPlanReady(false);
-    void handleSubmit({ content: "请按照上面的计划开始执行。" });
+    void handleSubmit({ content: t("Start executing the plan above.") });
   }, [handleModeChange, handleSubmit]);
 
   // 分享当前对话：截取整个聊天面板区域（含 header + 消息 + 输入框），
@@ -1154,7 +1155,7 @@ function AgentChatView({
     <div className="flex h-full w-full flex-col">
       {hydrationError && (
         <div className="border-b border-agent-border bg-agent-muted/60 px-2.5 py-1 text-xs text-agent-destructive">
-          加载对话历史失败：{hydrationError}
+          {t("Failed to load chat history: {error}", { error: hydrationError })}
         </div>
       )}
       <LocalChatPanel
@@ -1191,7 +1192,7 @@ function AgentChatView({
               }
             : undefined
         }
-        inputPlaceholder="向本地 Agent 发送消息…"
+        inputPlaceholder={t("Message the local Agent…")}
         agents={ctx.agents}
         chats={ctx.chats}
         currentAgent={agent}
@@ -1269,7 +1270,9 @@ function AgentChatView({
             <div className="mx-2.5 mb-1 flex items-center justify-between gap-2 rounded-agent-md border border-amber-400/50 bg-amber-400/10 px-2.5 py-1.5 text-xs">
               <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
                 <LuListChecks className="h-4 w-4 shrink-0" />
-                <span>计划已生成。确认无误后可切换到 Agent 模式开始执行。</span>
+                <span>
+                  {t("The plan is ready. Once it looks right, switch to Agent mode to execute it.")}
+                </span>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -1278,7 +1281,7 @@ function AgentChatView({
                   className="rounded-full px-2 py-1 text-agent-muted-foreground transition-colors hover:text-agent-foreground"
                   data-testid="plan-dismiss"
                 >
-                  忽略
+                  {t("Dismiss")}
                 </button>
                 <button
                   type="button"
@@ -1286,7 +1289,7 @@ function AgentChatView({
                   className="inline-flex items-center gap-1 rounded-full bg-agent-foreground px-3 py-1 font-medium text-agent-canvas transition hover:opacity-90"
                   data-testid="plan-execute"
                 >
-                  开始执行计划
+                  {t("Execute plan")}
                   <LuArrowRight className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -1416,7 +1419,7 @@ function EmptyChatGate() {
         ...(selectedProjectId && showProjectsChrome ? { projectId: selectedProjectId } : {}),
         ...(ctx.selectedAgentId ? { agentId: ctx.selectedAgentId } : {}),
       });
-      if (!id) throw new Error("创建对话失败，请重试");
+      if (!id) throw new Error(t("Failed to create the chat. Please try again."));
       // 会话已建，把附件落进会话空间（与 LocalChatPanel 同一套语义）：
       // 所有文件都写落盘路径引用（agent 用 local_read_file 读回）；仅图片
       // 额外进 metadata.images 走多模态，非图片文件不会被图片逻辑吞掉。
@@ -1466,8 +1469,8 @@ function EmptyChatGate() {
             disabled={!isElectron() || isCreating}
             placeholder={
               mode === "plan"
-                ? "描述你的目标，Agent 将先制定计划…"
-                : "向本地 Agent 发送消息…"
+                ? t("Describe your goal. The Agent will make a plan first…")
+                : t("Message the local Agent…")
             }
             currentAgent={selectedAgent}
             agents={ctx.agents}
@@ -1516,7 +1519,7 @@ function EmptyChatGate() {
         </div>
         {isCreating && (
           <p className="text-xs text-agent-muted-foreground">
-            正在创建对话…
+            {t("Creating chat…")}
           </p>
         )}
         {createError && (
@@ -1526,7 +1529,9 @@ function EmptyChatGate() {
         )}
         {!isElectron() && (
           <p className="text-xs text-agent-destructive">
-            浏览器预览模式 — 没有 Electron IPC 桥接，聊天列表与流式响应不可用。
+            {t(
+              "Browser preview mode: no Electron IPC bridge, so the chat list and streaming responses are unavailable.",
+            )}
           </p>
         )}
       </div>

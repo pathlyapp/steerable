@@ -3,6 +3,7 @@
  * 界面档位和命令权限存在 localStorage，由这里并进配置包；其余段走本地后端。
  */
 
+import { t } from '@/i18n';
 import { getElectronBridge } from '@/lib/electron-bridge';
 import { listChats } from '@/lib/local-api';
 import { persistExecPolicy, readStoredExecPolicy, type ExecPolicy } from '@/lib/exec-policy';
@@ -69,9 +70,9 @@ export interface PortableChatImportResult {
 const CLIENT_SECTION_IDS = ['appearance', 'execPolicy'] as const;
 
 export function portableErrorMessage(err: unknown): string {
-  if (!(err instanceof Error)) return '操作失败';
+  if (!(err instanceof Error)) return t('Operation failed');
   const message = err.message.trim();
-  if (!message) return '操作失败';
+  if (!message) return t('Operation failed');
   try {
     const parsed = JSON.parse(message) as { detail?: unknown; error?: unknown };
     if (typeof parsed.detail === 'string' && parsed.detail.trim()) return parsed.detail;
@@ -86,13 +87,13 @@ export function parsePortableText(text: string): { ok: true; value: unknown } | 
   try {
     return { ok: true, value: JSON.parse(text) as unknown };
   } catch {
-    return { ok: false, error: '文件不是 JSON' };
+    return { ok: false, error: t('The file is not JSON') };
   }
 }
 
 export function safeDownloadName(stem: string, suffix: string): string {
   const cleaned = stem.replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
-  return `${cleaned || '导出'}-${suffix}.json`;
+  return `${cleaned || t('Export')}-${suffix}.json`;
 }
 
 export function readLocalSections(): { appearance: { thinkingDisplay: ThinkingDisplayMode }; execPolicy: { policy: ExecPolicy } } {
@@ -139,7 +140,7 @@ export function isClientSection(id: string): boolean {
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const bridge = getElectronBridge();
-  if (!bridge) throw new Error('当前环境没有本地后端');
+  if (!bridge) throw new Error(t('No local backend in this environment'));
   return bridge.localBackend.request<T>(body === undefined ? { method, path } : { method, path, body });
 }
 
@@ -159,7 +160,7 @@ export async function listPortableChats(): Promise<Array<{ id: string; title: st
   for (;;) {
     const res = await listChats({ page, limit: 100 });
     for (const chat of res.chats) {
-      rows.push({ id: chat.id, title: chat.title.trim() || '未命名对话' });
+      rows.push({ id: chat.id, title: chat.title.trim() || t('Untitled chat') });
     }
     if (!res.pagination.hasMore || page >= 50) break;
     page += 1;
@@ -190,7 +191,7 @@ export async function saveJsonFile(filename: string, data: unknown): Promise<str
   const content = `${JSON.stringify(data, null, 2)}\n`;
   const save = getElectronBridge()?.local?.saveTextFile;
   if (save) {
-    const saved = await save({ title: '导出', defaultPath: filename, content });
+    const saved = await save({ title: t('Export'), defaultPath: filename, content });
     if (saved.canceled || !saved.filePath) return null;
     return saved.filePath;
   }

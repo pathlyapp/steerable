@@ -29,7 +29,7 @@ describe('summarizeWebAction / web_search', () => {
       { query: 'KV cache 量化' },
       { success: true, data: { result_count: 8, query: 'KV cache 量化', results: [] } },
     );
-    expect(summary).toBe('搜索“KV cache 量化” → 8 条结果');
+    expect(summary).toBe('Search "KV cache 量化" → 8 results');
   });
 
   it('长查询词截断到 40 字符', () => {
@@ -38,7 +38,7 @@ describe('summarizeWebAction / web_search', () => {
       { query: 'a'.repeat(60) },
       { success: true, data: { result_count: 1 } },
     );
-    expect(summary).toBe(`搜索“${'a'.repeat(37)}…” → 1 条结果`);
+    expect(summary).toBe(`Search "${'a'.repeat(37)}…" → 1 results`);
   });
 
   it('失败时只出意图头，不编造计数', () => {
@@ -47,12 +47,12 @@ describe('summarizeWebAction / web_search', () => {
       { query: 'x' },
       { success: false, error: 'web search timed out: ReadTimeout' },
     );
-    expect(summary).toBe('搜索“x”');
+    expect(summary).toBe('Search "x"');
   });
 
   it('data 缺失（被截断吃掉）时退化为意图头', () => {
     expect(summarizeWebAction('web_search', { query: 'x' }, { success: true })).toBe(
-      '搜索“x”',
+      'Search "x"',
     );
   });
 });
@@ -72,7 +72,7 @@ describe('summarizeWebAction / web_fetch', () => {
         },
       },
     );
-    expect(summary).toBe('抓取 example.com/docs/spec.html → 200 · 12.0 KB');
+    expect(summary).toBe('Fetch example.com/docs/spec.html → 200 · 12.0 KB');
   });
 
   it('截断的抓取带"已截断"标记', () => {
@@ -81,7 +81,7 @@ describe('summarizeWebAction / web_fetch', () => {
       { url: 'https://example.com/big' },
       { success: true, data: { status: 200, bytes: 1_000_000, truncated: true } },
     );
-    expect(summary).toBe('抓取 example.com/big → 200 · 976.6 KB · 已截断');
+    expect(summary).toBe('Fetch example.com/big → 200 · 976.6 KB · truncated');
   });
 
   it('失败时只出意图头（SSRF 拒绝 / 超时 / 跨域重定向）', () => {
@@ -90,7 +90,7 @@ describe('summarizeWebAction / web_fetch', () => {
       { url: 'http://169.254.169.254/latest' },
       { success: false, error: 'refusing to fetch a non-public address' },
     );
-    expect(summary).toBe('抓取 169.254.169.254/latest');
+    expect(summary).toBe('Fetch 169.254.169.254/latest');
   });
 
   it('无法解析的 URL 原样截断展示', () => {
@@ -99,7 +99,7 @@ describe('summarizeWebAction / web_fetch', () => {
       { url: 'not a url at all' },
       { success: false, error: 'unsupported scheme' },
     );
-    expect(summary).toBe('抓取 not a url at all');
+    expect(summary).toBe('Fetch not a url at all');
   });
 });
 
@@ -126,7 +126,7 @@ describe('summarizeRunCodeAction / expandRunCodeActions', () => {
         },
       },
     );
-    expect(summary).toBe('程序「two stubs」· 2 个内层工具');
+    expect(summary).toBe('Program "two stubs" · 2 inner tools');
   });
 
   it('展开为程序行 + 内层工具行', () => {
@@ -163,8 +163,8 @@ describe('delegate_subagent 摘要', () => {
 
   it('显示名优先用会话智能体，再退回内置画像中文名', () => {
     expect(delegateSubagentDisplayName('researcher', agents)).toBe('调研员');
-    expect(delegateSubagentDisplayName('explore', agents)).toBe('探索');
-    expect(delegateSubagentDisplayName(null, agents)).toBe('子代理');
+    expect(delegateSubagentDisplayName('explore', agents)).toBe('Explore');
+    expect(delegateSubagentDisplayName(null, agents)).toBe('Subagent');
   });
 
   it('自建智能体的派生画像名也出中文名，不甩 agent-<id>', () => {
@@ -196,7 +196,7 @@ describe('delegate_subagent 摘要', () => {
       { key: 'parent', name: '电脑操作员', color: '#111111' },
       { key: 'a1', name: '调研员', color: '#2563eb' },
       { key: 'a2', name: '脚本工程师', color: '#16a34a' },
-      { key: 'explore', name: '探索', color: '#0ea5e9' },
+      { key: 'explore', name: 'Explore', color: '#0ea5e9' },
     ]);
   });
 
@@ -253,11 +253,11 @@ describe('task_run 摘要', () => {
   });
 
   it('行头标题区分普通后台与隔离', () => {
-    expect(taskToolLabel('task_run', { task: 'x' })).toBe('后台任务');
-    expect(taskToolLabel('task_run', { task: 'x', worktree: true })).toBe('后台任务 · 隔离');
-    expect(taskToolLabel('task_status', {})).toBe('查询任务');
-    expect(taskToolLabel('task_result', {})).toBe('收取结果');
-    expect(taskToolLabel('task_send', {})).toBe('转达任务');
+    expect(taskToolLabel('task_run', { task: 'x' })).toBe('Background task');
+    expect(taskToolLabel('task_run', { task: 'x', worktree: true })).toBe('Background task · Isolated');
+    expect(taskToolLabel('task_status', {})).toBe('Check tasks');
+    expect(taskToolLabel('task_result', {})).toBe('Collect result');
+    expect(taskToolLabel('task_send', {})).toBe('Relay to task');
   });
 
   it('摘要用任务正文；blocked 时带等待依赖', () => {
@@ -268,7 +268,7 @@ describe('task_run 摘要', () => {
         { task: '写一份今晚日程' },
         { success: true, taskId: 'abc', status: 'blocked' },
       ),
-    ).toBe('写一份今晚日程 · 等待依赖');
+    ).toBe('写一份今晚日程 · Waiting on dependencies');
   });
 });
 
@@ -298,7 +298,7 @@ describe('工具结果信封', () => {
   it('委派失败句收成中文', () => {
     expect(
       humanizeDelegateError('sub-agent ended with status: budget_exhausted'),
-    ).toBe('子代理因额度耗尽结束');
+    ).toBe('Subagent ended due to budget exhausted');
   });
 
   it('task_status 嵌套 data.task 抽出编号和正文', () => {
@@ -372,6 +372,6 @@ describe('inspectableTaskFromAction', () => {
   it('终态卡标题优先 title 再 task', () => {
     expect(inspectTaskTitle({ id: 'a', chatId: 'c', title: '过程' })).toBe('过程');
     expect(inspectTaskTitle({ id: 'a', chatId: 'c', task: '写日程' })).toBe('写日程');
-    expect(inspectTaskTitle({ id: 'a', chatId: 'c' })).toBe('后台任务');
+    expect(inspectTaskTitle({ id: 'a', chatId: 'c' })).toBe('Background task');
   });
 });

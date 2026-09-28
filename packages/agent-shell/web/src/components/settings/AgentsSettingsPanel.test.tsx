@@ -101,7 +101,7 @@ describe('AgentsSettingsPanel', () => {
     render(<AgentsSettingsPanel />);
     const row = await screen.findByTestId('agent-row-local-assistant');
     expect(row.textContent).toContain('电脑操作员');
-    expect(row.textContent).toContain('内置');
+    expect(row.textContent).toContain('Built-in');
     expect(screen.queryByTestId('agent-archive-local-assistant')).toBeNull();
   });
 
@@ -203,9 +203,9 @@ describe('AgentsSettingsPanel', () => {
     listChatAgents.mockResolvedValue({ agents: [builtin, restricted], total: 2 });
     render(<AgentsSettingsPanel />);
     const summary = await screen.findByTestId('agent-capability-geo-advisor');
-    expect(summary.textContent).toContain('技能 1');
-    expect(summary.textContent).toContain('仅限所选技能');
-    expect(summary.textContent).toContain('仅 1 个工具');
+    expect(summary.textContent).toContain('Skills 1');
+    expect(summary.textContent).toContain('Selected skills only');
+    expect(summary.textContent).toContain('Only 1 tools');
     expect(screen.queryByTestId('agent-capability-local-assistant')).toBeNull();
   });
 

@@ -36,8 +36,8 @@ const SAMPLE_FLOW: OrchestrationFlowData = {
 describe('OrchestrationFlowCard', () => {
   it('renders header with summary status', () => {
     render(<OrchestrationFlowCard flow={SAMPLE_FLOW} />);
-    expect(screen.getByText('多智能体协同编排')).toBeTruthy();
-    expect(screen.getByText('Fork-Join 流程')).toBeTruthy();
+    expect(screen.getByText('Multi-agent orchestration')).toBeTruthy();
+    expect(screen.getByText('Fork-Join flow')).toBeTruthy();
     expect(screen.getByText('2/2 全部完成')).toBeTruthy();
   });
 
@@ -45,17 +45,17 @@ describe('OrchestrationFlowCard', () => {
     render(<OrchestrationFlowCard flow={SAMPLE_FLOW} />);
 
     // By default when completed, it might be collapsed; clicking header expands
-    const headerBtn = screen.getByRole('button', { name: /多智能体协同编排/i });
+    const headerBtn = screen.getByRole('button', { name: /Multi-agent orchestration/i });
     fireEvent.click(headerBtn);
 
     // Verify Fork, Nodes, Answers, and Join are rendered
-    expect(screen.getByText(/主智能体目标分发 \(Fork\)/i)).toBeTruthy();
+    expect(screen.getByText(/Main agent goal dispatch \(Fork\)/i)).toBeTruthy();
     expect(screen.getByText('心算 17+28')).toBeTruthy();
     expect(screen.getByText('心算 6×7')).toBeTruthy();
     expect(screen.getByText('只要数字')).toBeTruthy();
     expect(screen.getByText('45')).toBeTruthy();
     expect(screen.getByText('42')).toBeTruthy();
-    expect(screen.getByText(/结果汇聚 \(Join\)/i)).toBeTruthy();
+    expect(screen.getByText(/Result merge \(Join\)/i)).toBeTruthy();
   });
 
   it('respects defaultExpanded prop when passed', () => {
@@ -78,8 +78,8 @@ describe('OrchestrationFlowCard', () => {
 
     render(<OrchestrationFlowCard flow={runningFlow} defaultExpanded />);
     // When defaultExpanded is true, body is expanded
-    expect(screen.getByText(/主智能体目标分发 \(Fork\)/i)).toBeTruthy();
+    expect(screen.getByText(/Main agent goal dispatch \(Fork\)/i)).toBeTruthy();
     expect(screen.getByText('正在计算中')).toBeTruthy();
-    expect(screen.getByText('执行中')).toBeTruthy();
+    expect(screen.getByText('Running')).toBeTruthy();
   });
 });

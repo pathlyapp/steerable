@@ -144,8 +144,8 @@ describe('AskUserPromptProvider', () => {
       bridge.emit({ ...REQUEST, requestId: 'req-2', intro: '第二组问题' });
     });
 
-    expect(screen.getByText(/还有 1 组问题待回答/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /交给AI决定/ }));
+    expect(screen.getByText(/1 more question groups to answer/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Let AI decide/ }));
 
     expect(screen.getByText('第二组问题')).toBeTruthy();
     expect(bridge.answer).toHaveBeenCalledWith({

@@ -19,6 +19,7 @@ import {
   type OrchestrationNodeStatus,
 } from './orchestration-flow-model';
 import type { InspectTaskInput } from './executed-actions-model';
+import { t } from '@/i18n';
 
 function NodeStatusIcon({
   status,
@@ -50,20 +51,20 @@ function NodeStatusIcon({
 function statusBadgeText(status: OrchestrationNodeStatus): string {
   switch (status) {
     case 'completed':
-      return '已完成';
+      return t('Completed');
     case 'running':
-      return '执行中';
+      return t('Running');
     case 'interrupted':
-      return '已暂停';
+      return t('Paused');
     case 'cancelled':
-      return '已停止';
+      return t('Stopped');
     case 'closed':
-      return '已关闭';
+      return t('Closed');
     case 'failed':
-      return '失败';
+      return t('Failed');
     case 'pending':
     default:
-      return '等待中';
+      return t('Waiting');
   }
 }
 
@@ -302,9 +303,9 @@ export function OrchestrationFlowCard({
             <LuGitFork className="h-3 w-3" />
           </div>
           <div className="flex min-w-0 items-center gap-1.5 text-xs font-semibold text-agent-foreground">
-            <span>多智能体协同编排</span>
+            <span>{t('Multi-agent orchestration')}</span>
             <span className="rounded-full bg-violet-500/10 px-1.5 py-0.2 text-[10px] font-medium text-violet-700 dark:text-violet-300">
-              Fork-Join 流程
+              {t('Fork-Join flow')}
             </span>
           </div>
         </div>
@@ -343,9 +344,9 @@ export function OrchestrationFlowCard({
             {/* 1. 起点：目标分发 (Fork) 居中胶囊节点 */}
             <div className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-800 dark:text-violet-200 shadow-2xs">
               <LuBot className="h-3.5 w-3.5 text-violet-600 dark:text-violet-400" />
-              <span>主智能体目标分发 (Fork)</span>
+              <span>{t('Main agent goal dispatch (Fork)')}</span>
               <span className="rounded-full bg-violet-500/20 px-1.5 py-0.2 text-[10px] font-medium text-violet-700 dark:text-violet-300">
-                并发 {nodes.length} 分支
+                {t('{count} parallel branches', { count: nodes.length })}
               </span>
             </div>
 
@@ -370,7 +371,7 @@ export function OrchestrationFlowCard({
                         <div className="flex items-center gap-1.5 min-w-0">
                           <NodeStatusIcon status={node.status} />
                           <span className="font-semibold text-agent-foreground text-[11px] truncate">
-                            分支 #{index + 1}
+                            {t('Branch #{index}', { index: index + 1 })}
                           </span>
                         </div>
                         <div className="flex items-center gap-1">
@@ -390,14 +391,14 @@ export function OrchestrationFlowCard({
                                   chatId,
                                   recordId: node.recordId,
                                   live: node.status === 'running',
-                                  title: node.task || '子代理执行过程',
+                                  title: node.task || t('Subagent run'),
                                 })
                               }
                               className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 text-[10px] text-agent-muted-foreground hover:bg-agent-muted hover:text-agent-foreground"
-                              title="查看推理过程"
+                              title={t('View reasoning process')}
                             >
                               <LuExternalLink className="h-2.5 w-2.5" />
-                              <span>过程</span>
+                              <span>{t('Process')}</span>
                             </button>
                           ) : null}
                         </div>
@@ -415,7 +416,7 @@ export function OrchestrationFlowCard({
                           }`}
                           title={node.task}
                         >
-                          {node.task || `子任务 (${node.childId})`}
+                          {node.task || t('Subtask ({id})', { id: node.childId })}
                         </p>
                       </div>
 
@@ -437,7 +438,7 @@ export function OrchestrationFlowCard({
                       <div className="mt-2 rounded bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 text-[11px]">
                         <div className="flex items-center gap-1 font-semibold text-emerald-800 dark:text-emerald-200 text-[10px]">
                           <LuCheck className="h-3 w-3" />
-                          <span>结论:</span>
+                          <span>{t('Conclusion:')}</span>
                           <span className="font-mono text-emerald-950 dark:text-emerald-50 truncate">
                             {node.answer}
                           </span>
@@ -445,7 +446,7 @@ export function OrchestrationFlowCard({
                       </div>
                     ) : node.error ? (
                       <div className="mt-2 rounded bg-agent-destructive/10 px-1.5 py-1 text-[10px] text-agent-destructive truncate">
-                        失败: {node.error}
+                        {t('Failed: {error}', { error: node.error })}
                       </div>
                     ) : null}
                   </div>
@@ -465,13 +466,13 @@ export function OrchestrationFlowCard({
               }`}
             >
               <LuCircleCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-              <span>结果汇聚 (Join)</span>
+              <span>{t('Result merge (Join)')}</span>
               <span className="text-[10px] opacity-80">
                 {isAllCompleted
-                  ? '所有分支已汇聚并完成回答'
+                  ? t('All branches merged and answered')
                   : hasActive
-                    ? '等待分支就绪...'
-                    : '已停止'}
+                    ? t('Waiting for branches...')
+                    : t('Stopped')}
               </span>
             </div>
           </div>

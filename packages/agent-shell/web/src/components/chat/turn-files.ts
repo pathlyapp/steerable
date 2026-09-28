@@ -141,7 +141,7 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.tsv':
     case '.numbers':
       return {
-        label: '电子表格',
+        label: 'Spreadsheet',
         extBadge: extClean,
         kind: 'spreadsheet',
         themeColor: 'emerald',
@@ -150,7 +150,7 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.ppt': // shell-neutral:allow — Office 幻灯片扩展名，不是产品品牌
     case '.key':
       return {
-        label: '演示文稿',
+        label: 'Presentation',
         extBadge: extClean,
         kind: 'presentation',
         themeColor: 'amber',
@@ -160,14 +160,14 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.pages':
     case '.rtf':
       return {
-        label: '文档',
+        label: 'Document',
         extBadge: extClean,
         kind: 'document',
         themeColor: 'blue',
       };
     case '.pdf':
       return {
-        label: '文档',
+        label: 'Document',
         extBadge: 'PDF',
         kind: 'pdf',
         themeColor: 'rose',
@@ -179,7 +179,7 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.webp':
     case '.svg':
       return {
-        label: '图像',
+        label: 'Image',
         extBadge: extClean,
         kind: 'image',
         themeColor: 'purple',
@@ -189,7 +189,7 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.gz':
     case '.7z':
       return {
-        label: '压缩包',
+        label: 'Archive',
         extBadge: extClean,
         kind: 'archive',
         themeColor: 'amber',
@@ -197,14 +197,14 @@ export function getDeliverableMeta(filePath: string): DeliverableFileMeta {
     case '.html':
     case '.htm':
       return {
-        label: '网页',
+        label: 'Web page',
         extBadge: 'HTML',
         kind: 'document',
         themeColor: 'blue',
       };
     default:
       return {
-        label: '文件',
+        label: 'File',
         extBadge: extClean,
         kind: 'file',
         themeColor: 'slate',

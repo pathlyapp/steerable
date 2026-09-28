@@ -1,4 +1,5 @@
 import { LuSparkles } from 'react-icons/lu';
+import { t } from '@/i18n';
 
 /**
  * WorkBuddy-style follow-up chips: next-turn user inputs rendered under the
@@ -22,8 +23,8 @@ export function SuggestedReplies({
     >
       <div
         className="mr-0.5 inline-flex items-center select-none"
-        title="建议"
-        aria-label="建议"
+        title={t('Suggestions')}
+        aria-label={t('Suggestions')}
       >
         <LuSparkles className="h-3 w-3 text-agent-muted-foreground/80" />
       </div>

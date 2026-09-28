@@ -37,7 +37,7 @@ describe('SessionOrchestrationFlow', () => {
   it('renders trigger capsule with summary badge', () => {
     render(<SessionOrchestrationFlow flow={SAMPLE_FLOW} />);
     expect(screen.getByTestId('session-orchestration-flow')).toBeTruthy();
-    expect(screen.getByText('协同编排已就绪')).toBeTruthy();
+    expect(screen.getByText('Orchestration ready')).toBeTruthy();
     expect(screen.getByText('2/2 全部完成')).toBeTruthy();
   });
 
@@ -45,15 +45,15 @@ describe('SessionOrchestrationFlow', () => {
     render(<SessionOrchestrationFlow flow={SAMPLE_FLOW} />);
 
     // Click trigger to expand
-    fireEvent.click(screen.getByRole('button', { name: /协同编排已就绪/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Orchestration ready/i }));
 
-    expect(screen.getByText('多智能体协同流程')).toBeTruthy();
-    expect(screen.getByText('目标分发 (Fork)')).toBeTruthy();
+    expect(screen.getByText('Multi-agent flow')).toBeTruthy();
+    expect(screen.getByText('Goal dispatch (Fork)')).toBeTruthy();
     expect(screen.getByText(/心算 17\+28/)).toBeTruthy();
     expect(screen.getByText(/心算 6×7/)).toBeTruthy();
     expect(screen.getByText('45')).toBeTruthy();
     expect(screen.getByText('42')).toBeTruthy();
-    expect(screen.getByText('结果汇聚 (Join)')).toBeTruthy();
+    expect(screen.getByText('Result merge (Join)')).toBeTruthy();
   });
 
   it('renders 3-branch orchestration flow without badge distortion', () => {
@@ -101,13 +101,13 @@ describe('SessionOrchestrationFlow', () => {
       />
     );
 
-    expect(screen.getByText('并发 3 分支')).toBeTruthy();
-    expect(screen.getByText('分支 #1')).toBeTruthy();
-    expect(screen.getByText('分支 #2')).toBeTruthy();
-    expect(screen.getByText('分支 #3')).toBeTruthy();
-    expect(screen.getAllByText('执行中').length).toBe(2);
-    expect(screen.getByText('已完成')).toBeTruthy();
-    expect(screen.getAllByText('过程').length).toBe(3);
+    expect(screen.getByText('3 parallel branches')).toBeTruthy();
+    expect(screen.getByText('Branch #1')).toBeTruthy();
+    expect(screen.getByText('Branch #2')).toBeTruthy();
+    expect(screen.getByText('Branch #3')).toBeTruthy();
+    expect(screen.getAllByText('Running').length).toBe(2);
+    expect(screen.getByText('Completed')).toBeTruthy();
+    expect(screen.getAllByText('Process').length).toBe(3);
   });
 
   it('shows a stopped flow instead of waiting on join', () => {
@@ -139,12 +139,12 @@ describe('SessionOrchestrationFlow', () => {
     };
 
     render(<SessionOrchestrationFlow flow={STOPPED_FLOW} />);
-    fireEvent.click(screen.getByRole('button', { name: /协同编排已停止/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Orchestration stopped/ }));
 
-    expect(screen.getAllByText('已停止').length).toBeGreaterThan(0);
-    expect(screen.getByText('已完成')).toBeTruthy();
+    expect(screen.getAllByText('Stopped').length).toBeGreaterThan(0);
+    expect(screen.getByText('Completed')).toBeTruthy();
     expect(screen.getAllByText('1 完成 · 1 结束 (2 个子任务)').length).toBeGreaterThan(0);
-    expect(screen.queryByText('等待分支就绪...')).toBeNull();
+    expect(screen.queryByText('Waiting for branches...')).toBeNull();
     expect(screen.queryByText(/协同执行中/)).toBeNull();
   });
 });

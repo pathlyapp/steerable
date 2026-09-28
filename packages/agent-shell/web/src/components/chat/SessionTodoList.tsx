@@ -9,6 +9,7 @@ import {
   LuX,
 } from 'react-icons/lu';
 import { useExclusiveExpand } from './composer-status-stack';
+import { t } from '@/i18n';
 import {
   summarizeTodos,
   type SessionTodo,
@@ -45,12 +46,12 @@ export function todoProgressCopy(todos: SessionTodo[]): string {
   const summary = summarizeTodos(todos);
   if (summary.total === 0) return '';
   if (summary.completed === summary.total) {
-    return `${summary.completed}/${summary.total} 已完成`;
+    return t('{completed}/{total} done', { completed: summary.completed, total: summary.total });
   }
   const currentIndex = todos.findIndex((todo) => todo.status === 'in_progress');
   const step =
     currentIndex >= 0 ? currentIndex + 1 : Math.min(summary.completed + 1, summary.total);
-  return `执行到 ${step}/${summary.total}`;
+  return t('On step {step}/{total}', { step, total: summary.total });
 }
 
 export function TodoItems({
@@ -99,7 +100,7 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
   const progressLabel = useMemo(() => todoProgressCopy(todos), [todos]);
   
   const hasActive = useMemo(
-    () => todos.some((t) => t.status === 'in_progress'),
+    () => todos.some((todo) => todo.status === 'in_progress'),
     [todos],
   );
   const isAllCompleted = useMemo(() => {
@@ -177,7 +178,7 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
           <LuListChecks className="h-3.5 w-3.5 shrink-0 text-agent-foreground" />
         )}
         <span className="min-w-0 flex-1 truncate font-medium">
-          {isAllCompleted ? '任务清单' : (current?.content ?? '任务清单')}
+          {isAllCompleted ? t('Task list') : (current?.content ?? t('Task list'))}
         </span>
         {progressLabel ? (
           <span
@@ -207,7 +208,7 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
           <div className="flex items-center justify-between border-b border-agent-border/60 bg-agent-muted/30 px-2.5 py-1.5">
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-agent-foreground">
               <LuListChecks className="h-3.5 w-3.5 text-agent-foreground" />
-              <span>任务清单</span>
+              <span>{t('Task list')}</span>
             </div>
             <div className="flex items-center gap-1.5">
               {progressLabel && (
@@ -225,8 +226,8 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
                 type="button"
                 onClick={() => setUserToggled(false)}
                 className="flex h-5 w-5 items-center justify-center rounded text-agent-muted-foreground transition-colors hover:bg-agent-foreground/10 hover:text-agent-foreground"
-                title="收起清单"
-                aria-label="收起清单"
+                title={t('Collapse list')}
+                aria-label={t('Collapse list')}
               >
                 <LuX className="h-3 w-3" />
               </button>

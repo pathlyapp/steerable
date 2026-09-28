@@ -11,6 +11,7 @@ import {
   type ChildInfo,
 } from './orchestration-children-model';
 import type { LocalChatAgent } from '@/lib/local-api';
+import { t } from '@/i18n';
 
 /**
  * OrchestrationChildrenCard — the desktop surface of the framework's P3.1
@@ -57,7 +58,7 @@ export function OrchestrationChildrenCard({
     <OrchestrationPlanCard
       payload={payload}
       taskStatuses={taskStatuses}
-      headerLabel={delegateOnly ? '子代理' : undefined}
+      headerLabel={delegateOnly ? t('Subagents') : undefined}
       hideMode={delegateOnly}
       renderTaskRow={(task, status) => {
         // 没有匹配的智能体：编排六件套的子代理（只有 lineage id）或被删掉的

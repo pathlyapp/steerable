@@ -10,6 +10,7 @@ import {
 import { LuArrowDown } from 'react-icons/lu';
 import type { ChatMessage } from '@steerable/agent-protocol';
 import type { LocalChat, LocalChatAgent, LocalTask } from '@/lib/local-api';
+import { t } from '@/i18n';
 import { UserMessage } from './UserMessage';
 import { AssistantMessage } from './AssistantMessage';
 import { InterruptedTurnCard } from './InterruptedTurnCard';
@@ -467,8 +468,8 @@ export function MessageList({
             scrollToBottom('smooth');
           }}
           className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full border border-agent-border bg-agent-canvas text-agent-foreground shadow-md transition-colors hover:bg-agent-foreground/5"
-          title="回到底部"
-          aria-label="回到底部"
+          title={t('Back to bottom')}
+          aria-label={t('Back to bottom')}
         >
           <LuArrowDown className="h-4 w-4" />
         </button>

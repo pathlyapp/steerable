@@ -28,7 +28,7 @@ export const BRAND_TITLE: string =
  * 空字符串表示不显示这句。未 define 时用这句默认。
  */
 export const BRAND_HOME_HINT: string =
-  import.meta.env.VITE_BRAND_HOME_HINT ?? '输入消息，直接开始一段新对话。';
+  import.meta.env.VITE_BRAND_HOME_HINT ?? 'Type a message to start a new chat.';
 
 /** shell 默认 logo（Steerable 舵轮标）；包品牌 logo 由包 web 模块注册覆盖。 */
 let brandLogoUrl: string = shellLogoUrl;

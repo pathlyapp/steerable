@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { LuCheck, LuCopy, LuListChecks, LuLoaderCircle, LuRefreshCw, LuShare2 } from 'react-icons/lu';
 import type { ChatMessage } from '@steerable/agent-protocol';
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
+import { t } from '@/i18n';
 import { Markdown } from './Markdown';
 import { ExecutedActionsCard, type ExecutedAction } from './ExecutedActionsCard';
 import type { ChildInfo } from './OrchestrationChildrenCard';
@@ -228,7 +229,7 @@ function readPersistedAgentId(message: ChatMessage): string | undefined {
 function TurnErrorBubble({ reason }: { reason: string }) {
   return (
     <div className="rounded-agent-lg border border-agent-destructive/40 bg-agent-destructive/5 px-2.5 py-2 text-xs leading-relaxed text-agent-destructive shadow-sm">
-      请求失败：{reason}
+      {t('Request failed: {reason}', { reason })}
     </div>
   );
 }
@@ -339,7 +340,7 @@ export function AssistantMessage({
             {isPlanMode && (
               <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 dark:border-amber-800/50 bg-amber-100/70 dark:bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300 select-none">
                 <LuListChecks className="h-3.5 w-3.5" />
-                <span>计划模式 (Plan)</span>
+                <span>{t('Plan mode (Plan)')}</span>
               </span>
             )}
           </div>
@@ -369,7 +370,7 @@ export function AssistantMessage({
                 </div>
               ) : (
                 <div className={`${bubbleClass(isPlanMode)} text-xs italic text-agent-muted-foreground`}>
-                  (空消息)
+                  {t('(empty message)')}
                 </div>
               )
             }
@@ -427,7 +428,7 @@ export function AssistantMessage({
               </div>
             ) : (
               <div className={`${bubbleClass(isPlanMode)} text-xs italic text-agent-muted-foreground`}>
-                (空消息)
+                {t('(empty message)')}
               </div>
             )}
             {displayContent && failure ? (
@@ -458,14 +459,14 @@ export function AssistantMessage({
               type="button"
               onClick={() => void copy()}
               className={META_ACTION}
-              title={copied ? '已复制' : '复制消息'}
-              aria-label={copied ? '已复制' : '复制消息'}
+              title={copied ? t('Copied') : t('Copy message')}
+              aria-label={copied ? t('Copied') : t('Copy message')}
             >
               {copied ? (
                 <>
                   <LuCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
                   <span className="text-emerald-600 dark:text-emerald-400">
-                    已复制
+                    {t('Copied')}
                   </span>
                 </>
               ) : (
@@ -493,8 +494,12 @@ export function AssistantMessage({
                   .finally(() => setRegenerating(false));
               }}
               className={`${META_ACTION} disabled:cursor-not-allowed`}
-              title={regenerating ? '正在重新生成…' : '重新生成（旧回复保留为分支）'}
-              aria-label={regenerating ? '正在重新生成' : '重新生成'}
+              title={
+                regenerating
+                  ? t('Regenerating...')
+                  : t('Regenerate (the old reply is kept as a branch)')
+              }
+              aria-label={regenerating ? t('Regenerating') : t('Regenerate')}
               data-action="regenerate"
             >
               <LuRefreshCw
@@ -559,12 +564,12 @@ function ShareChatButton({ onShare }: { onShare: () => Promise<boolean> }) {
       }`}
       title={
         state === 'done'
-          ? '截图已复制到剪贴板'
+          ? t('Screenshot copied to clipboard')
           : state === 'error'
-            ? '截图失败，请重试'
-            : '分享对话（截图复制到剪贴板）'
+            ? t('Screenshot failed. Try again.')
+            : t('Share chat (copy a screenshot to the clipboard)')
       }
-      aria-label="分享对话截图"
+      aria-label={t('Share chat screenshot')}
     >
       {state === 'busy' ? (
         <LuLoaderCircle className="h-3 w-3 animate-spin" />

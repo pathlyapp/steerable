@@ -129,6 +129,14 @@ export interface ProductConfig {
    * STEERABLE_ORCHESTRATION 环境变量（'1' 开启，'0' 显式关闭）优先级更高。
    */
   orchestration?: boolean | { enabled?: boolean; maxDepth?: number; maxParallel?: number };
+  /**
+   * 界面语言。缺省只有 `en`。译文在应用层语言包，不在本包。
+   * `locales` 是这个产品装进包里的语言；多于一种时设置页才出现切换。
+   */
+  i18n?: {
+    locales: string[];
+    defaultLocale: string;
+  };
 }
 
 /** shell 内置智能体：只有产品显式 `true` 才开。 */

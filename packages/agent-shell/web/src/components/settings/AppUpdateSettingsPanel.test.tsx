@@ -58,11 +58,11 @@ describe('AppUpdateSettingsPanel', () => {
     });
     render(<AppUpdateSettingsPanel />);
 
-    expect(await screen.findByText('重启并安装 0.3.0')).toBeTruthy();
+    expect(await screen.findByText('Restart and install 0.3.0')).toBeTruthy();
     fireEvent.click(screen.getByTestId('settings-app-update'));
     await waitFor(() => {
       expect(app.install).toHaveBeenCalledOnce();
-      expect(screen.getByTestId('settings-app-update').textContent).toBe('正在安装');
+      expect(screen.getByTestId('settings-app-update').textContent).toBe('Installing');
     });
     expect(app.check).not.toHaveBeenCalled();
   });

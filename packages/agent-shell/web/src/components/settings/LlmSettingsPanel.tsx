@@ -32,6 +32,7 @@ import { ModelCapabilityChips } from '@/components/settings/ModelCapabilityChips
 import { modelCapabilityChips } from '@/components/settings/model-capabilities';
 import { ModelIdCombobox } from '@/components/settings/ModelIdCombobox';
 import { SettingsSaveButton } from '@/components/settings/SettingsSaveButton';
+import { t } from '@/i18n';
 import { isElectron } from '@/lib/electron-bridge';
 import {
   COMPAT_AUTO,
@@ -124,7 +125,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
 
   const reload = useCallback(async () => {
     if (!isElectron()) {
-      setError('需要在桌面客户端中打开');
+      setError(t('Open this in the desktop app'));
       return;
     }
     setLoading(true);
@@ -136,7 +137,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
         const { providers } = await getCatalogProviders();
         if (providers.length > 0) nextVendors = mergeVendorOptions(providers);
       } catch (err) {
-        console.warn('读取服务商目录失败:', err);
+        console.warn('Failed to read provider catalog:', err);
       }
       setVendors(nextVendors);
       const vendorId = inferVendorId(data, nextVendors);
@@ -154,7 +155,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
         setCompatFlags(flags);
         setCompatForm(formStateFromOverrides(data.compat, flags));
       } catch (err) {
-        console.warn('读取 compat 旗标词汇表失败:', err);
+        console.warn('Failed to read compat flag vocabulary:', err);
         setCompatFlags([]);
         setCompatForm({});
       }
@@ -174,7 +175,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
           setPresetPinnedIdx(-1);
         }
       } catch (err) {
-        console.warn('读取厂商预制注册表失败:', err);
+        console.warn('Failed to read vendor preset registry:', err);
         setPresetList([]);
         setPresetMode(presetModeFromChoice(data.presets));
       }
@@ -327,7 +328,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
       if (catalog.catalogStatus === 'offline') {
         setKeyTest({
           status: 'fail',
-          detail: catalog.error || '网关目录不可用',
+          detail: catalog.error || t('Gateway catalog unavailable'),
         });
         return;
       }
@@ -344,7 +345,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
 
   const handleSave = async () => {
     if (!isElectron()) {
-      setError('需要在桌面客户端中打开');
+      setError(t('Open this in the desktop app'));
       return;
     }
     setSaving(true);
@@ -401,13 +402,13 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
           {loading ? (
             <div className="flex items-center gap-2 py-2 text-xs text-agent-muted-foreground">
               <LuLoaderCircle className="h-4 w-4 animate-spin" />
-              加载当前配置...
+              {t('Loading current settings...')}
             </div>
           ) : (
             <>
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-agent-muted-foreground">
-                    服务商
+                    {t('Provider')}
                   </label>
                   <select
                     data-testid="llm-vendor-select"
@@ -416,7 +417,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                     className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-2 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                   >
                     {featuredVendors.length > 0 && (
-                      <optgroup label="常用">
+                      <optgroup label={t('Common')}>
                         {featuredVendors.map((v) => (
                           <option key={v.id} value={v.id}>
                             {v.label}
@@ -425,7 +426,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                       </optgroup>
                     )}
                     {otherVendors.length > 0 && (
-                      <optgroup label="全部">
+                      <optgroup label={t('All')}>
                         {otherVendors.map((v) => (
                           <option key={v.id} value={v.id}>
                             {v.label}
@@ -436,16 +437,16 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                   </select>
                   <p className="mt-1.5 text-[11px] text-agent-muted-foreground">
                     {selectedVendor?.id === 'ollama'
-                      ? '请确认本机已运行 `ollama serve` 并且执行过 `ollama pull <model>`。'
+                      ? t('Make sure `ollama serve` is running on this computer and you have run `ollama pull <model>`.')
                       : selectedVendor?.id === 'custom'
-                        ? '任意兼容 OpenAI Chat Completions 的网关。Anthropic / Gemini 请从上方列表选择对应服务商。'
+                        ? t('Any gateway compatible with OpenAI Chat Completions. For Anthropic / Gemini, pick the matching provider from the list above.')
                         : selectedVendor?.wireKind === 'anthropic'
-                          ? '走 Anthropic 原生 Messages 协议。'
+                          ? t('Uses the native Anthropic Messages protocol.')
                           : selectedVendor?.wireKind === 'google'
-                            ? '走 Google Gemini 原生协议。'
+                            ? t('Uses the native Google Gemini protocol.')
                             : selectedVendor?.wireKind === 'openai-responses'
-                              ? '走 OpenAI Responses API（如 xAI Grok）。'
-                              : '兼容 OpenAI Chat Completions 的云端或本地网关。'}
+                              ? t('Uses the OpenAI Responses API (e.g. xAI Grok).')
+                              : t('A cloud or local gateway compatible with OpenAI Chat Completions.')}
                   </p>
                 </div>
 
@@ -463,14 +464,14 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                       selectedVendor?.apiBaseUrl ||
                       (selectedVendor?.id === 'custom'
                         ? 'https://your-gateway.example/v1'
-                        : '该服务商没有默认地址，请手动填写')
+                        : t('This provider has no default URL. Enter it manually.'))
                     }
                     className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                   />
                   <p className="mt-1.5 text-[11px] text-agent-muted-foreground">
                     {selectedVendor?.apiBaseUrl
-                      ? '已按服务商填入默认地址，私有部署可改。'
-                      : '目录里没有默认 URL，需要手动填写。'}
+                      ? t('The provider default URL is filled in. Change it for a private deployment.')
+                      : t('The catalog has no default URL. Enter it manually.')}
                   </p>
                 </div>
 
@@ -488,15 +489,15 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                         }
                         placeholder={
                           selectedVendor?.id === 'custom'
-                            ? 'sk-... (可选，私有部署可留空)'
-                            : 'sk-... (必填，到服务商控制台创建)'
+                            ? t('sk-... (optional, can be blank for a private deployment)')
+                            : t('sk-... (required, create one in the provider console)')
                         }
                         className="h-8 min-w-0 flex-1 rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                       />
                       <button
                         type="button"
                         data-testid="llm-key-test"
-                        title="用当前 URL 和 Key 向网关拉一次模型目录"
+                        title={t('Fetch the model catalog from the gateway once with the current URL and key')}
                         disabled={!settings.baseUrl?.trim() || keyTest.status === 'testing'}
                         onClick={() => void handleTestKey()}
                         className="inline-flex h-8 shrink-0 items-center justify-center rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs font-medium text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-not-allowed disabled:opacity-50"
@@ -504,7 +505,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                         {keyTest.status === 'testing' ? (
                           <LuLoaderCircle className="h-4 w-4 animate-spin" />
                         ) : (
-                          '测试'
+                          t('Test')
                         )}
                       </button>
                     </div>
@@ -519,36 +520,40 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                       ].join(' ')}
                     >
                       {keyTest.status === 'testing'
-                        ? '正在验证凭证…'
+                        ? t('Verifying credentials…')
                         : keyTest.status === 'ok'
-                          ? `凭证可用，网关返回 ${keyTest.count} 个模型。`
+                          ? t('Credentials work. The gateway returned {count} models.', { count: keyTest.count })
                           : keyTest.status === 'fail'
-                            ? `验证失败：${keyTest.detail}`
+                            ? t('Verification failed: {detail}', { detail: keyTest.detail })
                             : !settings.apiKey?.trim()
-                              ? '尚未配置 API Key：到服务商控制台创建密钥（DeepSeek：platform.deepseek.com → API Keys），粘贴到上方输入框，点「测试」验证通过后保存。'
-                              : '网络搜索在设置页配置：可选用免费搜索或 Tavily 钥；OpenAI 可用这把聊天钥走托管搜索。'}
+                              ? t(
+                                  'No API key yet: create a key in the provider console (DeepSeek: platform.deepseek.com → API Keys), paste it in the box above, click "Test", and save once it passes.',
+                                )
+                              : t(
+                                  'Web search is configured on the settings page: choose free search or a Tavily key. OpenAI can use this chat key for hosted search.',
+                                )}
                     </p>
                   </div>
                 )}
 
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-agent-muted-foreground">
-                    模型
+                    {t('Model')}
                   </label>
                   <div className="flex items-center gap-2">
                     <div className="min-w-0 flex-1">
                       <ModelIdCombobox
                         value={settings.model}
                         options={modelOptions}
-                        placeholder={liveEntries[0]?.id || catalogModels[0] || '选择或填写模型 id'}
+                        placeholder={liveEntries[0]?.id || catalogModels[0] || t('Choose or enter a model id')}
                         onChange={(model) => setSettings((prev) => ({ ...prev, model }))}
                       />
                     </div>
                     <button
                       type="button"
                       data-testid="llm-model-refresh"
-                      title="从网关重新拉取模型列表"
-                      aria-label="刷新模型目录"
+                      title={t('Fetch the model list from the gateway again')}
+                      aria-label={t('Refresh model catalog')}
                       disabled={!settings.baseUrl?.trim() || modelsRefreshing}
                       onClick={() => void handleRefreshModels()}
                       className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-agent-md border border-agent-border bg-agent-canvas text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground disabled:cursor-not-allowed disabled:opacity-50"
@@ -561,30 +566,32 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                       data-testid="llm-model-capabilities"
                       className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-agent-muted-foreground"
                     >
-                      <span>当前</span>
+                      <span>{t('Current')}</span>
                       {selectedEntry ? (
                         selectedKnownEmpty ? (
-                          <span>文本对话</span>
+                          <span>{t('Text chat')}</span>
                         ) : (
                           <ModelCapabilityChips entry={selectedEntry} detail />
                         )
                       ) : (
-                        <span>能力未识别（不在网关目录）</span>
+                        <span>{t('Capabilities unrecognized (not in the gateway catalog)')}</span>
                       )}
                     </div>
                   )}
                   <p className="mt-1.5 text-[11px] text-agent-muted-foreground">
                     {liveCatalogStatus === 'live'
-                      ? `已从网关拉取 ${liveEntries.length} 个模型，也可直接填写。`
+                      ? t('Fetched {count} models from the gateway. You can also type one in.', {
+                          count: liveEntries.length,
+                        })
                       : liveCatalogStatus === 'stale'
-                        ? '网关目录刷新失败，正在用上次拉取的缓存；也可直接填写。'
+                        ? t('Failed to refresh the gateway catalog. Using the last cached copy; you can also type one in.')
                         : liveCatalogStatus === 'idle' && (settings.baseUrl || '').trim()
-                          ? '正在从网关拉取模型目录…'
+                          ? t('Fetching the model catalog from the gateway…')
                           : liveCatalogStatus === 'idle'
-                            ? '填写 Base URL 后可拉取网关模型目录，也可直接填写。'
+                            ? t('Enter a Base URL to fetch the gateway model catalog, or type a model in.')
                             : catalogModels.length > 0
-                              ? '网关目录不可用，暂用服务商内置列表；也可直接填写。'
-                              : '网关目录不可用，请直接填写模型 id。'}
+                              ? t('Gateway catalog unavailable. Using the provider built-in list for now; you can also type one in.')
+                              : t('Gateway catalog unavailable. Enter the model id directly.')}
                   </p>
                 </div>
 
@@ -592,19 +599,23 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                   <div className="rounded-agent-md border border-agent-border/60 p-3 space-y-3">
                     <div>
                       <h4 className="text-xs font-semibold text-agent-muted-foreground uppercase tracking-wide">
-                        厂商参数预制
+                        {t('Vendor parameter presets')}
                       </h4>
                       <p className="mt-1 text-[11px] text-agent-muted-foreground">
-                        按厂商文档的最优采样参数（temperature / top_p / top_k 等）自动填充请求。
-                        “自动”按 Base URL + 模型名匹配内置注册表；手动 Temperature 等显式设置永远优先于预制。
+                        {t(
+                          'Fill requests automatically with the best sampling parameters from vendor docs (temperature / top_p / top_k, etc.).',
+                        )}{' '}
+                        {t(
+                          '"Auto" matches the built-in registry by Base URL + model name. Explicit manual settings such as Temperature always take precedence over presets.',
+                        )}
                       </p>
                     </div>
                     <div className="flex gap-1.5">
                       {(
                         [
-                          { value: 'auto', label: '自动（推荐）' },
-                          { value: 'off', label: '关闭' },
-                          { value: 'pinned', label: '指定预制' },
+                          { value: 'auto', label: 'Auto (recommended)' },
+                          { value: 'off', label: 'Off' },
+                          { value: 'pinned', label: 'Pick a preset' },
                         ] as { value: PresetMode; label: string }[]
                       ).map((opt) => (
                         <button
@@ -618,7 +629,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                               : 'bg-agent-muted text-agent-muted-foreground hover:text-agent-foreground'
                           }`}
                         >
-                          {opt.label}
+                          {t(opt.label)}
                         </button>
                       ))}
                     </div>
@@ -631,7 +642,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                         >
                           {presetPinnedIdx === -1 && (
                             <option value={-1}>
-                              {settings.presets?.override ? '自定义（已保存的覆盖）' : '请选择…'}
+                              {settings.presets?.override ? t('Custom (saved override)') : t('Select…')}
                             </option>
                           )}
                           {presetList.map((d, i) => (
@@ -642,21 +653,23 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                         </select>
                       ) : (
                         <p className="text-[11px] text-agent-muted-foreground">
-                          预制注册表由 sidecar 提供；sidecar 未就绪时无可选条目。
+                          {t('The preset registry comes from the sidecar. Nothing is available while the sidecar is not ready.')}
                         </p>
                       ))}
                     <p className="text-[11px] text-agent-muted-foreground/80" data-preset-preview>
                       {presetMode === 'off'
-                        ? '已关闭：不下发厂商预制参数。'
+                        ? t('Off: vendor preset parameters are not sent.')
                         : presetMode === 'pinned'
-                          ? `生效参数：${summarizePreset(
-                              presetPinnedIdx >= 0 && presetList[presetPinnedIdx]
-                                ? overrideFromDescriptor(presetList[presetPinnedIdx])
-                                : (settings.presets?.override ?? null),
-                            )}`
+                          ? t('Effective parameters: {summary}', {
+                              summary: summarizePreset(
+                                presetPinnedIdx >= 0 && presetList[presetPinnedIdx]
+                                  ? overrideFromDescriptor(presetList[presetPinnedIdx])
+                                  : (settings.presets?.override ?? null),
+                              ),
+                            })
                           : resolvedPreset
-                            ? `命中预制：${summarizePreset(resolvedPreset)}`
-                            : '当前 Base URL + 模型未命中预制，不下发额外采样参数。'}
+                            ? t('Matched preset: {summary}', { summary: summarizePreset(resolvedPreset) })
+                            : t('The current Base URL + model match no preset. No extra sampling parameters are sent.')}
                     </p>
                   </div>
                 )}
@@ -665,17 +678,17 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                   <div className="rounded-agent-md border border-agent-border/60 p-3 space-y-3">
                     <div>
                       <h4 className="text-xs font-semibold text-agent-muted-foreground uppercase tracking-wide">
-                        高级兼容旗标（可选）
+                        {t('Advanced compatibility flags (optional)')}
                       </h4>
                       <p className="mt-1 text-[11px] text-agent-muted-foreground">
-                        仅当厂商网关与 OpenAI 协议有出入、且自动探测未覆盖时才需要改。“自动”
-                        = 框架按 Base URL 主机名匹配已知厂商（DeepSeek / Moonshot / OpenRouter /
-                        DashScope），未命中走 OpenAI 参考行为。
+                        {t(
+                          'Change these only when the vendor gateway differs from the OpenAI protocol and auto-detection does not cover it. "Auto" = the framework matches known vendors by Base URL host name (DeepSeek / Moonshot / OpenRouter / DashScope) and falls back to OpenAI reference behavior otherwise.',
+                        )}
                       </p>
                     </div>
                     {compatFlags.length === 0 ? (
                       <p className="text-[11px] text-agent-muted-foreground">
-                        旗标词汇表由 sidecar 提供；sidecar 未就绪时此处为空，保存不受影响。
+                        {t('The flag vocabulary comes from the sidecar. This stays empty while the sidecar is not ready; saving is not affected.')}
                       </p>
                     ) : (
                       compatFlags.map((flag) => (
@@ -686,9 +699,9 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                           {flag.kind === 'bool' ? (
                             <div className="flex gap-1.5">
                               {[
-                                { value: COMPAT_AUTO, label: '自动' },
-                                { value: 'true', label: '开' },
-                                { value: 'false', label: '关' },
+                                { value: COMPAT_AUTO, label: 'Auto' },
+                                { value: 'true', label: 'Yes' },
+                                { value: 'false', label: 'No' },
                               ].map((opt) => (
                                 <button
                                   key={opt.value}
@@ -702,7 +715,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                                       : 'bg-agent-muted text-agent-muted-foreground hover:text-agent-foreground'
                                   }`}
                                 >
-                                  {opt.label}
+                                  {t(opt.label)}
                                 </button>
                               ))}
                             </div>
@@ -714,7 +727,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                               }
                               className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-2 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                             >
-                              <option value={COMPAT_AUTO}>自动</option>
+                              <option value={COMPAT_AUTO}>{t('Auto')}</option>
                               {flag.kind
                                 .slice('enum:'.length)
                                 .split(',')
@@ -734,7 +747,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                                   [flag.key]: e.target.value || COMPAT_AUTO,
                                 }))
                               }
-                              placeholder="逗号分隔，留空 = 自动"
+                              placeholder={t('Comma-separated; blank = auto')}
                               className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-2 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                             />
                           )}
@@ -756,8 +769,8 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                     <div className="flex gap-1">
                       {(
                         [
-                          { value: 'auto', label: '自动' },
-                          { value: 'manual', label: '手动' },
+                          { value: 'auto', label: 'Auto' },
+                          { value: 'manual', label: 'Manual' },
                         ] as const
                       ).map((opt) => (
                         <button
@@ -779,18 +792,22 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                               : 'bg-agent-muted text-agent-muted-foreground hover:text-agent-foreground'
                           }`}
                         >
-                          {opt.label}
+                          {t(opt.label)}
                         </button>
                       ))}
                     </div>
                   </div>
                   {settings.temperature === undefined ? (
                     <p className="text-[11px] text-agent-muted-foreground">
-                      自动：命中厂商预制时用预制温度
-                      {presetMode === 'auto' && resolvedPreset?.temperature != null
-                        ? `（当前命中：${resolvedPreset.temperature}）`
-                        : ''}
-                      ，未命中则不下发（走厂商服务端默认）。手动显式值优先于预制。
+                      {t(
+                        'Auto: uses the preset temperature when a vendor preset matches{match}. Otherwise nothing is sent (the vendor server default applies). An explicit manual value takes precedence over the preset.',
+                        {
+                          match:
+                            presetMode === 'auto' && resolvedPreset?.temperature != null
+                              ? t(' (current match: {value})', { value: resolvedPreset.temperature })
+                              : '',
+                        },
+                      )}
                     </p>
                   ) : (
                     <input
@@ -809,7 +826,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
 
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-agent-muted-foreground">
-                    Token 预算限制 (Token Budget Limit)
+                    {t('Token budget limit')}
                   </label>
                   <input
                     type="number"
@@ -822,30 +839,34 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                     className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                   />
                   <p className="mt-1.5 text-[11px] text-agent-muted-foreground">
-                    单次对话中累积消耗的最大 Token 数量（默认 60,000）。超限后将自动停止，防止模型死循环或意外消耗过多 Token。
+                    {t(
+                      'Maximum tokens a single conversation may consume in total (default 60,000). It stops automatically when the limit is exceeded, to prevent endless model loops or unexpected token usage.',
+                    )}
                   </p>
                 </div>
 
                 {/* ───── 超时设置 ───── */}
                 <div className="border-t border-agent-border/60 pt-3 space-y-3">
                   <h4 className="text-xs font-semibold text-agent-muted-foreground uppercase tracking-wide">
-                    超时设置
+                    {t('Timeouts')}
                   </h4>
 
                   <div>
                     <label className="mb-1.5 block text-xs font-medium text-agent-muted-foreground">
-                      本地命令默认超时（秒）
+                      {t('Default local command timeout (seconds)')}
                     </label>
                     <input
                       type="number"
                       min={1}
                       value={execTimeoutInput}
                       onChange={(e) => setExecTimeoutInput(e.target.value)}
-                      placeholder="留空 = 默认（后台 30s / 终端 60s）"
+                      placeholder={t('Blank = default (background 30s / terminal 60s)')}
                       className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                     />
                     <p className="mt-1.5 text-[11px] text-agent-muted-foreground">
-                      执行本地命令时未显式指定超时的默认等待时长。命令行带 “gui” 的启动命令不受此限制：超时后按“程序已启动、仍在运行”处理，不会被判为失败或重复启动。
+                      {t(
+                        'Default wait time for local commands that do not set a timeout explicitly. Launch commands containing "gui" are exempt: on timeout they are treated as "program started and still running", not as a failure or a repeated launch.',
+                      )}
                     </p>
                   </div>
 

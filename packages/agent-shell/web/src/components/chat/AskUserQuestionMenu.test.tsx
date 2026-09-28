@@ -37,13 +37,13 @@ describe('AskUserQuestionMenu · 分步与提交契约', () => {
     const onSubmit = vi.fn();
     render(<AskUserQuestionMenu intro="需要你的输入" questions={TWO_SELECTS} onSubmit={onSubmit} />);
 
-    expect(screen.getByText('问题 1 / 2')).toBeTruthy();
+    expect(screen.getByText('Question 1 / 2')).toBeTruthy();
     expect(screen.getByText('选一个问题域')).toBeTruthy();
     // 上一题在第一题不出现
-    expect(screen.queryByText('上一题')).toBeNull();
+    expect(screen.queryByText('Previous')).toBeNull();
 
     fireEvent.click(screen.getByText('甲方案'));
-    expect(screen.getByText('问题 2 / 2')).toBeTruthy();
+    expect(screen.getByText('Question 2 / 2')).toBeTruthy();
     expect(screen.getByText('选一个范围')).toBeTruthy();
     // 还没到提交全部的时候
     expect(onSubmit).not.toHaveBeenCalled();
@@ -61,9 +61,9 @@ describe('AskUserQuestionMenu · 分步与提交契约', () => {
     const onSubmit = vi.fn();
     render(<AskUserQuestionMenu intro="" questions={TWO_SELECTS} onSubmit={onSubmit} />);
     fireEvent.click(screen.getByText('甲方案'));
-    fireEvent.click(screen.getByText('上一题'));
+    fireEvent.click(screen.getByText('Previous'));
 
-    expect(screen.getByText('问题 1 / 2')).toBeTruthy();
+    expect(screen.getByText('Question 1 / 2')).toBeTruthy();
     const prev = screen.getByText('甲方案').closest('button');
     expect(prev?.getAttribute('aria-checked')).toBe('true');
 
@@ -84,7 +84,7 @@ describe('AskUserQuestionMenu · 分步与提交契约', () => {
     ];
     render(<AskUserQuestionMenu intro="" questions={questions} onSubmit={onSubmit} />);
 
-    const submit = screen.getByText('提交').closest('button')!;
+    const submit = screen.getByText('Submit').closest('button')!;
     expect(submit.disabled).toBe(true);
 
     const red = screen.getByText('红').closest('button')!;
@@ -104,18 +104,18 @@ describe('AskUserQuestionMenu · 分步与提交契约', () => {
   it('「其他 / 自定义」：输入文本直接作为该题答案', () => {
     const onSubmit = vi.fn();
     render(<AskUserQuestionMenu intro="" questions={[TWO_SELECTS[0]]} onSubmit={onSubmit} />);
-    fireEvent.click(screen.getByText('其他 / 自定义'));
-    const input = screen.getByPlaceholderText('输入你的回答...');
+    fireEvent.click(screen.getByText('Other / custom'));
+    const input = screen.getByPlaceholderText('Type your answer...');
     fireEvent.change(input, { target: { value: '丙方案' } });
-    fireEvent.click(screen.getByText('提交'));
+    fireEvent.click(screen.getByText('Submit'));
     expect(onSubmit).toHaveBeenCalledWith({ q1: '丙方案' });
   });
 
   it('自定义模式可返回选项列表（答案不丢）', () => {
     const onSubmit = vi.fn();
     render(<AskUserQuestionMenu intro="" questions={[TWO_SELECTS[0]]} onSubmit={onSubmit} />);
-    fireEvent.click(screen.getByText('其他 / 自定义'));
-    fireEvent.click(screen.getByText('← 返回选项'));
+    fireEvent.click(screen.getByText('Other / custom'));
+    fireEvent.click(screen.getByText('← Back to options'));
     expect(screen.getByText('甲方案')).toBeTruthy();
   });
 
@@ -124,7 +124,7 @@ describe('AskUserQuestionMenu · 分步与提交契约', () => {
     const questions = [{ id: 'q1', text: '叫什么名字', type: 'text', placeholder: '输入名字' }];
     render(<AskUserQuestionMenu intro="" questions={questions} onSubmit={onSubmit} />);
 
-    const submit = screen.getByText('提交').closest('button')!;
+    const submit = screen.getByText('Submit').closest('button')!;
     expect(submit.disabled).toBe(true);
 
     const input = screen.getByPlaceholderText('输入名字');
@@ -140,7 +140,7 @@ describe('AskUserQuestionMenu · 分步与提交契约', () => {
       <AskUserQuestionMenu intro="" questions={questions} onSubmit={vi.fn()} />,
     );
     expect(container.querySelector('input[type="password"]')).not.toBeNull();
-    expect(screen.getByText('密码输入')).toBeTruthy();
+    expect(screen.getByText('Password input')).toBeTruthy();
   });
 
   it('「交给AI决定」按钮透传 onAutoContinue', () => {
@@ -153,7 +153,7 @@ describe('AskUserQuestionMenu · 分步与提交契约', () => {
         onAutoContinue={onAutoContinue}
       />,
     );
-    fireEvent.click(screen.getByText('交给AI决定'));
+    fireEvent.click(screen.getByText('Let AI decide'));
     expect(onAutoContinue).toHaveBeenCalledOnce();
   });
 });
@@ -168,7 +168,7 @@ describe('AskUserQuestionMenu · 归一化韧性', () => {
     ];
     render(<AskUserQuestionMenu intro="" questions={questions as never} onSubmit={onSubmit} />);
     expect(screen.getByText('用别名的问题')).toBeTruthy();
-    expect(screen.getByText('问题 1 / 1')).toBeTruthy();
+    expect(screen.getByText('Question 1 / 1')).toBeTruthy();
   });
 
   it('有选项的题强制 select 形态（即便声明了 text）', () => {
@@ -182,10 +182,10 @@ describe('AskUserQuestionMenu · 归一化韧性', () => {
     const onSubmit = vi.fn();
     // 第一题先答自定义值，再回退验证 initialDraft 的自定义恢复
     render(<AskUserQuestionMenu intro="" questions={TWO_SELECTS} onSubmit={onSubmit} />);
-    fireEvent.click(screen.getByText('其他 / 自定义'));
-    fireEvent.change(screen.getByPlaceholderText('输入你的回答...'), { target: { value: '自定义甲' } });
-    fireEvent.click(screen.getByText('下一题'));
-    fireEvent.click(screen.getByText('上一题'));
+    fireEvent.click(screen.getByText('Other / custom'));
+    fireEvent.change(screen.getByPlaceholderText('Type your answer...'), { target: { value: '自定义甲' } });
+    fireEvent.click(screen.getByText('Next'));
+    fireEvent.click(screen.getByText('Previous'));
     expect(screen.getByDisplayValue('自定义甲')).toBeTruthy();
   });
 });

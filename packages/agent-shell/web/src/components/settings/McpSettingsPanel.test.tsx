@@ -30,19 +30,19 @@ describe('McpSettingsPanel / Streamable HTTP', () => {
     fireEvent.change(screen.getByRole('combobox'), {
       target: { value: 'streamable-http' },
     });
-    fireEvent.change(screen.getByPlaceholderText('名称，如 filesystem'), {
+    fireEvent.change(screen.getByPlaceholderText('Name, e.g. filesystem'), {
       target: { value: 'remote-docs' },
     });
     fireEvent.change(screen.getByPlaceholderText('https://example.com/mcp'), {
       target: { value: 'https://mcp.example.com/mcp' },
     });
-    fireEvent.change(screen.getByPlaceholderText('环境变量请求头（每行 Header=ENV_NAME）'), {
+    fireEvent.change(screen.getByPlaceholderText('Headers from environment variables (one Header=ENV_NAME per line)'), {
       target: { value: 'X-Api-Key=MCP_API_KEY' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Bearer token 环境变量名（可选）'), {
+    fireEvent.change(screen.getByPlaceholderText('Bearer token environment variable name (optional)'), {
       target: { value: 'MCP_TOKEN' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => {
       expect(request).toHaveBeenCalledWith({
         method: 'POST',

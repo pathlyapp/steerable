@@ -75,7 +75,7 @@ describe('SettingsPage header save', () => {
   it('does not show the header save on the plugins page', () => {
     renderSettings('?section=plugins');
     expect(screen.queryByTestId('settings-header-save')).toBeNull();
-    expect(screen.getByRole('heading', { name: '插件' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Plugins' })).toBeTruthy();
     expect(screen.getByTestId('plugins-tabs')).toBeTruthy();
     expect(screen.getByTestId('settings-section-agents')).toBeTruthy();
     expect(screen.queryByTestId('settings-section-skills')).toBeNull();
@@ -95,10 +95,10 @@ describe('SettingsPage header save', () => {
 
     fireEvent.click(screen.getByTestId('plugins-tab-web-search'));
     expect(screen.getByTestId('settings-section-web-search')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '网络搜索' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Web search' })).toBeTruthy();
     expect(screen.queryByTestId('settings-section-mcp')).toBeNull();
     expect(screen.getByTestId('plugins-summary').textContent).toBe(
-      '管理智能体、技能、MCP 服务和网络搜索。',
+      'Manage agents, skills, MCP servers, and web search.',
     );
     view.unmount();
 
@@ -109,8 +109,8 @@ describe('SettingsPage header save', () => {
 
   it('orders general sections by how often they are used', () => {
     renderSettings();
-    expect(screen.getByRole('heading', { name: '界面' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: '帮助改进产品' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Interface' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Help improve the product' })).toBeTruthy();
     expect(
       [...document.querySelectorAll('[data-testid^="settings-section-"]')].map(
         (el) => el.getAttribute('data-testid'),
@@ -154,7 +154,7 @@ describe('SettingsPage header save', () => {
 
       renderSettings();
       expect(screen.getByTestId('settings-side-nav')).toBeTruthy();
-      expect(screen.getByText('设置导航')).toBeTruthy();
+      expect(screen.getByText('Settings navigation')).toBeTruthy();
       expect(screen.getByTestId('settings-nav-item-appearance')).toBeTruthy();
       expect(screen.getByTestId('settings-nav-item-orchestration')).toBeTruthy();
       // 右侧未挂载/隐藏的分段（如未支持的 python-runner 或无更新版本的 update），菜单一律不显示

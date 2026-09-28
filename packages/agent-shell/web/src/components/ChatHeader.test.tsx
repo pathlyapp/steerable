@@ -66,7 +66,7 @@ function installBridge(tasks: LocalTask[]) {
 }
 
 function taskButton() {
-  return screen.getByRole('button', { name: /后台任务/ });
+  return screen.getByRole('button', { name: /Background tasks/ });
 }
 
 describe('ChatHeader 后台任务角标', () => {
@@ -91,7 +91,7 @@ describe('ChatHeader 后台任务角标', () => {
 
     expect(taskButton().getAttribute('data-task-state')).toBe('running');
     expect(taskButton().textContent).toBe('2');
-    expect(taskButton().getAttribute('title')).toBe('共 3 个后台任务（2 个运行中）');
+    expect(taskButton().getAttribute('title')).toBe('Background tasks: 3 (2 in progress)');
   });
 
   it('等依赖的任务也算在推进中', () => {
@@ -100,7 +100,7 @@ describe('ChatHeader 后台任务角标', () => {
     );
 
     expect(taskButton().getAttribute('data-task-state')).toBe('running');
-    expect(taskButton().getAttribute('title')).toBe('共 1 个后台任务（1 个等依赖）');
+    expect(taskButton().getAttribute('title')).toBe('Background tasks: 1 (1 waiting on dependencies)');
   });
 
   it('待合并的 worktree 任务优先于失败任务上色', () => {
@@ -116,7 +116,7 @@ describe('ChatHeader 后台任务角标', () => {
 
     expect(taskButton().getAttribute('data-task-state')).toBe('review');
     expect(taskButton().textContent).toBe('1');
-    expect(taskButton().getAttribute('title')).toBe('共 2 个后台任务（1 个待合并，1 个失败）');
+    expect(taskButton().getAttribute('title')).toBe('Background tasks: 2 (1 awaiting merge, 1 failed)');
   });
 
   it('只有失败任务时标成 failed', () => {
@@ -152,7 +152,7 @@ describe('ChatHeader 角标直达', () => {
     );
 
     expect(taskButton().getAttribute('data-task-shortcut')).toBe('process');
-    expect(taskButton().getAttribute('title')).toContain('点击查看推理过程');
+    expect(taskButton().getAttribute('title')).toContain('Click to view the reasoning');
 
     fireEvent.click(taskButton());
 
@@ -176,7 +176,7 @@ describe('ChatHeader 角标直达', () => {
     render(<ChatHeader chat={CHAT} onInspectTask={vi.fn()} tasks={[task]} />);
 
     expect(taskButton().getAttribute('data-task-shortcut')).toBe('expand');
-    expect(taskButton().getAttribute('title')).toContain('点击处理 worktree');
+    expect(taskButton().getAttribute('title')).toContain('Click to handle the worktree');
 
     fireEvent.click(taskButton());
 
@@ -198,7 +198,7 @@ describe('ChatHeader 角标直达', () => {
     );
 
     expect(taskButton().getAttribute('data-task-shortcut')).toBeNull();
-    expect(taskButton().getAttribute('title')).not.toContain('点击');
+    expect(taskButton().getAttribute('title')).not.toContain('Click');
   });
 
   it('多件待处理时不直达——用户得先挑', () => {
@@ -250,7 +250,7 @@ describe('ChatHeader 包槽位入口', () => {
     expect(slotButton.className).toContain('bg-agent-foreground/10');
     // 紧跟「后台任务」按钮（右侧）
     expect(slotButton.previousElementSibling).toBe(
-      screen.getByRole('button', { name: /后台任务/ }),
+      screen.getByRole('button', { name: /Background tasks/ }),
     );
 
     fireEvent.click(slotButton);
@@ -289,8 +289,8 @@ describe('ChatHeader 终端入口', () => {
 
     const btn = screen.getByTestId('header-terminal');
     expect(btn.textContent).toBe('');
-    expect(btn.getAttribute('title')).toBe('打开终端面板 (⌘T)');
-    expect(btn.getAttribute('aria-label')).toBe('终端');
+    expect(btn.getAttribute('title')).toBe('Open terminal panel (⌘T)');
+    expect(btn.getAttribute('aria-label')).toBe('Terminal');
     fireEvent.click(btn);
     expect(onToggleRightPanel).toHaveBeenCalledWith('terminal');
   });
@@ -309,7 +309,7 @@ describe('ChatHeader 终端入口', () => {
 
     const btn = screen.getByTestId('header-terminal');
     expect(btn.textContent).toBe('');
-    expect(btn.getAttribute('title')).toBe('关闭终端面板 (Ctrl+T)');
+    expect(btn.getAttribute('title')).toBe('Close terminal panel (Ctrl+T)');
     expect(btn.getAttribute('aria-pressed')).toBe('true');
     expect(btn.className).toContain('bg-agent-foreground/10');
 

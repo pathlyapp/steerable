@@ -43,7 +43,7 @@ describe('PythonRunnerSettingsPanel', () => {
     });
     render(<PythonRunnerSettingsPanel />);
 
-    expect(await screen.findByText('Python 代码运行器')).toBeTruthy();
+    expect(await screen.findByText('Python code runner')).toBeTruthy();
     fireEvent.click(screen.getByTestId('python-runner-action'));
     await waitFor(() => expect(pythonRunner.download).toHaveBeenCalledWith(undefined));
   });
@@ -59,8 +59,8 @@ describe('PythonRunnerSettingsPanel', () => {
     pythonRunner.cancel.mockResolvedValue(base);
     render(<PythonRunnerSettingsPanel />);
 
-    expect(await screen.findByText(/正在下载 35%/)).toBeTruthy();
-    fireEvent.click(screen.getByText('取消'));
+    expect(await screen.findByText(/Downloading 35%/)).toBeTruthy();
+    fireEvent.click(screen.getByText('Cancel'));
     await waitFor(() => expect(pythonRunner.cancel).toHaveBeenCalledOnce());
   });
 
@@ -76,12 +76,12 @@ describe('PythonRunnerSettingsPanel', () => {
     });
     render(<PythonRunnerSettingsPanel />);
 
-    await screen.findByText('Python 代码运行器');
-    fireEvent.click(screen.getByLabelText('本地 Python'));
-    fireEvent.click(screen.getByText('选择…'));
+    await screen.findByText('Python code runner');
+    fireEvent.click(screen.getByLabelText('Local Python'));
+    fireEvent.click(screen.getByText('Choose…'));
     await waitFor(() => {
       expect(
-        (screen.getByPlaceholderText('Python 可执行文件的绝对路径') as HTMLInputElement)
+        (screen.getByPlaceholderText('Absolute path to the Python executable') as HTMLInputElement)
           .value,
       ).toBe('/usr/bin/python3');
     });

@@ -7,6 +7,7 @@ import {
   type GatewayModelCatalog,
   type GatewayModelEntry,
 } from '@/lib/local-api';
+import { t } from '@/i18n';
 
 /**
  * ModelPicker — 聊天输入框的模型/档位选择器。
@@ -97,11 +98,11 @@ export function ModelPicker({
   const statusBadge =
     status === 'offline' ? (
       <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/50 bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
-        目录不可用
+        {t('Catalog unavailable')}
       </span>
     ) : status === 'stale' ? (
       <span className="inline-flex items-center gap-1 rounded-full border border-agent-border bg-agent-muted px-1.5 py-0.5 text-[10px] text-agent-muted-foreground">
-        缓存
+        {t('Cached')}
       </span>
     ) : null;
 
@@ -124,16 +125,20 @@ export function ModelPicker({
           className="inline-flex h-6 min-w-0 max-w-[160px] items-center gap-1 rounded-full border border-agent-border bg-agent-canvas px-1.5 text-[12px] leading-[1.45] text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-not-allowed disabled:opacity-70 @sm:max-w-[220px]"
           title={
             status === 'offline'
-              ? `模型目录不可用${catalog?.error ? `：${catalog.error}` : ''}（仍可手动指定模型）`
-              : `当前模型：${effectiveModel || '未配置'}`
+              ? catalog?.error
+                ? t('Model catalog unavailable: {error} (you can still enter a model manually)', {
+                    error: catalog.error,
+                  })
+                : t('Model catalog unavailable (you can still enter a model manually)')
+              : t('Current model: {model}', { model: effectiveModel || t('Not configured') })
           }
           aria-haspopup="menu"
           aria-expanded={modelMenuOpen}
         >
-          <span className="min-w-0 truncate">{effectiveModel || '选择模型'}</span>
+          <span className="min-w-0 truncate">{effectiveModel || t('Choose a model')}</span>
           {model != null && (
             <span className="inline-flex shrink-0 items-center rounded bg-agent-foreground/10 px-1 py-0.5 text-[9px] font-medium text-agent-foreground">
-              本会话
+              {t('This chat')}
             </span>
           )}
           <LuChevronDown className="h-3 w-3 shrink-0 text-agent-muted-foreground" />
@@ -146,7 +151,7 @@ export function ModelPicker({
           >
             <div className="flex items-center justify-between gap-2 px-2 py-1">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-agent-muted-foreground">
-                模型（网关目录）
+                {t('Models (gateway catalog)')}
               </span>
               <span className="flex items-center gap-1">
                 {statusBadge}
@@ -154,8 +159,8 @@ export function ModelPicker({
                   type="button"
                   onClick={() => void refresh()}
                   className="flex h-4 w-4 items-center justify-center rounded text-agent-muted-foreground transition-colors hover:text-agent-foreground"
-                  title="刷新目录"
-                  aria-label="刷新目录"
+                  title={t('Refresh catalog')}
+                  aria-label={t('Refresh catalog')}
                 >
                   <LuRefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
                 </button>
@@ -168,8 +173,8 @@ export function ModelPicker({
                       setEffortMenuOpen(false);
                     }}
                     className="flex h-4 w-4 items-center justify-center rounded text-agent-muted-foreground transition-colors hover:text-agent-foreground"
-                    title="LLM 设置"
-                    aria-label="LLM 设置"
+                    title={t('LLM settings')}
+                    aria-label={t('LLM settings')}
                     data-testid="chat-llm-settings"
                   >
                     <LuSettings className="h-3 w-3" />
@@ -192,7 +197,9 @@ export function ModelPicker({
               ].join(' ')}
             >
               <span className="min-w-0 flex-1 truncate">
-                跟随设置{settingsModel ? `（${settingsModel}）` : ''}
+                {settingsModel
+                  ? t('Follow settings ({model})', { model: settingsModel })
+                  : t('Follow settings')}
               </span>
             </button>
             {catalog?.models.map((entry) => {
@@ -236,7 +243,9 @@ export function ModelPicker({
             })}
             {catalog != null && catalog.models.length === 0 && (
               <div className="px-2 py-2 text-[11px] text-agent-muted-foreground">
-                目录为空——{status === 'offline' ? '网关不可达，仍按设置里的模型发送' : '网关未报告任何模型'}
+                {status === 'offline'
+                  ? t('The catalog is empty. The gateway is unreachable, so messages still use the model in Settings.')
+                  : t('The catalog is empty. The gateway reported no models.')}
               </div>
             )}
           </div>
@@ -253,11 +262,11 @@ export function ModelPicker({
             }}
             disabled={disabled}
             className="inline-flex h-6 items-center gap-1 rounded-full border border-agent-border bg-agent-canvas px-1.5 text-[12px] leading-[1.45] text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-not-allowed disabled:opacity-70"
-            title="推理档位（随每轮请求下发；模型不支持会直接报错）"
+            title={t('Reasoning level (sent with every request; an error appears if the model does not support it)')}
             aria-haspopup="menu"
             aria-expanded={effortMenuOpen}
           >
-            <span className="truncate">{reasoningEffort ?? '自动'}</span>
+            <span className="truncate">{reasoningEffort ?? t('Auto')}</span>
             <LuChevronDown className="h-3 w-3 shrink-0 text-agent-muted-foreground" />
           </button>
           {effortMenuOpen && (
@@ -279,7 +288,7 @@ export function ModelPicker({
                     : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground',
                 ].join(' ')}
               >
-                自动
+                {t('Auto')}
               </button>
               {reasoningLevels.map((level) => (
                 <button

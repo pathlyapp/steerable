@@ -184,6 +184,8 @@ export interface HostBridge {
    * to clear the listener (otherwise multiple AgentSidebar mounts
    * during HMR would queue up duplicate callbacks).
    */
+  /** 把当前界面语言告诉主进程，以便重建应用菜单。浏览器预览里没有。 */
+  setLocale?: (locale: string) => void;
   onMenuNewChat?: (callback: () => void) => void;
   offMenuNewChat?: () => void;
   /**

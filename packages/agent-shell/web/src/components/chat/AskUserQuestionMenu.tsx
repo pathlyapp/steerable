@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LuCheck, LuChevronLeft, LuPencil, LuWand } from 'react-icons/lu';
+import { t } from '@/i18n';
 
 /**
  * AskUserQuestionMenu — W8 结构化提问的分步菜单卡片。
@@ -94,7 +95,7 @@ function initialDraft(question: AskQuestion, answer: AnswerValue | undefined): {
     return {
       selected,
       customMode: customBits.length > 0,
-      customText: customBits.join('、'),
+      customText: customBits.join(t(', ')),
     };
   }
   if (typeof answer === 'string' && answer.length > 0) {
@@ -129,7 +130,7 @@ function Footer({
             className="inline-flex items-center gap-1 rounded-agent-md border border-agent-border px-2.5 py-1.5 text-xs font-medium text-agent-foreground transition hover:bg-agent-muted"
           >
             <LuChevronLeft size={12} />
-            上一题
+            {t('Previous')}
           </button>
         )}
         {onAutoContinue && (
@@ -139,7 +140,7 @@ function Footer({
             className="inline-flex items-center gap-1 rounded-agent-md px-2.5 py-1.5 text-xs font-medium text-agent-muted-foreground transition hover:bg-agent-muted hover:text-agent-foreground"
           >
             <LuWand size={12} />
-            交给AI决定
+            {t('Let AI decide')}
           </button>
         )}
       </div>
@@ -175,7 +176,7 @@ function PrimaryButton({
       ].join(' ')}
     >
       <LuCheck size={12} />
-      {isLast ? '提交' : '下一题'}
+      {isLast ? t('Submit') : t('Next')}
     </button>
   );
 }
@@ -352,7 +353,7 @@ function SelectQuestionStep({
           <LuCheck size={10} />
         </span>
         <LuPencil size={12} className="shrink-0" />
-        <span className="min-w-0 flex-1">其他 / 自定义</span>
+        <span className="min-w-0 flex-1">{t('Other / custom')}</span>
       </button>
     );
   };
@@ -395,7 +396,7 @@ function SelectQuestionStep({
                 commitMulti();
               }
             }}
-            placeholder={question.placeholder || '输入你的补充...'}
+            placeholder={question.placeholder || t('Add your details...')}
             className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 text-xs text-agent-foreground outline-none placeholder:text-agent-muted-foreground focus:border-agent-foreground focus:ring-1 focus:ring-agent-foreground"
           />
         )}
@@ -413,7 +414,7 @@ function SelectQuestionStep({
                   commitCustom();
                 }
               }}
-              placeholder={question.placeholder || '输入你的回答...'}
+              placeholder={question.placeholder || t('Type your answer...')}
               className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 text-xs text-agent-foreground outline-none placeholder:text-agent-muted-foreground focus:border-agent-foreground focus:ring-1 focus:ring-agent-foreground"
             />
             <button
@@ -424,7 +425,7 @@ function SelectQuestionStep({
               }}
               className="text-xs text-agent-muted-foreground transition hover:text-agent-foreground"
             >
-              ← 返回选项
+              {t('← Back to options')}
             </button>
           </div>
         )}
@@ -434,7 +435,11 @@ function SelectQuestionStep({
         canGoBack={Boolean(onBack)}
         onBack={onBack}
         onAutoContinue={onAutoContinue}
-        hint={question.multiSelect ? '↑↓ 移动，Enter 勾选' : '↑↓ 选择，Enter 确认'}
+        hint={
+          question.multiSelect
+            ? t('↑↓ to move, Enter to check')
+            : t('↑↓ to choose, Enter to confirm')
+        }
       >
         {question.multiSelect ? (
           <PrimaryButton
@@ -511,7 +516,7 @@ function TextQuestionStep({
               commit();
             }
           }}
-          placeholder={question.placeholder || '输入你的回答...'}
+          placeholder={question.placeholder || t('Type your answer...')}
           className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 text-xs text-agent-foreground outline-none placeholder:text-agent-muted-foreground focus:border-agent-foreground focus:ring-1 focus:ring-agent-foreground"
         />
       </div>
@@ -520,7 +525,7 @@ function TextQuestionStep({
         canGoBack={Boolean(onBack)}
         onBack={onBack}
         onAutoContinue={onAutoContinue}
-        hint="Enter 确认"
+        hint={t('Enter to confirm')}
       >
         <PrimaryButton disabled={!value.trim()} isLast={isLast} onClick={commit} />
       </Footer>
@@ -581,16 +586,16 @@ export function AskUserQuestionMenu({
       <div className="flex items-start justify-between gap-2 border-b border-agent-border px-3 py-2">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-agent-foreground">
-            {intro || '需要你的输入'}
+            {intro || t('Your input is needed')}
           </p>
           <p className="mt-0.5 text-[11px] text-agent-muted-foreground">
-            问题 {step + 1} / {normalized.length}
+            {t('Question {current} / {total}', { current: step + 1, total: normalized.length })}
             {bottomHint ? ` · ${bottomHint}` : ''}
           </p>
         </div>
         {current.type === 'password' || current.multiSelect ? (
           <span className="rounded-full border border-agent-border px-2 py-0.5 text-[10px] font-medium text-agent-muted-foreground">
-            {current.type === 'password' ? '密码输入' : '可多选'}
+            {current.type === 'password' ? t('Password input') : t('Multiple choice')}
           </span>
         ) : null}
       </div>

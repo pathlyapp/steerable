@@ -65,8 +65,8 @@ describe('TaskProcessPanel', () => {
       />,
     );
     await waitFor(() => screen.getByText('问好完成。'));
-    expect(screen.getByText(/工具调用 1 次/)).toBeTruthy();
-    expect(screen.getByText(/已结束/)).toBeTruthy();
+    expect(screen.getByText(/1 tool calls/)).toBeTruthy();
+    expect(screen.getByText(/Finished/)).toBeTruthy();
   });
 
   it('task-process 推送更新时间线', async () => {
@@ -77,7 +77,7 @@ describe('TaskProcessPanel', () => {
         onClose={() => {}}
       />,
     );
-    await waitFor(() => screen.getByText(/正在推理/));
+    await waitFor(() => screen.getByText(/Reasoning/));
     emit({
       chatId: 'chat_1',
       taskId: 'task-1',
@@ -108,7 +108,7 @@ describe('TaskProcessPanel', () => {
           onClose={() => {}}
         />,
       );
-      await waitFor(() => screen.getByText(/正在推理/));
+      await waitFor(() => screen.getByText(/Reasoning/));
       pinned = 0;
 
       emit({

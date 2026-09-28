@@ -51,7 +51,7 @@ export async function refreshProjects(): Promise<void> {
   } catch (err) {
     if (seq !== requestSeq) return;
     const message = err instanceof Error ? err.message : String(err);
-    console.error('获取项目列表失败:', err);
+    console.error('Failed to load projects:', err);
     snapshot = { projects: snapshot.projects, error: message };
     emit();
   }

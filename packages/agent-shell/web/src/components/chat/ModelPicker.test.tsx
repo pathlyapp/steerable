@@ -75,10 +75,10 @@ describe('ModelPicker', () => {
     // 目录行 + 跟随设置行
     expect(await screen.findByText('z-ai/glm-5.3-flash')).toBeTruthy();
     expect(screen.getByText('openai/qwen/qwen3.8-27b')).toBeTruthy();
-    expect(screen.getByText(/跟随设置/)).toBeTruthy();
-    expect(screen.getByText('思考')).toBeTruthy();
+    expect(screen.getByText(/Follow settings/)).toBeTruthy();
+    expect(screen.getByText('Thinking')).toBeTruthy();
     expect(screen.getByText('131K')).toBeTruthy();
-    expect(screen.getByText('未识别')).toBeTruthy();
+    expect(screen.getByText('Unrecognized')).toBeTruthy();
 
     fireEvent.click(screen.getByText('z-ai/glm-5.3-flash'));
     expect(props.onSelectModel).toHaveBeenCalledWith('z-ai/glm-5.3-flash');
@@ -89,7 +89,7 @@ describe('ModelPicker', () => {
   it('offers the effort picker only for models with reasoning levels', async () => {
     const { props, rerender } = renderPicker({ model: 'z-ai/glm-5.3-flash' });
     // 等目录到达后档位按钮出现
-    const effortTrigger = await screen.findByText('自动');
+    const effortTrigger = await screen.findByText('Auto');
     fireEvent.click(effortTrigger);
     for (const level of ['low', 'high', 'max']) {
       expect(screen.getByText(level)).toBeTruthy();
@@ -106,7 +106,7 @@ describe('ModelPicker', () => {
         onSelectEffort={props.onSelectEffort}
       />,
     );
-    expect(screen.queryByText('自动')).toBeNull();
+    expect(screen.queryByText('Auto')).toBeNull();
   });
 
   it('discloses the offline state and still allows manual selection', async () => {
@@ -118,15 +118,15 @@ describe('ModelPicker', () => {
     renderPicker();
     const trigger = await screen.findByText('deepseek-chat');
     fireEvent.click(trigger);
-    expect(await screen.findByText('目录不可用')).toBeTruthy();
-    expect(screen.getByText(/网关不可达/)).toBeTruthy();
+    expect(await screen.findByText('Catalog unavailable')).toBeTruthy();
+    expect(screen.getByText(/The gateway is unreachable/)).toBeTruthy();
   });
 
   it('badges a stale catalog as cache', async () => {
     getLlmModels.mockResolvedValue({ ...CATALOG, catalogStatus: 'stale' });
     renderPicker();
     fireEvent.click(await screen.findByText('deepseek-chat'));
-    expect(await screen.findByText('缓存')).toBeTruthy();
+    expect(await screen.findByText('Cached')).toBeTruthy();
     // 缓存目录的模型行照常可选
     expect(screen.getByText('z-ai/glm-5.3-flash')).toBeTruthy();
   });
@@ -135,7 +135,7 @@ describe('ModelPicker', () => {
     renderPicker({ model: 'z-ai/glm-5.3-flash' });
     const trigger = (await screen.findByText('z-ai/glm-5.3-flash')).closest('button');
     expect(trigger).toBeTruthy();
-    expect(screen.getByText('本会话')).toBeTruthy();
+    expect(screen.getByText('This chat')).toBeTruthy();
     // Chevron only — no CPU / vendor logo in the chip.
     expect(trigger!.querySelectorAll('svg')).toHaveLength(1);
   });
@@ -143,7 +143,7 @@ describe('ModelPicker', () => {
   it('resets to the global settings model via 跟随设置', async () => {
     const { props } = renderPicker({ model: 'z-ai/glm-5.3-flash' });
     fireEvent.click(await screen.findByText('z-ai/glm-5.3-flash'));
-    fireEvent.click(await screen.findByText(/跟随设置/));
+    fireEvent.click(await screen.findByText(/Follow settings/));
     expect(props.onSelectModel).toHaveBeenCalledWith(null);
   });
 
@@ -155,7 +155,7 @@ describe('ModelPicker', () => {
 
     const settingsButton = screen.getByTestId('chat-llm-settings');
     expect(settingsButton).toBeTruthy();
-    expect(settingsButton.getAttribute('title')).toBe('LLM 设置');
+    expect(settingsButton.getAttribute('title')).toBe('LLM settings');
 
     fireEvent.click(settingsButton);
     expect(onOpenSettings).toHaveBeenCalledTimes(1);

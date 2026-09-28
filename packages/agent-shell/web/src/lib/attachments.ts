@@ -9,6 +9,7 @@
  *   - BS/browser：File 没有路径，这里把字节读成 base64 走 HTTP 端点落盘。
  * 返回的落盘路径会重写消息正文里的文件引用与图像附件元数据。
  */
+import { t } from '@/i18n';
 import { getElectronBridge } from './electron-bridge';
 
 export interface AttachmentFile {
@@ -109,7 +110,7 @@ export async function saveChatAttachments(
         kept.push(file);
         return;
       }
-      failures.push({ name: file.name, error: entry?.error || '上传失败', file });
+      failures.push({ name: file.name, error: entry?.error || t('Upload failed'), file });
     });
     return { files: kept, failures };
   } catch (err) {
@@ -123,13 +124,21 @@ export async function saveChatAttachments(
   }
 }
 
-/** 把失败项拼成一条给用户看的中文提示（供各提交入口复用）。 */
+/** 把失败项拼成一条给用户看的提示（供各提交入口复用）。 */
 export function formatAttachmentFailures(failures: AttachmentSaveFailure[]): string {
   if (failures.length === 0) return '';
-  const detail = failures.map((f) => `${f.name}（${f.error}）`).join('；');
+  const detail = failures
+    .map((f) => t('{name} ({error})', { name: f.name, error: f.error }))
+    .join(t('; '));
   return failures.length === 1
-    ? `文件「${failures[0].name}」未能上传，本条消息未包含它：${failures[0].error}`
-    : `${failures.length} 个文件未能上传，本条消息未包含它们：${detail}`;
+    ? t('File "{name}" failed to upload and is not included in this message: {error}', {
+        name: failures[0].name,
+        error: failures[0].error,
+      })
+    : t('{count} files failed to upload and are not included in this message: {detail}', {
+        count: failures.length,
+        detail,
+      });
 }
 
 /**
@@ -142,8 +151,8 @@ export function appendAttachmentRefs(rawText: string, files: AttachmentFile[]): 
   if (files.length === 0) return rawText;
   const refs = files.map((f) => `- \`${f.path}\``).join('\n');
   return rawText
-    ? `${rawText}\n\n---\n关联文件:\n${refs}`
-    : `关联文件:\n${refs}`;
+    ? `${rawText}\n\n---\n${t('Related files:')}\n${refs}`
+    : `${t('Related files:')}\n${refs}`;
 }
 
 /**

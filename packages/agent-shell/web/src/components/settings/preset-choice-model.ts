@@ -5,6 +5,7 @@
  * 载荷之间的转换，不硬编码任何厂商参数。
  */
 
+import { t } from '@/i18n';
 import type {
   ProviderPresetDescriptor,
   ProviderPresetOverride,
@@ -28,12 +29,12 @@ export function overrideFromDescriptor(d: ProviderPresetDescriptor): ProviderPre
 /** 选择器选项标签：`host + 前缀*`，缺省键名退化为「未命名」。 */
 export function descriptorLabel(d: ProviderPresetDescriptor): string {
   const parts = [d.host, d.modelPrefix ? `${d.modelPrefix}*` : null].filter(Boolean);
-  return parts.join(' + ') || '（未命名预制）';
+  return parts.join(' + ') || t('(Unnamed preset)');
 }
 
 /** 预制参数的一行摘要，用于生效预览。 */
 export function summarizePreset(p: ProviderPresetOverride | null): string {
-  if (!p) return '不下发额外采样参数';
+  if (!p) return t('No extra sampling parameters are sent');
   const parts: string[] = [];
   if (p.temperature != null) parts.push(`temperature ${p.temperature}`);
   if (p.topP != null) parts.push(`top_p ${p.topP}`);
@@ -42,7 +43,9 @@ export function summarizePreset(p: ProviderPresetOverride | null): string {
   if (p.extraBody) {
     for (const [k, v] of Object.entries(p.extraBody)) parts.push(`${k} ${JSON.stringify(v)}`);
   }
-  return parts.length > 0 ? parts.join(' · ') : '不下发额外采样参数（该厂商最优请求即不带采样字段）';
+  return parts.length > 0
+    ? parts.join(' · ')
+    : t('No extra sampling parameters are sent (the best request for this vendor omits sampling fields)');
 }
 
 export function overridesEqual(a: ProviderPresetOverride, b: ProviderPresetOverride): boolean {

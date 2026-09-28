@@ -7,6 +7,7 @@ import {
   type ChatBranchTreeNode,
   type ChatBranchTreeResponse,
 } from '@/lib/local-api';
+import { t } from '@/i18n';
 
 /**
  * SessionTreeModal — pi 式全树分支视图（session tree）。
@@ -129,7 +130,7 @@ export function SessionTreeModal({ chatId, onClose, onBranchSwitched }: SessionT
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="会话分支树"
+      aria-label={t('Chat branch tree')}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -139,10 +140,10 @@ export function SessionTreeModal({ chatId, onClose, onBranchSwitched }: SessionT
         <div className="flex items-center gap-2 border-b border-agent-border px-3 py-2">
           <LuGitBranch className="h-4 w-4 shrink-0 text-agent-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-xs font-medium text-agent-foreground">
-            会话分支树
+            {t('Chat branch tree')}
             {data && data.nodeCount > 1 && (
               <span className="ml-1.5 text-xs font-normal text-agent-muted-foreground">
-                {data.nodeCount} 个分支
+                {t('{count} branches', { count: data.nodeCount })}
               </span>
             )}
           </span>
@@ -150,7 +151,7 @@ export function SessionTreeModal({ chatId, onClose, onBranchSwitched }: SessionT
             type="button"
             onClick={onClose}
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
-            aria-label="关闭"
+            aria-label={t('Close')}
           >
             <LuX className="h-3.5 w-3.5" />
           </button>
@@ -160,11 +161,11 @@ export function SessionTreeModal({ chatId, onClose, onBranchSwitched }: SessionT
           {loading ? (
             <div className="flex items-center justify-center gap-2 px-3 py-6 text-xs text-agent-muted-foreground">
               <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
-              正在加载分支…
+              {t('Loading branches...')}
             </div>
           ) : isEmpty ? (
             <div className="px-3 py-6 text-center text-xs text-agent-muted-foreground">
-              暂无分支 — 重新生成回复后，旧版本会保留在这里。
+              {t('No branches yet. After you regenerate a reply, the old version is kept here.')}
             </div>
           ) : (
             rows.map((row, index) => {
@@ -194,7 +195,7 @@ export function SessionTreeModal({ chatId, onClose, onBranchSwitched }: SessionT
                     </span>
                   )}
                   <span className="min-w-0 flex-1 truncate">
-                    {row.node.label || '(空分支)'}
+                    {row.node.label || t('(empty branch)')}
                   </span>
                   {active && (
                     <LuCheck className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
@@ -208,8 +209,8 @@ export function SessionTreeModal({ chatId, onClose, onBranchSwitched }: SessionT
         {!loading && !isEmpty && (
           <div className="border-t border-agent-border px-3 py-1.5 text-[10px] text-agent-muted-foreground/80">
             {data?.truncated
-              ? '分支过多，树已被截断（仅显示部分节点）。'
-              : '点击切换分支；↑↓ 移动，Enter 切换，Esc 关闭。'}
+              ? t('Too many branches. The tree is truncated (only some nodes are shown).')
+              : t('Click to switch branches. ↑↓ to move, Enter to switch, Esc to close.')}
           </div>
         )}
       </div>

@@ -8,6 +8,7 @@
 
 import type { ExecutedAction } from './ExecutedActionsCard';
 import type { TurnBlock } from './turn-timeline';
+import { t } from '@/i18n';
 
 export const TODO_STATUSES = ['pending', 'in_progress', 'completed'] as const;
 export type TodoStatus = (typeof TODO_STATUSES)[number];
@@ -108,16 +109,16 @@ export function summarizeTodoWriteAction(
 ): string | null {
   if (tool !== 'todo_write') return null;
   const todos = extractTodosFromAction({ tool, arguments: args, result });
-  if (!todos) return '任务清单';
+  if (!todos) return t('Task list');
   const { completed, total, inProgress } = summarizeTodos(todos);
   const current = todos.find((todo) => todo.status === 'in_progress');
   if (inProgress > 0 && current) {
     const label =
       current.content.length > 28 ? `${current.content.slice(0, 25)}…` : current.content;
-    return `任务清单 ${completed}/${total} · ${label}`;
+    return t('Task list {completed}/{total} · {label}', { completed, total, label });
   }
-  if (completed === total) return `任务清单 ${completed}/${total} 已完成`;
-  return `任务清单 ${completed}/${total}`;
+  if (completed === total) return t('Task list {completed}/{total} done', { completed, total });
+  return t('Task list {completed}/{total}', { completed, total });
 }
 
 export function latestTodosFromActions(

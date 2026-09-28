@@ -56,7 +56,7 @@ describe('orchestration-flow-model', () => {
     expect(flow?.completedCount).toBe(2);
     expect(flow?.runningCount).toBe(0);
     expect(flow?.isAllCompleted).toBe(true);
-    expect(flow?.summaryCopy).toBe('2/2 全部完成');
+    expect(flow?.summaryCopy).toBe('2/2 all done');
 
     const node1 = flow?.nodes.find((n) => n.childId === '0.1');
     expect(node1?.task).toBe('心算 17+28');
@@ -194,7 +194,7 @@ describe('orchestration-flow-model', () => {
       turnActive: true,
     });
     expect(live?.hasActive).toBe(true);
-    expect(live?.summaryCopy).toBe('协同执行中 (1/2 完成)...');
+    expect(live?.summaryCopy).toBe('Running together (1/2 done)...');
     expect(live?.nodes.find((node) => node.childId === '0.2')?.status).toBe('running');
 
     const stopped = resolveLatestSessionOrchestrationFlow({
@@ -205,7 +205,7 @@ describe('orchestration-flow-model', () => {
     });
     expect(stopped?.hasActive).toBe(false);
     expect(stopped?.isAllCompleted).toBe(false);
-    expect(stopped?.summaryCopy).toBe('1 完成 · 1 结束 (2 个子任务)');
+    expect(stopped?.summaryCopy).toBe('1 done · 1 ended (2 subtasks)');
     expect(stopped?.nodes.find((node) => node.childId === '0.1')?.status).toBe('completed');
     expect(stopped?.nodes.find((node) => node.childId === '0.1')?.answer).toBe('结论');
     expect(stopped?.nodes.find((node) => node.childId === '0.2')?.status).toBe('cancelled');
@@ -224,6 +224,6 @@ describe('orchestration-flow-model', () => {
     );
     expect(flow?.nodes[0].status).toBe('cancelled');
     expect(flow?.hasActive).toBe(false);
-    expect(flow?.summaryCopy).not.toContain('协同执行中');
+    expect(flow?.summaryCopy).not.toContain('Running together');
   });
 });

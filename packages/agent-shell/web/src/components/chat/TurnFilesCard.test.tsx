@@ -61,25 +61,25 @@ describe('TurnFilesCard', () => {
 
     // 最终文件卡片
     expect(screen.getByText('自我介绍.pptx')).toBeTruthy();
-    expect(screen.getByText('演示文稿 · PPTX')).toBeTruthy();
+    expect(screen.getByText('Presentation · PPTX')).toBeTruthy();
     expect(screen.getByText('2.0 KB')).toBeTruthy();
-    expect(screen.getByText('打开方式')).toBeTruthy();
+    expect(screen.getByText('Open with')).toBeTruthy();
     expect(document.querySelector('[data-deliverable-card]')).toBeTruthy();
 
     // 中间修改文件卡片（默认折叠，点击 查看详情 展开）
-    expect(screen.getByText('修改了 1 个文件')).toBeTruthy();
-    expect(screen.getByText('查看详情')).toBeTruthy();
+    expect(screen.getByText('Changed 1 files')).toBeTruthy();
+    expect(screen.getByText('View details')).toBeTruthy();
     expect(document.querySelector('[data-edited-files-card]')).toBeTruthy();
     expect(screen.queryByText('review_work/build.mjs')).toBeNull();
 
     // 点击 查看详情 展开文件列表
-    fireEvent.click(screen.getByText('查看详情'));
+    fireEvent.click(screen.getByText('View details'));
     expect(screen.getAllByText('+110').length).toBeGreaterThan(0);
     expect(screen.getAllByText('-0').length).toBeGreaterThan(0);
     expect(screen.getByText('review_work/build.mjs')).toBeTruthy();
 
     // 再次点击折叠收起
-    fireEvent.click(screen.getByText('查看详情'));
+    fireEvent.click(screen.getByText('View details'));
     expect(screen.queryByText('review_work/build.mjs')).toBeNull();
   });
 
@@ -94,23 +94,23 @@ describe('TurnFilesCard', () => {
     );
 
     expect(screen.getByText('公司介绍 12 页')).toBeTruthy();
-    expect(screen.queryByText('演示文稿 · PPTX')).toBeNull();
+    expect(screen.queryByText('Presentation · PPTX')).toBeNull();
     expect(document.querySelectorAll('[data-deliverable-card]')).toHaveLength(1);
-    expect(screen.getByText('修改了 1 个文件')).toBeTruthy();
+    expect(screen.getByText('Changed 1 files')).toBeTruthy();
 
     // 展开查看 intermediate 文件
-    fireEvent.click(screen.getByText('查看详情'));
+    fireEvent.click(screen.getByText('View details'));
     expect(screen.getByText('proj/_预览_大事记页.png')).toBeTruthy();
   });
 
   it('点击 打开方式 按钮打开交付物文件', async () => {
     render(<TurnFilesCard files={[makeFile()]} />);
 
-    fireEvent.click(screen.getByText('打开方式'));
+    fireEvent.click(screen.getByText('Open with'));
     expect(openLocalPathMock).toHaveBeenCalledWith('/proj/自我介绍.pptx');
 
     // 成功后不出现行内错误
-    expect(screen.queryByText(/打开失败/)).toBeNull();
+    expect(screen.queryByText(/Could not open/)).toBeNull();
   });
 
   it('点击交付物标题打开文件', async () => {
@@ -118,7 +118,7 @@ describe('TurnFilesCard', () => {
 
     fireEvent.click(screen.getByText('自我介绍.pptx'));
     expect(openLocalPathMock).toHaveBeenCalledWith('/proj/自我介绍.pptx');
-    expect(screen.queryByText(/打开失败/)).toBeNull();
+    expect(screen.queryByText(/Could not open/)).toBeNull();
   });
 
   it('点击中间修改文件行用系统应用打开', async () => {
@@ -135,7 +135,7 @@ describe('TurnFilesCard', () => {
     );
 
     // 默认折叠，先展开
-    fireEvent.click(screen.getByText('查看详情'));
+    fireEvent.click(screen.getByText('View details'));
 
     fireEvent.click(screen.getByText('src/index.ts'));
     expect(openLocalPathMock).toHaveBeenCalledWith('/proj/src/index.ts');
@@ -145,7 +145,7 @@ describe('TurnFilesCard', () => {
     openLocalPathMock.mockResolvedValue({ success: false, error: '没有应用能打开该文件' });
     render(<TurnFilesCard files={[makeFile()]} />);
 
-    fireEvent.click(screen.getByText('打开方式'));
+    fireEvent.click(screen.getByText('Open with'));
     await screen.findByText(/没有应用能打开该文件/);
   });
 
@@ -153,18 +153,18 @@ describe('TurnFilesCard', () => {
     openLocalPathMock.mockRejectedValue(new Error('Electron bridge unavailable'));
     render(<TurnFilesCard files={[makeFile()]} />);
 
-    fireEvent.click(screen.getByText('打开方式'));
+    fireEvent.click(screen.getByText('Open with'));
     await screen.findByText(/Electron bridge unavailable/);
   });
 
   it('打开方式 下拉菜单提供更多操作选项', () => {
     render(<TurnFilesCard files={[makeFile()]} />);
 
-    const moreButton = screen.getByLabelText('更多操作');
+    const moreButton = screen.getByLabelText('More actions');
     fireEvent.click(moreButton);
 
-    expect(screen.getByText('用默认应用打开')).toBeTruthy();
-    expect(screen.getByText('在文件夹中显示')).toBeTruthy();
-    expect(screen.getByText('复制文件路径')).toBeTruthy();
+    expect(screen.getByText('Open with default app')).toBeTruthy();
+    expect(screen.getByText('Show in folder')).toBeTruthy();
+    expect(screen.getByText('Copy file path')).toBeTruthy();
   });
 });

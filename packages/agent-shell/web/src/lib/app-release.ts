@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import type { AppReleasePhase, AppReleaseSnapshot } from './electron-bridge';
 
 export interface AppReleaseView {
@@ -20,21 +21,25 @@ export function sidebarUpdateLabel(
   if (!snap.enabled || snap.phase === 'disabled') return null;
   switch (snap.phase) {
     case 'checking':
-      return '检查中';
+      return t('Checking');
     case 'downloading':
-      return typeof snap.percent === 'number' ? `下载 ${Math.round(snap.percent)}%` : '下载中';
+      return typeof snap.percent === 'number'
+        ? t('Downloading {percent}%', { percent: Math.round(snap.percent) })
+        : t('Downloading…');
     case 'ready':
-      return snap.availableVersion ? `升级 ${snap.availableVersion}` : '升级';
+      return snap.availableVersion
+        ? t('Update to {version}', { version: snap.availableVersion })
+        : t('Update');
     case 'installing':
-      return '正在安装';
+      return t('Installing');
     case 'error':
-      return '重试';
+      return t('Retry');
     case 'idle':
-      if (snap.availableVersion) return `发现 ${snap.availableVersion}`;
+      if (snap.availableVersion) return t('{version} available', { version: snap.availableVersion });
       if (snap.message) return snap.message;
-      return confirmedCurrent ? '已是最新' : '检查更新';
+      return confirmedCurrent ? t('Up to date') : t('Check for updates');
     default:
-      return '检查更新';
+      return t('Check for updates');
   }
 }
 
@@ -43,9 +48,9 @@ export function sidebarUpdateTitle(snap: AppReleaseSnapshot): string | undefined
     return snap.message;
   }
   if (snap.phase === 'ready' && snap.availableVersion) {
-    return `重启并安装 ${snap.availableVersion}`;
+    return t('Restart and install {version}', { version: snap.availableVersion });
   }
-  if (snap.phase === 'downloading') return '正在下载更新';
+  if (snap.phase === 'downloading') return t('Downloading update');
   return undefined;
 }
 

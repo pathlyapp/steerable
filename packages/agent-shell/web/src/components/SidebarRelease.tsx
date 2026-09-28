@@ -7,6 +7,7 @@ import {
   getElectronBridge,
   type AppReleaseSnapshot,
 } from '@/lib/electron-bridge';
+import { t } from '@/i18n';
 
 export function useAppRelease(): AppReleaseView & { run: () => void } {
   const [snap, setSnap] = useState<AppReleaseSnapshot | null>(null);
@@ -59,7 +60,7 @@ export function SidebarVersionLabel({ release }: { release: AppReleaseView }) {
     <span
       className="ml-auto text-[10px] tabular-nums text-agent-muted-foreground/70"
       data-testid="sidebar-app-version"
-      title={`当前版本 ${release.version}`}
+      title={t('Current version {version}', { version: release.version })}
     >
       v{release.version}
     </span>

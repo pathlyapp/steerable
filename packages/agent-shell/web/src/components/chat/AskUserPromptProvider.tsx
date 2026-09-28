@@ -65,7 +65,7 @@ export function AskUserPromptProvider({ children }: { children: ReactNode }) {
         if (active) addRequests(requests, 'prepend');
       })
       .catch((error) => {
-        console.error('恢复待回答问题失败:', error);
+        console.error('Failed to restore pending questions:', error);
       });
     return () => {
       active = false;

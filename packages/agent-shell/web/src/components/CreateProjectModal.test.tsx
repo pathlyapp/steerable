@@ -149,7 +149,7 @@ describe('CreateProjectModal', () => {
       />,
     );
 
-    fireEvent.click(screen.getByLabelText('移除 /tmp/old'));
+    fireEvent.click(screen.getByLabelText('Remove /tmp/old'));
     fireEvent.click(screen.getByTestId('edit-project-submit'));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith({ name: '项目甲', sourceFolders: [] }),

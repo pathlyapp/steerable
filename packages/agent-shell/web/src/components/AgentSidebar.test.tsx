@@ -259,7 +259,7 @@ function renderSidebar(
 }
 
 function openProjectMenu() {
-  fireEvent.click(screen.getByLabelText('项目菜单'));
+  fireEvent.click(screen.getByLabelText('Project menu'));
   expect(screen.getByTestId('project-overflow-menu')).toBeTruthy();
 }
 
@@ -306,7 +306,7 @@ describe('AgentSidebar 会话列表渲染', () => {
     renderSidebar('/agent', vi.fn(), {
       data: { chats: [makeChat({ id: 'c-plain', title: '普通会话' })] },
     });
-    expect(screen.queryByText('置顶')).toBeNull();
+    expect(screen.queryByText('Pinned')).toBeNull();
     expect(screen.queryByText('暂无置顶会话')).toBeNull();
   });
 
@@ -335,9 +335,9 @@ describe('AgentSidebar 会话列表渲染', () => {
     renderSidebar('/agent', vi.fn(), { data: { chats: [fresh, pinnedOld] } });
 
     // 组头顺序：置顶组在「今天」之前
-    expect(screen.getByText('置顶')).toBeTruthy();
-    const pinnedHeader = screen.getByText('置顶');
-    const todayHeader = screen.getByText('今天');
+    expect(screen.getByText('Pinned')).toBeTruthy();
+    const pinnedHeader = screen.getByText('Pinned');
+    const todayHeader = screen.getByText('Today');
     expect(
       pinnedHeader.compareDocumentPosition(todayHeader) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -350,10 +350,10 @@ describe('AgentSidebar 会话列表渲染', () => {
     const auto = makeChat({ id: 'c-auto', title: '[自动化] 每小时巡检' });
     renderSidebar('/agent', vi.fn(), { data: { chats: [auto] } });
 
-    const rowButton = screen.getByTitle('[由自动化触发] 每小时巡检');
+    const rowButton = screen.getByTitle('[Triggered by automation] 每小时巡检');
     expect(rowButton.textContent).toContain('每小时巡检');
     expect(rowButton.textContent).not.toContain('[自动化]');
-    expect(screen.getByLabelText('由自动化触发')).toBeTruthy();
+    expect(screen.getByLabelText('Triggered by automation')).toBeTruthy();
   });
 
   it('无项目会话按今天 / 昨天日期分组且新组在前', () => {
@@ -361,19 +361,19 @@ describe('AgentSidebar 会话列表渲染', () => {
     const yesterdayChat = makeChat({ id: 'c-yesterday', title: '昨天的会话', updatedAt: daysAgo(1) });
     renderSidebar('/agent', vi.fn(), { data: { chats: [yesterdayChat, todayChat] } });
 
-    expect(screen.getByText('今天')).toBeTruthy();
-    expect(screen.getByText('昨天')).toBeTruthy();
+    expect(screen.getByText('Today')).toBeTruthy();
+    expect(screen.getByText('Yesterday')).toBeTruthy();
     const ids = screen.getAllByTestId('sidebar-chat-row').map((r) => r.getAttribute('data-chat-id'));
     expect(ids).toEqual(['c-today', 'c-yesterday']);
   });
 
   it('空列表展示空态，加载中展示 spinner，错误走 alert 横幅', () => {
     const { unmount } = renderSidebar('/agent', vi.fn(), { data: { chats: [] } });
-    expect(screen.getByText('暂无会话')).toBeTruthy();
+    expect(screen.getByText('No chats yet')).toBeTruthy();
     unmount();
 
     const second = renderSidebar('/agent', vi.fn(), { data: { chats: [], isLoading: true } });
-    expect(screen.getByText('加载中...')).toBeTruthy();
+    expect(screen.getByText('Loading...')).toBeTruthy();
     second.unmount();
 
     renderSidebar('/agent', vi.fn(), { data: { error: '列表加载失败' } });
@@ -385,16 +385,16 @@ describe('AgentSidebar 会话列表渲染', () => {
       data: { chats: [existingChat, makeChat({ id: 'c-2', title: '第二条' })] },
     });
     expect(screen.queryByText('· 2')).toBeNull();
-    expect(screen.getByText('共 2 个会话')).toBeTruthy();
+    expect(screen.getByText('Total chats: 2')).toBeTruthy();
   });
 
   it('有更多页时底部提示继续下滑，加载中提示加载更多', () => {
     const { unmount } = renderSidebar('/agent', vi.fn(), { data: { hasMoreChats: true } });
-    expect(screen.getByText('继续下滑加载更多')).toBeTruthy();
+    expect(screen.getByText('Scroll down to load more')).toBeTruthy();
     unmount();
 
     renderSidebar('/agent', vi.fn(), { data: { hasMoreChats: true, isLoadingMoreChats: true } });
-    expect(screen.getByText('加载更多...')).toBeTruthy();
+    expect(screen.getByText('Loading more...')).toBeTruthy();
   });
 });
 
@@ -451,15 +451,15 @@ describe('AgentSidebar 会话行交互', () => {
 
     fireEvent.click(screen.getByText('已经聊过的对话'));
     expect(screen.getByTestId('loc').textContent).toBe('/agent/chat-with-content');
-    expect(screen.getByTestId('sidebar-chat-delete').getAttribute('aria-label')).toBe('删除会话');
+    expect(screen.getByTestId('sidebar-chat-delete').getAttribute('aria-label')).toBe('Delete chat');
   });
 
   it('会话区（最近）可折叠再展开', () => {
     renderSidebar('/agent');
-    fireEvent.click(screen.getByRole('button', { name: /^最近$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Recent$/ }));
     expect(screen.queryByTestId('sidebar-chat-row')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /^最近$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Recent$/ }));
     expect(screen.getByTestId('sidebar-chat-row')).toBeTruthy();
   });
 
@@ -473,9 +473,9 @@ describe('AgentSidebar 会话行交互', () => {
     const { unmount } = renderSidebar('/agent', vi.fn(), { data: { chats } });
     await screen.findByText('项目甲');
 
-    fireEvent.click(screen.getByRole('button', { name: /^置顶$/ }));
-    fireEvent.click(screen.getByRole('button', { name: /^项目$/ }));
-    fireEvent.click(screen.getByRole('button', { name: /^最近$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Pinned$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Projects$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Recent$/ }));
     expect(screen.queryByText('置顶会话')).toBeNull();
     expect(screen.queryByText('项目甲')).toBeNull();
     expect(screen.queryByText('已经聊过的对话')).toBeNull();
@@ -487,21 +487,21 @@ describe('AgentSidebar 会话行交互', () => {
 
     unmount();
     renderSidebar('/agent', vi.fn(), { data: { chats } });
-    expect(screen.getByRole('button', { name: /^置顶$/ }).getAttribute('aria-expanded')).toBe(
+    expect(screen.getByRole('button', { name: /^Pinned$/ }).getAttribute('aria-expanded')).toBe(
       'false',
     );
-    expect(screen.getByRole('button', { name: /^项目$/ }).getAttribute('aria-expanded')).toBe(
+    expect(screen.getByRole('button', { name: /^Projects$/ }).getAttribute('aria-expanded')).toBe(
       'false',
     );
-    expect(screen.getByRole('button', { name: /^最近$/ }).getAttribute('aria-expanded')).toBe(
+    expect(screen.getByRole('button', { name: /^Recent$/ }).getAttribute('aria-expanded')).toBe(
       'false',
     );
     expect(screen.queryByText('置顶会话')).toBeNull();
     expect(screen.queryByText('已经聊过的对话')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /^置顶$/ }));
-    fireEvent.click(screen.getByRole('button', { name: /^项目$/ }));
-    fireEvent.click(screen.getByRole('button', { name: /^最近$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Pinned$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Projects$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Recent$/ }));
     expect(screen.getByText('置顶会话')).toBeTruthy();
     await screen.findByText('项目甲');
     expect(screen.getByText('已经聊过的对话')).toBeTruthy();
@@ -523,10 +523,10 @@ describe('AgentSidebar 会话行交互', () => {
     renderSidebar('/agent', vi.fn(), { data: { chats: [pinnedChat] } });
     expect(screen.getByTestId('sidebar-chat-row')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: /^置顶$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Pinned$/ }));
     expect(screen.queryByTestId('sidebar-chat-row')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /^置顶$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Pinned$/ }));
     expect(screen.getByTestId('sidebar-chat-row')).toBeTruthy();
   });
 
@@ -537,7 +537,7 @@ describe('AgentSidebar 会话行交互', () => {
     });
 
     const pinBtn = screen.getByTestId('sidebar-chat-pin');
-    expect(pinBtn.getAttribute('aria-label')).toBe('置顶会话');
+    expect(pinBtn.getAttribute('aria-label')).toBe('Pin chat');
 
     fireEvent.click(pinBtn);
     await waitFor(() =>
@@ -558,7 +558,7 @@ describe('AgentSidebar 会话行交互', () => {
     });
 
     const pinBtn = screen.getByTestId('sidebar-chat-pin');
-    expect(pinBtn.getAttribute('aria-label')).toBe('取消置顶');
+    expect(pinBtn.getAttribute('aria-label')).toBe('Unpin');
 
     fireEvent.click(pinBtn);
     await waitFor(() =>
@@ -575,7 +575,7 @@ describe('AgentSidebar 会话行交互', () => {
     });
     renderSidebar('/agent', vi.fn(), { data: { chats: [streamingChat] } });
 
-    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+    expect(screen.getByLabelText('Generating')).toBeTruthy();
   });
 
   it('切到别的会话后，后台仍在生成的会话保留正在生成指示，结束后摘掉', async () => {
@@ -591,13 +591,13 @@ describe('AgentSidebar 会话行交互', () => {
         }),
       );
     });
-    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+    expect(screen.getByLabelText('Generating')).toBeTruthy();
 
     await waitFor(() => expect(getChatLiveStream).toHaveBeenCalledWith('c-bg'));
-    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+    expect(screen.getByLabelText('Generating')).toBeTruthy();
 
     getChatLiveStream.mockResolvedValue({ active: false });
-    await waitFor(() => expect(screen.queryByLabelText('正在生成')).toBeNull(), {
+    await waitFor(() => expect(screen.queryByLabelText('Generating')).toBeNull(), {
       timeout: 2500,
     });
   });
@@ -620,7 +620,7 @@ describe('AgentSidebar 会话行交互', () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
-    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+    expect(screen.getByLabelText('Generating')).toBeTruthy();
   });
 
   it('当前打开的会话不因 live-stream 暂时 inactive 丢掉正在生成指示', async () => {
@@ -636,13 +636,13 @@ describe('AgentSidebar 会话行交互', () => {
         }),
       );
     });
-    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+    expect(screen.getByLabelText('Generating')).toBeTruthy();
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     expect(getChatLiveStream).not.toHaveBeenCalled();
-    expect(screen.getByLabelText('正在生成')).toBeTruthy();
+    expect(screen.getByLabelText('Generating')).toBeTruthy();
   });
 
   it('会话有问题需要用户输入时渲染待输入指示器', () => {
@@ -653,7 +653,7 @@ describe('AgentSidebar 会话行交互', () => {
     });
     renderSidebar('/agent', vi.fn(), { data: { chats: [inputChat] } });
 
-    expect(screen.getByLabelText('等待用户输入')).toBeTruthy();
+    expect(screen.getByLabelText('Waiting for user input')).toBeTruthy();
   });
 });
 
@@ -721,7 +721,7 @@ describe('AgentSidebar 入口导航与高亮', () => {
   it('收起按钮回调 onCollapse', () => {
     const onCollapse = vi.fn();
     renderSidebar('/agent', vi.fn(), { onCollapse });
-    fireEvent.click(screen.getByLabelText('收起侧边栏'));
+    fireEvent.click(screen.getByLabelText('Collapse sidebar'));
     expect(onCollapse).toHaveBeenCalledTimes(1);
   });
 });
@@ -827,7 +827,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     expect(chatRow('c-in')).toBeTruthy();
     // 孤儿会话按无项目处理，进入日期分组。
     expect(chatRow('c-orphan')).toBeTruthy();
-    expect(screen.getByText('今天')).toBeTruthy();
+    expect(screen.getByText('Today')).toBeTruthy();
   });
 
   it('项目组头可折叠再展开', async () => {
@@ -849,7 +849,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     renderSidebar('/agent');
 
     await screen.findByText('项目甲');
-    fireEvent.click(screen.getByTitle('在此项目下新建对话'));
+    fireEvent.click(screen.getByTitle('New chat in this project'));
     expect(screen.getByTestId('loc').textContent).toBe('/agent?projectId=proj-1');
   });
 
@@ -859,17 +859,17 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     renderSidebar('/agent');
 
     await screen.findByText('项目甲');
-    expect(screen.getByTitle('在此项目下新建对话')).toBeTruthy();
-    expect(screen.getByLabelText('项目菜单')).toBeTruthy();
-    expect(screen.queryByTitle('重命名项目')).toBeNull();
-    expect(screen.queryByTitle('编辑项目')).toBeNull();
+    expect(screen.getByTitle('New chat in this project')).toBeTruthy();
+    expect(screen.getByLabelText('Project menu')).toBeTruthy();
+    expect(screen.queryByTitle('Rename project')).toBeNull();
+    expect(screen.queryByTitle('Edit project')).toBeNull();
 
     openProjectMenu();
-    expect(screen.getByText('0 个会话')).toBeTruthy();
-    expect(screen.getByTitle('重命名项目')).toBeTruthy();
-    expect(screen.getByTitle('编辑项目')).toBeTruthy();
-    expect(screen.getByTitle('在访达中显示')).toBeTruthy();
-    expect(screen.getByTitle('删除项目（会话保留为无项目对话）')).toBeTruthy();
+    expect(screen.getByText('Chats: 0')).toBeTruthy();
+    expect(screen.getByTitle('Rename project')).toBeTruthy();
+    expect(screen.getByTitle('Edit project')).toBeTruthy();
+    expect(screen.getByTitle('Show in Finder')).toBeTruthy();
+    expect(screen.getByTitle('Delete project (its chats stay as chats without a project)')).toBeTruthy();
   });
 
   it('项目菜单：在访达中显示会打开项目文件夹', async () => {
@@ -879,7 +879,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
 
     await screen.findByText('项目甲');
     openProjectMenu();
-    fireEvent.click(screen.getByTitle('在访达中显示'));
+    fireEvent.click(screen.getByTitle('Show in Finder'));
     await waitFor(() => expect(openLocalPath).toHaveBeenCalledWith('/tmp/proj-a'));
   });
 
@@ -888,7 +888,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     createProject.mockResolvedValue({ success: true, project: makeProject() });
     renderSidebar('/agent');
 
-    fireEvent.click(screen.getByLabelText('新建项目'));
+    fireEvent.click(screen.getByLabelText('New project'));
     expect(screen.getByTestId('create-project-dialog')).toBeTruthy();
     fireEvent.change(screen.getByTestId('create-project-name'), { target: { value: '演示项目' } });
     fireEvent.click(screen.getByTestId('create-project-submit'));
@@ -900,8 +900,8 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     enterElectron([]);
     renderSidebar('/agent');
 
-    fireEvent.click(screen.getByLabelText('新建项目'));
-    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    fireEvent.click(screen.getByLabelText('New project'));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByTestId('create-project-dialog')).toBeNull();
     expect(createProject).not.toHaveBeenCalled();
   });
@@ -913,7 +913,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
 
     await screen.findByText('项目甲');
     openProjectMenu();
-    fireEvent.click(screen.getByTitle('重命名项目'));
+    fireEvent.click(screen.getByTitle('Rename project'));
     const input = screen.getByDisplayValue('项目甲');
     fireEvent.change(input, { target: { value: '项目甲改' } });
     fireEvent.submit(input.closest('form')!);
@@ -928,7 +928,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
 
     await screen.findByText('项目甲');
     openProjectMenu();
-    fireEvent.click(screen.getByTitle('重命名项目'));
+    fireEvent.click(screen.getByTitle('Rename project'));
     const input = screen.getByDisplayValue('项目甲');
     fireEvent.keyDown(input, { key: 'Escape' });
 
@@ -942,7 +942,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
 
     await screen.findByText('项目甲');
     openProjectMenu();
-    fireEvent.click(screen.getByTitle('重命名项目'));
+    fireEvent.click(screen.getByTitle('Rename project'));
     const input = screen.getByDisplayValue('项目甲');
     fireEvent.change(input, { target: { value: '   ' } });
     fireEvent.submit(input.closest('form')!);
@@ -960,7 +960,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
 
     await screen.findByText('项目甲');
     openProjectMenu();
-    fireEvent.click(screen.getByTitle('编辑项目'));
+    fireEvent.click(screen.getByTitle('Edit project'));
     expect(screen.getByTestId('edit-project-dialog')).toBeTruthy();
     expect(screen.getByText('/tmp/old')).toBeTruthy();
 
@@ -987,7 +987,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
 
     await screen.findByText('项目甲');
     openProjectMenu();
-    fireEvent.click(screen.getByTitle('删除项目（会话保留为无项目对话）'));
+    fireEvent.click(screen.getByTitle('Delete project (its chats stay as chats without a project)'));
     expect(deleteProject).not.toHaveBeenCalled();
     expect(screen.queryByTestId('project-overflow-menu')).toBeNull();
     expect(screen.getByTestId('sidebar-delete-project-dialog').textContent).toContain('项目甲');
@@ -997,7 +997,7 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     expect(screen.queryByTestId('sidebar-delete-project-dialog')).toBeNull();
 
     openProjectMenu();
-    fireEvent.click(screen.getByTitle('删除项目（会话保留为无项目对话）'));
+    fireEvent.click(screen.getByTitle('Delete project (its chats stay as chats without a project)'));
     fireEvent.click(screen.getByTestId('sidebar-delete-project-dialog-confirm'));
     await waitFor(() => expect(deleteProject).toHaveBeenCalledWith('proj-1'));
     await waitFor(() => expect(data.refreshChats).toHaveBeenCalled());

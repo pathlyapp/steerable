@@ -3,6 +3,7 @@ import { openLocalPath, type ResolvedLocalPath } from '@/lib/local-api';
 import { hostToolChrome } from '@/lib/host-tools';
 import { peekResolvedPath, subscribeResolvedPath } from './path-mentions';
 import { splitTurnFilePath } from './turn-files';
+import { t } from '@/i18n';
 
 /**
  * 行内代码里的文件路径：后端确认存在后变成可点击，点击用系统默认应用打开。
@@ -48,9 +49,9 @@ export function FilePathCode({ candidate, chatId, children, ...rest }: FilePathC
     setOpenError(null);
     try {
       const result = await openLocalPath(resolved.path);
-      if (!result.success) setOpenError(result.error || '打开失败');
+      if (!result.success) setOpenError(result.error || t('Failed to open'));
     } catch (err) {
-      setOpenError(err instanceof Error ? err.message : '打开失败');
+      setOpenError(err instanceof Error ? err.message : t('Failed to open'));
     }
   };
 
@@ -59,7 +60,11 @@ export function FilePathCode({ candidate, chatId, children, ...rest }: FilePathC
       type="button"
       data-file-path-chip=""
       onClick={handleClick}
-      title={openError ? `${resolved.path}（${openError}）` : `点击打开 ${resolved.path}`}
+      title={
+        openError
+          ? t('{path} ({error})', { path: resolved.path, error: openError })
+          : t('Click to open {path}', { path: resolved.path })
+      }
       className={`${INLINE_CODE_CLASS} cursor-pointer underline decoration-dotted underline-offset-2 transition-colors hover:bg-agent-accent/15 hover:text-agent-accent ${
         openError ? 'text-red-600 dark:text-red-400' : ''
       }`}

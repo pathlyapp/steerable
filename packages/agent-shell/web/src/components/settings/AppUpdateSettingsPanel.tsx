@@ -1,5 +1,6 @@
 import { LuInfo } from 'react-icons/lu';
 import { useAppRelease } from '@/components/SidebarRelease';
+import { t } from '@/i18n';
 
 /**
  * 综合设置里的版本与更新。侧栏只显示版本号；检查、下载和安装在这里。
@@ -17,11 +18,11 @@ export function AppUpdateSettingsPanel() {
     <section className="space-y-2" data-testid="settings-section-update">
       <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
         <LuInfo className="h-3.5 w-3.5 text-agent-muted-foreground" />
-        关于
+        {t('About')}
       </h2>
       <div className="flex items-center gap-3 rounded-agent-md border border-agent-border bg-agent-card p-2.5">
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium text-agent-foreground">当前版本</p>
+          <p className="text-xs font-medium text-agent-foreground">{t('Current version')}</p>
           <p
             className="mt-1 text-xs tabular-nums text-agent-muted-foreground"
             data-testid="settings-app-version"

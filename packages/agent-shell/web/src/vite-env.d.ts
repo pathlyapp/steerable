@@ -14,6 +14,9 @@ interface ImportMetaEnv {
   readonly VITE_SETTINGS?: string;
   /** `'true'` 才打开对话与配置的导出/导入。缺省关。 */
   readonly VITE_PORTABLE?: string;
+  /** JSON 数组，产品声明的界面语言。缺省 `["en"]`。 */
+  readonly VITE_LOCALES?: string;
+  readonly VITE_DEFAULT_LOCALE?: string;
 }
 
 interface ImportMeta {

@@ -17,6 +17,7 @@ import {
   updateProject,
   type LocalProject,
 } from '@/lib/local-api';
+import { t } from '@/i18n';
 
 /**
  * 项目徽章 / 选择器（Codex 式 cwd 指示），渲染在输入框上方的 meta 行里，
@@ -113,8 +114,8 @@ function MenuSectionLabel({
           type="button"
           onClick={onAdd}
           className="flex h-5 w-5 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/10 hover:text-agent-foreground"
-          title="新建项目"
-          aria-label="新建项目"
+          title={t('New project')}
+          aria-label={t('New project')}
         >
           <LuPlus className="h-3 w-3" />
         </button>
@@ -132,7 +133,7 @@ function CreateProjectMenuItem({ onClick }: { onClick: () => void }) {
       className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5"
     >
       <LuFolderPlus className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
-      新建项目
+      {t('New project')}
     </button>
   );
 }
@@ -220,7 +221,7 @@ export function ChatProjectBadge({
     run(async () => {
       if (!isElectron() || !project) return;
       const result = await getElectronBridge()!.local?.selectDirectory({
-        title: `重新选择「${project.name}」绑定的文件夹`,
+        title: t('Choose a new folder for "{name}"', { name: project.name }),
       });
       if (!result || result.canceled || result.filePaths.length === 0) return;
       await updateProject(project.id, { folderPath: result.filePaths[0] });
@@ -230,7 +231,7 @@ export function ChatProjectBadge({
   return (
     <div className="relative">
       <BadgeButton
-        label={project ? project.name : '选择项目'}
+        label={project ? project.name : t('Choose a project')}
         active={Boolean(project)}
         open={open}
         busy={busy}
@@ -240,8 +241,10 @@ export function ChatProjectBadge({
         }}
         title={
           project
-            ? `${project.folderPath}\n点击管理项目归属 / 修改绑定目录`
-            : '把当前对话关联到一个项目（文件写入限制在项目家目录、源文件夹，以及这些目录的子目录内）'
+            ? `${project.folderPath}\n${t('Click to manage the project or change its folder')}`
+            : t(
+                'Link this chat to a project (file writes are limited to the project home folder, its source folders, and their subfolders)',
+              )
         }
       />
 
@@ -249,7 +252,7 @@ export function ChatProjectBadge({
         <MenuShell onClose={() => setOpen(false)}>
           {project ? (
             <>
-              <MenuSectionLabel>当前项目</MenuSectionLabel>
+              <MenuSectionLabel>{t('Current project')}</MenuSectionLabel>
               <div
                 className="flex items-center gap-2 rounded px-2 py-1.5 text-xs text-agent-foreground"
                 title={project.folderPath}
@@ -268,7 +271,7 @@ export function ChatProjectBadge({
               </div>
             </>
           ) : (
-            <MenuSectionLabel onAdd={openCreate}>关联到项目</MenuSectionLabel>
+            <MenuSectionLabel onAdd={openCreate}>{t('Link to a project')}</MenuSectionLabel>
           )}
 
           {otherProjects.length > 0 && (
@@ -276,7 +279,7 @@ export function ChatProjectBadge({
               {project && (
                 <div className="mx-1 my-1 border-t border-agent-border/60" />
               )}
-              {project && <MenuSectionLabel>移动到</MenuSectionLabel>}
+              {project && <MenuSectionLabel>{t('Move to')}</MenuSectionLabel>}
               <div className="max-h-40 overflow-y-auto">
                 {otherProjects.map((p) => (
                   <ProjectMenuRow
@@ -291,7 +294,7 @@ export function ChatProjectBadge({
           {!project && projects.length === 0 && (
             <>
               <div className="px-2 py-1.5 text-[11px] text-agent-muted-foreground/70">
-                还没有项目
+                {t('No projects yet')}
               </div>
               <CreateProjectMenuItem onClick={openCreate} />
             </>
@@ -307,7 +310,7 @@ export function ChatProjectBadge({
                 className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5"
               >
                 <LuFolderPen className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
-                修改项目目录…
+                {t('Change project folder...')}
               </button>
               <button
                 type="button"
@@ -316,7 +319,7 @@ export function ChatProjectBadge({
                 className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5"
               >
                 <LuFolderX className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
-                移出项目（变为无项目对话）
+                {t('Remove from project (becomes a chat without a project)')}
               </button>
             </>
           )}
@@ -375,21 +378,23 @@ export function ProjectPickerButton({
   return (
     <div className="relative">
       <BadgeButton
-        label={selected ? selected.name : '选择项目'}
+        label={selected ? selected.name : t('Choose a project')}
         active={Boolean(selected)}
         open={open}
         busy={false}
         onClick={() => setOpen((v) => !v)}
         title={
           selected
-            ? `${selected.folderPath}\n新对话将绑定到此项目`
-            : '为新对话选择项目。不选则在文稿/<应用名>/conversations/ 下建立本对话工作区'
+            ? `${selected.folderPath}\n${t('New chats will be linked to this project')}`
+            : t(
+                'Choose a project for the new chat. Without one, a workspace for this chat is created under Documents/<app name>/conversations/',
+              )
         }
       />
 
       {open && (
         <MenuShell onClose={() => setOpen(false)}>
-          <MenuSectionLabel onAdd={openCreate}>新对话所属项目</MenuSectionLabel>
+          <MenuSectionLabel onAdd={openCreate}>{t('Project for new chat')}</MenuSectionLabel>
           <button
             type="button"
             role="menuitem"
@@ -400,7 +405,7 @@ export function ProjectPickerButton({
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5"
           >
             <LuFolderX className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate">不关联项目</span>
+            <span className="min-w-0 flex-1 truncate">{t('No project')}</span>
             {!selected && (
               <LuCheck className="h-3 w-3 shrink-0 text-agent-muted-foreground" />
             )}
@@ -421,7 +426,7 @@ export function ProjectPickerButton({
           {projects.length === 0 && (
             <>
               <div className="px-2 py-1.5 text-[11px] text-agent-muted-foreground/70">
-                还没有项目
+                {t('No projects yet')}
               </div>
               <CreateProjectMenuItem onClick={openCreate} />
             </>

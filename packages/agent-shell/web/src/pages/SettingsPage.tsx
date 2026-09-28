@@ -17,6 +17,7 @@ import {
 } from 'react-icons/lu';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { isElectron } from '@/lib/electron-bridge';
+import { getLocale, t } from '@/i18n';
 import { useAppRelease } from '@/components/SidebarRelease';
 import { AgentsSettingsPanel } from '@/components/settings/AgentsSettingsPanel';
 import { AppearanceSettingsPanel } from '@/components/settings/AppearanceSettingsPanel';
@@ -49,24 +50,28 @@ type PluginTab = 'agents' | 'skills' | 'mcp' | 'web-search';
 
 const PLUGIN_TABS: readonly PluginTab[] = ['agents', 'skills', 'mcp', 'web-search'];
 
-const PLUGIN_TAB_META: Record<
-  PluginTab,
-  { label: string; noun: string; Icon: typeof LuBot }
-> = {
-  agents: { label: '智能体', noun: '智能体', Icon: LuBot },
-  skills: { label: 'Skills', noun: '技能', Icon: LuBlocks },
-  mcp: { label: 'MCP', noun: 'MCP 服务', Icon: LuPlug },
-  'web-search': { label: '网络搜索', noun: '网络搜索', Icon: LuSearch },
-};
+/** 每次渲染现取，文案跟随当前语言。 */
+function pluginTabMeta(): Record<PluginTab, { label: string; noun: string; Icon: typeof LuBot }> {
+  return {
+    agents: { label: t('Agents'), noun: t('agents'), Icon: LuBot },
+    skills: { label: 'Skills', noun: t('skills'), Icon: LuBlocks },
+    mcp: { label: 'MCP', noun: t('MCP servers'), Icon: LuPlug },
+    'web-search': { label: t('Web search'), noun: t('web search'), Icon: LuSearch },
+  };
+}
 
 function isPluginTab(value: string | null): value is PluginTab {
   return (PLUGIN_TABS as readonly string[]).includes(value ?? '');
 }
 
 function pluginsSummary(tabs: readonly PluginTab[]): string {
-  const nouns = tabs.map((id) => PLUGIN_TAB_META[id].noun);
-  if (nouns.length <= 1) return `管理${nouns[0] ?? '插件'}。`;
-  return `管理${nouns.slice(0, -1).join('、')}和${nouns[nouns.length - 1]}。`;
+  const meta = pluginTabMeta();
+  const nouns = tabs.map((id) => meta[id].noun);
+  const items =
+    nouns.length === 0
+      ? t('plugins')
+      : new Intl.ListFormat(getLocale(), { type: 'conjunction' }).format(nouns);
+  return t('Manage {items}.', { items });
 }
 
 function enabledPluginTabs(): PluginTab[] {
@@ -185,30 +190,30 @@ export function SettingsPage() {
     const list: SettingsNavItem[] = [];
 
     if (settingsChrome('appearance')) {
-      list.push({ id: 'appearance', label: '界面', Icon: LuMonitor });
+      list.push({ id: 'appearance', label: t('Interface'), Icon: LuMonitor });
     }
-    list.push({ id: 'orchestration', label: '协同编排', Icon: LuGitFork });
+    list.push({ id: 'orchestration', label: t('Orchestration'), Icon: LuGitFork });
 
     if (settingsChrome('llm')) {
-      list.push({ id: 'llm', label: '本地模型设置', Icon: LuSettings });
+      list.push({ id: 'llm', label: t('Local model settings'), Icon: LuSettings });
     }
     if (settingsChrome('web-search')) {
-      list.push({ id: 'web-search', label: '网络搜索', Icon: LuSearch });
+      list.push({ id: 'web-search', label: t('Web search'), Icon: LuSearch });
     }
     if (settingsChrome('usage')) {
-      list.push({ id: 'usage', label: '用量与成本', Icon: LuChartBar });
+      list.push({ id: 'usage', label: t('Usage and cost'), Icon: LuChartBar });
     }
     if (settingsChrome('diagnose')) {
-      list.push({ id: 'diagnose', label: '链路诊断', Icon: LuNetwork });
+      list.push({ id: 'diagnose', label: t('Connection diagnostics'), Icon: LuNetwork });
     }
     if (settingsChrome('security')) {
-      list.push({ id: 'security', label: '安全', Icon: LuShieldCheck });
+      list.push({ id: 'security', label: t('Security'), Icon: LuShieldCheck });
     }
     if (settingsChrome('insights')) {
-      list.push({ id: 'insights', label: '帮助改进产品', Icon: LuChartBar });
+      list.push({ id: 'insights', label: t('Help improve the product'), Icon: LuChartBar });
     }
     if (settingsChrome('telemetry')) {
-      list.push({ id: 'telemetry', label: '遥测(OTLP)', Icon: LuActivity });
+      list.push({ id: 'telemetry', label: t('Telemetry (OTLP)'), Icon: LuActivity });
     }
 
     const packPanels = getPackSettingsPanels();
@@ -221,13 +226,13 @@ export function SettingsPage() {
     }
 
     if (isPortableEnabled()) {
-      list.push({ id: 'portable', label: '备份与迁移', Icon: LuDownload });
+      list.push({ id: 'portable', label: t('Backup and migration'), Icon: LuDownload });
     }
     if (isElectron()) {
-      list.push({ id: 'python-runner', label: 'Python 运行环境', Icon: LuCodeXml });
+      list.push({ id: 'python-runner', label: t('Python runtime'), Icon: LuCodeXml });
     }
     if (release.version) {
-      list.push({ id: 'update', label: '软件更新', Icon: LuInfo });
+      list.push({ id: 'update', label: t('Software update'), Icon: LuInfo });
     }
 
     return list;
@@ -271,7 +276,8 @@ export function SettingsPage() {
     }
   }, [menuItems]);
 
-  const title = section === 'plugins' ? '插件' : '设置';
+  const title = section === 'plugins' ? t('Plugins') : t('Settings');
+  const pluginMeta = pluginTabMeta();
 
   return (
     <div ref={pageContainerRef} className="flex h-full w-full flex-col overflow-hidden">
@@ -281,12 +287,12 @@ export function SettingsPage() {
           {section === 'plugins' && pluginTabs.length > 1 && (
             <div
               role="tablist"
-              aria-label="插件"
+              aria-label={t('Plugins')}
               data-testid="plugins-tabs"
               className="flex min-w-0 items-center gap-1"
             >
               {pluginTabs.map((id) => {
-                const meta = PLUGIN_TAB_META[id];
+                const meta = pluginMeta[id];
                 const active = pluginTab === id;
                 return (
                   <button
@@ -343,7 +349,7 @@ export function SettingsPage() {
           <div ref={contentRef} className="min-w-0 flex-1 max-w-3xl space-y-4">
             {!isElectron() && (
               <p className="rounded-agent-md border border-agent-destructive/20 bg-agent-destructive/10 p-2.5 text-xs text-agent-destructive">
-                浏览器预览模式 — 没有 Electron IPC 桥接，部分设置不可用。
+                {t('Browser preview mode: no Electron IPC bridge, so some settings are unavailable.')}
               </p>
             )}
 
@@ -356,7 +362,7 @@ export function SettingsPage() {
                 <section className="space-y-2" data-testid="settings-section-skills">
                   <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                     <LuBlocks className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                    本地技能
+                    {t('Local skills')}
                   </h2>
                   <SkillsSettingsPanel />
                 </section>
@@ -365,7 +371,7 @@ export function SettingsPage() {
                 <section className="space-y-2" data-testid="settings-section-mcp">
                   <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                     <LuPlug className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                    MCP 服务
+                    {t('MCP servers')}
                   </h2>
                   <McpSettingsPanel />
                 </section>
@@ -374,7 +380,7 @@ export function SettingsPage() {
                 <section className="space-y-2" data-testid="settings-section-agents">
                   <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                     <LuBot className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                    智能体
+                    {t('Agents')}
                   </h2>
                   <AgentsSettingsPanel onCatalogChange={catalog?.refreshAgents} />
                 </section>
@@ -383,7 +389,7 @@ export function SettingsPage() {
                 <section className="space-y-2" data-testid="settings-section-web-search">
                   <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                     <LuSearch className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                    网络搜索
+                    {t('Web search')}
                   </h2>
                   <WebSearchSettingsPanel />
                 </section>
@@ -397,7 +403,7 @@ export function SettingsPage() {
               <section className="space-y-2" data-testid="settings-section-appearance">
                 <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                   <LuMonitor className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                  界面
+                  {t('Interface')}
                 </h2>
                 <AppearanceSettingsPanel />
               </section>
@@ -406,7 +412,7 @@ export function SettingsPage() {
               <section className="space-y-2" data-testid="settings-section-orchestration">
                 <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                   <LuSettings className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                  协同编排
+                  {t('Orchestration')}
                 </h2>
                 <OrchestrationSettingsPanel />
               </section>
@@ -415,7 +421,7 @@ export function SettingsPage() {
               <section className="space-y-2" data-testid="settings-section-llm">
                 <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                   <LuSettings className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                  本地模型设置
+                  {t('Local model settings')}
                 </h2>
                 <LlmSettingsPanel
                   ref={llmPanelRef}
@@ -429,7 +435,7 @@ export function SettingsPage() {
               <section className="space-y-2" data-testid="settings-section-web-search">
                 <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                   <LuSearch className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                  网络搜索
+                  {t('Web search')}
                 </h2>
                 <WebSearchSettingsPanel />
               </section>
@@ -439,7 +445,7 @@ export function SettingsPage() {
               <section className="space-y-2" data-testid="settings-section-usage">
                 <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                   <LuChartBar className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                  用量与成本
+                  {t('Usage and cost')}
                 </h2>
                 <UsagePanel />
               </section>
@@ -449,7 +455,7 @@ export function SettingsPage() {
               <section className="space-y-2" data-testid="settings-section-diagnose">
                 <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                   <LuNetwork className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                  链路诊断
+                  {t('Connection diagnostics')}
                 </h2>
                 <DiagnoseSettingsPanel />
               </section>
@@ -459,7 +465,7 @@ export function SettingsPage() {
               <section className="space-y-2" data-testid="settings-section-security">
                 <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                   <LuShieldCheck className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                  安全
+                  {t('Security')}
                 </h2>
                 <SecuritySettingsPanel />
               </section>
@@ -469,7 +475,7 @@ export function SettingsPage() {
               <section className="space-y-2" data-testid="settings-section-insights">
                 <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                   <LuChartBar className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                  帮助改进产品
+                  {t('Help improve the product')}
                 </h2>
                 <InsightsSettingsPanel />
               </section>
@@ -479,7 +485,7 @@ export function SettingsPage() {
               <section className="space-y-2" data-testid="settings-section-telemetry">
                 <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                   <LuActivity className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                  遥测(OTLP)
+                  {t('Telemetry (OTLP)')}
                 </h2>
                 <TelemetrySettingsPanel />
               </section>
@@ -507,7 +513,7 @@ export function SettingsPage() {
               <section className="space-y-2" data-testid="settings-section-portable">
                 <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
                   <LuDownload className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                  备份与迁移
+                  {t('Backup and migration')}
                 </h2>
                 <PortableSettingsPanel />
               </section>

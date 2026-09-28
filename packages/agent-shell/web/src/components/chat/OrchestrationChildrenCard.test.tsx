@@ -80,7 +80,7 @@ describe('OrchestrationChildrenCard / 显示名与颜色点', () => {
     render(
       <OrchestrationChildrenCard children={CHILDREN} agents={[RESEARCHER, ENGINEER]} />,
     );
-    expect(screen.getByText('子代理')).toBeTruthy();
+    expect(screen.getByText('Subagents')).toBeTruthy();
     expect(screen.queryByText('编排计划')).toBeNull();
     expect(screen.queryByText('PARALLEL')).toBeNull();
   });

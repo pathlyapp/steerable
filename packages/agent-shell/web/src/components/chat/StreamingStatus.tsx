@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { t } from '@/i18n';
 
 /**
  * StreamingStatus — informative placeholder for an assistant bubble that has
@@ -71,12 +72,12 @@ export function StreamingStatus({
 
 function selectLabel(round: number, actionCount: number): string {
   if (round >= 2 && actionCount === 0) {
-    return `Round ${round} · 继续推理...`;
+    return t('Round {round} · Continuing reasoning...', { round });
   }
   if (actionCount > 0) {
-    return `已调用 ${actionCount} 个工具，正在分析...`;
+    return t('Called {count} tools, analyzing...', { count: actionCount });
   }
-  return '正在思考...';
+  return t('Now thinking...');
 }
 
 function Dots() {

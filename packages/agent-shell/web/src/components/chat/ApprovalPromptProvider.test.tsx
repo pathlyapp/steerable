@@ -61,7 +61,7 @@ describe('ApprovalPromptProvider', () => {
     expect(screen.getByTestId('approval-composer')).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
 
-    fireEvent.click(screen.getByText('允许一次'));
+    fireEvent.click(screen.getByText('Allow once'));
     expect(bridge.decide).toHaveBeenCalledWith({
       requestId: 'approval-1',
       kind: 'allow_once',
@@ -134,7 +134,7 @@ describe('ApprovalPromptProvider', () => {
       bridge.emit({ ...REQUEST, chatId: 'chat-a', requestId: 'approval-a' });
     });
 
-    fireEvent.click(screen.getByText('允许一次'));
+    fireEvent.click(screen.getByText('Allow once'));
     expect(bridge.decide).toHaveBeenCalledWith({
       requestId: 'approval-a',
       kind: 'allow_once',

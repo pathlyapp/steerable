@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { LuChevronDown, LuChevronUp, LuCheck, LuCopy, LuCornerDownRight } from 'react-icons/lu';
 import type { ChatMessage } from '@steerable/agent-protocol';
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
+import { t } from '@/i18n';
 import { useSlashSources } from '@/lib/slash-sources';
 import { Markdown } from './Markdown';
 import { getFriendlyDate } from './timestamp';
@@ -68,7 +69,7 @@ export function UserMessage({
           <div className="mb-1 flex items-center gap-1 text-[11px] font-medium text-agent-muted-foreground select-none">
             <LuCornerDownRight className="h-3 w-3 text-agent-primary/80" />
             <span className="rounded bg-agent-primary/10 px-1 py-0.5 text-[10px] text-agent-primary font-medium">
-              追加
+              {t('Appended')}
             </span>
           </div>
         )}
@@ -110,12 +111,12 @@ export function UserMessage({
           >
             {isExpanded ? (
               <>
-                收起
+                {t('Collapse')}
                 <LuChevronUp className="h-3 w-3" />
               </>
             ) : (
               <>
-                展开全部
+                {t('Expand all')}
                 <LuChevronDown className="h-3 w-3" />
               </>
             )}
@@ -127,14 +128,14 @@ export function UserMessage({
             type="button"
             onClick={() => void copy()}
             className="inline-flex items-center gap-0.5 rounded text-xs text-agent-muted-foreground opacity-0 transition-all duration-200 hover:text-agent-foreground focus:opacity-100 group-hover/message:opacity-100"
-            title={copied ? '已复制' : '复制消息'}
-            aria-label={copied ? '已复制' : '复制消息'}
+            title={copied ? t('Copied') : t('Copy message')}
+            aria-label={copied ? t('Copied') : t('Copy message')}
           >
             {copied ? (
               <>
                 <LuCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
                 <span className="text-emerald-600 dark:text-emerald-400">
-                  已复制
+                  {t('Copied')}
                 </span>
               </>
             ) : (
@@ -200,12 +201,12 @@ export function UserMessage({
             >
               {isExpanded ? (
                 <>
-                  收起
+                  {t('Collapse')}
                   <LuChevronUp className="h-3 w-3" />
                 </>
               ) : (
                 <>
-                  展开全部
+                  {t('Expand all')}
                   <LuChevronDown className="h-3 w-3" />
                 </>
               )}
@@ -217,14 +218,14 @@ export function UserMessage({
               type="button"
               onClick={() => void copy()}
               className="inline-flex items-center gap-0.5 rounded text-xs text-agent-muted-foreground opacity-0 transition-all duration-200 hover:text-agent-foreground focus:opacity-100 group-hover/message:opacity-100"
-              title={copied ? '已复制' : '复制消息'}
-              aria-label={copied ? '已复制' : '复制消息'}
+              title={copied ? t('Copied') : t('Copy message')}
+              aria-label={copied ? t('Copied') : t('Copy message')}
             >
               {copied ? (
                 <>
                   <LuCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
                   <span className="text-emerald-600 dark:text-emerald-400">
-                    已复制
+                    {t('Copied')}
                   </span>
                 </>
               ) : (

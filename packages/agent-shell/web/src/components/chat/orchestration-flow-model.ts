@@ -7,6 +7,7 @@
 
 import type { ChildInfo } from './orchestration-children-model';
 import { parseToolEnvelope } from './executed-actions-model';
+import { t } from '@/i18n';
 
 export const ORCHESTRATION_TOOL_NAMES = [
   'agent_spawn',
@@ -102,11 +103,21 @@ function buildOrchestrationFlow(nodes: OrchestrationChildNode[]): OrchestrationF
 
   let summaryCopy = '';
   if (isAllCompleted) {
-    summaryCopy = `${completedCount}/${totalCount} 全部完成`;
+    summaryCopy = t('{completed}/{total} all done', {
+      completed: completedCount,
+      total: totalCount,
+    });
   } else if (hasActive) {
-    summaryCopy = `协同执行中 (${completedCount}/${totalCount} 完成)...`;
+    summaryCopy = t('Running together ({completed}/{total} done)...', {
+      completed: completedCount,
+      total: totalCount,
+    });
   } else {
-    summaryCopy = `${completedCount} 完成 · ${totalCount - completedCount} 结束 (${totalCount} 个子任务)`;
+    summaryCopy = t('{completed} done · {ended} ended ({total} subtasks)', {
+      completed: completedCount,
+      ended: totalCount - completedCount,
+      total: totalCount,
+    });
   }
 
   return {
@@ -226,7 +237,7 @@ export function extractOrchestrationFlow(
 
       if (envelope.success === false || envelope.error) {
         node.status = 'failed';
-        node.error = envelope.error || '派发失败';
+        node.error = envelope.error || t('Dispatch failed');
       }
     } else if (action.tool === 'agent_wait') {
       const childId = typeof rawArgs.childId === 'string' ? rawArgs.childId.trim() : '';
@@ -260,7 +271,7 @@ export function extractOrchestrationFlow(
           node.status = 'completed';
         } else if (waitStatus === 'failed' || waitStatus === 'error' || envelope.success === false) {
           node.status = 'failed';
-          node.error = envelope.error || '执行失败';
+          node.error = envelope.error || t('Run failed');
         } else if (waitStatus === 'cancelled') {
           node.status = 'cancelled';
         } else if (waitStatus === 'interrupted') {

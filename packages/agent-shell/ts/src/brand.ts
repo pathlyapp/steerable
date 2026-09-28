@@ -63,7 +63,7 @@ const SHELL_BRAND: Omit<Brand, 'flavor'> = {
   displayName: 'Steerable Shell',
   title: 'Steerable Shell',
   agentName: 'Agent',
-  tagline: '一款本地桌面 AI 伙伴',
+  tagline: 'A local desktop AI partner',
   defaultAgentId: LOCAL_ASSISTANT_AGENT_ID,
 };
 

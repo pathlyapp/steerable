@@ -1,6 +1,6 @@
 ---
 name: goal
-displayName: 目标跟踪
+displayName: Goal tracking
 description: 把一句话需求变成有验收标准的目标，用 todo_write 建清单、执行中更新状态、收尾逐条给出证据。适合多步骤、跨回合、需要明确「到底做完没有」的任务。
 priority: 500
 tags: [workflow, planning, goal]

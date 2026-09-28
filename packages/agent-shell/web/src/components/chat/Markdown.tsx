@@ -11,6 +11,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { LuBlocks, LuMessageSquare, LuPlug } from 'react-icons/lu';
+import { t } from '@/i18n';
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
 import {
   resolveSlashTool,
@@ -314,7 +315,7 @@ function renderTextWithMentions(
           );
         }
 
-        const chat = chats.find((c) => (c.title || '未命名对话') === name);
+        const chat = chats.find((c) => (c.title || t('Untitled chat')) === name);
         if (chat) {
           return (
             <span

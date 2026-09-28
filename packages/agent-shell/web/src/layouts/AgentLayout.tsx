@@ -17,6 +17,7 @@ import {
   type UseChatsAndAgentsResult,
 } from '@/hooks/useChatsAndAgents';
 import { hostToolChrome, sanitizeRightPanelKind, settingsChrome } from '@/lib/host-tools';
+import { t } from '@/i18n';
 
 /**
  * AgentLayout wraps `/agent`, `/agent/:chatId`, and `/` (default) with a
@@ -560,8 +561,8 @@ function AgentLayoutContent() {
               type="button"
               onClick={toggleSidebarCollapsed}
               className="flex h-7 w-7 items-center justify-center rounded-full text-agent-muted-foreground transition-colors duration-200 hover:bg-agent-foreground/5 hover:text-agent-foreground"
-              title="展开侧边栏"
-              aria-label="展开侧边栏"
+              title={t('Expand sidebar')}
+              aria-label={t('Expand sidebar')}
             >
               <LuPanelLeftOpen className="h-3.5 w-3.5" />
             </button>
@@ -581,11 +582,11 @@ function AgentLayoutContent() {
           <div
             role="separator"
             aria-orientation="vertical"
-            aria-label="调整侧边栏宽度"
+            aria-label={t('Resize sidebar')}
             onMouseDown={() => setIsResizing(true)}
             onDoubleClick={resetWidth}
             className="w-1 flex-shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-agent-border/60"
-            title="拖拽调整侧边栏宽度（双击恢复默认）"
+            title={t('Drag to resize the sidebar (double-click to reset)')}
           />
         </>
       )}
@@ -612,11 +613,11 @@ function AgentLayoutContent() {
               <div
                 role="separator"
                 aria-orientation="vertical"
-                aria-label="调整右侧面板宽度"
+                aria-label={t('Resize right panel')}
                 onMouseDown={() => setIsTerminalResizing(true)}
                 onDoubleClick={resetTerminalWidth}
                 className="w-1 flex-shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-agent-border/60"
-                title="拖拽调整右侧面板宽度（双击恢复默认）"
+                title={t('Drag to resize the right panel (double-click to reset)')}
               />
               <div
                 className={`h-full flex-shrink-0 overflow-hidden rounded-agent-lg shadow-sm ${

@@ -73,20 +73,20 @@ describe('ComposerStatusStack', () => {
 
   it('keeps expanded panels exclusive', () => {
     renderStack(DONE_FLOW, DONE_TODOS);
-    const flowButton = screen.getByRole('button', { name: /协同编排已就绪/ });
-    const todoButton = screen.getByRole('button', { name: /任务清单/ });
+    const flowButton = screen.getByRole('button', { name: /Orchestration ready/ });
+    const todoButton = screen.getByRole('button', { name: /Task list/ });
 
     fireEvent.click(flowButton);
     expect(flowButton.getAttribute('aria-expanded')).toBe('true');
     expect(todoButton.getAttribute('aria-expanded')).toBe('false');
-    expect(screen.getByText('多智能体协同流程')).toBeTruthy();
+    expect(screen.getByText('Multi-agent flow')).toBeTruthy();
     expect(screen.queryByTestId('todo-item-a')).toBeNull();
 
     fireEvent.click(todoButton);
     expect(todoButton.getAttribute('aria-expanded')).toBe('true');
     expect(flowButton.getAttribute('aria-expanded')).toBe('false');
     expect(screen.getByTestId('todo-item-a')).toBeTruthy();
-    expect(screen.queryByText('多智能体协同流程')).toBeNull();
+    expect(screen.queryByText('Multi-agent flow')).toBeNull();
   });
 
   it('auto-opens only the orchestration panel when both are active', () => {

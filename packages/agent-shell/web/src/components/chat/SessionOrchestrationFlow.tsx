@@ -21,6 +21,7 @@ import {
 } from './orchestration-flow-model';
 import type { InspectTaskInput } from './executed-actions-model';
 import { useExclusiveExpand } from './composer-status-stack';
+import { t } from '@/i18n';
 
 function FlowNodeStatusIcon({
   status,
@@ -51,21 +52,21 @@ function FlowNodeStatusIcon({
 function statusBadgeText(status: OrchestrationNodeStatus): string {
   switch (status) {
     case 'completed':
-      return '已完成';
+      return t('Completed');
     case 'running':
-      return '执行中';
+      return t('Running');
     case 'interrupted':
-      return '已暂停';
+      return t('Paused');
     case 'cancelled':
-      return '已停止';
+      return t('Stopped');
     case 'closed':
-      return '已关闭';
+      return t('Closed');
     case 'failed':
-      return '失败';
+      return t('Failed');
     case 'pending':
-      return '等待中';
+      return t('Waiting');
     default:
-      return '等待中';
+      return t('Waiting');
   }
 }
 
@@ -349,10 +350,10 @@ export function SessionOrchestrationFlow({
 
         <span className="min-w-0 flex-1 truncate font-medium">
           {isAllCompleted
-            ? '协同编排已就绪'
+            ? t('Orchestration ready')
             : hasActive
-              ? (activeNode?.task ? activeNode.task : '协同编排流程')
-              : '协同编排已停止'}
+              ? (activeNode?.task ? activeNode.task : t('Orchestration flow'))
+              : t('Orchestration stopped')}
         </span>
 
         {summaryCopy ? (
@@ -389,7 +390,7 @@ export function SessionOrchestrationFlow({
           <div className="flex items-center justify-between border-b border-agent-border/60 bg-agent-muted/30 px-3 py-2">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
               <LuGitFork className="h-3.5 w-3.5 text-violet-600 dark:text-violet-400" />
-              <span>多智能体协同流程</span>
+              <span>{t('Multi-agent flow')}</span>
               <span className="rounded-full bg-violet-500/10 px-1.5 py-0.2 text-[10px] font-medium text-violet-700 dark:text-violet-300">
                 Fork-Join
               </span>
@@ -410,7 +411,7 @@ export function SessionOrchestrationFlow({
                 type="button"
                 onClick={() => setUserToggled(false)}
                 className="rounded p-0.5 text-agent-muted-foreground hover:bg-agent-foreground/10 hover:text-agent-foreground"
-                aria-label="收起编排流程"
+                aria-label={t('Collapse orchestration flow')}
               >
                 <LuX className="h-3 w-3" />
               </button>
@@ -423,9 +424,9 @@ export function SessionOrchestrationFlow({
               {/* 1. 起点：目标分发 (Fork) 居中节点 */}
               <div className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/30 bg-violet-500/10 px-3.5 py-1 text-xs font-semibold text-violet-800 dark:text-violet-200 shadow-2xs">
                 <LuBot className="h-3.5 w-3.5 text-violet-600 dark:text-violet-400" />
-                <span>目标分发 (Fork)</span>
+                <span>{t('Goal dispatch (Fork)')}</span>
                 <span className="rounded-full bg-violet-500/20 px-1.5 py-0.2 text-[10px] font-medium text-violet-700 dark:text-violet-300">
-                  并发 {nodes.length} 分支
+                  {t('{count} parallel branches', { count: nodes.length })}
                 </span>
               </div>
 
@@ -451,7 +452,7 @@ export function SessionOrchestrationFlow({
                           <div className="flex items-center gap-1 min-w-0 flex-1">
                             <FlowNodeStatusIcon status={node.status} />
                             <span className="font-semibold text-agent-foreground text-[11px] truncate whitespace-nowrap">
-                              分支 #{index + 1}
+                              {t('Branch #{index}', { index: index + 1 })}
                             </span>
                           </div>
 
@@ -478,14 +479,14 @@ export function SessionOrchestrationFlow({
                                     chatId,
                                     recordId: node.recordId,
                                     live: node.status === 'running',
-                                    title: node.task || '子代理执行过程',
+                                    title: node.task || t('Subagent run'),
                                   })
                                 }
                                 className="inline-flex shrink-0 whitespace-nowrap items-center gap-0.5 rounded px-1 text-[10px] text-agent-muted-foreground hover:bg-agent-muted hover:text-agent-foreground"
-                                title="查看过程"
+                                title={t('View process')}
                               >
                                 <LuExternalLink className="h-2.5 w-2.5 shrink-0" />
-                                <span>过程</span>
+                                <span>{t('Process')}</span>
                               </button>
                             ) : null}
                           </div>
@@ -503,7 +504,7 @@ export function SessionOrchestrationFlow({
                             }`}
                             title={node.task}
                           >
-                            {node.task || `子任务 (${node.childId})`}
+                            {node.task || t('Subtask ({id})', { id: node.childId })}
                           </p>
                         </div>
 
@@ -525,7 +526,7 @@ export function SessionOrchestrationFlow({
                         <div className="mt-2 rounded bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 text-[11px]">
                           <div className="flex items-center gap-1 font-semibold text-emerald-800 dark:text-emerald-200 text-[10px]">
                             <LuCheck className="h-3 w-3" />
-                            <span>结论:</span>
+                            <span>{t('Conclusion:')}</span>
                             <span className="font-mono text-emerald-950 dark:text-emerald-50 truncate">
                               {node.answer}
                             </span>
@@ -533,7 +534,7 @@ export function SessionOrchestrationFlow({
                         </div>
                       ) : node.error ? (
                         <div className="mt-2 rounded bg-agent-destructive/10 px-1.5 py-1 text-[10px] text-agent-destructive truncate">
-                          失败: {node.error}
+                          {t('Failed: {error}', { error: node.error })}
                         </div>
                       ) : null}
                     </div>
@@ -553,13 +554,13 @@ export function SessionOrchestrationFlow({
                 }`}
               >
                 <LuCircleCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span>结果汇聚 (Join)</span>
+                <span>{t('Result merge (Join)')}</span>
                 <span className="text-[10px] opacity-80">
                   {isAllCompleted
-                    ? '所有分支已汇聚并完成回答'
+                    ? t('All branches merged and answered')
                     : hasActive
-                      ? '等待分支就绪...'
-                      : '已停止'}
+                      ? t('Waiting for branches...')
+                      : t('Stopped')}
                 </span>
               </div>
             </div>

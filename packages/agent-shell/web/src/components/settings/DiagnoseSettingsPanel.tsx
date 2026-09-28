@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { LuCircleCheck, LuCircleX, LuLoader, LuPlay } from 'react-icons/lu';
 import { diagnoseLlmConnection, type DiagnoseResult } from '@/lib/local-api';
+import { t } from '@/i18n';
 
 /**
  * 设置页「链路诊断」面板：一键探测当前 LLM 配置的连通性
@@ -29,8 +30,10 @@ export function DiagnoseSettingsPanel() {
   return (
     <div className="space-y-2 rounded-agent-md border border-agent-border bg-agent-card p-2.5">
       <p className="text-xs text-agent-muted-foreground">
-        诊断当前模型服务的网络连通性，包括 DNS 解析、TCP 连接、TLS 握手、HTTP 接口与对话补全。
-        诊断在宿主进程内执行，会同时报告系统/环境代理配置。
+        {t(
+          'Diagnose network connectivity to the current model service, including DNS resolution, TCP connection, TLS handshake, the HTTP endpoint, and chat completion.',
+        )}{' '}
+        {t('The diagnosis runs in the host process and also reports system and environment proxy settings.')}
       </p>
 
       <button
@@ -42,19 +45,19 @@ export function DiagnoseSettingsPanel() {
         {running ? (
           <>
             <LuLoader className="h-3.5 w-3.5 animate-spin" />
-            诊断中…
+            {t('Diagnosing…')}
           </>
         ) : (
           <>
             <LuPlay className="h-3.5 w-3.5" />
-            开始诊断
+            {t('Start diagnosis')}
           </>
         )}
       </button>
 
       {error && (
         <p className="rounded-agent-md border border-agent-destructive/20 bg-agent-destructive/10 p-2.5 text-xs text-agent-destructive">
-          诊断请求失败：{error}
+          {t('Diagnosis request failed: {error}', { error })}
         </p>
       )}
 
@@ -64,12 +67,12 @@ export function DiagnoseSettingsPanel() {
             {result.ok ? (
               <span className="inline-flex items-center gap-1 text-agent-success">
                 <LuCircleCheck className="h-4 w-4" />
-                全部通过
+                {t('All checks passed')}
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-agent-destructive">
                 <LuCircleX className="h-4 w-4" />
-                诊断失败
+                {t('Diagnosis failed')}
               </span>
             )}
           </div>
@@ -98,7 +101,7 @@ export function DiagnoseSettingsPanel() {
 
           {result.ambientProxies.length > 0 && (
             <div className="rounded-agent-sm border border-agent-border bg-agent-muted/30 p-2.5 text-xs">
-              <p className="font-medium text-agent-foreground">检测到的代理配置</p>
+              <p className="font-medium text-agent-foreground">{t('Detected proxy settings')}</p>
               <ul className="mt-1 list-inside list-disc space-y-0.5 text-agent-muted-foreground">
                 {result.ambientProxies.map((proxy) => (
                   <li key={proxy}>{proxy}</li>

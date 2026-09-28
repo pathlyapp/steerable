@@ -91,7 +91,7 @@ describe('PortableSettingsPanel', () => {
 
     await waitFor(() => expect(bridge.saveTextFile).toHaveBeenCalled());
     const saved = bridge.saveTextFile.mock.calls[0]?.[0] as { content: string; defaultPath: string };
-    expect(saved.defaultPath).toContain('对话');
+    expect(saved.defaultPath).toContain('Chats');
     const body = JSON.parse(saved.content) as { kind: string; chats: Array<{ chat: { title: string } }> };
     expect(body.kind).toBe('steerable-chats');
     expect(body.chats.map((item) => item.chat.title)).toEqual(['周报']);
@@ -108,7 +108,7 @@ describe('PortableSettingsPanel', () => {
     render(<PortableSettingsPanel />);
     fireEvent.click(screen.getByTestId('portable-import-chats'));
 
-    expect((await screen.findByTestId('portable-error')).textContent).toContain('这是配置包，请用「导入配置」');
+    expect((await screen.findByTestId('portable-error')).textContent).toContain('This is a config package. Use "Import config".');
     expect(screen.queryByTestId('portable-import-chat-form')).toBeNull();
     picker.mockRestore();
   });
@@ -141,7 +141,7 @@ describe('PortableSettingsPanel', () => {
     expect((await screen.findByTestId('portable-import-chat-form')).textContent).toContain('周报');
     fireEvent.click(screen.getByTestId('portable-import-chat-confirm'));
 
-    expect((await screen.findByTestId('portable-status')).textContent).toContain('已导入对话「周报」');
+    expect((await screen.findByTestId('portable-status')).textContent).toContain('Imported chat "周报"');
     picker.mockRestore();
   });
 });

@@ -2,6 +2,7 @@ import { StrictMode, lazy, Suspense, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createHashRouter, RouterProvider } from 'react-router-dom';
 import { AppShell } from './AppShell';
+import { I18nProvider, configureI18n, getLocale } from './i18n';
 import { AgentLayout } from './layouts/AgentLayout';
 import { AgentPage } from './pages/AgentPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -82,7 +83,9 @@ function renderApplication(root: Root): void {
 
   root.render(
     <StrictMode>
-      <RouterProvider router={router} />
+      <I18nProvider>
+        <RouterProvider router={router} />
+      </I18nProvider>
     </StrictMode>,
   );
 }
@@ -97,6 +100,12 @@ export async function bootstrap(): Promise<void> {
 
   // 标题与 favicon 在 bootstrap 时设置——此刻产品入口已完成包注册
   // （品牌 logo 由包经 setBrandLogoUrl 注入，见 brand.ts）。
+  configureI18n({
+    locales: parseLocales(import.meta.env.VITE_LOCALES),
+    defaultLocale: import.meta.env.VITE_DEFAULT_LOCALE || 'en',
+  });
+  document.documentElement.lang = getLocale() === 'zh' ? 'zh-CN' : getLocale();
+  window.electron?.setLocale?.(getLocale());
   document.title = BRAND_NAME;
   document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute('href', getBrandLogoUrl());
   installHostPaste();
@@ -117,11 +126,25 @@ export async function bootstrap(): Promise<void> {
     const Gate = gate.Component;
     root.render(
       <StrictMode>
-        <Gate onAuthenticated={onAuthenticated} />
+        <I18nProvider>
+          <Gate onAuthenticated={onAuthenticated} />
+        </I18nProvider>
       </StrictMode>,
     );
     return;
   }
 
   renderApplication(root);
+}
+
+function parseLocales(raw: string | undefined): string[] {
+  if (!raw) return ['en'];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return ['en'];
+    const locales = parsed.filter((item): item is string => typeof item === 'string' && item.length > 0);
+    return locales.length > 0 ? locales : ['en'];
+  } catch {
+    return ['en'];
+  }
 }

@@ -319,7 +319,7 @@ describe('regenerateChatMessage', () => {
     const p = regenerateChatMessage('chat-1', 'msg-1');
     await vi.waitFor(() => expect(captured.cb).toBeDefined());
     captured.cb!({ type: 'end', status: 500 });
-    await expect(p).rejects.toThrow('重新生成失败（HTTP 500）');
+    await expect(p).rejects.toThrow('Regeneration failed (HTTP 500)');
   });
 
   it('桥缺失时拒绝', async () => {

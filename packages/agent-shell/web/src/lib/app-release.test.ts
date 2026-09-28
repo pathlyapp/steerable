@@ -24,32 +24,32 @@ describe('sidebar release labels', () => {
   });
 
   it('offers a check, then reports the current build or a newer one', () => {
-    expect(sidebarUpdateLabel(snap(), false)).toBe('检查更新');
-    expect(sidebarUpdateLabel(snap(), true)).toBe('已是最新');
+    expect(sidebarUpdateLabel(snap(), false)).toBe('Check for updates');
+    expect(sidebarUpdateLabel(snap(), true)).toBe('Up to date');
     expect(sidebarUpdateLabel(snap({ message: '已是最新' }), false)).toBe('已是最新');
     expect(
       sidebarUpdateLabel(
         snap({ availableVersion: '0.3.0', message: '开发构建不安装更新' }),
         false,
       ),
-    ).toBe('发现 0.3.0');
+    ).toBe('0.3.0 available');
   });
 
   it('shows download progress and an install action', () => {
-    expect(sidebarUpdateLabel(snap({ phase: 'checking' }), false)).toBe('检查中');
-    expect(sidebarUpdateLabel(snap({ phase: 'downloading', percent: 40 }), false)).toBe('下载 40%');
+    expect(sidebarUpdateLabel(snap({ phase: 'checking' }), false)).toBe('Checking');
+    expect(sidebarUpdateLabel(snap({ phase: 'downloading', percent: 40 }), false)).toBe('Downloading 40%');
     expect(sidebarUpdateLabel(snap({ phase: 'ready', availableVersion: '0.3.0' }), false)).toBe(
-      '升级 0.3.0',
+      'Update to 0.3.0',
     );
     expect(sidebarReleaseView(snap({ phase: 'ready', availableVersion: '0.3.0' }), false)).toMatchObject({
-      actionLabel: '升级 0.3.0',
-      actionTitle: '重启并安装 0.3.0',
+      actionLabel: 'Update to 0.3.0',
+      actionTitle: 'Restart and install 0.3.0',
       clickable: true,
       emphasize: true,
     });
     expect(sidebarUpdateLabel(snap({ phase: 'installing', availableVersion: '0.3.0' }), false)).toBe(
-      '正在安装',
+      'Installing',
     );
-    expect(sidebarUpdateLabel(snap({ phase: 'error', message: 'offline' }), false)).toBe('重试');
+    expect(sidebarUpdateLabel(snap({ phase: 'error', message: 'offline' }), false)).toBe('Retry');
   });
 });

@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import type { GatewayModelEntry } from '@/lib/local-api';
 
 /**
@@ -18,17 +19,17 @@ export interface ModelCapabilityChip {
 const MODALITY_ORDER = ['image', 'pdf', 'audio', 'video'] as const;
 
 const MODALITY_LABELS: Record<(typeof MODALITY_ORDER)[number], string> = {
-  image: '图像',
+  image: 'Image',
   pdf: 'PDF',
-  audio: '音频',
-  video: '视频',
+  audio: 'Audio',
+  video: 'Video',
 };
 
 const MODALITY_TITLES: Record<(typeof MODALITY_ORDER)[number], string> = {
-  image: '支持图像输入',
-  pdf: '支持 PDF 输入',
-  audio: '支持音频输入',
-  video: '支持视频输入',
+  image: 'Supports image input',
+  pdf: 'Supports PDF input',
+  audio: 'Supports audio input',
+  video: 'Supports video input',
 };
 
 /** 上下文窗口：1_000_000 → 1M，131_072 → 131K。 */
@@ -45,8 +46,8 @@ export function formatContextWindow(window: number | null | undefined): string |
 function unknownChip(): ModelCapabilityChip {
   return {
     key: 'unknown',
-    label: '未识别',
-    title: '网关目录未匹配到该 id，思考档位与多模态未核实。',
+    label: t('Unrecognized'),
+    title: t('The gateway catalog has no match for this id. Thinking levels and multimodal input are unverified.'),
     kind: 'unknown',
   };
 }
@@ -68,8 +69,8 @@ export function modelCapabilityChips(
     const joined = levels.join(' / ');
     chips.push({
       key: 'reasoning',
-      label: options?.detail ? `思考（${joined}）` : '思考',
-      title: `支持思考档位：${joined}`,
+      label: options?.detail ? t('Thinking ({levels})', { levels: joined }) : t('Thinking'),
+      title: t('Supported thinking levels: {levels}', { levels: joined }),
       kind: 'reasoning',
     });
   }
@@ -80,8 +81,8 @@ export function modelCapabilityChips(
     seen.add(modality);
     chips.push({
       key: modality,
-      label: MODALITY_LABELS[modality],
-      title: MODALITY_TITLES[modality],
+      label: t(MODALITY_LABELS[modality]),
+      title: t(MODALITY_TITLES[modality]),
       kind: 'modality',
     });
   }
@@ -92,7 +93,7 @@ export function modelCapabilityChips(
     chips.push({
       key: key,
       label: modality,
-      title: `输入模态：${modality}`,
+      title: t('Input modality: {modality}', { modality }),
       kind: 'modality',
     });
   }
@@ -102,7 +103,7 @@ export function modelCapabilityChips(
     chips.push({
       key: 'window',
       label: windowLabel,
-      title: `上下文窗口 ${entry.window} tokens`,
+      title: t('Context window {window} tokens', { window: entry.window ?? '' }),
       kind: 'window',
     });
   }

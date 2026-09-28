@@ -65,10 +65,10 @@ describe('TaskOutcomeCards', () => {
     const task = makeTask();
     const { onInspect, onDismiss } = renderCards([task]);
 
-    fireEvent.click(screen.getByRole('button', { name: '查看过程' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View process' }));
     expect(onInspect).toHaveBeenCalledWith(task);
 
-    fireEvent.click(screen.getByRole('button', { name: '忽略' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(onDismiss).toHaveBeenCalledWith('task-1');
   });
 
@@ -82,8 +82,8 @@ describe('TaskOutcomeCards', () => {
     ]);
 
     expect(screen.getByText('steerable/fix')).toBeTruthy();
-    expect(screen.getByText(/待合并 — 在标题栏的任务按钮里处理/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /合并/ })).toBeNull();
+    expect(screen.getByText(/Awaiting merge. Handle it from the tasks button in the title bar/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /merge/i })).toBeNull();
   });
 
   it('超过三个时只留前三张，其余折成一行汇总', () => {
@@ -92,6 +92,6 @@ describe('TaskOutcomeCards', () => {
     );
 
     expect(document.querySelectorAll('[data-task-outcome]')).toHaveLength(3);
-    expect(screen.getByText(/另有 2 个后台任务已结束/)).toBeTruthy();
+    expect(screen.getByText(/2 more background tasks finished/)).toBeTruthy();
   });
 });

@@ -48,14 +48,14 @@ describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
       <ApprovalPromptMenu request={EGRESS_REQUEST} pendingCount={0} onDecide={vi.fn()} />,
     );
 
-    expect(screen.getByText('Agent 请求访问外网')).toBeTruthy();
+    expect(screen.getByText('Agent requests internet access')).toBeTruthy();
     expect(screen.getByText('cdn.example.com:443')).toBeTruthy();
-    expect(screen.getByText(/仿冒域名/)).toBeTruthy();
+    expect(screen.getByText(/lookalike domains/)).toBeTruthy();
     // 会话档保留，「始终」档隐藏。
-    expect(screen.getByText('允许一次')).toBeTruthy();
-    expect(screen.getByText('本次会话允许')).toBeTruthy();
-    expect(screen.queryByText('始终允许')).toBeNull();
-    expect(screen.queryByText('始终拒绝')).toBeNull();
+    expect(screen.getByText('Allow once')).toBeTruthy();
+    expect(screen.getByText('Allow for this chat')).toBeTruthy();
+    expect(screen.queryByText('Always allow')).toBeNull();
+    expect(screen.queryByText('Always deny')).toBeNull();
   });
 
   it('普通工具调用的 7 变体不回归', () => {
@@ -64,13 +64,13 @@ describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
       <ApprovalPromptMenu request={SHELL_REQUEST} pendingCount={1} onDecide={onDecide} />,
     );
 
-    expect(screen.getByText('Agent 请求执行')).toBeTruthy();
+    expect(screen.getByText('Agent requests to run')).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByText('还有 1 个待审批')).toBeTruthy();
-    expect(screen.getByText('始终允许')).toBeTruthy();
-    expect(screen.getByText('始终拒绝')).toBeTruthy();
-    expect(screen.getByText(/工作区沙箱/)).toBeTruthy();
-    fireEvent.click(screen.getByText('允许一次'));
+    expect(screen.getByText('1 more awaiting approval')).toBeTruthy();
+    expect(screen.getByText('Always allow')).toBeTruthy();
+    expect(screen.getByText('Always deny')).toBeTruthy();
+    expect(screen.getByText(/workspace sandbox/)).toBeTruthy();
+    fireEvent.click(screen.getByText('Allow once'));
     expect(onDecide).toHaveBeenCalledWith('allow_once');
   });
 
@@ -83,9 +83,9 @@ describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
       />,
     );
 
-    expect(screen.getByText('Agent 请求在工作区外执行命令')).toBeTruthy();
+    expect(screen.getByText('Agent requests to run a command outside the workspace')).toBeTruthy();
     expect(screen.getByText('rm -rf ~/.local/share/python-runner')).toBeTruthy();
-    expect(screen.getByText(/命令已在工作区沙箱中被拒绝/)).toBeTruthy();
-    expect(screen.queryByText(/把沙箱切到/)).toBeNull();
+    expect(screen.getByText(/The workspace sandbox blocked this command/)).toBeTruthy();
+    expect(screen.queryByText(/switch the sandbox to/)).toBeNull();
   });
 });

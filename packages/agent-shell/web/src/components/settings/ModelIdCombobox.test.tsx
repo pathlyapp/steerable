@@ -80,9 +80,9 @@ describe('ModelIdCombobox', () => {
     render(<ModelIdCombobox value="deepseek-v4-pro" options={ROWS} onChange={() => {}} />);
     fireEvent.focus(screen.getByTestId('llm-model-input'));
     expect(screen.getByRole('option', { name: 'deepseek-v4-pro' })).toBeTruthy();
-    expect(screen.getByText('思考')).toBeTruthy();
+    expect(screen.getByText('Thinking')).toBeTruthy();
     expect(screen.getByText('1M')).toBeTruthy();
-    expect(screen.getByText('未识别')).toBeTruthy();
-    expect(screen.queryByText('思考（high / max）')).toBeNull();
+    expect(screen.getByText('Unrecognized')).toBeTruthy();
+    expect(screen.queryByText('Thinking (high / max)')).toBeNull();
   });
 });

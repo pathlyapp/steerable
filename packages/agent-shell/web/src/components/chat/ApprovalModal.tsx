@@ -3,6 +3,7 @@ import {
   type ApprovalDecisionKind,
   type ApprovalPromptRequest,
 } from '@/lib/electron-bridge';
+import { t } from '@/i18n';
 
 /**
  * ApprovalPromptMenu — W4-1 审批代数的输入区 UI。
@@ -19,10 +20,10 @@ import {
  */
 
 const MODE_LABEL: Record<string, string> = {
-  read: '只读',
-  safe_write: '写入',
-  destructive: '危险',
-  other: '其他',
+  read: 'Read only',
+  safe_write: 'Write',
+  destructive: 'Dangerous',
+  other: 'Other',
 };
 
 function summarizeArguments(args: Record<string, unknown>): string {
@@ -45,15 +46,15 @@ interface DecisionButton {
 }
 
 const ALLOW_BUTTONS: DecisionButton[] = [
-  { kind: 'allow_once', label: '允许一次', tone: 'allow' },
-  { kind: 'allow_for_session', label: '本次会话允许', tone: 'allow' },
-  { kind: 'allow_always', label: '始终允许', tone: 'allow' },
+  { kind: 'allow_once', label: 'Allow once', tone: 'allow' },
+  { kind: 'allow_for_session', label: 'Allow for this chat', tone: 'allow' },
+  { kind: 'allow_always', label: 'Always allow', tone: 'allow' },
 ];
 
 const DENY_BUTTONS: DecisionButton[] = [
-  { kind: 'deny_once', label: '拒绝一次', tone: 'deny' },
-  { kind: 'deny_for_session', label: '本次会话拒绝', tone: 'deny' },
-  { kind: 'deny_always', label: '始终拒绝', tone: 'deny' },
+  { kind: 'deny_once', label: 'Deny once', tone: 'deny' },
+  { kind: 'deny_for_session', label: 'Deny for this chat', tone: 'deny' },
+  { kind: 'deny_always', label: 'Always deny', tone: 'deny' },
 ];
 
 function DecisionRow({
@@ -77,7 +78,7 @@ function DecisionRow({
               : 'rounded-agent-md border border-agent-border px-3 py-1.5 text-xs font-medium text-agent-foreground transition hover:bg-agent-muted'
           }
         >
-          {b.label}
+          {t(b.label)}
         </button>
       ))}
     </div>
@@ -120,27 +121,29 @@ export function ApprovalPromptMenu({
             <div className="text-xs font-medium text-agent-foreground">
               {isEgress ? (
                 <>
-                  Agent 请求访问外网
+                  {t('Agent requests internet access')}
                   <span className="mx-1 font-mono">
                     {egressHost}
                     {egressPort !== null ? `:${egressPort}` : ''}
                   </span>
                 </>
               ) : isSandboxEscalation ? (
-                <>Agent 请求在工作区外执行命令</>
+                <>{t('Agent requests to run a command outside the workspace')}</>
               ) : (
                 <>
-                  Agent 请求执行
+                  {t('Agent requests to run')}
                   <span className="mx-1 font-mono">{current.toolName}</span>
                   <span className="text-agent-muted-foreground">
-                    （{MODE_LABEL[current.mode] ?? current.mode}操作）
+                    {t('({mode} action)', {
+                      mode: MODE_LABEL[current.mode] ? t(MODE_LABEL[current.mode]) : current.mode,
+                    })}
                   </span>
                 </>
               )}
             </div>
             {pendingCount > 0 && (
               <div className="mt-0.5 text-[11px] text-agent-muted-foreground">
-                还有 {pendingCount} 个待审批
+                {t('{count} more awaiting approval', { count: pendingCount })}
               </div>
             )}
           </div>
@@ -152,23 +155,30 @@ export function ApprovalPromptMenu({
           </pre>
             {isEgress ? (
             <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-              该域名不在出网白名单内。放行前请核对完整域名拼写（仿冒域名常
-              用相似拼写，如 cdn.jsdelivr.net.evil.com）。放行仅对本次会话
-              生效；要持久放行请把域名加入设置的出网白名单。
+              {t(
+                'This domain is not on the egress allowlist. Check the full spelling before allowing it (lookalike domains often use similar spellings, such as cdn.jsdelivr.net.evil.com). Allowing it applies only to this chat. To allow it permanently, add the domain to the egress allowlist in Settings.',
+              )}
             </p>
           ) : isSandboxEscalation ? (
             <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-              命令已在工作区沙箱中被拒绝。允许后只重试这条命令，不再限制写入范围。
+              {t(
+                'The workspace sandbox blocked this command. Allowing it retries only this command, without limiting where it can write.',
+              )}
             </p>
           ) : (
             <>
               {current.category !== current.toolName && (
                 <p className="mt-2 text-[11px] text-agent-muted-foreground">
-                  持久化类别：{current.category}（会话/始终决定对该类别所有调用生效）
+                  {t(
+                    'Saved category: {category} (a chat or always decision applies to every call in this category)',
+                    { category: current.category },
+                  )}
                 </p>
               )}
               <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-                在工作区沙箱中执行，范围外的写入会被拒绝。需要写到外面时，把沙箱切到「完整权限」后再试。
+                {t(
+                  'Runs in the workspace sandbox. Writes outside it are blocked. To write outside, switch the sandbox to "Full access" and try again.',
+                )}
               </p>
             </>
           )}
@@ -198,13 +208,17 @@ export function ApprovalPromptMenu({
               className="shrink-0 rounded-agent-md bg-agent-destructive px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90"
               data-testid="approval-abort"
             >
-              中止本轮
+              {t('Abort this turn')}
             </button>
           </div>
           <p className="text-[11px] leading-relaxed text-agent-muted-foreground">
             {isEgress
-              ? '「会话」决定在本对话内记住（代理进程退出即失效）。不操作约 3 分钟后按拒绝处理。'
-              : '「会话」决定在本对话内记住；「始终」决定写入本机 ~/.steerable/approvals.json，跨对话生效。不操作约 2 分钟后按拒绝处理。'}
+              ? t(
+                  '"This chat" decisions are remembered in this chat until the agent process exits. With no action for about 3 minutes, the request is denied.',
+                )
+              : t(
+                  '"This chat" decisions are remembered in this chat. "Always" decisions are written to ~/.steerable/approvals.json on this computer and apply across chats. With no action for about 2 minutes, the request is denied.',
+                )}
           </p>
         </div>
     </div>

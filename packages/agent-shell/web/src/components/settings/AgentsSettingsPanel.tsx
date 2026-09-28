@@ -6,6 +6,7 @@ import {
   LuTrash2,
 } from 'react-icons/lu';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { t } from '@/i18n';
 import { isElectron } from '@/lib/electron-bridge';
 import {
   archiveChatAgent,
@@ -61,15 +62,15 @@ function agentInitial(agent: LocalChatAgent): string {
 function capabilitySummary(agent: LocalChatAgent): string[] {
   const labels: string[] = [];
   const skillCount = agent.skillIds?.length ?? 0;
-  if (skillCount > 0) labels.push(`技能 ${skillCount}`);
-  if (agent.allowExternalSkills === false) labels.push('仅限所选技能');
-  if (agent.loadAllSkills) labels.push('全部技能');
+  if (skillCount > 0) labels.push(t('Skills {count}', { count: skillCount }));
+  if (agent.allowExternalSkills === false) labels.push(t('Selected skills only'));
+  if (agent.loadAllSkills) labels.push(t('All skills'));
   const policy = agent.toolPolicy;
   if (policy && policy.mode !== 'all' && policy.tools.length > 0) {
     labels.push(
       policy.mode === 'allowlist'
-        ? `仅 ${policy.tools.length} 个工具`
-        : `禁用 ${policy.tools.length} 个工具`,
+        ? t('Only {count} tools', { count: policy.tools.length })
+        : t('{count} tools blocked', { count: policy.tools.length }),
     );
   }
   return labels;
@@ -158,7 +159,7 @@ export function AgentsSettingsPanel({
         name: trimmedName,
         color,
         description: description.trim() || null,
-        rolePrompt: rolePrompt.trim() || `你是 **${trimmedName}**。`,
+        rolePrompt: rolePrompt.trim() || t('You are **{name}**.', { name: trimmedName }),
         skillIds: capability.skillIds,
         allowExternalSkills: capability.allowExternalSkills,
         loadAllSkills: capability.loadAllSkills,
@@ -203,20 +204,21 @@ export function AgentsSettingsPanel({
   return (
     <div className="space-y-3">
       <p className="text-[11px] text-agent-muted-foreground">
-        自定义智能体会出现在输入框上方的专家选择器里。角色设定会作为对话的人设前言，
-        勾选的技能与工具权限在每一轮真实生效。内置智能体可以改文案和能力，但不能删除。
+        {t(
+          'Custom agents appear in the expert picker above the input box. The role prompt opens the conversation as its persona, and the checked skills and tool permissions apply on every turn. Built-in agents can have their text and capabilities edited, but cannot be deleted.',
+        )}
       </p>
 
       {formOpen ? (
         <div className="space-y-2 rounded-agent-md border border-agent-border/60 bg-agent-muted/30 p-2.5">
           <h4 className="text-xs font-semibold text-agent-foreground">
-            {editingId ? '编辑智能体' : '新建智能体'}
+            {editingId ? t('Edit agent') : t('New agent')}
           </h4>
           <input
             type="text"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="名称，如 地质顾问"
+            placeholder={t('Name, e.g. Geology advisor')}
             maxLength={40}
             className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
             data-testid="agent-form-name"
@@ -225,13 +227,13 @@ export function AgentsSettingsPanel({
             type="text"
             value={description}
             onChange={(event) => setDescription(event.target.value)}
-            placeholder="一句话简介（可选）"
+            placeholder={t('One-line summary (optional)')}
             maxLength={200}
             className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
             data-testid="agent-form-description"
           />
           <div>
-            <p className="mb-1.5 text-[10px] font-medium text-agent-muted-foreground">颜色</p>
+            <p className="mb-1.5 text-[10px] font-medium text-agent-muted-foreground">{t('Color')}</p>
             <div className="flex flex-wrap gap-1.5" data-testid="agent-form-colors">
               {AGENT_COLORS.map((item) => (
                 <button
@@ -245,7 +247,7 @@ export function AgentsSettingsPanel({
                   }`}
                   style={{ backgroundColor: item }}
                   title={item}
-                  aria-label={`颜色 ${item}`}
+                  aria-label={t('Color {color}', { color: item })}
                 />
               ))}
             </div>
@@ -253,7 +255,7 @@ export function AgentsSettingsPanel({
           <textarea
             value={rolePrompt}
             onChange={(event) => setRolePrompt(event.target.value)}
-            placeholder="角色设定。例如：你是地质顾问，回答简洁，先给结论再给依据。"
+            placeholder={t('Role prompt. For example: You are a geology advisor. Answer concisely, giving the conclusion first and then the evidence.')}
             rows={6}
             className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
             data-testid="agent-form-role"
@@ -268,7 +270,7 @@ export function AgentsSettingsPanel({
               }}
               className="h-8 rounded-full px-4 text-xs font-medium text-agent-muted-foreground transition-colors hover:bg-agent-muted hover:text-agent-foreground"
             >
-              取消
+              {t('Cancel')}
             </button>
             <button
               type="button"
@@ -281,7 +283,7 @@ export function AgentsSettingsPanel({
                   : 'bg-agent-foreground text-agent-canvas hover:opacity-90'
               }`}
             >
-              {saving ? <LuLoaderCircle className="h-3 w-3 animate-spin" /> : '保存'}
+              {saving ? <LuLoaderCircle className="h-3 w-3 animate-spin" /> : t('Save')}
             </button>
           </div>
         </div>
@@ -293,13 +295,13 @@ export function AgentsSettingsPanel({
           data-testid="agent-add"
         >
           <LuPlus className="h-3.5 w-3.5" />
-          添加智能体
+          {t('Add agent')}
         </button>
       )}
 
       <div className="space-y-2">
         <h4 className="text-xs font-semibold uppercase tracking-wide text-agent-muted-foreground">
-          已有智能体
+          {t('Existing agents')}
           {agents.length > 0 && (
             <span className="ml-1.5 font-normal normal-case">· {agents.length}</span>
           )}
@@ -307,11 +309,11 @@ export function AgentsSettingsPanel({
         {loading ? (
           <div className="flex items-center gap-2 py-4 text-xs text-agent-muted-foreground">
             <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            获取智能体...
+            {t('Loading agents...')}
           </div>
         ) : agents.length === 0 ? (
           <div className="py-6 text-center text-xs text-agent-muted-foreground">
-            暂无智能体
+            {t('No agents yet')}
           </div>
         ) : (
           <div className="divide-y divide-agent-border/40 pr-1">
@@ -334,7 +336,7 @@ export function AgentsSettingsPanel({
                     </span>
                     {agent.isBuiltin && (
                       <span className="flex-shrink-0 rounded bg-agent-muted px-1 py-0.5 text-[9px] font-medium text-agent-muted-foreground">
-                        内置
+                        {t('Built-in')}
                       </span>
                     )}
                   </div>
@@ -364,7 +366,7 @@ export function AgentsSettingsPanel({
                     type="button"
                     onClick={() => openEdit(agent)}
                     className="rounded-full p-1 text-agent-muted-foreground transition-colors hover:bg-agent-muted hover:text-agent-foreground"
-                    title="编辑"
+                    title={t('Edit')}
                     data-testid={`agent-edit-${agent.id}`}
                   >
                     <LuPencil className="h-3.5 w-3.5" />
@@ -377,7 +379,7 @@ export function AgentsSettingsPanel({
                       }
                       disabled={archivingId === agent.id}
                       className="rounded-full p-1 text-agent-muted-foreground transition-colors hover:bg-agent-muted hover:text-agent-destructive"
-                      title="删除"
+                      title={t('Delete')}
                       data-testid={`agent-archive-${agent.id}`}
                     >
                       {archivingId === agent.id ? (
@@ -404,10 +406,13 @@ export function AgentsSettingsPanel({
       )}
       <ConfirmDialog
         open={pendingArchive !== null}
-        title="删除智能体"
+        title={t('Delete agent')}
         description={
           pendingArchive
-            ? `确定删除「${pendingArchive.name}」？它会从专家选择器中移除，已有会话不受影响。`
+            ? t(
+                'Delete "{name}"? It will be removed from the expert picker. Existing conversations are not affected.',
+                { name: pendingArchive.name },
+              )
             : ''
         }
         pending={pendingArchive !== null && archivingId === pendingArchive.id}

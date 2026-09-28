@@ -53,6 +53,7 @@ import {
 } from '@steerable/agent-ui/state';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import { getElectronBridge } from './electron-bridge';
+import { t } from '@/i18n';
 import {
   appendDelta,
   freezeReasoningDurations,
@@ -372,7 +373,7 @@ export async function regenerateChatMessage(
         if (frame.event !== 'error' || !frame.data) return;
         const parsed = parseSSEData(frame.data);
         const message = (parsed as { message?: unknown } | null)?.message;
-        refusal = typeof message === 'string' && message ? message : '重新生成失败';
+        refusal = typeof message === 'string' && message ? message : t('Regeneration failed');
       },
     });
     bridge.localBackend
@@ -388,7 +389,10 @@ export async function regenerateChatMessage(
             parser.end();
             settle(
               payload.status >= 400
-                ? new Error(refusal ?? `重新生成失败（HTTP ${payload.status}）`)
+                ? new Error(
+                    refusal ??
+                      t('Regeneration failed (HTTP {status})', { status: payload.status }),
+                  )
                 : undefined,
             );
           } else if (payload.type === 'error') settle(new Error(payload.error));

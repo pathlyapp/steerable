@@ -10,6 +10,7 @@
  * 不写库。worktree 的合并/丢弃仍归任务弹层——卡片只通知，不重复那套操作。
  */
 import { LuCheck, LuGitBranch, LuX } from 'react-icons/lu';
+import { t } from '@/i18n';
 import type { LocalTask } from '@/lib/local-api';
 
 /** 同时挤在消息列尾部的卡片上限；更多的只留一行汇总指回角标。 */
@@ -41,7 +42,9 @@ export function TaskOutcomeCards({ tasks, onInspect, onDismiss }: TaskOutcomeCar
       ))}
       {overflow > 0 && (
         <div className="px-1 text-[11px] text-agent-muted-foreground">
-          另有 {overflow} 个后台任务已结束 — 见标题栏的任务按钮。
+          {t('{count} more background tasks finished. See the tasks button in the title bar.', {
+            count: overflow,
+          })}
         </div>
       )}
     </div>
@@ -86,7 +89,7 @@ function TaskOutcomeCard({
               : 'text-emerald-700 dark:text-emerald-300'
           }
         >
-          {failed ? '后台任务失败：' : '后台任务已完成：'}
+          {failed ? t('Background task failed: ') : t('Background task completed: ')}
           <span className="font-medium">{task.task}</span>
         </div>
         {detail && (
@@ -100,7 +103,7 @@ function TaskOutcomeCard({
             <span className="min-w-0 truncate font-mono text-[10px]">
               {task.worktreeBranch}
             </span>
-            <span>待合并 — 在标题栏的任务按钮里处理。</span>
+            <span>{t('Awaiting merge. Handle it from the tasks button in the title bar.')}</span>
           </div>
         )}
       </div>
@@ -111,14 +114,14 @@ function TaskOutcomeCard({
           onClick={onDismiss}
           className="rounded px-1.5 py-0.5 text-agent-muted-foreground transition-colors hover:text-agent-foreground"
         >
-          忽略
+          {t('Dismiss')}
         </button>
         <button
           type="button"
           onClick={onInspect}
           className="rounded-full bg-agent-foreground px-3 py-1 font-medium text-agent-canvas transition hover:opacity-90"
         >
-          查看过程
+          {t('View process')}
         </button>
       </div>
     </div>

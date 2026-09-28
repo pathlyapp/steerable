@@ -1,5 +1,6 @@
 import { LuGitFork } from 'react-icons/lu';
 import { useOrchestrationSetting } from '@/lib/orchestration-settings';
+import { t } from '@/i18n';
 
 /**
  * OrchestrationSettingsPanel — 多智能体协同编排设置面板。
@@ -17,10 +18,12 @@ export function OrchestrationSettingsPanel() {
         <div className="space-y-1">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
             <LuGitFork className="h-3.5 w-3.5 text-violet-600 dark:text-violet-400" />
-            <span>多智能体协同编排 (Fork-Join)</span>
+            <span>{t('Multi-agent orchestration (Fork-Join)')}</span>
           </div>
           <p className="text-xs leading-relaxed text-agent-muted-foreground">
-            允许主智能体通过派生子任务（agent_spawn）并行推理计算，并在输入框上方呈现流程图与实时协同进度看板。
+            {t(
+              'Let the main agent spawn subtasks (agent_spawn) to reason in parallel, and show a flow chart and live progress board above the input box.',
+            )}
           </p>
         </div>
 
@@ -28,7 +31,7 @@ export function OrchestrationSettingsPanel() {
         <div
           className="flex shrink-0 rounded-full border border-agent-border bg-agent-canvas p-0.5"
           role="radiogroup"
-          aria-label="多智能体协同编排功能开关"
+          aria-label={t('Multi-agent orchestration toggle')}
         >
           <button
             type="button"
@@ -42,7 +45,7 @@ export function OrchestrationSettingsPanel() {
                 : 'text-agent-muted-foreground hover:text-agent-foreground',
             ].join(' ')}
           >
-            开启
+            {t('On')}
           </button>
           <button
             type="button"
@@ -56,7 +59,7 @@ export function OrchestrationSettingsPanel() {
                 : 'text-agent-muted-foreground hover:text-agent-foreground',
             ].join(' ')}
           >
-            关闭
+            {t('Off')}
           </button>
         </div>
       </div>

@@ -7,6 +7,7 @@ import '@xterm/xterm/css/xterm.css';
 import { DockHeaderButton, DockPanelHeader } from '@/components/DockPanelHeader';
 import { getElectronBridge } from '@/lib/electron-bridge';
 import { BRAND_NAME } from '@/brand';
+import { t } from '@/i18n';
 
 /**
  * Renders an xterm.js terminal wired up to the main-process PTY via the
@@ -48,7 +49,7 @@ export function TerminalView({
     const terminal = bridge?.terminal;
     if (!terminal) {
       setStatus('error');
-      setStatusMsg('window.electron.terminal 不可用');
+      setStatusMsg(t('window.electron.terminal is unavailable'));
       return;
     }
 
@@ -199,23 +200,27 @@ export function TerminalView({
   }, []);
 
   const statusLabel =
-    status === 'starting' ? '启动中…' : status === 'ready' ? '在线' : `错误：${statusMsg}`;
+    status === 'starting'
+      ? t('Starting…')
+      : status === 'ready'
+        ? t('Online')
+        : t('Error: {message}', { message: statusMsg });
 
   return (
     <div className="flex h-full w-full flex-col bg-[#0b0b0c]">
       <DockPanelHeader
-        title={`${BRAND_NAME} · 终端 · ${statusLabel}`}
+        title={t('{brand} · Terminal · {status}', { brand: BRAND_NAME, status: statusLabel })}
         onClose={onClose}
-        closeLabel="关闭终端面板"
+        closeLabel={t('Close terminal panel')}
         actions={
           onShowTaskProcess && (
             <DockHeaderButton
               icon={<LuListTodo className="h-3 w-3" />}
-              label="后台任务"
+              label={t('Background tasks')}
               title={
                 taskProcessTitle
-                  ? `切换到后台推理：${taskProcessTitle}`
-                  : '切换到后台推理'
+                  ? t('Switch to background reasoning: {title}', { title: taskProcessTitle })
+                  : t('Switch to background reasoning')
               }
               onClick={onShowTaskProcess}
             />

@@ -43,7 +43,7 @@ describe('mergeVendorOptions', () => {
     expect(ids).toContain('ollama');
     expect(ids).toContain('custom');
     expect(ids).toContain('azure');
-    expect(vendorLabel('alibaba-cn')).toBe('阿里云百炼');
+    expect(vendorLabel('alibaba-cn')).toBe('Alibaba Cloud Model Studio');
   });
 
   it('orders the fallback featured list by common usage', () => {

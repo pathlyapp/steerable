@@ -67,7 +67,7 @@ export function ApprovalPromptProvider({ children }: { children: ReactNode }) {
         if (active) addRequests(requests, 'prepend');
       })
       .catch((error) => {
-        console.error('恢复待审批请求失败:', error);
+        console.error('Failed to restore pending approval requests:', error);
       });
     return () => {
       active = false;

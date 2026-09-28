@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { LuX } from 'react-icons/lu';
 import type { LlmSettings } from '@/lib/local-api';
 import { LlmSettingsPanel } from '@/components/settings/LlmSettingsPanel';
+import { t } from '@/i18n';
 
 interface LocalLlmSettingsModalProps {
   open: boolean;
@@ -43,12 +44,12 @@ export function LocalLlmSettingsModal({ open, onClose, onSaved }: LocalLlmSettin
         className="flex h-[560px] max-h-[90vh] w-[540px] max-w-[92vw] flex-col overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas shadow-2xl animate-fade-in"
       >
         <div className="flex h-9 flex-shrink-0 items-center justify-between border-b border-agent-border px-3">
-          <h2 className="text-xs font-semibold text-agent-foreground">本地模型设置</h2>
+          <h2 className="text-xs font-semibold text-agent-foreground">{t('Local model settings')}</h2>
           <button
             type="button"
             onClick={onClose}
             className="rounded-full p-1 text-agent-muted-foreground transition-colors hover:bg-agent-muted hover:text-agent-foreground"
-            aria-label="关闭"
+            aria-label={t('Close')}
           >
             <LuX className="h-4 w-4" />
           </button>
@@ -62,7 +63,7 @@ export function LocalLlmSettingsModal({ open, onClose, onSaved }: LocalLlmSettin
             onClick={onClose}
             className="h-7 rounded-full px-3 text-xs font-medium text-agent-muted-foreground transition-colors hover:bg-agent-muted hover:text-agent-foreground"
           >
-            关闭
+            {t('Close')}
           </button>
         </div>
       </div>

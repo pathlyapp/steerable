@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { LuDownload, LuUpload } from 'react-icons/lu';
 import { hostToolChrome, settingsChrome } from '@/lib/host-tools';
 import { BRAND_NAME } from '@/brand';
+import { t } from '@/i18n';
 import {
   applyClientSections,
   fetchChatDocument,
@@ -20,42 +21,61 @@ import {
 } from '@/lib/portable';
 
 const EXPORT_SECTIONS: Array<{ id: string; label: string; visible: () => boolean }> = [
-  { id: 'appearance', label: '界面', visible: () => settingsChrome('appearance') },
-  { id: 'execPolicy', label: '命令权限', visible: () => hostToolChrome('local-fs') },
-  { id: 'llm', label: '本地模型', visible: () => settingsChrome('llm') },
-  { id: 'webSearch', label: '网络搜索', visible: () => settingsChrome('web-search') },
-  { id: 'insights', label: '帮助改进产品', visible: () => settingsChrome('insights') },
-  { id: 'telemetry', label: '遥测', visible: () => settingsChrome('telemetry') },
-  { id: 'mcp', label: 'MCP 服务', visible: () => settingsChrome('mcp') },
-  { id: 'agents', label: '智能体', visible: () => settingsChrome('agents') },
-  { id: 'skills', label: '技能引用', visible: () => settingsChrome('skills') },
+  { id: 'appearance', label: 'Interface', visible: () => settingsChrome('appearance') },
+  { id: 'execPolicy', label: 'Command permissions', visible: () => hostToolChrome('local-fs') },
+  { id: 'llm', label: 'Local model', visible: () => settingsChrome('llm') },
+  { id: 'webSearch', label: 'Web search', visible: () => settingsChrome('web-search') },
+  { id: 'insights', label: 'Help improve the product', visible: () => settingsChrome('insights') },
+  { id: 'telemetry', label: 'Telemetry', visible: () => settingsChrome('telemetry') },
+  { id: 'mcp', label: 'MCP servers', visible: () => settingsChrome('mcp') },
+  { id: 'agents', label: 'Agents', visible: () => settingsChrome('agents') },
+  { id: 'skills', label: 'Skill references', visible: () => settingsChrome('skills') },
 ];
 
 function projectClause(chat: { projectName?: string; projectCount?: number }): string | null {
   const count = chat.projectCount ?? 0;
   if (count <= 0) return null;
   if (count === 1 && chat.projectName) {
-    return `项目「${chat.projectName}」（不含目录里的文件，同名项目沿用本机已有的）`;
+    return t(
+      'Project "{name}" (files in its directory are not included; a project with the same name reuses the one on this computer)',
+      { name: chat.projectName },
+    );
   }
-  return `${count} 个项目（不含目录里的文件，同名项目沿用本机已有的）`;
+  return t(
+    '{count} projects (files in their directories are not included; projects with the same name reuse the ones on this computer)',
+    { count },
+  );
 }
 
 function describeChat(preview: PortablePreview): string {
   const chat = preview.chat;
-  if (!chat) return '将作为新会话导入，不覆盖现有对话。';
-  const bits = [`${chat.messageCount} 条消息`];
-  if (chat.attachmentCount > 0) bits.push(`${chat.attachmentCount} 个附件`);
-  if (chat.omittedAttachmentCount > 0) bits.push(`${chat.omittedAttachmentCount} 个附件因过大未包含`);
-  if (chat.truncated) bits.push('消息已达到导出上限');
+  if (!chat) return t('Will be imported as a new chat. Existing chats are not overwritten.');
+  const bits = [t('{count} messages', { count: chat.messageCount })];
+  if (chat.attachmentCount > 0) bits.push(t('{count} attachments', { count: chat.attachmentCount }));
+  if (chat.omittedAttachmentCount > 0) {
+    bits.push(t('{count} attachments left out because they are too large', { count: chat.omittedAttachmentCount }));
+  }
+  if (chat.truncated) bits.push(t('Messages reached the export limit'));
   const project = projectClause(chat);
   if (project) bits.push(project);
-  if ((chat.count ?? 1) > 1) return `将新增 ${chat.count} 条对话，共 ${bits.join('，')}。不覆盖现有会话。`;
-  return `将新增对话「${chat.title}」：${bits.join('，')}。不覆盖现有会话。`;
+  const details = bits.join(t(', '));
+  if ((chat.count ?? 1) > 1) {
+    return t('Will add {count} chats with {details} in total. Existing chats are not overwritten.', {
+      count: chat.count ?? 1,
+      details,
+    });
+  }
+  return t('Will add chat "{title}": {details}. Existing chats are not overwritten.', {
+    title: chat.title,
+    details,
+  });
 }
 
 function describeImport(preview: PortablePreview): string {
-  if (preview.includeSecrets) return '这份配置包含 API Key。导入后会写入本机。';
-  return '将按勾选覆盖对应设置。未出现的段保持不动。钥匙默认不在包里，导入后需要自己填写。';
+  if (preview.includeSecrets) return t('This config includes API keys. Importing writes them to this computer.');
+  return t(
+    'Checked settings will be overwritten. Sections not in the file stay unchanged. Keys are not in the package by default, so you need to fill them in after importing.',
+  );
 }
 
 /**
@@ -113,7 +133,7 @@ export function PortableSettingsPanel() {
   const confirmExportChats = async () => {
     const chosen = chatRows.filter((row) => chatIds.has(row.id));
     if (chosen.length === 0) {
-      setError('请至少选择一条对话');
+      setError(t('Select at least one chat'));
       return;
     }
     setBusy(true);
@@ -121,13 +141,13 @@ export function PortableSettingsPanel() {
     try {
       const chats = [];
       for (const row of chosen) chats.push(await fetchChatDocument(row.id));
-      const saved = await saveJsonFile(safeDownloadName(BRAND_NAME, '对话'), {
+      const saved = await saveJsonFile(safeDownloadName(BRAND_NAME, t('Chats')), {
         kind: 'steerable-chats',
         schemaVersion: 1,
         exportedAt: new Date().toISOString(),
         chats,
       });
-      setStatus(saved ? `已保存到 ${saved}` : '已取消');
+      setStatus(saved ? t('Saved to {path}', { path: saved }) : t('Canceled'));
       if (saved) setMode('idle');
     } catch (err) {
       setError(portableErrorMessage(err));
@@ -151,11 +171,11 @@ export function PortableSettingsPanel() {
       const fetched = await fetchConfigDocument(includeSecrets);
       const finished = finishConfigDocument(fetched, selected);
       if (Object.keys(finished.sections).length === 0) {
-        setError('没有可导出的内容');
+        setError(t('Nothing to export'));
         return;
       }
-      const saved = await saveJsonFile(safeDownloadName(BRAND_NAME, '配置'), finished);
-      setStatus(saved ? `已保存到 ${saved}` : '已取消');
+      const saved = await saveJsonFile(safeDownloadName(BRAND_NAME, t('Config')), finished);
+      setStatus(saved ? t('Saved to {path}', { path: saved }) : t('Canceled'));
       if (saved) setMode('idle');
     } catch (err) {
       setError(portableErrorMessage(err));
@@ -182,14 +202,14 @@ export function PortableSettingsPanel() {
         setPreview(null);
         setDocument(null);
         setMode('idle');
-        setError('这是配置包，请用「导入配置」');
+        setError(t('This is a config package. Use "Import config".'));
         return;
       }
       if (target === 'config' && isChat) {
         setPreview(null);
         setDocument(null);
         setMode('idle');
-        setError('这是对话包，请用「导入对话」');
+        setError(t('This is a chat package. Use "Import chats".'));
         return;
       }
       setDocument(parsed.value);
@@ -222,13 +242,17 @@ export function PortableSettingsPanel() {
       const appliedLabels = sections
         .filter((section) => section.clientOnly || result.applied.includes(section.id))
         .map((section) => section.label);
-      const parts = [`已导入${appliedLabels.length > 0 ? `：${appliedLabels.join('、')}` : ''}`];
+      const parts = [
+        appliedLabels.length > 0
+          ? t('Imported: {sections}', { sections: appliedLabels.join(t(', ')) })
+          : t('Imported'),
+      ];
       for (const item of result.skipped) parts.push(item.reason);
       for (const note of result.notes) parts.push(note);
       if (result.missingSkills.length > 0) {
-        parts.push(`本机没有这些技能：${result.missingSkills.join('、')}`);
+        parts.push(t('These skills are not on this computer: {skills}', { skills: result.missingSkills.join(t(', ')) }));
       }
-      setStatus(parts.join('。'));
+      setStatus(parts.join(t('. ')));
       setMode('idle');
       setPreview(null);
       setDocument(null);
@@ -246,7 +270,7 @@ export function PortableSettingsPanel() {
     try {
       const result = await importChatDocument(document);
       const count = preview.chat?.count ?? 1;
-      setStatus(count > 1 ? `已导入 ${count} 条对话` : `已导入对话「${result.title}」`);
+      setStatus(count > 1 ? t('Imported {count} chats', { count }) : t('Imported chat "{title}"', { title: result.title }));
       setMode('idle');
       setPreview(null);
       setDocument(null);
@@ -269,7 +293,9 @@ export function PortableSettingsPanel() {
       data-testid="portable-settings-panel"
     >
       <p className="text-xs leading-relaxed text-agent-muted-foreground">
-        导出配置或对话记录，带到另一台电脑后再导入。对话会连同所属项目一起导出，不包含项目目录里的文件。对话作为新会话导入，不覆盖现有记录。API Key 默认不包含。
+        {t(
+          'Export your config or chat history, take it to another computer, and import it there. Chats are exported with their projects, without the files in project directories. Chats are imported as new chats and do not overwrite existing history. API keys are not included by default.',
+        )}
       </p>
       <div className="flex flex-wrap gap-1.5">
         <button
@@ -279,7 +305,7 @@ export function PortableSettingsPanel() {
           data-testid="portable-export-config"
         >
           <LuDownload className="h-3.5 w-3.5" />
-          导出配置
+          {t('Export config')}
         </button>
         <button
           type="button"
@@ -289,7 +315,7 @@ export function PortableSettingsPanel() {
           data-testid="portable-export-chats"
         >
           <LuDownload className="h-3.5 w-3.5" />
-          导出对话
+          {t('Export chats')}
         </button>
         <button
           type="button"
@@ -299,7 +325,7 @@ export function PortableSettingsPanel() {
           data-testid="portable-import-config"
         >
           <LuUpload className="h-3.5 w-3.5" />
-          导入配置
+          {t('Import config')}
         </button>
         <button
           type="button"
@@ -309,13 +335,13 @@ export function PortableSettingsPanel() {
           data-testid="portable-import-chats"
         >
           <LuUpload className="h-3.5 w-3.5" />
-          导入对话
+          {t('Import chats')}
         </button>
       </div>
 
       {mode === 'export' && (
         <fieldset className="space-y-1.5" data-testid="portable-export-form">
-          <legend className="text-xs font-medium text-agent-foreground">导出哪些段</legend>
+          <legend className="text-xs font-medium text-agent-foreground">{t('Sections to export')}</legend>
           {visible.map((item) => (
             <label key={item.id} className="flex items-center gap-1.5 text-xs text-agent-foreground">
               <input
@@ -324,7 +350,7 @@ export function PortableSettingsPanel() {
                 onChange={() => toggle(item.id)}
                 data-testid={`portable-section-${item.id}`}
               />
-              {item.label}
+              {t(item.label)}
             </label>
           ))}
           <label className="flex items-center gap-1.5 text-xs text-agent-foreground">
@@ -334,10 +360,10 @@ export function PortableSettingsPanel() {
               onChange={(event) => setIncludeSecrets(event.target.checked)}
               data-testid="portable-include-secrets"
             />
-            包含 API Key
+            {t('Include API keys')}
           </label>
           <p className="text-[11px] leading-relaxed text-agent-muted-foreground">
-            勾选后文件等同于钥匙，不要发给别人，也不要提交到仓库。
+            {t('When checked, the file is as sensitive as a key. Do not send it to anyone or commit it to a repository.')}
           </p>
           <div className="flex gap-1.5">
             <button
@@ -347,14 +373,14 @@ export function PortableSettingsPanel() {
               className="h-7 rounded-full bg-agent-foreground px-2.5 text-xs text-agent-canvas disabled:opacity-60"
               data-testid="portable-export-confirm"
             >
-              {busy ? '导出中' : '保存文件'}
+              {busy ? t('Exporting') : t('Save file')}
             </button>
             <button
               type="button"
               onClick={cancel}
               className="h-7 rounded-full px-2.5 text-xs text-agent-muted-foreground hover:bg-agent-foreground/5"
             >
-              取消
+              {t('Cancel')}
             </button>
           </div>
         </fieldset>
@@ -362,14 +388,16 @@ export function PortableSettingsPanel() {
 
       {mode === 'export-chats' && (
         <fieldset className="space-y-1.5" data-testid="portable-export-chats-form">
-          <legend className="text-xs font-medium text-agent-foreground">导出哪些对话</legend>
+          <legend className="text-xs font-medium text-agent-foreground">{t('Chats to export')}</legend>
           <p className="text-[11px] leading-relaxed text-agent-muted-foreground">
-            这些对话所属的项目会一起写进文件，只保留名称和目录位置，不打包目录里的文件。
+            {t(
+              'The projects these chats belong to are written into the file too, keeping only their names and directory locations. Files in the directories are not packaged.',
+            )}
           </p>
           {busy && chatRows.length === 0 ? (
-            <p className="text-xs text-agent-muted-foreground">正在读取对话…</p>
+            <p className="text-xs text-agent-muted-foreground">{t('Loading chats…')}</p>
           ) : chatRows.length === 0 ? (
-            <p className="text-xs text-agent-muted-foreground">还没有对话。</p>
+            <p className="text-xs text-agent-muted-foreground">{t('No chats yet.')}</p>
           ) : (
             <div className="max-h-48 space-y-1 overflow-y-auto">
               <label className="flex items-center gap-1.5 text-xs text-agent-foreground">
@@ -381,7 +409,7 @@ export function PortableSettingsPanel() {
                   }}
                   data-testid="portable-chats-all"
                 />
-                全部（{chatRows.length}）
+                {t('All ({count})', { count: chatRows.length })}
               </label>
               {chatRows.map((row) => (
                 <label key={row.id} className="flex items-center gap-1.5 text-xs text-agent-foreground">
@@ -404,14 +432,14 @@ export function PortableSettingsPanel() {
               className="h-7 rounded-full bg-agent-foreground px-2.5 text-xs text-agent-canvas disabled:opacity-60"
               data-testid="portable-export-chats-confirm"
             >
-              {busy ? '导出中' : '保存文件'}
+              {busy ? t('Exporting') : t('Save file')}
             </button>
             <button
               type="button"
               onClick={cancel}
               className="h-7 rounded-full px-2.5 text-xs text-agent-muted-foreground hover:bg-agent-foreground/5"
             >
-              取消
+              {t('Cancel')}
             </button>
           </div>
         </fieldset>
@@ -428,14 +456,14 @@ export function PortableSettingsPanel() {
               className="h-7 rounded-full bg-agent-foreground px-2.5 text-xs text-agent-canvas disabled:opacity-60"
               data-testid="portable-import-chat-confirm"
             >
-              {busy ? '导入中' : '导入对话'}
+              {busy ? t('Importing') : t('Import chats')}
             </button>
             <button
               type="button"
               onClick={cancel}
               className="h-7 rounded-full px-2.5 text-xs text-agent-muted-foreground hover:bg-agent-foreground/5"
             >
-              取消
+              {t('Cancel')}
             </button>
           </div>
         </div>
@@ -443,7 +471,7 @@ export function PortableSettingsPanel() {
 
       {mode === 'import' && preview && (
         <fieldset className="space-y-1.5" data-testid="portable-import-form">
-          <legend className="text-xs font-medium text-agent-foreground">导入哪些段</legend>
+          <legend className="text-xs font-medium text-agent-foreground">{t('Sections to import')}</legend>
           <p className="text-[11px] leading-relaxed text-agent-muted-foreground">{describeImport(preview)}</p>
           {preview.sections.map((section) => (
             <label key={section.id} className="flex items-center gap-1.5 text-xs text-agent-foreground">
@@ -465,14 +493,14 @@ export function PortableSettingsPanel() {
               className="h-7 rounded-full bg-agent-foreground px-2.5 text-xs text-agent-canvas disabled:opacity-60"
               data-testid="portable-import-confirm"
             >
-              {busy ? '导入中' : '导入配置'}
+              {busy ? t('Importing') : t('Import config')}
             </button>
             <button
               type="button"
               onClick={cancel}
               className="h-7 rounded-full px-2.5 text-xs text-agent-muted-foreground hover:bg-agent-foreground/5"
             >
-              取消
+              {t('Cancel')}
             </button>
           </div>
         </fieldset>

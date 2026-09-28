@@ -16,6 +16,7 @@ import {
 } from 'react-icons/lu';
 import { openLocalPath } from '@/lib/local-api';
 import { hostToolChrome } from '@/lib/host-tools';
+import { t } from '@/i18n';
 import {
   formatFileSize,
   formatIntermediateDisplayPath,
@@ -67,7 +68,7 @@ export function TurnFilesCard({ files, executedActions }: TurnFilesCardProps) {
     try {
       const result = await openLocalPath(filePath);
       if (!result.success) {
-        setOpenError({ path: filePath, message: result.error || '打开失败' });
+        setOpenError({ path: filePath, message: result.error || t('Could not open') });
       }
     } catch (err) {
       setOpenError({
@@ -197,7 +198,7 @@ function DeliverableCard({
           </button>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-agent-muted-foreground">
             <span className="truncate" title={file.description}>
-              {file.description ?? `${meta.label} · ${meta.extBadge}`}
+              {file.description ?? `${t(meta.label)} · ${meta.extBadge}`}
             </span>
             {size && (
               <>
@@ -221,13 +222,13 @@ function DeliverableCard({
               {busy ? (
                 <LuLoaderCircle className="h-3.5 w-3.5 animate-spin text-agent-muted-foreground" />
               ) : null}
-              <span>打开方式</span>
+              <span>{t('Open with')}</span>
             </button>
             <button
               type="button"
               onClick={() => setDropdownOpen(!dropdownOpen)}
               disabled={!allowOpen}
-              aria-label="更多操作"
+              aria-label={t('More actions')}
               className="border-l border-agent-border px-1.5 py-1 text-agent-muted-foreground hover:bg-agent-muted/50 hover:text-agent-foreground rounded-r-agent-md transition-colors"
             >
               <LuChevronDown className="h-3.5 w-3.5" />
@@ -246,7 +247,7 @@ function DeliverableCard({
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-agent-foreground hover:bg-agent-foreground/5"
               >
                 <LuExternalLink className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                <span>用默认应用打开</span>
+                <span>{t('Open with default app')}</span>
               </button>
               <button
                 type="button"
@@ -257,7 +258,7 @@ function DeliverableCard({
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-agent-foreground hover:bg-agent-foreground/5"
               >
                 <LuFolderOpen className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                <span>在文件夹中显示</span>
+                <span>{t('Show in folder')}</span>
               </button>
               <button
                 type="button"
@@ -272,7 +273,7 @@ function DeliverableCard({
                 ) : (
                   <LuCopy className="h-3.5 w-3.5 text-agent-muted-foreground" />
                 )}
-                <span>{copied ? '已复制完整路径' : '复制文件路径'}</span>
+                <span>{copied ? t('Copied full path') : t('Copy file path')}</span>
               </button>
             </div>
           )}
@@ -281,7 +282,7 @@ function DeliverableCard({
 
       {error && (
         <div className="mt-2 px-1 text-[11px] text-agent-destructive" role="status">
-          打开失败：{error}
+          {t('Could not open: {error}', { error })}
         </div>
       )}
     </div>
@@ -370,7 +371,7 @@ function EditedFilesCard({
           </div>
           <div className="min-w-0">
             <div className="truncate text-xs font-medium text-agent-foreground">
-              修改了 {files.length} 个文件
+              {t('Changed {count} files', { count: files.length })}
             </div>
             {(totalAdditions > 0 || totalDeletions > 0) && (
               <div className="flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-agent-muted-foreground">
@@ -388,10 +389,10 @@ function EditedFilesCard({
           <button
             type="button"
             disabled
-            title="撤销本轮文件改动"
+            title={t('Undo file changes from this turn')}
             className="flex items-center gap-1 px-1.5 py-0.5 text-xs text-agent-muted-foreground/50 cursor-default"
           >
-            <span>撤销</span>
+            <span>{t('Undo')}</span>
             <LuUndo2 className="h-3 w-3" />
           </button>
           <button
@@ -400,7 +401,7 @@ function EditedFilesCard({
             onClick={() => setExpanded(!expanded)}
             className="rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 py-0.5 text-xs font-medium text-agent-foreground hover:bg-agent-muted/50 transition-colors"
           >
-            查看详情
+            {t('View details')}
           </button>
         </div>
       </div>
@@ -457,7 +458,7 @@ function EditedFilesCard({
 
                 {error && (
                   <div className="px-3 pb-1 text-[11px] text-agent-destructive" role="status">
-                    打开失败：{error}
+                    {t('Could not open: {error}', { error })}
                   </div>
                 )}
               </li>

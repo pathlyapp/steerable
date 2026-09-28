@@ -8,6 +8,8 @@
  * result_count / status / bytes / truncated 这些小字段原样保留。
  */
 
+import { t } from '@/i18n';
+import { agentLabel } from '@/i18n/agent-label';
 import { findAgentForProfile } from './orchestration-children-model';
 
 interface WebToolResultData {
@@ -61,19 +63,21 @@ export function summarizeWebAction(
 
   if (tool === 'web_search') {
     const query = typeof obj.query === 'string' ? obj.query : '';
-    const head = `搜索“${query.length > 40 ? `${query.slice(0, 37)}…` : query}”`;
+    const head = t('Search "{query}"', {
+      query: query.length > 40 ? `${query.slice(0, 37)}…` : query,
+    });
     if (failed || !data) return head;
     const count = typeof data.result_count === 'number' ? data.result_count : null;
-    return count === null ? head : `${head} → ${count} 条结果`;
+    return count === null ? head : t('{head} → {count} results', { head, count });
   }
   if (tool === 'web_fetch') {
-    const head = `抓取 ${shortUrl(obj.url) ?? '未知地址'}`;
+    const head = t('Fetch {url}', { url: shortUrl(obj.url) ?? t('unknown address') });
     if (failed || !data) return head;
     const parts: string[] = [];
     if (typeof data.status === 'number') parts.push(String(data.status));
     const size = formatBytes(data.bytes);
     if (size) parts.push(size);
-    if (data.truncated === true) parts.push('已截断');
+    if (data.truncated === true) parts.push(t('truncated'));
     return parts.length > 0 ? `${head} → ${parts.join(' · ')}` : head;
   }
   return null;
@@ -99,7 +103,7 @@ export function summarizeRunCodeAction(
   const description =
     typeof obj.description === 'string' && obj.description.trim()
       ? obj.description.trim()
-      : '程序';
+      : t('Program');
   const head =
     description.length > 40 ? `${description.slice(0, 37)}…` : description;
   const data = resultData(result);
@@ -110,10 +114,10 @@ export function summarizeRunCodeAction(
     result &&
     typeof result === 'object' &&
     (result as { success?: unknown }).success === false;
-  if (failed) return `程序「${head}」失败`;
+  if (failed) return t('Program "{name}" failed', { name: head });
   return calls.length > 0
-    ? `程序「${head}」· ${calls.length} 个内层工具`
-    : `程序「${head}」`;
+    ? t('Program "{name}" · {count} inner tools', { name: head, count: calls.length })
+    : t('Program "{name}"', { name: head });
 }
 
 export interface ExecutedActionLike {
@@ -129,11 +133,16 @@ export interface DelegateSubagentView {
 }
 
 const BUILTIN_DELEGATE_LABELS: Record<string, string> = {
-  explore: '探索',
-  research: '调研',
-  coder: '编程',
-  'general-purpose': '通用',
+  explore: 'Explore',
+  research: 'Research',
+  coder: 'Coding',
+  'general-purpose': 'General',
 };
+
+function builtinDelegateLabel(profile: string): string {
+  const source = BUILTIN_DELEGATE_LABELS[profile];
+  return source ? t(source) : profile;
+}
 
 const BUILTIN_DELEGATE_COLORS: Record<string, string> = {
   explore: '#0ea5e9',
@@ -157,7 +166,7 @@ function participantFromProfile(
   const match = findAgentForProfile(profile, agents);
   return {
     key: match?.id ?? profile,
-    name: match?.name ?? BUILTIN_DELEGATE_LABELS[profile] ?? profile,
+    name: match ? agentLabel(match) : builtinDelegateLabel(profile),
     color: match?.color || BUILTIN_DELEGATE_COLORS[profile] || '#7c3aed',
   };
 }
@@ -187,7 +196,7 @@ export function collectTurnParticipants(
   const pushAgent = (agent: AgentRef) => {
     push({
       key: agent.id,
-      name: agent.name,
+      name: agentLabel(agent),
       color: agent.color || '#7c3aed',
     });
   };
@@ -196,7 +205,7 @@ export function collectTurnParticipants(
     if (parent && !mentioned.includes(parent.id)) {
       push({
         key: parent.id,
-        name: parent.name,
+        name: agentLabel(parent),
         color: parent.color || '#7c3aed',
       });
     }
@@ -209,7 +218,7 @@ export function collectTurnParticipants(
   if (parent) {
     push({
       key: parent.id,
-      name: parent.name,
+      name: agentLabel(parent),
       color: parent.color || '#7c3aed',
     });
   }
@@ -285,10 +294,10 @@ export function delegateSubagentDisplayName(
   profile: string | null,
   agents: ReadonlyArray<{ id: string; slug: string | null; name: string }>,
 ): string {
-  if (!profile) return '子代理';
+  if (!profile) return t('Subagent');
   const match = findAgentForProfile(profile, agents);
-  if (match) return match.name;
-  return BUILTIN_DELEGATE_LABELS[profile] ?? profile;
+  if (match) return agentLabel(match);
+  return builtinDelegateLabel(profile);
 }
 
 /** 任务正文作行摘要；没有任务时返回 null，调用方不再回落 JSON。 */
@@ -374,22 +383,25 @@ export function parseToolEnvelope(result: unknown): ToolEnvelope {
   };
 }
 
-const DELEGATE_STATUS_ZH: Record<string, string> = {
-  budget_exhausted: '额度耗尽',
-  failed: '失败',
-  cancelled: '已取消',
+const DELEGATE_STATUS_LABELS: Record<string, string> = {
+  budget_exhausted: 'budget exhausted',
+  failed: 'failure',
+  cancelled: 'cancellation',
 };
 
 /** 把 sidecar 的英文失败句收成行头/错误栏可读的中文。 */
 export function humanizeDelegateError(error: string | null): string | null {
   if (!error) return null;
-  if (error.includes('orchestration_budget_exceeded')) return '编排额度已用尽';
+  if (error.includes('orchestration_budget_exceeded')) return t('Orchestration budget used up');
   const ended = error.match(/sub-agent ended with status:\s*(\S+)/i);
   if (ended) {
     const status = ended[1].replace(/[.,;]+$/, '');
-    return `子代理因${DELEGATE_STATUS_ZH[status] ?? status}结束`;
+    const label = DELEGATE_STATUS_LABELS[status];
+    return t('Subagent ended due to {reason}', { reason: label ? t(label) : status });
   }
-  if (error.includes('budget_exhausted')) return '子代理因额度耗尽结束';
+  if (error.includes('budget_exhausted')) {
+    return t('Subagent ended due to {reason}', { reason: t('budget exhausted') });
+  }
   return error;
 }
 
@@ -475,7 +487,7 @@ export interface InspectTaskInput {
 }
 
 export function inspectTaskTitle(input: InspectTaskInput): string {
-  return input.title ?? input.task ?? '后台任务';
+  return input.title ?? input.task ?? t('Background task');
 }
 
 /** 工具行能打开右侧「后台推理」时抽出 taskId 和标题。 */
@@ -493,7 +505,7 @@ export function inspectableTaskFromAction(
     parseTaskRun(args).task
     ?? parsed.items[0]?.task
     ?? parsed.items[0]?.hint
-    ?? '后台任务';
+    ?? t('Background task');
   return { id, title };
 }
 
@@ -539,13 +551,13 @@ export function isTaskFamilyTool(tool: string): tool is TaskFamilyTool {
 export function taskToolLabel(tool: string, args: unknown): string | null {
   switch (tool) {
     case 'task_run':
-      return parseTaskRun(args).worktree ? '后台任务 · 隔离' : '后台任务';
+      return parseTaskRun(args).worktree ? t('Background task · Isolated') : t('Background task');
     case 'task_send':
-      return '转达任务';
+      return t('Relay to task');
     case 'task_status':
-      return '查询任务';
+      return t('Check tasks');
     case 'task_result':
-      return '收取结果';
+      return t('Collect result');
     default:
       return null;
   }
@@ -569,8 +581,8 @@ export function summarizeTaskAction(
     const parsed = parseTaskRun(args);
     if (!parsed.task) return null;
     const head = clip(parsed.task);
-    if (taskRunStatus(result) === 'blocked') return `${head} · 等待依赖`;
-    if (parsed.worktree) return `${head} · 隔离工作区`;
+    if (taskRunStatus(result) === 'blocked') return t('{head} · Waiting on dependencies', { head });
+    if (parsed.worktree) return t('{head} · Isolated workspace', { head });
     return head;
   }
   if (tool === 'task_send') {
@@ -581,7 +593,7 @@ export function summarizeTaskAction(
     const id = stringField(asObject(args), 'taskId');
     if (id) return shortTaskId(id);
     const total = asObject(result)?.total;
-    return typeof total === 'number' ? `${total} 个任务` : '本会话';
+    return typeof total === 'number' ? t('{count} tasks', { count: total }) : t('This chat');
   }
   if (tool === 'task_result') {
     const id = stringField(asObject(args), 'taskId');

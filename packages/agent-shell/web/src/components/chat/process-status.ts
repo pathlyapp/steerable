@@ -4,6 +4,7 @@
  * output stage (reasoning + reply), excluding tool-wait gaps.
  */
 
+import { t } from '@/i18n';
 import { formatElapsedCompact } from './elapsed';
 import {
   countProcessReasoning,
@@ -75,16 +76,16 @@ export function processStatusLabel(input: {
   elapsedMs?: number;
 }): string {
   const { process, isStreaming, elapsedMs } = input;
-  if (isStreaming) return '工作中';
+  if (isStreaming) return t('Working');
 
   const parts: string[] = [];
   const thinks = countProcessReasoning(process);
   const tools = countProcessTools(process);
   const elapsed = formatElapsedPart(false, elapsedMs);
-  if (elapsed) parts.push(`工作了 ${elapsed}`);
-  if (thinks > 0) parts.push(`思考 ${thinks} 次`);
-  if (tools > 0) parts.push(`工具调用 ${tools} 次`);
-  if (parts.length === 0) return '执行过程';
+  if (elapsed) parts.push(t('Worked {elapsed}', { elapsed }));
+  if (thinks > 0) parts.push(t('Thought {count} times', { count: thinks }));
+  if (tools > 0) parts.push(t('{count} tool calls', { count: tools }));
+  if (parts.length === 0) return t('Run process');
   return parts.join(' · ');
 }
 
@@ -96,9 +97,9 @@ export function thinkingFoldLabel(input: {
 }): string {
   const elapsed = formatElapsedPart(input.isLive, input.elapsedMs);
   if (input.isLive) {
-    return elapsed ? `思考中 · ${elapsed}` : '思考中';
+    return elapsed ? t('Thinking · {elapsed}', { elapsed }) : t('Thinking...');
   }
-  return elapsed ? `思考 · ${elapsed}` : '思考';
+  return elapsed ? t('Thought for {elapsed}', { elapsed }) : t('Thinking');
 }
 
 /** Reasoning + reply tokens for the message-footer tok/s. */

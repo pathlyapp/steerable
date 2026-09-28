@@ -3,6 +3,7 @@
  * 常用置顶、中文标签、以及 sidecar 未就绪时的本地回退。
  */
 
+import { t } from '@/i18n';
 import type {
   CatalogProviderDescriptor,
   GatewayModelEntry,
@@ -42,14 +43,14 @@ export const VENDOR_LABELS: Record<string, string> = {
   anthropic: 'Anthropic',
   google: 'Google Gemini',
   openrouter: 'OpenRouter',
-  'alibaba-cn': '阿里云百炼',
-  'moonshotai-cn': '月之暗面 Kimi',
-  zhipuai: '智谱 GLM',
+  'alibaba-cn': 'Alibaba Cloud Model Studio',
+  'moonshotai-cn': 'Moonshot AI Kimi',
+  zhipuai: 'Zhipu GLM',
   groq: 'Groq',
   xai: 'xAI',
   lmstudio: 'LM Studio',
-  ollama: 'Ollama (本地)',
-  custom: '自定义 OpenAI 兼容',
+  ollama: 'Ollama (local)',
+  custom: 'Custom OpenAI-compatible',
 };
 
 /** sidecar 未就绪时仍能选常用服务商。 */
@@ -155,7 +156,8 @@ const LOCAL_VENDORS: VendorOption[] = [
 ];
 
 export function vendorLabel(id: string): string {
-  return VENDOR_LABELS[id] ?? id;
+  const label = VENDOR_LABELS[id];
+  return label ? t(label) : id;
 }
 
 export function llmProviderFromWireKind(wireKind: string): LlmProvider {
@@ -190,7 +192,10 @@ export function mergeVendorOptions(catalog: CatalogProviderDescriptor[]): Vendor
     featured: featured.has(row.id),
   }));
   const seen = new Set(fromCatalog.map((v) => v.id));
-  const extras = LOCAL_VENDORS.filter((v) => !seen.has(v.id));
+  const extras = LOCAL_VENDORS.filter((v) => !seen.has(v.id)).map((v) => ({
+    ...v,
+    label: vendorLabel(v.id),
+  }));
   const featuredOrder = [...FEATURED_VENDOR_IDS, 'ollama', 'custom'];
   const rank = (id: string) => {
     const idx = featuredOrder.indexOf(id);

@@ -19,6 +19,7 @@ import {
   saveJsonFile,
 } from '@/lib/portable';
 import { hostToolChrome } from '@/lib/host-tools';
+import { t } from '@/i18n';
 
 interface ChatHeaderProps {
   chat: LocalChat | null;
@@ -147,8 +148,8 @@ export function ChatHeader({
   useEffect(() => {
     if (!branchMenuOpen) return;
     const onPointerDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (buttonRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      const target = e.target as Node;
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
       setBranchMenuOpen(false);
     };
     document.addEventListener('mousedown', onPointerDown);
@@ -166,7 +167,7 @@ export function ChatHeader({
           >
             {!branches || branchCount === 0 ? (
               <div className="px-2.5 py-1.5 text-xs text-agent-muted-foreground">
-                暂无分支 — 重新生成回复后，旧版本会保留在这里。
+                {t('No branches yet. After you regenerate a reply, the old version stays here.')}
               </div>
             ) : (
               <>
@@ -201,7 +202,7 @@ export function ChatHeader({
                     data-action="branch-tree"
                   >
                     <LuListTree className="h-3 w-3 shrink-0" />
-                    查看完整分支树
+                    {t('View full branch tree')}
                   </button>
                 </div>
               </>
@@ -218,7 +219,7 @@ export function ChatHeader({
           className="break-words text-xs font-medium text-agent-foreground"
           title={chat?.title}
         >
-          {chat?.title ?? '未选择对话'}
+          {chat?.title ?? t('No chat selected')}
         </span>
       </div>
       {chat && isPortableEnabled() && (
@@ -229,7 +230,7 @@ export function ChatHeader({
             setExporting(true);
             setExportError(null);
             void fetchChatDocument(chat.id)
-              .then((doc) => saveJsonFile(safeDownloadName(chat.title, '对话'), doc))
+              .then((doc) => saveJsonFile(safeDownloadName(chat.title, t('Chat')), doc))
               .then((saved) => {
                 if (!saved) return;
               })
@@ -237,12 +238,12 @@ export function ChatHeader({
               .finally(() => setExporting(false));
           }}
           className="flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground disabled:opacity-60"
-          title={exportError ?? '导出此对话'}
-          aria-label="导出此对话"
+          title={exportError ?? t('Export this chat')}
+          aria-label={t('Export this chat')}
           data-testid="header-export-chat"
         >
           <LuDownload className="h-3.5 w-3.5" />
-          {exportError ? '导出失败' : exporting ? '导出中' : '导出'}
+          {exportError ? t('Export failed') : exporting ? t('Exporting') : t('Export')}
         </button>
       )}
       {chat && onBranchSwitched && (
@@ -252,8 +253,8 @@ export function ChatHeader({
             type="button"
             onClick={() => void openBranchMenu()}
             className="flex h-7 items-center gap-1 rounded-full px-2 text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
-            title="会话分支（重新生成产生的分叉）"
-            aria-label="会话分支"
+            title={t('Chat branches (forks created by regenerating)')}
+            aria-label={t('Chat branches')}
             data-action="branches"
           >
             <LuGitBranch className="h-3.5 w-3.5" />
@@ -282,7 +283,11 @@ export function ChatHeader({
               : 'w-7 justify-center text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground'
           }`}
           title={taskButtonTitle(taskBadge, taskShortcut)}
-          aria-label={taskBadge ? `后台任务：${taskBadge.title}` : '后台任务'}
+          aria-label={
+            taskBadge
+              ? t('Background tasks: {title}', { title: taskBadge.title })
+              : t('Background tasks')
+          }
           data-action="tasks"
           data-task-state={taskBadge?.state}
           data-task-shortcut={taskShortcut?.kind}
@@ -308,7 +313,11 @@ export function ChatHeader({
                   ? 'bg-agent-foreground/10 text-agent-foreground'
                   : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground'
               }`}
-              title={`${open ? '关闭' : '打开'}${slot.title}`}
+              title={
+                open
+                  ? t('Close {name}', { name: slot.title })
+                  : t('Open {name}', { name: slot.title })
+              }
               aria-label={slot.title}
               aria-pressed={open}
               data-action={`chat-slot-${slot.slotId}`}
@@ -328,8 +337,12 @@ export function ChatHeader({
               ? 'bg-agent-foreground/10 text-agent-foreground'
               : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground'
           }`}
-          title={`${rightPanel === 'terminal' ? '关闭' : '打开'}终端面板 (${isMac ? '⌘T' : 'Ctrl+T'})`}
-          aria-label="终端"
+          title={
+            rightPanel === 'terminal'
+              ? t('Close terminal panel ({shortcut})', { shortcut: isMac ? '⌘T' : 'Ctrl+T' })
+              : t('Open terminal panel ({shortcut})', { shortcut: isMac ? '⌘T' : 'Ctrl+T' })
+          }
+          aria-label={t('Terminal')}
           aria-pressed={rightPanel === 'terminal'}
           data-action="terminal"
           data-testid="header-terminal"
@@ -386,14 +399,16 @@ function describeTaskBadge(summary: ChatTaskSummary): TaskBadge | null {
   if (summary.total === 0) return null;
 
   const detail = [
-    summary.running > 0 ? `${summary.running} 个运行中` : null,
-    summary.blocked > 0 ? `${summary.blocked} 个等依赖` : null,
-    summary.needsReview > 0 ? `${summary.needsReview} 个待合并` : null,
-    summary.failed > 0 ? `${summary.failed} 个失败` : null,
+    summary.running > 0 ? t('{count} in progress', { count: summary.running }) : null,
+    summary.blocked > 0 ? t('{count} waiting on dependencies', { count: summary.blocked }) : null,
+    summary.needsReview > 0 ? t('{count} awaiting merge', { count: summary.needsReview }) : null,
+    summary.failed > 0 ? t('{count} failed', { count: summary.failed }) : null,
   ]
     .filter((part) => part !== null)
-    .join('，');
-  const title = `共 ${summary.total} 个后台任务${detail ? `（${detail}）` : ''}`;
+    .join(t(', '));
+  const title = detail
+    ? t('Background tasks: {total} ({detail})', { total: summary.total, detail })
+    : t('Background tasks: {total}', { total: summary.total });
 
   // 等依赖的任务也算在推进中：依赖跑完它会自动点火，用户不用做任何事。
   const active = summary.running + summary.blocked;
@@ -459,11 +474,12 @@ function taskButtonTitle(
   badge: TaskBadge | null,
   shortcut: TaskShortcut | null,
 ): string {
-  const base = badge?.title ?? '后台任务（跨轮运行，可查看结果与合并 worktree）';
+  const base =
+    badge?.title ?? t('Background tasks (run across turns; view results and merge worktrees)');
   if (!shortcut) return base;
   return shortcut.kind === 'process'
-    ? `${base} · 点击查看推理过程`
-    : `${base} · 点击处理 worktree`;
+    ? t('{base} · Click to view the reasoning', { base })
+    : t('{base} · Click to handle the worktree', { base });
 }
 
 /** Pin the branch menu to the trigger, clamped inside the chat panel so
@@ -505,7 +521,7 @@ function BranchRow({
       data-branch-row
       data-active={active || undefined}
     >
-      <span className="min-w-0 flex-1 truncate">{label || '(空分支)'}</span>
+      <span className="min-w-0 flex-1 truncate">{label || t('(empty branch)')}</span>
       {active && (
         <LuCheck className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
       )}

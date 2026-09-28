@@ -92,7 +92,9 @@ describe('ChatInput streaming 期排队与插队（W6-2）', () => {
     await act(async () => {});
     expect(onChange).toHaveBeenCalledWith('');
     const notice = screen.getByRole('status');
-    expect(notice.textContent).toBe('当前回合无法插队，已改为排队，本轮结束后自动发出');
+    expect(notice.textContent).toBe(
+      'This turn cannot take an interjection. The message was queued and will be sent when this turn ends.',
+    );
   });
 
   it('⌘/Ctrl+Enter 插队被接受（steered）：清空草稿且不显示排队提示', async () => {
@@ -130,20 +132,22 @@ describe('ChatInput 待发队列可见性（W6-2）', () => {
     });
 
     expect(
-      screen.getByText('排队中（2）· 本轮结束后自动发出 · 停止后恢复到输入框'),
+      screen.getByText(
+        'Queued (2) · Sent when this turn ends · Restored to the input box if stopped',
+      ),
     ).toBeTruthy();
     expect(screen.getByText('第一条')).toBeTruthy();
     expect(screen.getByText('第二条')).toBeTruthy();
     // 发现性：streaming 期间快捷键区展示 Enter 排队。
-    expect(screen.getByText('排队')).toBeTruthy();
+    expect(screen.getByText('Queue')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: '撤回排队消息 2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Withdraw queued message 2' }));
     expect(onRemoveFollowUp).toHaveBeenCalledWith(1);
   });
 
   it('无排队消息时不渲染横幅', () => {
     renderInput({ isStreaming: true, pendingFollowUps: [] });
-    expect(screen.queryByText(/排队中/)).toBeNull();
+    expect(screen.queryByText(/Queued \(/)).toBeNull();
   });
 });
 
@@ -160,8 +164,8 @@ describe('ChatInput 停止交互（W6-2）', () => {
       />,
     );
     expect(
-      screen.getByRole('button', { name: '停止生成' }).getAttribute('title'),
-    ).toContain('2 条排队消息将恢复到输入框');
+      screen.getByRole('button', { name: 'Stop generating' }).getAttribute('title'),
+    ).toContain('2 queued messages will be restored to the input box');
 
     rerender(
       <ChatInput
@@ -172,9 +176,9 @@ describe('ChatInput 停止交互（W6-2）', () => {
         pendingFollowUps={[]}
       />,
     );
-    const title = screen.getByRole('button', { name: '停止生成' }).getAttribute('title');
-    expect(title).toContain('停止生成');
-    expect(title).not.toContain('恢复');
+    const title = screen.getByRole('button', { name: 'Stop generating' }).getAttribute('title');
+    expect(title).toContain('Stop generating');
+    expect(title).not.toContain('restored');
   });
 
   it('Escape 停止生成，⌘/Ctrl+. 仍作为兼容快捷键', () => {
@@ -469,9 +473,9 @@ describe('ChatInput composer meta row', () => {
       />,
     );
 
-    expect(screen.getByTestId('agent-select').textContent).toContain('智能助手');
+    expect(screen.getByTestId('agent-select').textContent).toContain('Assistant');
     fireEvent.click(screen.getByTestId('agent-select'));
-    expect(screen.getByTestId('agent-option-all-round-assistant').textContent).toContain('当前');
+    expect(screen.getByTestId('agent-option-all-round-assistant').textContent).toContain('Current');
   });
 
   it('opens 智能体管理 from the picker footer', () => {
@@ -522,7 +526,7 @@ describe('ChatInput composer meta row', () => {
     }
     renderComposer(<Harness />);
 
-    const chip = screen.getByRole('button', { name: '移除 @电脑操作员' });
+    const chip = screen.getByRole('button', { name: 'Remove @电脑操作员' });
     expect(chip.className).toContain('px-1.5');
     expect(chip.className).toContain('py-0.5');
     const remove = chip.querySelector('[data-mention-remove]');
@@ -543,7 +547,7 @@ describe('ChatInput composer meta row', () => {
     );
 
     const editor = screen.getByRole('textbox');
-    const chip = screen.getByRole('button', { name: '移除 @电脑操作员' });
+    const chip = screen.getByRole('button', { name: 'Remove @电脑操作员' });
     expect(editor.contains(chip)).toBe(true);
     // Trailing text ' 111' is a sibling node after chip in the editor layout flow
     expect(editor.textContent).toBe('@电脑操作员 111');
@@ -567,7 +571,7 @@ describe('ChatInput composer meta row', () => {
     }
     render(<Harness />);
 
-    const chip = screen.getByRole('button', { name: '移除 /mcp__sqlite__query' });
+    const chip = screen.getByRole('button', { name: 'Remove /mcp__sqlite__query' });
     expect(chip.className).toContain('px-1.5');
     expect(chip.className).toContain('py-0.5');
     expect(chip.getAttribute('data-mention-type')).toBe('mcp');
@@ -597,7 +601,7 @@ describe('ChatInput composer meta row', () => {
     }
     render(<Harness />);
 
-    const chip = screen.getByRole('button', { name: '移除 /read-workspace' });
+    const chip = screen.getByRole('button', { name: 'Remove /read-workspace' });
     expect(chip.className).toContain('px-1.5');
     expect(chip.className).toContain('py-0.5');
     expect(chip.getAttribute('data-mention-type')).toBe('skill');
@@ -636,7 +640,7 @@ describe('ChatInput composer meta row', () => {
     fireEvent.click(slashOption);
     await flushComposerSync();
 
-    const chip = screen.getByRole('button', { name: '移除 /web-search' });
+    const chip = screen.getByRole('button', { name: 'Remove /web-search' });
     expect(chip.className).toContain('px-1.5');
     expect(chip.className).toContain('py-0.5');
     expect(chip.getAttribute('data-mention-type')).toBe('skill');

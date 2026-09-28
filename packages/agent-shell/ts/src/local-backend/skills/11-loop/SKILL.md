@@ -1,6 +1,6 @@
 ---
 name: loop
-displayName: 循环执行
+displayName: Repeat on a schedule
 description: 按固定间隔或自选节奏重复执行同一件事（如「每 5 分钟查一次构建状态」）。支持本轮内有限次循环和 task_run 后台长循环，必须先定好间隔、终止条件与最大次数。
 priority: 500
 tags: [workflow, automation, loop]

@@ -23,6 +23,7 @@ import type {
   TerminalSession,
   TerminalSpawnOptions,
 } from './electron-bridge';
+import { t } from '@/i18n';
 
 interface BsBootstrap {
   platform: NodeJS.Platform;
@@ -225,7 +226,9 @@ export function createHttpBridge(): ElectronBridge {
       },
       captureScreenshot: async () => ({
         success: false as const,
-        error: '浏览器模式不支持窗口截图，请用系统截图工具。',
+        error: t(
+          'Browser mode cannot capture window screenshots. Use your system screenshot tool.',
+        ),
       }),
     },
 

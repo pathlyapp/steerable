@@ -70,14 +70,14 @@ describe('extractTodosFromAction', () => {
 describe('summarizeTodoWriteAction', () => {
   it('names the in-progress item', () => {
     expect(summarizeTodoWriteAction('todo_write', { todos: TODOS }, undefined)).toBe(
-      '任务清单 1/3 · 写补丁',
+      'Task list 1/3 · 写补丁',
     );
   });
 
   it('marks an all-completed list', () => {
     const done = TODOS.map((t) => ({ ...t, status: 'completed' as const }));
     expect(summarizeTodoWriteAction('todo_write', { todos: done }, undefined)).toBe(
-      '任务清单 3/3 已完成',
+      'Task list 3/3 done',
     );
   });
 });

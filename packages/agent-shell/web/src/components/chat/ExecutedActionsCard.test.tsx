@@ -84,7 +84,7 @@ describe('ToolsFlow / delegate_subagent', () => {
       />,
     );
 
-    expect(screen.getByText('委派 · 调研员')).toBeTruthy();
+    expect(screen.getByText('Delegate · 调研员')).toBeTruthy();
     expect(screen.getByText('调研 PDF 方案并给出带 URL 的结论')).toBeTruthy();
     expect(screen.getByText('执行中')).toBeTruthy();
     expect(screen.queryByText('delegate_subagent')).toBeNull();
@@ -104,7 +104,7 @@ describe('ToolsFlow / delegate_subagent', () => {
         ]}
       />,
     );
-    expect(screen.getByText('委派 · 探索')).toBeTruthy();
+    expect(screen.getByText('Delegate · Explore')).toBeTruthy();
     expect(screen.getByText('已完成')).toBeTruthy();
   });
 });
@@ -122,7 +122,7 @@ describe('ToolsFlow / task_run', () => {
         ]}
       />,
     );
-    expect(screen.getByText('后台任务')).toBeTruthy();
+    expect(screen.getByText('Background task')).toBeTruthy();
     expect(screen.getByText('写一份今晚的时间块安排，落成文件')).toBeTruthy();
     expect(screen.getByText('已完成')).toBeTruthy();
     expect(screen.queryByText('task_run')).toBeNull();
@@ -139,8 +139,8 @@ describe('ToolsFlow / task_run', () => {
         ]}
       />,
     );
-    expect(screen.getByText('后台任务 · 隔离')).toBeTruthy();
-    expect(screen.getByText('改代码 · 隔离工作区')).toBeTruthy();
+    expect(screen.getByText('Background task · Isolated')).toBeTruthy();
+    expect(screen.getByText('改代码 · Isolated workspace')).toBeTruthy();
   });
 });
 
@@ -159,7 +159,7 @@ describe('ToolsFlow / 展开输出', () => {
         ]}
       />,
     );
-    expect(screen.getByText('子代理因额度耗尽结束')).toBeTruthy();
+    expect(screen.getByText('Subagent ended due to budget exhausted')).toBeTruthy();
     expect(screen.getByText(/I'll start by exploring the target directory structure/)).toBeTruthy();
     expect(screen.queryByText(/"success": false/)).toBeNull();
   });
@@ -186,9 +186,9 @@ describe('ToolsFlow / 展开输出', () => {
         ]}
       />,
     );
-    expect(screen.getByText('查询任务')).toBeTruthy();
+    expect(screen.getByText('Check tasks')).toBeTruthy();
     expect(screen.getAllByText('3bcae2a7').length).toBeGreaterThan(0);
-    expect(screen.getByText('已启动')).toBeTruthy();
+    expect(screen.getByText('Started')).toBeTruthy();
     expect(screen.getByText(/你是"日程规划"角色/)).toBeTruthy();
     expect(screen.queryByText(/"success": true/)).toBeNull();
   });
@@ -216,7 +216,7 @@ describe('ToolsFlow / 委派展开', () => {
         ]}
       />,
     );
-    expect(screen.getByText('子代理')).toBeTruthy();
+    expect(screen.getByText('Subagent')).toBeTruthy();
     expect(screen.getAllByText('日程规划').length).toBeGreaterThan(0);
     expect(screen.queryByText('agent-85dd21394cbe4997')).toBeNull();
   });
@@ -374,7 +374,7 @@ describe('ToolsFlow / 后台任务跳转', () => {
       />,
     );
     expect(screen.queryByTestId('tool-activate')).toBeNull();
-    fireEvent.click(screen.getByText('后台任务'));
+    fireEvent.click(screen.getByText('Background task'));
     expect(onInspectTask).not.toHaveBeenCalled();
   });
 });

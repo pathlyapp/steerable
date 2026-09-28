@@ -50,7 +50,7 @@ describe('FilePathCode', () => {
 
     const button = await screen.findByRole('button');
     expect(button.textContent).toBe('自我介绍.pptx');
-    expect(button.getAttribute('title')).toBe('点击打开 /proj/自我介绍.pptx');
+    expect(button.getAttribute('title')).toBe('Click to open /proj/自我介绍.pptx');
     fireEvent.click(button);
     await waitFor(() => expect(openLocalPath).toHaveBeenCalledWith('/proj/自我介绍.pptx'));
   });
@@ -69,7 +69,7 @@ describe('FilePathCode', () => {
     const button = await screen.findByRole('button');
     fireEvent.click(button);
     await waitFor(() =>
-      expect(button.getAttribute('title')).toBe('/proj/a.pptx（ENOENT）'),
+      expect(button.getAttribute('title')).toBe('/proj/a.pptx (ENOENT)'),
     );
     expect(button.className).toContain('text-red-600');
   });
@@ -89,6 +89,6 @@ describe('FilePathCode', () => {
     const button = await screen.findByRole('button');
     expect(button.textContent).toBe('自我介绍_简约商务.pptx');
     expect(button.textContent).not.toContain('C:\\Users');
-    expect(button.getAttribute('title')).toBe(`点击打开 ${full}`);
+    expect(button.getAttribute('title')).toBe(`Click to open ${full}`);
   });
 });

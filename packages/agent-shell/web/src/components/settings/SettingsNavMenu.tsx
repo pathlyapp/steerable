@@ -1,4 +1,5 @@
 import React from 'react';
+import { t } from '@/i18n';
 
 export interface SettingsNavItem {
   id: string;
@@ -21,10 +22,10 @@ export function SettingsNavMenu({
     <aside
       className="sticky top-0 h-fit w-44 shrink-0 py-1 select-none"
       data-testid="settings-side-nav"
-      aria-label="设置目录导航"
+      aria-label={t('Settings section navigation')}
     >
       <div className="mb-2 px-2.5 text-[11px] font-semibold tracking-wider text-agent-muted-foreground uppercase">
-        设置导航
+        {t('Settings navigation')}
       </div>
       <nav className="space-y-0.5">
         {items.map((item) => {

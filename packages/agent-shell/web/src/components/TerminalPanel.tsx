@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { t } from '@/i18n';
 
 // 把 xterm 那一坨 (~300KB) 拆到独立 chunk —— 用户没打开终端就不下载。
 // 跟原 Next.js 版本里 `dynamic(() => import('./TerminalView'), {ssr:false})`
@@ -42,9 +43,9 @@ export function TerminalPanel({
     return (
       <div className="flex h-full w-full items-center justify-center bg-black p-4 text-center font-mono text-xs text-white">
         <div>
-          <p className="mb-2">⚠️ 此面板需要桌面客户端或 BS server 连接。</p>
+          <p className="mb-2">⚠️ {t('This panel needs the desktop client or a BS server connection.')}</p>
           <p className="text-white/60">
-            当前页面没有可用的宿主 bridge，无法连接到本地 PTY。
+            {t('This page has no host bridge, so it cannot connect to a local PTY.')}
           </p>
         </div>
       </div>

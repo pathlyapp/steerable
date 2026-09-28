@@ -13,7 +13,7 @@ const ITEMS: SettingsNavItem[] = [
 describe('SettingsNavMenu', () => {
   it('renders all navigation items', () => {
     render(<SettingsNavMenu items={ITEMS} activeId="appearance" onSelect={() => {}} />);
-    expect(screen.getByText('设置导航')).toBeTruthy();
+    expect(screen.getByText('Settings navigation')).toBeTruthy();
     expect(screen.getByText('界面')).toBeTruthy();
     expect(screen.getByText('模型设置')).toBeTruthy();
   });

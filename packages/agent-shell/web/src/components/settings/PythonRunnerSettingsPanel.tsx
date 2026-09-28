@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { LuCodeXml } from 'react-icons/lu';
+import { t } from '@/i18n';
 import {
   getElectronBridge,
   type PythonRunnerSnapshot,
@@ -72,33 +73,35 @@ export function PythonRunnerSettingsPanel() {
 
   const actionLabel =
     source === 'local'
-      ? '使用此 Python'
+      ? t('Use this Python')
       : source === 'url'
-        ? '从此地址下载'
-        : '下载默认运行器';
+        ? t('Download from this URL')
+        : t('Download default runner');
   const phaseLabel =
     snapshot.phase === 'verifying'
-      ? '正在校验'
+      ? t('Verifying')
       : snapshot.phase === 'extracting'
-        ? '正在解压'
-        : '正在下载';
+        ? t('Extracting')
+        : t('Downloading');
 
   return (
     <section className="space-y-2" data-testid="settings-section-python-runner">
       <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
         <LuCodeXml className="h-3.5 w-3.5 text-agent-muted-foreground" />
-        Python 代码运行器
+        {t('Python code runner')}
       </h2>
       <div className="space-y-3 rounded-agent-md border border-agent-border bg-agent-card p-3 text-xs">
         <p className="leading-relaxed text-agent-muted-foreground">
-          run_code 使用独立的 Python 解释器。下载和配置不会阻塞聊天，变更在重启应用后生效。
+          {t(
+            'run_code uses a separate Python interpreter. Downloading and configuring it does not block chat. Changes take effect after you restart the app.',
+          )}
         </p>
 
         <div className="flex flex-wrap gap-3">
           {([
-            ['default', '默认地址'],
-            ['url', '自定义地址'],
-            ['local', '本地 Python'],
+            ['default', 'Default URL'],
+            ['url', 'Custom URL'],
+            ['local', 'Local Python'],
           ] as const).map(([value, label]) => (
             <label key={value} className="flex items-center gap-1.5 text-agent-foreground">
               <input
@@ -109,7 +112,7 @@ export function PythonRunnerSettingsPanel() {
                 disabled={busy}
                 onChange={() => setSource(value)}
               />
-              {label}
+              {t(label)}
             </label>
           ))}
         </div>
@@ -131,7 +134,7 @@ export function PythonRunnerSettingsPanel() {
               onChange={(event) => setUrl(event.target.value)}
             />
             <p className="text-agent-destructive">
-              自定义地址不会校验文件完整性，请仅使用可信来源。
+              {t('Custom URLs are not checked for file integrity. Use only trusted sources.')}
             </p>
           </div>
         ) : null}
@@ -142,7 +145,7 @@ export function PythonRunnerSettingsPanel() {
               type="text"
               value={localPath}
               disabled={busy}
-              placeholder="Python 可执行文件的绝对路径"
+              placeholder={t('Absolute path to the Python executable')}
               className="h-8 min-w-0 flex-1 rounded-agent-sm border border-agent-border bg-agent-canvas px-2 text-agent-foreground outline-none focus:border-agent-foreground/40"
               onChange={(event) => setLocalPath(event.target.value)}
             />
@@ -152,7 +155,7 @@ export function PythonRunnerSettingsPanel() {
               className="h-8 shrink-0 rounded-agent-sm border border-agent-border px-3 text-agent-foreground hover:bg-agent-foreground/5 disabled:opacity-50"
               onClick={chooseLocal}
             >
-              选择…
+              {t('Choose…')}
             </button>
           </div>
         ) : null}
@@ -178,7 +181,7 @@ export function PythonRunnerSettingsPanel() {
                 className="text-agent-foreground hover:underline"
                 onClick={() => runner && update(runner.cancel())}
               >
-                取消
+                {t('Cancel')}
               </button>
             </div>
           </div>
@@ -203,7 +206,7 @@ export function PythonRunnerSettingsPanel() {
                 className="h-8 rounded-agent-sm bg-agent-foreground px-3 font-medium text-agent-canvas hover:opacity-90"
                 onClick={() => void runner?.restart()}
               >
-                重启应用
+                {t('Restart app')}
               </button>
             ) : null}
           </div>
@@ -218,11 +221,11 @@ export function PythonRunnerSettingsPanel() {
           </p>
         ) : null}
         {snapshot.restartRequired ? (
-          <p className="font-medium text-agent-foreground">已保存，重启应用后生效。</p>
+          <p className="font-medium text-agent-foreground">{t('Saved. Takes effect after you restart the app.')}</p>
         ) : null}
         {snapshot.activeRunner ? (
           <p className="break-all text-agent-muted-foreground">
-            当前会话：{snapshot.activeRunner}
+            {t('Current session: {runner}', { runner: snapshot.activeRunner })}
           </p>
         ) : null}
       </div>

@@ -57,8 +57,8 @@ describe('summarizePreset', () => {
   });
 
   it('describes the empty preset honestly (Moonshot case)', () => {
-    expect(summarizePreset(null)).toBe('不下发额外采样参数');
-    expect(summarizePreset({})).toContain('不带采样字段');
+    expect(summarizePreset(null)).toBe('No extra sampling parameters are sent');
+    expect(summarizePreset({})).toContain('omits sampling fields');
   });
 });
 

@@ -1,6 +1,6 @@
 ---
 name: create-skill
-displayName: 创建技能
+displayName: Create a skill
 description: 按本产品的 SKILL.md 规范创建一个新的本地技能，含目录结构、frontmatter 字段、写作要求。写到项目 skills/ 目录后自动出现在 Skill 设置与 / 菜单。用户说「做个技能 / 写个 skill / 把这套流程固化下来」时使用。
 priority: 500
 tags: [skill, authoring, meta]
@@ -40,7 +40,7 @@ disable-model-invocation: true
 ```markdown
 ---
 name: my-skill
-displayName: 我的技能
+displayName: My skill
 description: 做什么 + 什么时候用，一句话说清。
 priority: 500
 tags: [workflow]

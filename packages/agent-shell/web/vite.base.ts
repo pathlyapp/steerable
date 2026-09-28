@@ -62,9 +62,9 @@ export function createProductViteConfig(options: ProductViteConfigOptions) {
       // 在注册时经 setBrandLogoUrl 注入（本包 src/brand.ts）。
       'import.meta.env.VITE_BRAND_NAME': JSON.stringify(brand?.displayName ?? 'Steerable Shell'),
       'import.meta.env.VITE_BRAND_TITLE': JSON.stringify(brand?.title ?? ''),
-      'import.meta.env.VITE_BRAND_TAGLINE': JSON.stringify(brand?.tagline ?? '一款本地桌面 AI 伙伴'),
+      'import.meta.env.VITE_BRAND_TAGLINE': JSON.stringify(brand?.tagline ?? 'A local desktop AI partner'),
       'import.meta.env.VITE_BRAND_HOME_HINT': JSON.stringify(
-        brand?.homeHint ?? '输入消息，直接开始一段新对话。',
+        brand?.homeHint ?? 'Type a message to start a new chat.',
       ),
       'import.meta.env.VITE_DEFAULT_AGENT_ID': JSON.stringify(brand?.defaultAgentId ?? 'local-assistant'),
       // 宿主工具族 / 安全询问：与 node 侧 setProductConfig 读同一份 product.json。
@@ -75,6 +75,14 @@ export function createProductViteConfig(options: ProductViteConfigOptions) {
       ),
       'import.meta.env.VITE_SETTINGS': JSON.stringify(JSON.stringify(product.settings ?? {})),
       'import.meta.env.VITE_PORTABLE': JSON.stringify(product.portable === true ? 'true' : 'false'),
+      'import.meta.env.VITE_LOCALES': JSON.stringify(
+        JSON.stringify(
+          Array.isArray(product.i18n?.locales) && product.i18n.locales.length > 0
+            ? product.i18n.locales
+            : ['en'],
+        ),
+      ),
+      'import.meta.env.VITE_DEFAULT_LOCALE': JSON.stringify(product.i18n?.defaultLocale ?? 'en'),
     },
     resolve: {
       alias: {

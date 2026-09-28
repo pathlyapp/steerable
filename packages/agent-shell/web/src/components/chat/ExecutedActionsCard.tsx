@@ -3,6 +3,7 @@ import { LuCircleCheck, LuCircleX, LuListTodo } from 'react-icons/lu';
 import { ToolExecutionCard } from '@steerable/agent-ui/cards';
 import type { ToolExecutionPayload } from '@steerable/agent-protocol';
 import type { LocalChatAgent } from '@/lib/local-api';
+import { t } from '@/i18n';
 import { UnifiedDiff } from './UnifiedDiff';
 import {
   summarizeRunCodeAction,
@@ -117,11 +118,11 @@ function sandboxBadge(sandbox: ExecutedAction['sandbox']): string | null {
   if (!sandbox) return null;
   switch (sandbox.enforcement) {
     case 'full':
-      return '[沙箱]';
+      return t('[Sandboxed]');
     case 'partial':
-      return '[沙箱·部分]';
+      return t('[Sandboxed · partial]');
     default:
-      return '[未沙箱]';
+      return t('[Not sandboxed]');
   }
 }
 
@@ -252,7 +253,7 @@ function renderDelegateArgs(
       {profile ? (
         <section>
           <div className="mb-0.5 text-[10px] uppercase tracking-wider text-agent-muted-foreground">
-            子代理
+            {t('Subagent')}
           </div>
           <div className="text-[11px]">{displayName}</div>
         </section>
@@ -260,7 +261,7 @@ function renderDelegateArgs(
       {task ? (
         <section>
           <div className="mb-0.5 text-[10px] uppercase tracking-wider text-agent-muted-foreground">
-            任务
+            {t('Task')}
           </div>
           <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
             {task}
@@ -277,7 +278,7 @@ function renderDelegateOutput(output: unknown): ReactNode {
     return (
       <div className="space-y-1.5">
         {kvBlock(
-          '回报',
+          t('Report'),
           <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
             {env.message}
           </pre>,
@@ -286,7 +287,7 @@ function renderDelegateOutput(output: unknown): ReactNode {
     );
   }
   if (env.error || env.success === false) {
-    return <div className="text-[11px] text-agent-muted-foreground">没有文字回报</div>;
+    return <div className="text-[11px] text-agent-muted-foreground">{t('No text report')}</div>;
   }
   return renderActionOutput(output);
 }
@@ -303,11 +304,11 @@ function TaskLead() {
   );
 }
 
-const TASK_STATUS_ZH: Record<string, string> = {
-  running: '已启动',
-  blocked: '等待依赖',
-  completed: '已完成',
-  failed: '失败',
+const TASK_STATUS_LABELS: Record<string, string> = {
+  running: 'Started',
+  blocked: 'Waiting on dependencies',
+  completed: 'Completed',
+  failed: 'Failed',
 };
 
 function kvBlock(label: string, value: ReactNode): ReactNode {
@@ -331,17 +332,22 @@ function renderTaskArgs(tool: string, args: unknown): ReactNode {
       <div className="space-y-1.5">
         {parsed.task
           ? kvBlock(
-              '任务',
+              t('Task'),
               <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
                 {parsed.task}
               </pre>,
             )
           : null}
         {parsed.dependsOn.length > 0
-          ? kvBlock('依赖', parsed.dependsOn.map(shortTaskId).join('、'))
+          ? kvBlock(t('Dependencies'), parsed.dependsOn.map(shortTaskId).join(t(', ')))
           : null}
         {parsed.worktree
-          ? kvBlock('工作区', parsed.worktreeName ? `隔离 · ${parsed.worktreeName}` : '隔离')
+          ? kvBlock(
+              t('Workspace'),
+              parsed.worktreeName
+                ? t('Isolated · {name}', { name: parsed.worktreeName })
+                : t('Isolated'),
+            )
           : null}
       </div>
     );
@@ -352,10 +358,10 @@ function renderTaskArgs(tool: string, args: unknown): ReactNode {
   if (!taskId && !message) return renderActionOutput(args);
   return (
     <div className="space-y-1.5">
-      {taskId ? kvBlock('编号', <span className="font-mono">{shortTaskId(taskId)}</span>) : null}
+      {taskId ? kvBlock(t('ID'), <span className="font-mono">{shortTaskId(taskId)}</span>) : null}
       {message
         ? kvBlock(
-            '消息',
+            t('Message'),
             <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
               {message}
             </pre>,
@@ -375,32 +381,35 @@ function renderTaskOutput(output: unknown): ReactNode {
       {parsed.items.map((item, index) => (
         <div key={item.taskId ?? `task-${index}`} className="space-y-1.5">
           {item.taskId
-            ? kvBlock('编号', <span className="font-mono">{shortTaskId(item.taskId)}</span>)
+            ? kvBlock(t('ID'), <span className="font-mono">{shortTaskId(item.taskId)}</span>)
             : null}
-          {item.status ? kvBlock('状态', TASK_STATUS_ZH[item.status] ?? item.status) : null}
+          {item.status ? kvBlock(
+                t('Status'),
+                TASK_STATUS_LABELS[item.status] ? t(TASK_STATUS_LABELS[item.status]) : item.status,
+              ) : null}
           {item.task
             ? kvBlock(
-                '任务',
+                t('Task'),
                 <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
                   {item.task}
                 </pre>,
               )
             : null}
-          {item.worktreeLabel ? kvBlock('工作区', item.worktreeLabel) : null}
-          {item.hint ? kvBlock('说明', item.hint) : null}
+          {item.worktreeLabel ? kvBlock(t('Workspace'), item.worktreeLabel) : null}
+          {item.hint ? kvBlock(t('Note'), item.hint) : null}
           {item.answer
             ? kvBlock(
-                '结果',
+                t('Result'),
                 <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
                   {item.answer}
                 </pre>,
               )
             : null}
-          {item.error ? kvBlock('原因', item.error) : null}
+          {item.error ? kvBlock(t('Reason'), item.error) : null}
         </div>
       ))}
       {parsed.hint && parsed.items.every((item) => item.hint !== parsed.hint)
-        ? kvBlock('说明', parsed.hint)
+        ? kvBlock(t('Note'), parsed.hint)
         : null}
     </div>
   );
@@ -419,7 +428,7 @@ function toolCardExtras(
     const { profile } = parseDelegateSubagent(action.arguments);
     const displayName = delegateSubagentDisplayName(profile, agents);
     return {
-      label: `委派 · ${displayName}`,
+      label: t('Delegate · {name}', { name: displayName }),
       lead: <DelegateLead name={displayName} color={delegateColor(profile, agents)} />,
       renderArgs: (args) => renderDelegateArgs(args, agents),
       renderOutput: renderDelegateOutput,
@@ -453,16 +462,16 @@ function inspectActivate(
           chatId,
           recordId: child.recordId,
           live: child.status === 'running',
-          title: task ?? '子代理任务',
+          title: task ?? t('Subagent task'),
         }),
-      activateTitle: '查看子代理执行过程',
+      activateTitle: t('View subagent run'),
     };
   }
   const target = inspectableTaskFromAction(action.tool, action.arguments, action.result);
   if (!target) return {};
   return {
     onActivate: () => onInspectTask({ id: target.id, chatId, title: target.title }),
-    activateTitle: '查看后台执行过程',
+    activateTitle: t('View background run'),
   };
 }
 
@@ -558,15 +567,18 @@ export function ExecutedActionsCard({
             <LuCircleX className="h-3.5 w-3.5 text-agent-destructive" />
           )}
           <span className="font-medium text-agent-foreground">
-            已自动执行 {expanded.length} 个操作
+            {t('Ran {count} actions automatically', { count: expanded.length })}
           </span>
         </div>
         <span className="text-[11px] text-agent-muted-foreground">
           {runningCount > 0
-            ? `${runningCount} 执行中`
+            ? t('{count} running', { count: runningCount })
             : failureCount > 0
-              ? `${successCount} 成功 · ${failureCount} 失败`
-              : `全部成功`}
+              ? t('{success} succeeded · {failed} failed', {
+                  success: successCount,
+                  failed: failureCount,
+                })
+              : t('All succeeded')}
         </span>
       </div>
       <div className="space-y-px">

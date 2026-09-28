@@ -20,6 +20,7 @@ import type { TurnBlock } from './turn-timeline';
 import type { TurnFile } from './turn-files';
 import type { LlmSpeedSnapshot } from './process-status';
 import { ComposerStatusStack } from './composer-status-stack';
+import { t } from '@/i18n';
 import { SessionTodoList } from './SessionTodoList';
 import { resolveLatestSessionTodos } from './todo-list-model';
 import { SessionOrchestrationFlow } from './SessionOrchestrationFlow';
@@ -418,7 +419,7 @@ export function LocalChatPanel({
         disabled={disabled}
         placeholder={
           mode === 'plan'
-            ? '描述你的目标，Agent 将先制定计划…'
+            ? t('Describe your goal. The Agent will make a plan first...')
             : inputPlaceholder
         }
         currentAgent={currentAgent}

@@ -3,6 +3,7 @@
  */
 import { useEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
+import { t } from '@/i18n';
 
 export interface ConfirmDialogProps {
   open: boolean;
@@ -19,7 +20,7 @@ export function ConfirmDialog({
   open,
   title,
   description,
-  confirmLabel = '删除',
+  confirmLabel = t('Delete'),
   pending = false,
   onCancel,
   onConfirm,
@@ -71,7 +72,7 @@ export function ConfirmDialog({
             className="h-9 rounded-full px-4 text-sm text-agent-muted-foreground transition-colors hover:bg-agent-muted hover:text-agent-foreground disabled:opacity-40"
             data-testid={`${testId}-cancel`}
           >
-            取消
+            {t('Cancel')}
           </button>
           <button
             type="button"
@@ -80,7 +81,7 @@ export function ConfirmDialog({
             className="h-9 rounded-full bg-agent-destructive px-4 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
             data-testid={`${testId}-confirm`}
           >
-            {pending ? '删除中…' : confirmLabel}
+            {pending ? t('Deleting…') : confirmLabel}
           </button>
         </div>
       </div>
