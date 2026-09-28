@@ -9,7 +9,8 @@ import {
 } from '@steerable/agent-client';
 
 import { parseApprovePolicy } from './approve.js';
-import { chatHelp, doctorHelp, rootHelp, runHelp } from './help.js';
+import { chatCommand, configCommand, mcpCommand, skillsCommand, type CommandIO } from './commands.js';
+import { chatHelp, configHelp, doctorHelp, mcpHelp, rootHelp, runHelp, skillsHelp } from './help.js';
 import { runTurn, type RunRequest } from './run.js';
 
 export interface CliOptions {
@@ -44,6 +45,7 @@ export async function createCli(options: CliOptions = {}): Promise<number> {
         'data-dir': { type: 'string' },
         agent: { type: 'string' },
         file: { type: 'string', multiple: true },
+        format: { type: 'string' },
       },
     });
   } catch (error) {
@@ -61,7 +63,10 @@ export async function createCli(options: CliOptions = {}): Promise<number> {
     return 2;
   }
   if (command === 'run') return runCommand(parsed, options, stdout, stderr);
-  if (command === 'chat') return chatCommand(parsed, options, stdout, stderr);
+  if (command === 'chat') return dispatch(parsed, options, stdout, stderr, chatHelp(), chatCommand);
+  if (command === 'skills') return dispatch(parsed, options, stdout, stderr, skillsHelp(), skillsCommand);
+  if (command === 'mcp') return dispatch(parsed, options, stdout, stderr, mcpHelp(), mcpCommand);
+  if (command === 'config') return dispatch(parsed, options, stdout, stderr, configHelp(), configCommand);
   if (command === 'doctor') return doctorCommand(parsed, options, stdout, stderr);
   stderr.write(`unknown command: ${command}\n${rootHelp()}\n`);
   return 2;
@@ -110,36 +115,30 @@ async function runCommand(
   return withClient(parsed, options, async (client, signal) => runTurn(client, request, stdout, stderr, signal));
 }
 
-async function chatCommand(
+function commandIO(parsed: ReturnType<typeof parseArgs>): CommandIO {
+  return {
+    positionals: parsed.positionals,
+    help: parsed.values.help === true,
+    json: parsed.values.json === true,
+    ...(typeof parsed.values.format === 'string' ? { format: parsed.values.format } : {}),
+  };
+}
+
+async function dispatch(
   parsed: ReturnType<typeof parseArgs>,
   options: CliOptions,
   stdout: NodeJS.WritableStream,
   stderr: NodeJS.WritableStream,
+  help: string,
+  command: (
+    io: CommandIO,
+    stdout: NodeJS.WritableStream,
+    stderr: NodeJS.WritableStream,
+    open: (body: (client: AgentClient) => Promise<number>) => Promise<number>,
+    help: string,
+  ) => Promise<number>,
 ): Promise<number> {
-  if (parsed.values.help || parsed.positionals[1] === undefined) {
-    stdout.write(`${chatHelp()}\n`);
-    return parsed.values.help ? 0 : 2;
-  }
-  if (parsed.positionals[1] !== 'list') {
-    stderr.write(`unknown chat command: ${parsed.positionals[1]}\n${chatHelp()}\n`);
-    return 2;
-  }
-  return withClient(parsed, options, async (client) => {
-    const listed = await client.request('GET', '/api/v2/chats', undefined);
-    if (listed.status !== 200) {
-      stderr.write(`chat list failed (${listed.status})\n`);
-      return 1;
-    }
-    const chats = (listed.data as { chats?: Array<{ id: string; title?: string }> }).chats ?? [];
-    if (parsed.values.json === true) {
-      stdout.write(`${JSON.stringify(chats)}\n`);
-    } else if (chats.length === 0) {
-      stdout.write('no chats\n');
-    } else {
-      for (const chat of chats) stdout.write(`${chat.id}\t${chat.title ?? ''}\n`);
-    }
-    return 0;
-  });
+  return command(commandIO(parsed), stdout, stderr, (body) => withClient(parsed, options, body, stderr), help);
 }
 
 async function doctorCommand(
