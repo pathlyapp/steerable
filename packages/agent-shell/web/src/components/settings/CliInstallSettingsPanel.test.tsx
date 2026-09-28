@@ -11,6 +11,7 @@ describe('CliInstallSettingsPanel', () => {
   it('installs the command and shows the path', async () => {
     render(
       <CliInstallSettingsPanel
+        binName="aroli"
         install={async () => ({ path: '/home/me/.local/bin/aroli', onPath: true })}
       />,
     );
@@ -23,6 +24,7 @@ describe('CliInstallSettingsPanel', () => {
   it('says when the directory is not on PATH', async () => {
     render(
       <CliInstallSettingsPanel
+        binName="aroli"
         install={async () => ({ path: '/home/me/.local/bin/aroli', onPath: false })}
       />,
     );

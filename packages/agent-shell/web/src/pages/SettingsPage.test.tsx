@@ -110,6 +110,7 @@ describe('SettingsPage header save', () => {
   it('orders general sections by how often they are used', () => {
     renderSettings();
     expect(screen.getByRole('heading', { name: 'Interface' })).toBeTruthy();
+    expect(screen.queryByTestId('settings-section-cli')).toBeNull();
     expect(screen.getByRole('heading', { name: 'Help improve the product' })).toBeTruthy();
     expect(
       [...document.querySelectorAll('[data-testid^="settings-section-"]')].map(
@@ -121,7 +122,6 @@ describe('SettingsPage header save', () => {
       'settings-section-llm',
       'settings-section-web-search',
       'settings-section-usage',
-      'settings-section-cli',
       'settings-section-diagnose',
       'settings-section-security',
       'settings-section-insights',

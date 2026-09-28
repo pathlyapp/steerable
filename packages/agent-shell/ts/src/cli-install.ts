@@ -7,7 +7,6 @@ import { accessSync, chmodSync, constants, existsSync, mkdirSync, writeFileSync 
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { getProductConfig } from './product-config.js';
 import { getAppRootDir } from './runtime.js';
 
 export interface CliInstallResult {
@@ -84,14 +83,14 @@ export function installCliLink(input: CliInstallLinkInput): CliInstallResult {
   return { path: file, onPath: chosen.onPath };
 }
 
-/** 按当前产品和本机环境安装。 */
-export function installProductCli(): CliInstallResult {
-  const binName = getProductConfig().cliBin?.trim();
-  if (!binName) throw new Error('This product has no command-line name.');
-  const scriptPath = resolveCliScript(getAppRootDir(), binName, existsSync);
+/** 把名为 `binName` 的产品命令安装到 PATH。调用方传入命令名。 */
+export function installProductCli(binName: string): CliInstallResult {
+  const name = binName.trim();
+  if (!name) throw new Error('This product has no command-line name.');
+  const scriptPath = resolveCliScript(getAppRootDir(), name, existsSync);
   if (!scriptPath) throw new Error('The command-line tool is not included in this installation.');
   return installCliLink({
-    binName,
+    binName: name,
     scriptPath,
     nodePath: process.execPath,
     home: homedir(),

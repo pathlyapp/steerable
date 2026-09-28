@@ -14,7 +14,6 @@ import {
   LuSearch,
   LuSettings,
   LuShieldCheck,
-  LuTerminal,
 } from 'react-icons/lu';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { hasHostBridge } from '@/lib/host-bridge';
@@ -26,7 +25,6 @@ import { OrchestrationSettingsPanel } from '@/components/settings/OrchestrationS
 import { AppUpdateSettingsPanel } from '@/components/settings/AppUpdateSettingsPanel';
 import { PortableSettingsPanel } from '@/components/settings/PortableSettingsPanel';
 import { PythonRunnerSettingsPanel } from '@/components/settings/PythonRunnerSettingsPanel';
-import { CliInstallSettingsPanel } from '@/components/settings/CliInstallSettingsPanel';
 import { DiagnoseSettingsPanel } from '@/components/settings/DiagnoseSettingsPanel';
 import { InsightsSettingsPanel } from '@/components/settings/InsightsSettingsPanel';
 import {
@@ -452,14 +450,6 @@ export function SettingsPage() {
                 <UsagePanel />
               </section>
               )}
-
-              <section className="space-y-2" data-testid="settings-section-cli">
-                <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
-                  <LuTerminal className="h-3.5 w-3.5 text-agent-muted-foreground" />
-                  {t('Command line')}
-                </h2>
-                <CliInstallSettingsPanel />
-              </section>
 
               {settingsChrome('diagnose') && (
               <section className="space-y-2" data-testid="settings-section-diagnose">

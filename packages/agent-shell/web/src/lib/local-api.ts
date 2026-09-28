@@ -767,10 +767,11 @@ export interface DiagnoseResult {
   hint: string | null;
 }
 
-export async function installCommandLineTool() {
+export async function installCommandLineTool(name: string) {
   return bridge().localBackend.request<{ path: string; onPath: boolean }>({
     method: 'POST',
     path: '/api/v2/cli/install',
+    body: { name },
   });
 }
 

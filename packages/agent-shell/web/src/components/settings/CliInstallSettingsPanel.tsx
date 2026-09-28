@@ -4,9 +4,10 @@ import { t } from '@/i18n';
 import { installCommandLineTool } from '@/lib/local-api';
 
 export function CliInstallSettingsPanel(props: {
+  binName: string;
   install?: () => Promise<{ path: string; onPath: boolean }>;
-} = {}) {
-  const install = props.install ?? installCommandLineTool;
+}) {
+  const install = props.install ?? (() => installCommandLineTool(props.binName));
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

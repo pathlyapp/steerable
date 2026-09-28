@@ -1728,8 +1728,10 @@ export class LocalBackendRouter {
     // 探测 DNS/TCP/TLS/HTTP/chat 五级连通性，并报告宿主机的 ambient 代理
     // 配置（sidecar 沙箱视角会隐藏用户需要看到的代理问题）。
     if (method === 'POST' && pathname === '/api/v2/cli/install') {
+      const payload = this.toRecord(request.body);
+      const name = typeof payload.name === 'string' ? payload.name : '';
       try {
-        return { status: 200, data: installProductCli() };
+        return { status: 200, data: installProductCli(name) };
       } catch (error) {
         return {
           status: 400,
