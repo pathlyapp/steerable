@@ -88,6 +88,46 @@ class TestUsageCalibration:
         assert loaded.factor("m") == pytest.approx(320 / 400)
         assert loaded.models["m"].obs_completion == 40
 
+    def test_two_processes_keep_both_models(self, tmp_path) -> None:
+        import subprocess
+        import sys
+
+        path = tmp_path / "token-calibration.json"
+        script = r"""
+import sys
+import time
+from pathlib import Path
+
+from steerable_agent_runtime import UsageCalibration
+
+path, model, ready, peer = sys.argv[1:5]
+cal = UsageCalibration.load(path, min_samples=1, auto_register=False)
+Path(ready).write_text("ready", encoding="utf-8")
+deadline = time.monotonic() + 5
+while time.monotonic() < deadline and not Path(peer).exists():
+    time.sleep(0.02)
+cal.record(model, est_prompt=100, obs_prompt=80)
+cal.save(path)
+"""
+        ready_a = tmp_path / "a.ready"
+        ready_b = tmp_path / "b.ready"
+        proc_a = subprocess.Popen(
+            [sys.executable, "-c", script, str(path), "model-a", str(ready_a), str(ready_b)]
+        )
+        proc_b = subprocess.Popen(
+            [sys.executable, "-c", script, str(path), "model-b", str(ready_b), str(ready_a)]
+        )
+        try:
+            assert proc_a.wait(timeout=15) == 0
+            assert proc_b.wait(timeout=15) == 0
+        finally:
+            proc_a.kill()
+            proc_b.kill()
+        loaded = UsageCalibration.load(str(path), min_samples=1, auto_register=False)
+        assert set(loaded.models) == {"model-a", "model-b"}
+        assert loaded.models["model-a"].requests == 1
+        assert loaded.models["model-b"].requests == 1
+
     def test_load_missing_or_corrupt_returns_empty(self, tmp_path) -> None:
         assert UsageCalibration.load(str(tmp_path / "nope.json")).models == {}
         bad = tmp_path / "bad.json"

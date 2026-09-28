@@ -14,13 +14,13 @@ duplicated as real columns with indexes, so session enumeration and the
 resume tail-scan are indexed lookups, never a table scan over JSON.
 
 Concurrency: like ``InMemoryStorage``, all mutations run under one asyncio
-lock (safe under concurrent ``await`` in a single loop). A sibling
-``*.lock`` file (``fcntl.flock`` / Windows named mutex) makes the writer
-process-exclusive: a second process opening the same path fails loud
-(``StoreAlreadyOwnedError``). Process death releases the kernel lock;
-there is no TTL steal; the lock file is never deleted. WAL remains so a
-reader (e.g. the maintenance CLI) does not block the writer and does not
-take the write lease.
+lock (safe under concurrent ``await`` in a single loop). Across processes
+the database uses WAL, ``busy_timeout``, and a shared lease on the sibling
+``*.lock`` file, so two sidecars can write different sessions. Schema
+migration takes that file exclusively and fails when another process has
+the database open. A ``user_version`` newer than this process refuses to
+open. Process death releases the kernel lock; the lock file is never
+deleted.
 """
 
 from __future__ import annotations
@@ -40,8 +40,11 @@ from steerable_agent_protocol.generated import (
     TraceSpan,
 )
 
-from ..errors import StorageError
-from .write_lease import WriteLease, acquire_write_lease
+from ..errors import StorageError, StorageUpgradeBlockedError, StoreAlreadyOwnedError
+from .write_lease import WriteLease, acquire_shared_lease, acquire_write_lease
+
+SCHEMA_VERSION = 1
+_BUSY_TIMEOUT_MS = 5000
 
 _SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -107,17 +110,75 @@ def _dump(model: Any) -> str:
     return json.dumps(model.model_dump(mode="json"), ensure_ascii=False)
 
 
+def _is_memory(path: str) -> bool:
+    return path == ":memory:" or path.startswith("file::memory:")
+
+
+def _connect(path: str) -> sqlite3.Connection:
+    db = sqlite3.connect(path, timeout=_BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    db.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+    db.execute("PRAGMA journal_mode = WAL")
+    db.execute("PRAGMA synchronous = NORMAL")
+    return db
+
+
+def _read_user_version(path: str) -> int:
+    db = sqlite3.connect(path, timeout=_BUSY_TIMEOUT_MS / 1000)
+    try:
+        row = db.execute("PRAGMA user_version").fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        db.close()
+
+
+def _apply_schema(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    db.commit()
+
+
+def _open_lease(path: str) -> WriteLease:
+    version = _read_user_version(path)
+    if version > SCHEMA_VERSION:
+        raise StorageUpgradeBlockedError(
+            f"sidecar database version {version} is newer than this program ({SCHEMA_VERSION})"
+        )
+    if version < SCHEMA_VERSION:
+        try:
+            exclusive = acquire_write_lease(path)
+        except StoreAlreadyOwnedError as exc:
+            version = _read_user_version(path)
+            if version < SCHEMA_VERSION:
+                raise StorageUpgradeBlockedError(
+                    "sidecar database needs an upgrade but another process has it open"
+                ) from exc
+        else:
+            try:
+                db = _connect(path)
+                try:
+                    _apply_schema(db)
+                finally:
+                    db.close()
+            finally:
+                exclusive.release()
+    return acquire_shared_lease(path)
+
+
 class SqliteStorage:
     """Stdlib-sqlite3 StorageAdapter. See module docstring for the contract."""
 
     def __init__(self, path: str) -> None:
         self._path = path
         self._lock = asyncio.Lock()
-        self._lease: WriteLease = acquire_write_lease(path)
+        self._lease = WriteLease._unheld()
+        if _is_memory(path):
+            self._db = _connect(path)
+            _apply_schema(self._db)
+            return
+        self._lease = _open_lease(path)
         try:
-            self._db = sqlite3.connect(path, check_same_thread=False)
-            self._db.row_factory = sqlite3.Row
-            self._db.executescript(_SCHEMA)
+            self._db = _connect(path)
         except BaseException:
             self._lease.release()
             raise

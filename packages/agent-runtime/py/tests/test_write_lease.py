@@ -7,8 +7,10 @@ import sys
 import time
 from pathlib import Path
 
+import sqlite3
+
 import pytest
-from steerable_agent_runtime.errors import StoreAlreadyOwnedError
+from steerable_agent_runtime.errors import StorageUpgradeBlockedError, StoreAlreadyOwnedError
 from steerable_agent_runtime.storage import SqliteStorage
 from steerable_agent_runtime.storage.write_lease import (
     acquire_write_lease,
@@ -62,7 +64,7 @@ def test_second_process_fails_loud(tmp_path: Path) -> None:
         _wait_held(holder, flag)
         with pytest.raises(StoreAlreadyOwnedError, match="already owned"):
             acquire_write_lease(db)
-        with pytest.raises(StoreAlreadyOwnedError):
+        with pytest.raises(StorageUpgradeBlockedError, match="another process"):
             SqliteStorage(str(db))
         assert lock_path_for_db(db).is_file()
     finally:
@@ -85,6 +87,79 @@ def test_successor_opens_after_holder_is_killed(tmp_path: Path) -> None:
     store = SqliteStorage(str(db))
     store.close()
     assert lock_path_for_db(db).is_file()
+
+
+_WRITER = r"""
+import asyncio
+import sys
+
+from steerable_agent_protocol.generated import AgentSession
+from steerable_agent_runtime.storage import SqliteStorage
+
+
+async def main() -> None:
+    store = SqliteStorage(sys.argv[1])
+    await store.upsert_session(
+        AgentSession(
+            sessionId=sys.argv[2],
+            userId="u1",
+            chatId=sys.argv[2],
+            currentStage="chat",
+            isActive=True,
+            createdAt="2026-08-30T00:00:00Z",
+            updatedAt="2026-08-30T00:00:00Z",
+        )
+    )
+    store.close()
+
+
+asyncio.run(main())
+"""
+
+
+def test_two_processes_write_different_sessions(tmp_path: Path) -> None:
+    """Two sidecars can write different sessions in one database."""
+    import asyncio
+
+    from steerable_agent_protocol.generated import AgentSession
+
+    db = tmp_path / "sessions.db"
+    store = SqliteStorage(str(db))
+    try:
+        asyncio.run(
+            store.upsert_session(
+                AgentSession(
+                    sessionId="s1",
+                    userId="u1",
+                    chatId="c1",
+                    currentStage="chat",
+                    isActive=True,
+                    createdAt="2026-08-30T00:00:00Z",
+                    updatedAt="2026-08-30T00:00:00Z",
+                )
+            )
+        )
+        child = subprocess.run(
+            [sys.executable, "-c", _WRITER, str(db), "s2"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert child.returncode == 0, child.stderr
+        loaded = asyncio.run(store.get_session("s2"))
+        assert loaded is not None and loaded.sessionId == "s2"
+    finally:
+        store.close()
+
+
+def test_refuses_a_database_newer_than_this_program(tmp_path: Path) -> None:
+    db = tmp_path / "sessions.db"
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA user_version = 99")
+    conn.commit()
+    conn.close()
+    with pytest.raises(StorageUpgradeBlockedError, match="newer than this program"):
+        SqliteStorage(str(db))
 
 
 def test_release_does_not_delete_lock_file(tmp_path: Path) -> None:

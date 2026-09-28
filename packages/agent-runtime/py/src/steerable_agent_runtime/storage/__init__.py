@@ -117,7 +117,7 @@ class StorageAdapter(Protocol):
 
 from .in_memory import InMemoryStorage  # noqa: E402
 from .sqlite_store import SqliteStorage  # noqa: E402
-from .write_lease import acquire_write_lease, lock_path_for_db  # noqa: E402
+from .write_lease import acquire_shared_lease, acquire_write_lease, lock_path_for_db  # noqa: E402
 from ..errors import StoreAlreadyOwnedError  # noqa: E402
 
 try:
@@ -132,6 +132,7 @@ __all__ = [
     "SqliteStorage",
     "SqlAlchemyStorage",
     "StoreAlreadyOwnedError",
+    "acquire_shared_lease",
     "acquire_write_lease",
     "lock_path_for_db",
 ]

@@ -18,8 +18,12 @@ class StorageError(RuntimeError):
     """Persistence layer failure."""
 
 
+class StorageUpgradeBlockedError(StorageError):
+    """The database is newer than this process, or a migration cannot take the exclusive lock."""
+
+
 class StoreAlreadyOwnedError(StorageError):
-    """Another process already holds the write lease for this database."""
+    """Another process already holds the exclusive lease for this database."""
 
     def __init__(self, path: str) -> None:
         super().__init__(

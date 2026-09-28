@@ -25,11 +25,14 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from collections.abc import AsyncIterator, Iterable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
+from .errors import StoreAlreadyOwnedError
 from .llm import LLMMessage, LLMProvider, LLMStreamChunk, LLMUsage
+from .storage.write_lease import WriteLease, acquire_write_lease
 from .tokens import estimate_text_tokens, estimate_tokens, register_model_factor
 
 #: Requests needed before a derived factor is trusted and auto-registered.
@@ -70,6 +73,7 @@ class UsageCalibration:
         self.min_samples = min_samples
         self.auto_register = auto_register
         self.models: dict[str, ModelCalibration] = {}
+        self._persisted: dict[str, ModelCalibration] = {}
 
     def record(
         self,
@@ -142,29 +146,84 @@ class UsageCalibration:
         return cal
 
     def save(self, path: str) -> None:
-        """Atomic write: tmp file + rename so a crash mid-write can't corrupt."""
-        directory = os.path.dirname(os.path.abspath(path))
-        os.makedirs(directory, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+        """Merge this process's new samples into ``path`` and write atomically.
+
+        The exclusive lease covers the reload and the rename, so two sidecars
+        recording different requests both keep their samples. Samples already
+        written by this object are not added again.
+        """
+        lease = _wait_for_file_lease(path)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(self.to_dict(), fh)
-            os.replace(tmp, path)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+            disk = UsageCalibration.load(
+                path, min_samples=self.min_samples, auto_register=False
+            )
+            self.models = _merge_models(disk.models, self.models, self._persisted)
+            self._persisted = _snapshot(self.models)
+            _atomic_write(path, self.to_dict())
+        finally:
+            lease.release()
 
     @classmethod
     def load(cls, path: str, **kwargs: Any) -> UsageCalibration:
         """Load aggregates from ``path``; missing/corrupt file → empty."""
         try:
             with open(path, encoding="utf-8") as fh:
-                return cls.from_dict(json.load(fh), **kwargs)
+                cal = cls.from_dict(json.load(fh), **kwargs)
         except (OSError, ValueError):
-            return cls(**kwargs)
+            cal = cls(**kwargs)
+        cal._persisted = _snapshot(cal.models)
+        return cal
+
+
+def _snapshot(models: dict[str, ModelCalibration]) -> dict[str, ModelCalibration]:
+    return {name: replace(entry) for name, entry in models.items()}
+
+
+def _merge_models(
+    disk: dict[str, ModelCalibration],
+    local: dict[str, ModelCalibration],
+    persisted: dict[str, ModelCalibration],
+) -> dict[str, ModelCalibration]:
+    merged: dict[str, ModelCalibration] = {}
+    for name in set(disk) | set(local):
+        on_disk = disk.get(name, ModelCalibration())
+        current = local.get(name, ModelCalibration())
+        base = persisted.get(name, ModelCalibration())
+        merged[name] = ModelCalibration(
+            requests=on_disk.requests + (current.requests - base.requests),
+            est_prompt=on_disk.est_prompt + (current.est_prompt - base.est_prompt),
+            obs_prompt=on_disk.obs_prompt + (current.obs_prompt - base.obs_prompt),
+            est_completion=on_disk.est_completion + (current.est_completion - base.est_completion),
+            obs_completion=on_disk.obs_completion + (current.obs_completion - base.obs_completion),
+        )
+    return merged
+
+
+def _wait_for_file_lease(path: str, timeout_s: float = 5.0) -> WriteLease:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            return acquire_write_lease(path)
+        except StoreAlreadyOwnedError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
+def _atomic_write(path: str, payload: dict[str, Any]) -> None:
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 @dataclass
