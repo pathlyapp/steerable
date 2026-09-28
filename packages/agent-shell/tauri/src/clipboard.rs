@@ -1,7 +1,8 @@
 //! OS pasteboard reads for the chat composer.
 //!
 //! WKWebView does not deliver copied files or screenshots to the page.
-//! File URLs are read on macOS; image data is encoded as PNG on every desktop.
+//! File lists are read on macOS and Windows. Image data is encoded as PNG
+//! on every desktop.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image::codecs::png::PngEncoder;
@@ -32,8 +33,9 @@ pub struct ClipboardContents {
 
 /// Files win over text, and text wins over a bare image.
 ///
-/// Finder copies a path string next to the file URL. Returning that string
-/// would also paste the path into the composer. A screenshot has no text.
+/// The file manager copies a path string next to the file list. Returning
+/// that string would also paste the path into the composer. A screenshot
+/// has no text.
 pub fn read_clipboard() -> ClipboardContents {
     let files = clipboard_file_paths()
         .into_iter()
@@ -116,10 +118,22 @@ fn clipboard_file_paths() -> Vec<String> {
     {
         macos_file_paths()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows_file_paths()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Vec::new()
     }
+}
+
+/// Explorer stores a copied selection as `CF_HDROP`.
+#[cfg(target_os = "windows")]
+fn windows_file_paths() -> Vec<String> {
+    let files: Vec<String> =
+        clipboard_win::get_clipboard(clipboard_win::formats::FileList).unwrap_or_default();
+    files.into_iter().filter(|path| !path.is_empty()).collect()
 }
 
 #[cfg(target_os = "macos")]
