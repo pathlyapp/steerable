@@ -12,7 +12,11 @@ Examples:
   <product> tui
 `.trim();
 
-export function rootHelp(): string {
+export function rootHelp(commands: readonly { name: string; summary: string }[] = []): string {
+  const extra = commands
+    .map((command) => `  <product> ${command.name}    ${command.summary}`)
+    .join('\n');
+  const pack = extra ? `\n${extra}` : '';
   return `
 Usage:
   <product> run "<task>" [--chat <id>] [--approve deny|allow-read|allow-all]
@@ -23,7 +27,7 @@ Usage:
   <product> mcp list | add <name> -- <cmd...> | rm <name>
   <product> config get <key> | set <key> <value>
   <product> doctor
-  <product> tui
+  <product> tui${pack}
 
 ${EXAMPLES}
 `.trim();

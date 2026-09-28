@@ -227,6 +227,22 @@ export interface BrandSpec {
   readonly defaultAgentId: string;
 }
 
+/**
+ * 包贡献给产品命令行的一个子命令。产品组装根在启动 CLI 时注册。
+ * `request` 走进程内宿主，和桌面版同一套路由。
+ */
+export interface CliCommandIO {
+  write(text: string): void;
+  writeError(text: string): void;
+  request(method: string, path: string, body?: unknown): Promise<{ status: number; data: unknown }>;
+}
+
+export interface CliCommandSpec {
+  readonly name: string;
+  readonly summary: string;
+  readonly run: (args: readonly string[], io: CliCommandIO) => number | Promise<number>;
+}
+
 /** 打包覆盖：产品组装期消费，不进运行时。 */
 export interface PackagingSpec {
   readonly appId: string;
@@ -248,6 +264,8 @@ export interface ScenarioPack {
   readonly main?: MainContribution;
   readonly renderer?: RendererContribution;
   readonly packaging?: PackagingSpec;
+  /** 命令行子命令。产品组装根注册后，由 agent-cli 在内置命令之后分发。 */
+  readonly cliCommands?: () => readonly CliCommandSpec[];
 }
 
 // ─── local-backend 包路由（/api/v2/<包前缀>/*）契约 ───

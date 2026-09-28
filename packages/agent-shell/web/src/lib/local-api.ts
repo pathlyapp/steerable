@@ -767,6 +767,13 @@ export interface DiagnoseResult {
   hint: string | null;
 }
 
+export async function installCommandLineTool() {
+  return bridge().localBackend.request<{ path: string; onPath: boolean }>({
+    method: 'POST',
+    path: '/api/v2/cli/install',
+  });
+}
+
 export async function diagnoseLlmConnection(input: {
   baseUrl?: string;
   apiKey?: string;

@@ -28,8 +28,31 @@ export function registerPackHttpRoutes(
 ): void {
   for (const route of routes) {
     assertPackRoutePath(packId, route.path);
+    const already = packHttpRoutes.some(
+      (existing) => existing.method === route.method && existing.path === route.path,
+    );
+    if (already) continue;
     packHttpRoutes.push(route);
   }
+}
+
+/**
+ * 进程内路由器调用包的 `/host/<packId>/*` 路由。
+ * 处理器直接返回数据，这里包成 `{ status, data }`。
+ */
+export async function invokePackHttpRoute(
+  method: string,
+  pathname: string,
+  body: unknown,
+): Promise<{ status: number; data: unknown } | null> {
+  const match = matchPackHttpRoute(method, pathname);
+  if (!match) return null;
+  const data = await match.route.handler({
+    params: match.params,
+    query: {},
+    body,
+  });
+  return { status: 200, data };
 }
 
 /** 测试钩子：清空注册表。 */

@@ -124,6 +124,8 @@ import {
   collectPackWorldState,
 } from './pack-turn-hooks.js';
 import { matchPackBackendRoute } from './pack-backend-routes.js';
+import { invokePackHttpRoute } from '../host/http-routes.js';
+import { installProductCli } from '../cli-install.js';
 import { collectTurnFiles } from './turn-files.js';
 import { resolveMentionedPaths } from './mentioned-paths.js';
 import { getAuthProvider, type Principal } from '../auth/index.js';
@@ -1725,6 +1727,17 @@ export class LocalBackendRouter {
     // W-llm-diagnose：LLM 链路诊断。设置页「诊断」按钮触发，在主进程内
     // 探测 DNS/TCP/TLS/HTTP/chat 五级连通性，并报告宿主机的 ambient 代理
     // 配置（sidecar 沙箱视角会隐藏用户需要看到的代理问题）。
+    if (method === 'POST' && pathname === '/api/v2/cli/install') {
+      try {
+        return { status: 200, data: installProductCli() };
+      } catch (error) {
+        return {
+          status: 400,
+          data: { error: error instanceof Error ? error.message : String(error) },
+        };
+      }
+    }
+
     if (method === 'POST' && pathname === '/api/v2/llm/diagnose') {
       const payload = this.toRecord(request.body);
       const settings = llmService.getSettings();
@@ -2110,6 +2123,9 @@ export class LocalBackendRouter {
         body: request.body,
       });
     }
+
+    const packHttp = await invokePackHttpRoute(method, pathname, request.body);
+    if (packHttp) return packHttp;
 
     return this.fallbackResponse(method, pathname);
   }

@@ -29,6 +29,8 @@ export type {
   RendererContribution,
   BrandSpec,
   PackagingSpec,
+  CliCommandIO,
+  CliCommandSpec,
   ScenarioPack,
   PackBackendRouteResponse,
   PackBackendRouteRequest,

@@ -64,6 +64,7 @@ import {
   type PackAssemblyDeps,
   type PackAssemblyHandle,
 } from './pack-assembly.js';
+import { registerPackHttpRoutes } from './http-routes.js';
 
 export interface HostRuntimeOptions {
   /** Storage ownership for this host process. Defaults to local personal use. */
@@ -248,6 +249,10 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
       const handle = assemble(packDeps);
       if (handle) packHandles.set(packId, handle);
     }
+  }
+  for (const [packId, handle] of packHandles) {
+    const routes = handle.httpRoutes?.();
+    if (routes && routes.length > 0) registerPackHttpRoutes(packId, routes);
   }
   const worktreeService = new WorktreeService({ resolveProject: resolveChatProjectRoot });
   const taskService = new TaskService({

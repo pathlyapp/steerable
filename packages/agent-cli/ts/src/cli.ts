@@ -1,5 +1,9 @@
 import { parseArgs } from 'node:util';
 import { getBrand } from '@steerable/agent-shell/brand';
+import {
+  collectPackCliCommands,
+  type CliCommandSpec,
+} from '@steerable/agent-shell/host/pack-cli';
 import { getUserDataDir } from '@steerable/agent-shell/runtime';
 import {
   applyHostRuntimeEnv,
@@ -24,11 +28,19 @@ export interface CliOptions {
   stdinIsTTY?: boolean;
   createClient?: (options: LocalClientOptions) => Promise<AgentClient>;
   installSignals?: boolean;
+  commands?: readonly CliCommandSpec[];
 }
 
 export async function createCli(options: CliOptions = {}): Promise<number> {
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
+  let packCommands: CliCommandSpec[];
+  try {
+    packCommands = collectPackCliCommands(options.commands ?? []);
+  } catch (error) {
+    stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 2;
+  }
   const argv = options.argv ?? process.argv.slice(2);
   let parsed: ReturnType<typeof parseArgs>;
   try {
@@ -51,17 +63,17 @@ export async function createCli(options: CliOptions = {}): Promise<number> {
       },
     });
   } catch (error) {
-    stderr.write(`${error instanceof Error ? error.message : String(error)}\n${rootHelp()}\n`);
+    stderr.write(`${error instanceof Error ? error.message : String(error)}\n${rootHelp(packCommands)}\n`);
     return 2;
   }
 
   const command = parsed.positionals[0];
   if (parsed.values.help && !command) {
-    stdout.write(`${rootHelp()}\n`);
+    stdout.write(`${rootHelp(packCommands)}\n`);
     return 0;
   }
   if (!command) {
-    stderr.write(`${rootHelp()}\n`);
+    stderr.write(`${rootHelp(packCommands)}\n`);
     return 2;
   }
   if (command === 'run') return runCommand(parsed, options, stdout, stderr);
@@ -71,8 +83,28 @@ export async function createCli(options: CliOptions = {}): Promise<number> {
   if (command === 'config') return dispatch(parsed, options, stdout, stderr, configHelp(), configCommand);
   if (command === 'doctor') return doctorCommand(parsed, options, stdout, stderr);
   if (command === 'tui') return tuiCommand(parsed, options, stdout, stderr);
-  stderr.write(`unknown command: ${command}\n${rootHelp()}\n`);
+  const pack = packCommands.find((entry) => entry.name === command);
+  if (pack) return runPackCommand(pack, parsed, options, stdout, stderr);
+  stderr.write(`unknown command: ${command}\n${rootHelp(packCommands)}\n`);
   return 2;
+}
+
+async function runPackCommand(
+  command: CliCommandSpec,
+  parsed: ReturnType<typeof parseArgs>,
+  options: CliOptions,
+  stdout: NodeJS.WritableStream,
+  stderr: NodeJS.WritableStream,
+): Promise<number> {
+  if (parsed.values.help) {
+    stdout.write(`<product> ${command.name}\n${command.summary}\n`);
+    return 0;
+  }
+  return withClient(parsed, options, async (client) => command.run(parsed.positionals.slice(1), {
+    write: (text) => stdout.write(text),
+    writeError: (text) => stderr.write(text),
+    request: (method, requestPath, body) => client.request(method, requestPath, body),
+  }), stderr);
 }
 
 async function runCommand(

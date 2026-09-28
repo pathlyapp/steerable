@@ -63,6 +63,11 @@ export interface ProductConfig {
    */
   portable?: boolean;
   /**
+   * 安装到 PATH 的命令名（aroli / ciflog / etown）。
+   * 设置页「安装命令行工具」按它写包装脚本。
+   */
+  cliBin?: string;
+  /**
    * 产品钉死的大模型。`settings.llm === false` 时必填，运行时用这份，
    * 不再读设置页。密钥用 `apiKeyEnv` 指向环境变量，不要把 key 写进仓库。
    */
