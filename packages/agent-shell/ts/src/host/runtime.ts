@@ -292,6 +292,7 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
 
   let started = false;
   let instanceLease: InstanceLease | null = null;
+  let warmTimer: ReturnType<typeof setTimeout> | null = null;
 
   return {
     store: defaultStore,
@@ -359,7 +360,8 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
       // 后台刷新已启用 MCP 服务的工具列表（连接慢的 server 不阻塞启动）。
       void mcpServerRegistry.refreshAllEnabled();
       // 预热共享可见 PTY：首条 agent 命令不必付 shell 启动成本。
-      setTimeout(() => {
+      // 短命进程在这两秒内退出时必须取消，否则定时器会在关停之后再拉起一个 shell。
+      warmTimer = setTimeout(() => {
         try {
           terminalManager.ensurePrimary();
         } catch (err) {
@@ -369,6 +371,10 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
     },
 
     async shutdown(): Promise<void> {
+      if (warmTimer) {
+        clearTimeout(warmTimer);
+        warmTimer = null;
+      }
       terminalManager.killAll();
       // 包装配逆序关停（后装配的先停）。
       for (const handle of [...packHandles.values()].reverse()) {

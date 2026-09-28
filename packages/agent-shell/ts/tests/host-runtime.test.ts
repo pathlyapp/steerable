@@ -275,6 +275,20 @@ describe('start · 生命周期', () => {
     expect(mocks.terminalEnsurePrimary).toHaveBeenCalledOnce();
     const onLog = (options as never as { onLog: ReturnType<typeof vi.fn> }).onLog;
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining('pty unavailable'));
+    vi.useRealTimers();
+  });
+
+  it('关停后不再预热终端', async () => {
+    vi.useFakeTimers();
+    try {
+      const rt = await createHostRuntime(makeOptions());
+      await rt.start();
+      await rt.shutdown();
+      vi.advanceTimersByTime(2_100);
+      expect(mocks.terminalEnsurePrimary).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
