@@ -16,7 +16,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "steerable-agent": "dist/bin.js"
+    "steerable-cli": "dist/bin.js"
   },
   "exports": {
     ".": {

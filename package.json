@@ -14,7 +14,7 @@
     "shell:build": "pnpm --filter steerable-example-web-shell build",
     "shell:preview": "pnpm --filter steerable-example-web-shell preview",
     "agent-shell:web": "pnpm --filter @steerable/agent-shell-web app:build && pnpm --filter @steerable/agent-shell build && pnpm --filter @steerable/agent-shell web",
-    "cli": "node packages/agent-cli/ts/dist/bin.js"
+    "steerable-cli": "node packages/agent-cli/ts/dist/bin.js"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.7",
