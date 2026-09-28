@@ -38,6 +38,7 @@ import { sidecarWebSearchEnv } from '../storage/web-search-settings.js';
 import { executeHostedWebSearch } from '../hosted-web-search.js';
 import type { createApprovalBridge } from './reverse-approval.js';
 import type { SidecarReverseHandler } from './types.js';
+import { getProductConfig } from '../product-config.js';
 
 export interface HostSidecarDeps {
   store: ScopedStore;
@@ -181,6 +182,9 @@ async function startEgressProxyIfEnabled(store: ScopedStore): Promise<{
         ? {
             STEERABLE_EGRESS_CONTROL_PORT: String(egressProxyRef.controlPort),
             [plan.control.tokenEnv]: plan.control.tokenValue,
+            ...(getProductConfig().egressApproval === 'off'
+              ? { STEERABLE_EGRESS_APPROVAL: 'off' }
+              : {}),
           }
         : {};
     return {

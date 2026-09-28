@@ -160,6 +160,10 @@ Semantics (`build_seatbelt_profile(allowed_hosts=...)`):
   and sandboxed children run with a scrubbed environment that excludes it —
   a confined process cannot widen its own egress. Session grants die with
   the proxy process; durable grants belong to the configured domain list.
+  A product may set `egressApproval: "off"`; the host then passes
+  `STEERABLE_EGRESS_APPROVAL=off` and denied web targets are added to the
+  same session list without prompting. The proxy and SSRF checks remain
+  active.
 
 The desktop supervisor passes the list through `SidecarStartOptions.sandboxAllowedHosts` (env fallback `STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS`, comma-separated).
 

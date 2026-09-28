@@ -59,6 +59,11 @@ export interface ProductConfig {
    */
   approval?: 'host' | 'off';
   /**
+   * 白名单外出网询问：host = 弹宿主审批；off = 自动加入当前代理会话。
+   * 缺省 host。自动放行仅存活到代理进程退出，不修改持久白名单。
+   */
+  egressApproval?: 'host' | 'off';
+  /**
    * 对话模式。缺省 `['agent','plan']`。只留一种时渲染层不显示切换。
    */
   chatModes?: Array<'agent' | 'plan'>;

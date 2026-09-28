@@ -6,6 +6,10 @@ An allow decision is relayed to the proxy's loopback control endpoint as a
 session-scoped allow-list addition (it dies with the proxy process), and
 the original request is retried once.
 
+Products may set ``STEERABLE_EGRESS_APPROVAL=off`` to relay the same
+session-scoped addition without prompting. This does not modify the durable
+domain list or disable the proxy.
+
 The security boundary is the control token: it reaches the sidecar's
 environment but never the sandboxed children's (their environment is
 scrubbed to a small allowlist), so a confined process cannot widen its own
@@ -17,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Literal
 
 from steerable_agent_runtime import ApprovalRequest
 from steerable_agent_runtime.transport.stdio_jsonrpc import JsonRpcServer
@@ -61,15 +65,19 @@ class EgressApprovalAsker:
         control_port: int,
         control_token: str,
         timeout_s: float = _DEFAULT_ASK_TIMEOUT_S,
+        approval_mode: Literal["host", "off"] = "host",
     ) -> None:
         self._server = server
         self._control_port = control_port
         self._control_token = control_token
         self._timeout_s = timeout_s
+        self._approval_mode = approval_mode
         self._session_denied: set[str] = set()
 
     async def ask_and_allow(self, host: str, port: int, url: str) -> bool:
-        """Prompt the host; on allow, widen the proxy and return True."""
+        """Apply the configured approval mode, then widen the proxy."""
+        if self._approval_mode == "off":
+            return await self._relay_allow(host, port)
         key = f"{host}:{port}"
         if key in self._session_denied:
             return False
@@ -134,9 +142,23 @@ def asker_from_environ(
     token = (env.get("STEERABLE_EGRESS_CONTROL_TOKEN") or "").strip()
     if not port_raw or not token:
         return None
+    approval_raw = (env.get("STEERABLE_EGRESS_APPROVAL") or "host").strip()
+    approval_mode: Literal["host", "off"]
+    if approval_raw == "host":
+        approval_mode = "host"
+    elif approval_raw == "off":
+        approval_mode = "off"
+    else:
+        logger.warning("invalid STEERABLE_EGRESS_APPROVAL: %r", approval_raw)
+        return None
     try:
         port = int(port_raw)
     except ValueError:
         logger.warning("invalid STEERABLE_EGRESS_CONTROL_PORT: %r", port_raw)
         return None
-    return EgressApprovalAsker(server, control_port=port, control_token=token)
+    return EgressApprovalAsker(
+        server,
+        control_port=port,
+        control_token=token,
+        approval_mode=approval_mode,
+    )

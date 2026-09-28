@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -80,6 +81,24 @@ class TestAsker:
             assert params["arguments"]["port"] == 443
         finally:
             proxy.stop()
+
+    @pytest.mark.asyncio
+    async def test_approval_off_relays_without_prompting(self, monkeypatch) -> None:
+        stub = _StubServer("deny_once")
+        asker = EgressApprovalAsker(
+            stub,  # type: ignore[arg-type]
+            control_port=1,
+            control_token="tok-test",
+            approval_mode="off",
+        )
+        relay = AsyncMock(return_value=True)
+        monkeypatch.setattr(asker, "_relay_allow", relay)
+
+        assert await asker.ask_and_allow(
+            "example.com", 443, "https://example.com/"
+        ) is True
+        assert stub.calls == []
+        relay.assert_awaited_once_with("example.com", 443)
 
     @pytest.mark.asyncio
     async def test_relay_ignores_proxy_environment(self, monkeypatch) -> None:
@@ -178,6 +197,19 @@ class TestAskerFromEnviron:
             asker_from_environ(
                 _StubServer("deny_once"),  # type: ignore[arg-type]
                 {"STEERABLE_EGRESS_CONTROL_PORT": "abc", "STEERABLE_EGRESS_CONTROL_TOKEN": "t"},
+            )
+            is None
+        )
+
+    def test_invalid_approval_mode_means_no_asker(self) -> None:
+        assert (
+            asker_from_environ(
+                _StubServer("deny_once"),  # type: ignore[arg-type]
+                {
+                    "STEERABLE_EGRESS_CONTROL_PORT": "8899",
+                    "STEERABLE_EGRESS_CONTROL_TOKEN": "t",
+                    "STEERABLE_EGRESS_APPROVAL": "allow",
+                },
             )
             is None
         )

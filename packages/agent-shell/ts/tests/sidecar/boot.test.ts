@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   webToolsEnabled: vi.fn(() => true),
   sidecarWebSearchEnv: vi.fn(() => ({ STEERABLE_WEB_SEARCH_PROVIDER: 'host' }) as Record<string, string>),
   executeHostedWebSearch: vi.fn(async () => ({ results: [] })),
+  getProductConfig: vi.fn(() => ({})),
 }));
 
 vi.mock('../../src/sidecar/supervisor.js', () => ({
@@ -79,6 +80,9 @@ vi.mock('../../src/storage/web-search-settings.js', () => ({
 }));
 vi.mock('../../src/hosted-web-search.js', () => ({
   executeHostedWebSearch: mocks.executeHostedWebSearch,
+}));
+vi.mock('../../src/product-config.js', () => ({
+  getProductConfig: mocks.getProductConfig,
 }));
 
 import { startHostSidecar, shutdownHostSidecar } from '../../src/sidecar/boot.js';
@@ -132,6 +136,7 @@ beforeEach(() => {
   mocks.ensureEgressProxyExecutable.mockResolvedValue('/usr/bin/steerable-egress-proxy');
   mocks.webToolsEnabled.mockReturnValue(true);
   mocks.sidecarWebSearchEnv.mockReturnValue({ STEERABLE_WEB_SEARCH_PROVIDER: 'host' });
+  mocks.getProductConfig.mockReturnValue({});
   mocks.storeGetWebSearchSettings.mockReturnValue(undefined);
   mocks.llmGetSettings.mockReturnValue({ baseUrl: 'https://llm.example/v1', apiKey: 'k' });
   mocks.deriveEgressAllowListFromBaseUrl.mockReturnValue(['llm.example']);
@@ -381,6 +386,32 @@ describe('startHostSidecar · egress 代理', () => {
     expect(plan.sandboxWebEgress).toBe(false);
     expect(plan.sandboxAllowResolver).toBe(true);
     expect(mocks.recordEgressPosture).toHaveBeenCalledWith({ mode: 'per-host-proxy', reason: null });
+  });
+
+  it('产品关闭出网审批时向 sidecar 下发自动会话放行模式', async () => {
+    mocks.getProductConfig.mockReturnValue({ egressApproval: 'off' });
+    mocks.decideEgressProxy.mockReturnValue({ start: true, posture: { mode: 'per-host-proxy', reason: null } });
+    mocks.buildEgressProxyPlan.mockReturnValue({
+      proxyEndpoint: 'http://127.0.0.1:41000',
+      proxyUrl: 'http://127.0.0.1:41000',
+      proxiedHosts: ['llm.example'],
+      sandboxAllowedHosts: ['proxy.local'],
+      broker: null,
+      control: {
+        tokenEnv: 'STEERABLE_EGRESS_CONTROL_TOKEN',
+        tokenValue: 'control-token',
+      },
+    });
+    mocks.startEgressProxy.mockResolvedValue({ stop: vi.fn(), controlPort: 41001 });
+    const sup = fakeSupervisor();
+    mocks.supervisorStart.mockResolvedValue(sup);
+    await startHostSidecar(makeDeps());
+
+    expect(mocks.supervisorStart.mock.calls[0][0].env).toMatchObject({
+      STEERABLE_EGRESS_CONTROL_PORT: '41001',
+      STEERABLE_EGRESS_CONTROL_TOKEN: 'control-token',
+      STEERABLE_EGRESS_APPROVAL: 'off',
+    });
   });
 
   it('代理启动抛错 → 回退端口级管控，boot 继续（加固不能弄断 LLM 通路）', async () => {
