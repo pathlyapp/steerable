@@ -149,6 +149,42 @@ describe('desktop host beside the command line', () => {
       restore();
     }
   }, 45_000);
+
+  it('runs eight commands at the same time', async () => {
+    const cli = path.resolve(import.meta.dirname, '../dist/cli.js');
+    expect(fs.existsSync(cli), 'agent-cli dist is required').toBe(true);
+    const home = fs.mkdtempSync(path.join('/tmp', 'agent-cli-eight-'));
+    dirs.push(home);
+    const dir = path.join(home, 'data');
+    fs.mkdirSync(dir);
+    const restore = useIsolatedHome(home, dir);
+    const mock = await startMockLlm();
+    const runs: Array<ReturnType<typeof spawnRun>> = [];
+    try {
+      const preparer = await createLocalClient({ dataDir: dir, startSidecar: false });
+      const saved = await preparer.request('POST', '/api/v2/local-settings/llm', {
+        provider: 'openai-compat',
+        model: 'e2e-mock',
+        baseUrl: mock.baseUrl,
+        apiKey: 'e2e-not-a-real-key',
+        temperature: 0,
+        systemPrompt: 'E2E 测试系统提示词。',
+      });
+      expect(saved.status).toBe(200);
+      await preparer.close();
+      const script = writeRunScript(dir, cli);
+      for (let slot = 0; slot < 8; slot += 1) runs.push(spawnRun(script, dir, `slot-${slot} 列出当前目录`));
+      const results = await Promise.all(runs.map((run) => run.done));
+      expect(results.map((result) => result.code)).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+      for (let slot = 0; slot < 8; slot += 1) {
+        expect(results[slot].stdout, results[slot].stderr).toContain(`slot-${slot} 完成`);
+      }
+    } finally {
+      for (const run of runs) run.stop();
+      await mock.close();
+      restore();
+    }
+  }, 60_000);
 });
 
 function startDesktop(dataDir: string): {
@@ -362,6 +398,57 @@ function useIsolatedHome(home: string, dataDir: string): () => void {
   };
 }
 
+function writeRunScript(dataDir: string, cli: string): string {
+  const script = path.join(dataDir, 'run-once.mjs');
+  fs.writeFileSync(script, `
+import { createCli } from ${JSON.stringify(pathToFileURL(cli).href)};
+const code = await createCli({
+  argv: ['run', process.argv[2], '--approve', 'allow-read', '--data-dir', process.argv[3]],
+  stdout: process.stdout,
+  stderr: process.stderr,
+});
+process.exit(code);
+`);
+  return script;
+}
+
+function spawnRun(script: string, dataDir: string, task: string): {
+  done: Promise<{ code: number; stdout: string; stderr: string }>;
+  stop: () => void;
+} {
+  const child = spawn(process.execPath, [script, task, dataDir], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: process.env,
+  });
+  children.push(child);
+  let stdout = '';
+  let stderr = '';
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr?.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  const done = new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`run timed out: ${task}\n${stdout}\n${stderr}`));
+    }, 45_000);
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
+  return {
+    done,
+    stop() {
+      if (child.exitCode === null) child.kill('SIGKILL');
+    },
+  };
+}
+
 function startMockLlm(): Promise<{ baseUrl: string; close: () => Promise<void> }> {
   const rounds = new Map<string, number>();
   const server = createServer((req, res) => {
@@ -390,11 +477,13 @@ function startMockLlm(): Promise<{ baseUrl: string; close: () => Promise<void> }
         writeReply(res, false, { kind: 'text', content: '{"route":"allow_no_tool","reason":"e2e"}' });
         return;
       }
-      const task = wire.includes('删除构建目录') ? 'deny' : 'allow';
+      const slot = /slot-(\d+)/.exec(wire)?.[1];
+      const task = slot ? `slot-${slot}` : wire.includes('删除构建目录') ? 'deny' : 'allow';
       const round = (rounds.get(task) ?? 0) + 1;
       rounds.set(task, round);
       if (round > 1) {
-        writeReply(res, true, { kind: 'text', content: task === 'allow' ? '目录是空的。' : '已拒绝。' });
+        const content = slot ? `slot-${slot} 完成` : task === 'allow' ? '目录是空的。' : '已拒绝。';
+        writeReply(res, true, { kind: 'text', content });
         return;
       }
       writeReply(res, true, { kind: 'tool', name: 'local_list_scripts', args: {} });
