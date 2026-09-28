@@ -347,6 +347,25 @@ impl HostPaths {
         let Some(python_runner_mode) = product.python_runner.as_deref() else {
             return Ok(None);
         };
+        if python_runner_mode == "sidecar" {
+            let runner = self
+                .sidecar_python
+                .clone()
+                .ok_or_else(|| "packaged Python sidecar runtime is missing".to_string())?;
+            python_runner::configure(
+                app,
+                RunnerSetup {
+                    user_data: user_data.to_path_buf(),
+                    node: self.node.clone(),
+                    engine_dir: self.engine_dir.clone(),
+                    lock: None,
+                    target_name: platform_tag().into(),
+                    supported: false,
+                    active_runner: Some(runner.clone()),
+                },
+            );
+            return Ok(Some(runner));
+        }
         let lock: PythonRunnerLock = serde_json::from_str(
             &std::fs::read_to_string(engine_dir.join("python-runner-lock.json"))
                 .map_err(|error| error.to_string())?,
