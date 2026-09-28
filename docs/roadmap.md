@@ -223,7 +223,7 @@ line below with that in mind: the code landed, the product default did not.
 | Hook output bounding | 2500-token cap with spill-to-disk (`codex-rs/hooks/src/output_spill.rs:12`) | None — hooks return transcripts with no cap. pi shares this weakness: its `context` hook is unbounded too | **Significant** |
 | Per-tool timeouts | Server and caller timeouts composed with `min()` (codex `codex-mcp/src/binding.rs:321-325`) | Closed and default-on — `LoopConfig.tool_timeout_ms` = 300s, `asyncio.wait_for` per call (`loop.py:401-432`). pi has no per-tool timeout at all | Closed |
 | Tool exposure tiers | codex now has **six** tiers (`Direct`, `Deferred`, `DirectModelOnly`, `DeferredModelOnly`, `CodeModeOnly`, `Hidden`) plus a BM25 `tool_search` capped at 8 results (`tools/src/tool_executor.rs:51-79`, `tool_discovery.rs:6-7`); dsh has it for skills only; pi has an active-tool subset but no deferred tier | Closed — `direct/deferred/hidden` + `tool_search`, live on the desktop via the host's TypeScript router | Closed |
-| MCP | codex: identity-keyed reuse, 2048-item catalog caps, `mcp__server__tool`, immutable per-step binding with a revision guard; dsh: client with auto-reconnect, declines to be an MCP *server* in favor of ACP; pi: **no MCP in core at all**, extension-only | Seam closed (`mcp.py`, 64 tools/server cap, deferred by default); the desktop runs its MCP client host-side instead | Closed as a seam |
+| MCP | codex: identity-keyed reuse, 2048-item catalog caps, `mcp__server__tool`, immutable per-step binding with a revision guard; dsh: client with auto-reconnect, declines to be an MCP *server* in favor of ACP; pi: **no MCP in core at all**, extension-only | Stdio and Streamable HTTP on desktop, sidecar, headless, and ACP; 64 tools/server cap, deferred by default, bounded reconnect and dynamic catalog refresh | Closed as a seam |
 | Tool-execution sandbox | codex: per-OS, fail-closed on Windows, `SandboxErr::Denied` returned to the caller, and a second approval to escalate to unsandboxed; dsh: bwrap/Landlock, Seatbelt, Windows restricted token, enforcement as a return value; pi: **none by design** — containerize the whole process instead | `SandboxedToolExecutor` + `SeatbeltExecBackend` implemented with `require_full` fail-closed — but **the desktop never sends `execSandbox`, so commands run unconfined** | **Significant** — wiring, not mechanism |
 | Egress control | Allow-listed (codex, dsh); pi delegates to the container | Allow-list implemented in the profile generator, but the sidecar sandbox is off unless `STEERABLE_SIDECAR_SANDBOX=1`, so **the product default is open egress** | **Significant** — wiring, not mechanism |
 | Approval algebra | codex: 8 variants across three persistence scopes, composed with sandbox escalation; dsh: four outcomes with `rejected` distinct from `cancelled`, child agents pinned to `never`; pi: no core algebra, extensions may block a call | 8 variants and 3 scopes implemented (`approval.py:63-72`), Denied distinct from Abort — but **the desktop sends no `approval` parameter and has no approval UI** | **Significant** — wiring, not mechanism |
@@ -405,11 +405,11 @@ The order is the argument:
    (never a half-registered or silently truncated catalog). Catalogs
    register deferred by default, so the model discovers MCP tools through
    `tool_search` instead of paying for every schema in every request.
-   `McpStdioClient` (NDJSON JSON-RPC: initialize handshake, cursor-paginated
-   `tools/list`, `tools/call`, per-request timeouts, method-not-found
-   answers to server-initiated requests) serves hosts embedding the
-   runtime directly; the desktop keeps the recorded architecture — servers
-   launch host-side (Electron main) and arrive through
+   `McpStdioClient` handles local child processes and
+   `McpStreamableHttpClient` uses the official MCP SDK for remote HTTP
+   sessions; both paginate `tools/list`, share the same catalog cap, and
+   serve hosts embedding the runtime directly. The desktop keeps the
+   recorded architecture — transports live host-side (Electron main) and arrive through
    `ToolRouter.register_remote`, whose invoker contract is identical to
    `register_mcp_catalog`'s.
 

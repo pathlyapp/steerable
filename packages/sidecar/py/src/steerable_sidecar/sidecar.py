@@ -71,7 +71,8 @@ from steerable_agent_runtime import (
     JsonApprovalStore,
     LoopConfig,
     LoopHooks,
-    McpStdioClient,
+    McpClient,
+    McpError,
     OrchestrationConfig,
     OrchestrationExecutor,
     PluginLoadError,
@@ -92,6 +93,7 @@ from steerable_agent_runtime import (
     ToolDispatchError,
     ToolRouter,
     TodoCompletionGate,
+    create_mcp_client,
     TodoPlanningNudge,
     TraceRecorder,
     WorldStateHooks,
@@ -1152,14 +1154,26 @@ class Sidecar:
         # as an unretrieved exception inside the background stream task).
         # Spawning/registration happens in _run_chat_stream_coreloop.
         mcp_param = params.get("mcp")
-        if isinstance(mcp_param, list):
+        if (
+            isinstance(mcp_param, list)
+            and not params.get("toolsViaHost")
+            and self._loop_hooks_factory is None
+        ):
             for index, server in enumerate(mcp_param):
-                if not isinstance(server, dict) or not server.get("command"):
+                if not isinstance(server, dict):
                     raise JsonRpcError(
-                        f"mcp[{index}] requires a non-empty 'command'",
+                        f"mcp[{index}] must be an object",
                         code=-32602,
                         kind="invalid_params",
                     )
+                try:
+                    create_mcp_client(server)
+                except McpError as exc:
+                    raise JsonRpcError(
+                        f"mcp[{index}]: {exc}",
+                        code=-32602,
+                        kind="invalid_params",
+                    ) from exc
         if use_coreloop:
             task = asyncio.create_task(
                 self._run_chat_stream_coreloop_guarded(
@@ -1680,9 +1694,9 @@ class Sidecar:
         terminal tool-free response reaches the host; the durable record and
         trace still retain every intermediate assistant turn.
 
-        ``mcp`` mounts per-turn MCP servers on the sidecar-local path:
-        ``[{"name", "command", "args"?, "env"?}]`` spawns one
-        ``McpStdioClient`` per entry, registers its catalog under the
+        ``mcp`` mounts per-turn MCP servers on the sidecar-local path.
+        Stdio entries use ``command`` and Streamable HTTP entries use
+        ``url``; each client registers its catalog under the
         ``mcp__<name>__<tool>`` prefix on this turn's router, and closes the
         clients when the stream ends (completion, error, or cancel). It is
         the sidecar-local counterpart of the ACP adapter's ``mcpServers``
@@ -1691,13 +1705,13 @@ class Sidecar:
         """
 
         # mcp: per-turn MCP servers on the sidecar-local path. Each entry
-        # spawns one McpStdioClient; its catalog is registered on this turn's
-        # router under the ``mcp__<name>__<tool>`` prefix. Clients are closed
+        # creates one transport client; its catalog is registered on this
+        # turn's router under the ``mcp__<name>__<tool>`` prefix. Clients close
         # in this method's ``finally`` so a completion, error, or cancel never
-        # leaks a subprocess. Skipped under toolsViaHost (the host owns
+        # leaks a transport. Skipped under toolsViaHost (the host owns
         # execution there) and when an embedder replaces the whole harness
         # (the hooks factory owns the tool surface).
-        mcp_clients: list[McpStdioClient] = []
+        mcp_clients: list[McpClient] = []
         mcp_param = params.get("mcp")
         if (
             isinstance(mcp_param, list)
@@ -1708,15 +1722,7 @@ class Sidecar:
             # Entries were shape-validated in _handle_chat_stream.
             for index, server in enumerate(mcp_param):
                 name = str(server.get("name") or f"mcp{index}")
-                client = McpStdioClient(
-                    str(server["command"]),
-                    [str(a) for a in server.get("args") or []],
-                    env={
-                        str(k): str(v)
-                        for k, v in (server.get("env") or {}).items()
-                    }
-                    or None,
-                )
+                client = create_mcp_client(server)
                 await client.start()
                 mcp_clients.append(client)
                 catalog = await client.list_tools()
@@ -2375,7 +2381,7 @@ class Sidecar:
             self._coreloops.pop(stream_id, None)
             for client in mcp_clients:
                 # Close every per-turn MCP client (completion, error, or
-                # cancel) so no server subprocess outlives its stream.
+                # cancel) so no transport outlives its stream.
                 await client.aclose()
             if orchestration is not None:
                 # Wind down any children still running when the parent ends

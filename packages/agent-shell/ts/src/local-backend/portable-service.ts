@@ -238,19 +238,36 @@ async function applyMcp(
   if (!mcp) return 'MCP 注册表不可用';
   for (const server of servers) {
     const name = server.name?.trim();
-    const command = server.command?.trim();
-    if (!name || !command) continue;
-    const input: CreateMcpServerInput = {
-      name,
-      command,
-      args: Array.isArray(server.args) ? server.args.map((arg) => String(arg)) : [],
-      cwd: server.cwd,
-      enabled: server.enabled !== false,
-      ...(server.envIncluded && server.env ? { env: server.env } : {}),
-    };
+    if (!name) continue;
+    const input: CreateMcpServerInput =
+      server.transport === 'streamable-http'
+        ? {
+            name,
+            transport: 'streamable-http',
+            url: server.url?.trim() ?? '',
+            headers: server.headers ?? {},
+            headersFromEnv: server.headersFromEnv ?? {},
+            bearerTokenEnvVar: server.bearerTokenEnvVar,
+            enabled: server.enabled !== false,
+          }
+        : {
+            name,
+            transport: 'stdio',
+            command: server.command?.trim() ?? '',
+            args: Array.isArray(server.args) ? server.args.map((arg) => String(arg)) : [],
+            cwd: server.cwd,
+            enabled: server.enabled !== false,
+            ...(server.envIncluded && server.env ? { env: server.env } : {}),
+          };
+    if (
+      (input.transport === 'stdio' && !input.command) ||
+      (input.transport === 'streamable-http' && !input.url)
+    ) {
+      continue;
+    }
     const existing = mcp.list().find((item) => item.name.toLowerCase() === name.toLowerCase());
     if (existing) mcp.update(existing.id, input);
-    else mcp.create({ ...input, env: input.env ?? {} });
+    else mcp.create(input);
   }
   return null;
 }

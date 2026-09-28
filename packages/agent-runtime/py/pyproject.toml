@@ -13,6 +13,11 @@ requires-python = ">=3.10"
 # CoreLoop execution is the Rust engine. The matching native wheel
 # is a hard dependency: install or startup fails if it is missing.
 dependencies = [
+  # MCP Streamable HTTP and OpenAI-compatible providers both construct httpx
+  # clients. Keep SOCKS support in the base install because exported proxy
+  # variables are evaluated during client construction.
+  "httpx[socks]>=0.27",
+  "mcp>=1.13.0,<2.0.0",
   "pydantic>=2.10.0",
   "steerable-agent-protocol>=0.1.0,<1.0.0",
   "steerable-agent-harness>=0.1.0,<1.0.0",
@@ -22,17 +27,12 @@ dependencies = [
 [project.optional-dependencies]
 sqlalchemy = ["sqlalchemy>=2.0"]
 fastapi = ["fastapi>=0.110", "starlette>=0.37"]
-# The `socks` extra is not optional in practice: httpx builds a transport for
-# every proxy the environment declares while the client is constructed, so a
-# host exporting `all_proxy=socks5://…` — the common shell proxy snippet — makes
-# construction raise without it, failing provider calls that never reach a URL.
-openai = ["httpx[socks]>=0.27"]
+openai = []
 anthropic = ["anthropic>=0.40"]
 all = [
   "sqlalchemy>=2.0",
   "fastapi>=0.110",
   "starlette>=0.37",
-  "httpx[socks]>=0.27",
   "anthropic>=0.40",
 ]
 

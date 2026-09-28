@@ -101,9 +101,14 @@ export interface PortableWebSearchSection {
 
 export interface PortableMcpSection {
   name: string;
-  command: string;
-  args: string[];
+  transport: 'stdio' | 'streamable-http';
+  command?: string;
+  args?: string[];
   cwd?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  headersFromEnv?: Record<string, string>;
+  bearerTokenEnvVar?: string;
   enabled: boolean;
   envIncluded: boolean;
   env?: Record<string, string>;
@@ -297,25 +302,48 @@ export function webSearchSectionFromSettings(
 }
 
 export function mcpSectionFromServer(
-  server: {
-    name: string;
-    command: string;
-    args: string[];
-    cwd?: string;
-    enabled: boolean;
-    env: Record<string, string>;
-  },
+  server:
+    | {
+        name: string;
+        transport: 'stdio';
+        command: string;
+        args: string[];
+        cwd?: string;
+        enabled: boolean;
+        env: Record<string, string>;
+      }
+    | {
+        name: string;
+        transport: 'streamable-http';
+        url: string;
+        headers: Record<string, string>;
+        headersFromEnv: Record<string, string>;
+        bearerTokenEnvVar?: string;
+        enabled: boolean;
+      },
   includeSecrets: boolean,
 ): PortableMcpSection {
-  return {
-    name: server.name,
-    command: server.command,
-    args: [...server.args],
-    cwd: server.cwd,
-    enabled: server.enabled,
-    envIncluded: includeSecrets,
-    ...(includeSecrets ? { env: { ...server.env } } : {}),
-  };
+  return server.transport === 'stdio'
+    ? {
+        name: server.name,
+        transport: 'stdio',
+        command: server.command,
+        args: [...server.args],
+        cwd: server.cwd,
+        enabled: server.enabled,
+        envIncluded: includeSecrets,
+        ...(includeSecrets ? { env: { ...server.env } } : {}),
+      }
+    : {
+        name: server.name,
+        transport: 'streamable-http',
+        url: server.url,
+        headers: { ...server.headers },
+        headersFromEnv: { ...server.headersFromEnv },
+        bearerTokenEnvVar: server.bearerTokenEnvVar,
+        enabled: server.enabled,
+        envIncluded: false,
+      };
 }
 
 /**

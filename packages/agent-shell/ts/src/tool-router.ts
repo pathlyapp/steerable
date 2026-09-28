@@ -321,7 +321,9 @@ export class ToolRouter {
     return [
       {
         name: 'local_exec_shell',
-        description: 'Execute a local shell command',
+        description:
+          'Execute a shell command in a pseudo-terminal. Set pty to false for a plain pipe. ' +
+          'When this host is configured with a remote endpoint, the command runs on that host instead of this machine.',
         mode: 'destructive',
         inputSchema: {
           type: 'object',
@@ -329,6 +331,7 @@ export class ToolRouter {
             command: { type: 'string' },
             cwd: { type: 'string' },
             timeout: { type: 'number', description: 'Timeout in milliseconds (e.g. 30000). If a small number like 15 or 30 is provided, it is assumed to be in seconds and automatically multiplied by 1000.' },
+            pty: { type: 'boolean', description: 'Run in a pseudo-terminal. Defaults to true.' },
           },
           required: ['command'],
         },
@@ -537,32 +540,37 @@ export class ToolRouter {
       },
       {
         name: 'mcp_list_tools',
-        description: 'List tools from one MCP server',
+        description:
+          'List tools from one MCP server. Pass command for stdio or url for unauthenticated Streamable HTTP.',
         mode: 'external',
         inputSchema: {
           type: 'object',
           properties: {
             command: { type: 'string' },
+            url: { type: 'string' },
             args: { type: 'array', items: { type: 'string' } },
             cwd: { type: 'string' },
           },
-          required: ['command'],
+          additionalProperties: false,
         },
       },
       {
         name: 'mcp_tool_exec',
-        description: 'Execute one MCP tool',
+        description:
+          'Execute one MCP tool. Pass command for stdio or url for unauthenticated Streamable HTTP.',
         mode: 'external',
         inputSchema: {
           type: 'object',
           properties: {
             command: { type: 'string' },
+            url: { type: 'string' },
             args: { type: 'array', items: { type: 'string' } },
             cwd: { type: 'string' },
             toolName: { type: 'string' },
             toolArgs: { type: 'object' },
           },
-          required: ['command', 'toolName'],
+          required: ['toolName'],
+          additionalProperties: false,
         },
       },
       // deferred 层的发现缝（Wave 2 工具分层）：MCP 动态工具不占每轮
@@ -1082,6 +1090,7 @@ export class ToolRouter {
             command: String(args.command || ''),
             cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
             timeout: typeof args.timeout === 'number' ? args.timeout : undefined,
+            pty: args.pty !== false,
           },
           projectRoot,
           context?.additionalWriteRoots ?? null,
@@ -1518,8 +1527,14 @@ export class ToolRouter {
   }
 
   private resolveMcpConfig(args: Record<string, unknown>): McpServerConfig {
+    const command = typeof args.command === 'string' ? args.command.trim() : '';
+    const url = typeof args.url === 'string' ? args.url.trim() : '';
+    if (command && url) throw new Error('MCP 调用只能提供 command 或 url 之一');
+    if (url) return { transport: 'streamable-http', url };
+    if (!command) throw new Error('MCP 调用需要 command（stdio）或 url（Streamable HTTP）');
     return {
-      command: String(args.command || ''),
+      transport: 'stdio',
+      command,
       args: Array.isArray(args.args) ? args.args.map(item => String(item)) : undefined,
       cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
     };

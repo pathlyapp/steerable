@@ -136,6 +136,16 @@ export interface LocalBackendResponse<T = unknown> {
   data: T;
 }
 
+function stringRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      String(item),
+    ]),
+  );
+}
+
 function parseSourceFolders(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -1341,7 +1351,7 @@ export class LocalBackendRouter {
       const servers = registry.list().map((s) => {
         const cached = registry.getCachedTools(s.id);
         return {
-          ...s,
+          ...registry.toPublicEntry(s),
           serverKey: registry.serverKey(s),
           toolCount: cached?.tools.length ?? 0,
           toolsPreview: cached?.tools.slice(0, 8).map((t) => t.name) ?? [],
@@ -1357,22 +1367,37 @@ export class LocalBackendRouter {
       if (!registry) return { status: 503, data: { error: 'MCP 注册表不可用' } };
       try {
         const payload = this.toRecord(request.body);
-        const entry = registry.create({
-          name: String(payload.name ?? ''),
-          command: String(payload.command ?? ''),
-          args: Array.isArray(payload.args) ? payload.args.map((a) => String(a)) : [],
-          env:
-            payload.env && typeof payload.env === 'object' && !Array.isArray(payload.env)
-              ? Object.fromEntries(
-                  Object.entries(payload.env as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
-                )
-              : {},
-          cwd: typeof payload.cwd === 'string' ? payload.cwd : undefined,
-          enabled: payload.enabled !== false,
-        });
+        const entry = payload.transport === 'streamable-http'
+          ? registry.create({
+              name: String(payload.name ?? ''),
+              transport: 'streamable-http',
+              url: String(payload.url ?? ''),
+              headers: stringRecord(payload.headers),
+              headersFromEnv: stringRecord(payload.headersFromEnv),
+              bearerTokenEnvVar:
+                typeof payload.bearerTokenEnvVar === 'string'
+                  ? payload.bearerTokenEnvVar
+                  : undefined,
+              reconnect:
+                payload.reconnect &&
+                typeof payload.reconnect === 'object' &&
+                !Array.isArray(payload.reconnect)
+                  ? payload.reconnect as Record<string, number>
+                  : undefined,
+              enabled: payload.enabled !== false,
+            })
+          : registry.create({
+              name: String(payload.name ?? ''),
+              transport: 'stdio',
+              command: String(payload.command ?? ''),
+              args: Array.isArray(payload.args) ? payload.args.map((a) => String(a)) : [],
+              env: stringRecord(payload.env),
+              cwd: typeof payload.cwd === 'string' ? payload.cwd : undefined,
+              enabled: payload.enabled !== false,
+            });
         // 后台拉一次工具列表，下一轮对话即可用；失败不阻塞创建
         void registry.refreshTools(entry.id).catch(() => {});
-        return { status: 200, data: { server: entry } };
+        return { status: 200, data: { server: registry.toPublicEntry(entry) } };
       } catch (err) {
         return { status: 400, data: { error: err instanceof Error ? err.message : String(err) } };
       }
@@ -1391,7 +1416,7 @@ export class LocalBackendRouter {
         return {
           status: 200,
           data: {
-            added: result.added,
+            added: result.added.map((entry) => registry.toPublicEntry(entry)),
             skipped: result.skipped,
           },
         };
@@ -1414,19 +1439,36 @@ export class LocalBackendRouter {
           const payload = this.toRecord(request.body);
           const updated = registry.update(serverId, {
             name: typeof payload.name === 'string' ? payload.name : undefined,
+            transport:
+              payload.transport === 'stdio' || payload.transport === 'streamable-http'
+                ? payload.transport
+                : undefined,
             command: typeof payload.command === 'string' ? payload.command : undefined,
             args: Array.isArray(payload.args) ? payload.args.map((a) => String(a)) : undefined,
             env:
               payload.env && typeof payload.env === 'object' && !Array.isArray(payload.env)
-                ? Object.fromEntries(
-                    Object.entries(payload.env as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
-                  )
+                ? stringRecord(payload.env)
                 : undefined,
             cwd: typeof payload.cwd === 'string' ? payload.cwd : undefined,
+            url: typeof payload.url === 'string' ? payload.url : undefined,
+            headers:
+              payload.headers && typeof payload.headers === 'object' && !Array.isArray(payload.headers)
+                ? stringRecord(payload.headers)
+                : undefined,
+            headersFromEnv:
+              payload.headersFromEnv &&
+              typeof payload.headersFromEnv === 'object' &&
+              !Array.isArray(payload.headersFromEnv)
+                ? stringRecord(payload.headersFromEnv)
+                : undefined,
+            bearerTokenEnvVar:
+              typeof payload.bearerTokenEnvVar === 'string'
+                ? payload.bearerTokenEnvVar
+                : undefined,
             enabled: typeof payload.enabled === 'boolean' ? payload.enabled : undefined,
           });
           if (updated.enabled) void registry.refreshTools(updated.id).catch(() => {});
-          return { status: 200, data: { server: updated } };
+          return { status: 200, data: { server: registry.toPublicEntry(updated) } };
         } catch (err) {
           return { status: 400, data: { error: err instanceof Error ? err.message : String(err) } };
         }

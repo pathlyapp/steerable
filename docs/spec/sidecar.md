@@ -330,17 +330,19 @@ are on, delegation and the six-tool family share ONE pool — one
 `maxParallel` budget and one lineage space, and delegate children appear
 in `agent_list`.
 
-Per-turn MCP servers mount via `mcp: [{name?, command, args?, env?}]` in
-`params` (CoreLoop, sidecar-local path only). Each entry spawns one stdio
-MCP server subprocess; its tools are registered on the turn's router under
-the `mcp__<name>__<tool>` prefix and are callable by the model like any
-local tool. Every entry needs a non-empty `command` — a malformed entry
-fails the request with `invalid_params` before any provider call. Clients
-are closed when the stream ends (completion, error, or cancel), so no
-server subprocess outlives its turn. The param is ignored under
+Per-turn MCP servers mount via `mcp` in `params` (CoreLoop, sidecar-local
+path only). Entries use `transport: "stdio"` with `command`, `args`, and
+`env`, or `transport: "streamable-http"` with `url`, `headers`,
+`headersFromEnv`, and `bearerTokenEnvVar`; legacy entries without
+`transport` are discriminated by `command` versus `url`. HTTP header and
+bearer environment references resolve only in memory. Tools register on
+the turn's router under the `mcp__<name>__<tool>` prefix and are callable
+by the model like any local tool. Malformed entries fail with
+`invalid_params` before any provider call. Clients close when the stream
+ends (completion, error, or cancel). The param is ignored under
 `toolsViaHost` (the host owns tool execution there) and when an embedder
 replaces the harness via a hooks factory. This mirrors the ACP adapter's
-`mcpServers` wiring; HTTP/SSE MCP transports remain an honest gap.
+`mcpServers` wiring; legacy HTTP SSE remains unsupported.
 
 ## `agent.session.tree` payload
 

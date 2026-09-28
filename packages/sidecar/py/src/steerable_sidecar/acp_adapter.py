@@ -67,6 +67,7 @@ from acp.schema import (
     EnvVarAuthMethod,
     Implementation,
     InitializeResponse,
+    McpCapabilities,
     NewSessionResponse,
     PermissionOption,
     PromptCapabilities,
@@ -111,7 +112,7 @@ class _Session:
     # Hydration re-seeds it from the durable record (CC seed_read_state).
     read_file_state: dict[str, str] = field(default_factory=dict)
     approvals: SessionApprovalCache = field(default_factory=SessionApprovalCache)
-    #: MCP servers the client asked to mount (W3.4.2.1); stdio-only today.
+    #: MCP servers the client asked to mount (W3.4.2.1).
     mcp_servers: list[Any] = field(default_factory=list)
     #: Session mode (W3.4.2.3): "default" runs the full surface;
     #: "read-only" denies every non-read tool call before approval.
@@ -338,6 +339,7 @@ class SteerableAcpAgent(acp.Agent):
             protocol_version=protocol_version,
             agent_capabilities=AgentCapabilities(
                 load_session=True,
+                mcp_capabilities=McpCapabilities(http=True, sse=False, acp=False),
                 prompt_capabilities=PromptCapabilities(
                     image=False, audio=False, embedded_context=False
                 ),
@@ -416,19 +418,20 @@ class SteerableAcpAgent(acp.Agent):
     ) -> NewSessionResponse:
         from datetime import datetime, timezone
 
-        from acp.schema import McpServerStdio
+        from acp.schema import McpServerHttp, McpServerStdio
         from steerable_agent_protocol.generated import AgentSession
 
         session_id = uuid.uuid4().hex
         servers = list(mcp_servers or [])
-        # Stdio-only today (W3.4.2.1): HTTP/SSE transports are an honest
-        # gap — fail loud at session creation rather than silently dropping
-        # the tools the client asked to mount.
-        unsupported = [s for s in servers if not isinstance(s, McpServerStdio)]
+        unsupported = [
+            server
+            for server in servers
+            if not isinstance(server, (McpServerStdio, McpServerHttp))
+        ]
         if unsupported:
             raise acp.RequestError(
                 -32602,
-                "only stdio MCP servers are supported; got "
+                "only stdio and Streamable HTTP MCP servers are supported; got "
                 + ", ".join(type(s).__name__ for s in unsupported),
             )
         self._sessions[session_id] = _Session(cwd=cwd, mcp_servers=servers)
@@ -787,21 +790,34 @@ class SteerableAcpAgent(acp.Agent):
         )
 
     async def _mount_mcp(self, router: ToolRouter, session: _Session) -> list[Any]:
-        """W3.4.2.1: spawn the session's stdio MCP servers and register
-        their catalogs on this prompt's router (qualified names)."""
+        """Mount the session's MCP servers on this prompt's router."""
+        from acp.schema import McpServerHttp, McpServerStdio
         from steerable_agent_runtime.mcp import (
-            McpStdioClient,
+            create_mcp_client,
             mcp_invoker,
             register_mcp_catalog,
         )
 
         clients: list[Any] = []
         for server in session.mcp_servers:
-            client = McpStdioClient(
-                server.command,
-                server.args,
-                env={e.name: e.value for e in (server.env or [])},
-            )
+            if isinstance(server, McpServerStdio):
+                config = {
+                    "transport": "stdio",
+                    "command": server.command,
+                    "args": server.args,
+                    "env": {entry.name: entry.value for entry in (server.env or [])},
+                }
+            elif isinstance(server, McpServerHttp):
+                config = {
+                    "transport": "streamable-http",
+                    "url": server.url,
+                    "headers": {
+                        header.name: header.value for header in (server.headers or [])
+                    },
+                }
+            else:
+                raise RuntimeError(f"unsupported MCP server: {type(server).__name__}")
+            client = create_mcp_client(config)
             try:
                 await client.start()
                 tools = await client.list_tools()

@@ -98,14 +98,26 @@ export interface ProductConfig {
    * 产品预置 MCP 服务。按需引入，缺省空。已有同名服务不覆盖。
    * 设置页入口不受影响。
    */
-  builtinMcp?: Array<{
-    name: string;
-    command: string;
-    args?: string[];
-    env?: Record<string, string>;
-    cwd?: string;
-    enabled?: boolean;
-  }>;
+  builtinMcp?: Array<
+    | {
+        name: string;
+        transport?: 'stdio';
+        command: string;
+        args?: string[];
+        env?: Record<string, string>;
+        cwd?: string;
+        enabled?: boolean;
+      }
+    | {
+        name: string;
+        transport: 'streamable-http';
+        url: string;
+        headers?: Record<string, string>;
+        headersFromEnv?: Record<string, string>;
+        bearerTokenEnvVar?: string;
+        enabled?: boolean;
+      }
+  >;
   /**
    * P3.1 多智能体编排六件套 (agent_spawn / agent_wait / agent_send / agent_interrupt / agent_close / agent_list)。
    * 缺省关（仅开 delegate_subagent）；设为 true 或配置对象时在回合中启用。

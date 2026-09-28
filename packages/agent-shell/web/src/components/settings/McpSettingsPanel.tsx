@@ -26,10 +26,15 @@ import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
 export interface McpServerInfo {
   id: string;
   name: string;
-  command: string;
-  args: string[];
-  env: Record<string, string>;
+  transport: 'stdio' | 'streamable-http';
+  command?: string;
+  args?: string[];
+  envKeys?: string[];
   cwd?: string;
+  url?: string;
+  headerNames?: string[];
+  headersFromEnv?: Record<string, string>;
+  bearerTokenEnvVar?: string;
   enabled: boolean;
   serverKey: string;
   toolCount: number;
@@ -46,11 +51,16 @@ export function McpSettingsPanel() {
   const [mcpImportStatus, setMcpImportStatus] = useState<string | null>(null);
   const [mcpFormOpen, setMcpFormOpen] = useState(false);
   const [mcpEditingId, setMcpEditingId] = useState<string | null>(null);
+  const [mcpFormTransport, setMcpFormTransport] = useState<'stdio' | 'streamable-http'>('stdio');
   const [mcpFormName, setMcpFormName] = useState('');
   const [mcpFormCommand, setMcpFormCommand] = useState('');
   const [mcpFormArgs, setMcpFormArgs] = useState('');
   const [mcpFormEnv, setMcpFormEnv] = useState('');
   const [mcpFormCwd, setMcpFormCwd] = useState('');
+  const [mcpFormUrl, setMcpFormUrl] = useState('');
+  const [mcpFormHeaders, setMcpFormHeaders] = useState('');
+  const [mcpFormHeadersFromEnv, setMcpFormHeadersFromEnv] = useState('');
+  const [mcpFormBearerEnv, setMcpFormBearerEnv] = useState('');
   const [mcpSaving, setMcpSaving] = useState(false);
   const [mcpTestingId, setMcpTestingId] = useState<string | null>(null);
   const [mcpDeletingId, setMcpDeletingId] = useState<string | null>(null);
@@ -80,11 +90,16 @@ export function McpSettingsPanel() {
 
   const resetMcpForm = () => {
     setMcpEditingId(null);
+    setMcpFormTransport('stdio');
     setMcpFormName('');
     setMcpFormCommand('');
     setMcpFormArgs('');
     setMcpFormEnv('');
     setMcpFormCwd('');
+    setMcpFormUrl('');
+    setMcpFormHeaders('');
+    setMcpFormHeadersFromEnv('');
+    setMcpFormBearerEnv('');
   };
 
   const parseEnvLines = (raw: string): Record<string, string> => {
@@ -104,13 +119,27 @@ export function McpSettingsPanel() {
     setMcpSaving(true);
     setError(null);
     try {
-      const body = {
-        name: mcpFormName.trim(),
-        command: mcpFormCommand.trim(),
-        args: mcpFormArgs.split('\n').map((s) => s.trim()).filter(Boolean),
-        env: parseEnvLines(mcpFormEnv),
-        cwd: mcpFormCwd.trim() || undefined,
-      };
+      const body = mcpFormTransport === 'stdio'
+        ? {
+            name: mcpFormName.trim(),
+            transport: 'stdio',
+            command: mcpFormCommand.trim(),
+            args: mcpFormArgs.split('\n').map((s) => s.trim()).filter(Boolean),
+            ...(!mcpEditingId || mcpFormEnv.trim()
+              ? { env: parseEnvLines(mcpFormEnv) }
+              : {}),
+            cwd: mcpFormCwd.trim() || undefined,
+          }
+        : {
+            name: mcpFormName.trim(),
+            transport: 'streamable-http',
+            url: mcpFormUrl.trim(),
+            ...(!mcpEditingId || mcpFormHeaders.trim()
+              ? { headers: parseEnvLines(mcpFormHeaders) }
+              : {}),
+            headersFromEnv: parseEnvLines(mcpFormHeadersFromEnv),
+            bearerTokenEnvVar: mcpFormBearerEnv.trim() || undefined,
+          };
       if (mcpEditingId) {
         await getElectronBridge()!.localBackend.request({
           method: 'PUT',
@@ -136,15 +165,22 @@ export function McpSettingsPanel() {
 
   const handleEditMcpServer = (server: McpServerInfo) => {
     setMcpEditingId(server.id);
+    setMcpFormTransport(server.transport ?? 'stdio');
     setMcpFormName(server.name);
-    setMcpFormCommand(server.command);
+    setMcpFormCommand(server.command ?? '');
     setMcpFormArgs((server.args || []).join('\n'));
-    setMcpFormEnv(
-      Object.entries(server.env || {})
-        .map(([k, v]) => `${k}=${v}`)
+    // Stored values never return through the settings API. Blank preserves
+    // the existing env map; entering lines replaces it deliberately.
+    setMcpFormEnv('');
+    setMcpFormCwd(server.cwd || '');
+    setMcpFormUrl(server.url || '');
+    setMcpFormHeaders('');
+    setMcpFormHeadersFromEnv(
+      Object.entries(server.headersFromEnv ?? {})
+        .map(([header, variable]) => `${header}=${variable}`)
         .join('\n'),
     );
-    setMcpFormCwd(server.cwd || '');
+    setMcpFormBearerEnv(server.bearerTokenEnvVar || '');
     setMcpFormOpen(true);
   };
 
@@ -275,6 +311,16 @@ export function McpSettingsPanel() {
           <h4 className="text-xs font-semibold text-agent-foreground">
             {mcpEditingId ? '编辑 MCP 服务' : '手动添加 MCP 服务'}
           </h4>
+          <select
+            value={mcpFormTransport}
+            onChange={(event) =>
+              setMcpFormTransport(event.target.value as 'stdio' | 'streamable-http')
+            }
+            className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+          >
+            <option value="stdio">本地进程（stdio）</option>
+            <option value="streamable-http">远程服务（Streamable HTTP）</option>
+          </select>
           <div className="grid grid-cols-2 gap-2">
             <input
               type="text"
@@ -283,35 +329,73 @@ export function McpSettingsPanel() {
               placeholder="名称，如 filesystem"
               className="h-8 rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
             />
-            <input
-              type="text"
-              value={mcpFormCommand}
-              onChange={(e) => setMcpFormCommand(e.target.value)}
-              placeholder="启动命令，如 npx / uvx / node"
-              className="h-8 rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
-            />
+            {mcpFormTransport === 'stdio' ? (
+              <input
+                type="text"
+                value={mcpFormCommand}
+                onChange={(e) => setMcpFormCommand(e.target.value)}
+                placeholder="启动命令，如 npx / uvx / node"
+                className="h-8 rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+            ) : (
+              <input
+                type="url"
+                value={mcpFormUrl}
+                onChange={(e) => setMcpFormUrl(e.target.value)}
+                placeholder="https://example.com/mcp"
+                className="h-8 rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+            )}
           </div>
-          <textarea
-            value={mcpFormArgs}
-            onChange={(e) => setMcpFormArgs(e.target.value)}
-            placeholder="参数（每行一个），如：&#10;-y&#10;@modelcontextprotocol/server-filesystem&#10;C:/"
-            rows={3}
-            className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
-          />
-          <textarea
-            value={mcpFormEnv}
-            onChange={(e) => setMcpFormEnv(e.target.value)}
-            placeholder="环境变量（每行一个 KEY=VALUE，可留空）"
-            rows={2}
-            className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
-          />
-          <input
-            type="text"
-            value={mcpFormCwd}
-            onChange={(e) => setMcpFormCwd(e.target.value)}
-            placeholder="工作目录（可选）"
-            className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
-          />
+          {mcpFormTransport === 'stdio' ? (
+            <>
+              <textarea
+                value={mcpFormArgs}
+                onChange={(e) => setMcpFormArgs(e.target.value)}
+                placeholder="参数（每行一个）"
+                rows={3}
+                className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+              <textarea
+                value={mcpFormEnv}
+                onChange={(e) => setMcpFormEnv(e.target.value)}
+                placeholder={mcpEditingId ? '环境变量；留空保留现有值' : '环境变量（每行 KEY=VALUE）'}
+                rows={2}
+                className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+              <input
+                type="text"
+                value={mcpFormCwd}
+                onChange={(e) => setMcpFormCwd(e.target.value)}
+                placeholder="工作目录（可选）"
+                className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+            </>
+          ) : (
+            <>
+              <textarea
+                value={mcpFormHeaders}
+                onChange={(e) => setMcpFormHeaders(e.target.value)}
+                placeholder={mcpEditingId ? '普通请求头；留空保留现有值' : '普通请求头（每行 Header=Value）'}
+                rows={2}
+                className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+              <textarea
+                value={mcpFormHeadersFromEnv}
+                onChange={(e) => setMcpFormHeadersFromEnv(e.target.value)}
+                placeholder="环境变量请求头（每行 Header=ENV_NAME）"
+                rows={2}
+                className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+              <input
+                type="text"
+                value={mcpFormBearerEnv}
+                onChange={(e) => setMcpFormBearerEnv(e.target.value)}
+                placeholder="Bearer token 环境变量名（可选）"
+                className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+            </>
+          )}
           <div className="flex justify-end gap-2">
             <button
               type="button"
@@ -323,9 +407,19 @@ export function McpSettingsPanel() {
             <button
               type="button"
               onClick={handleSaveMcpServer}
-              disabled={mcpSaving || !mcpFormName.trim() || !mcpFormCommand.trim()}
+              disabled={
+                mcpSaving ||
+                !mcpFormName.trim() ||
+                (mcpFormTransport === 'stdio'
+                  ? !mcpFormCommand.trim()
+                  : !mcpFormUrl.trim())
+              }
               className={`h-8 px-4 rounded-full text-xs font-medium transition-all ${
-                mcpSaving || !mcpFormName.trim() || !mcpFormCommand.trim()
+                mcpSaving ||
+                !mcpFormName.trim() ||
+                (mcpFormTransport === 'stdio'
+                  ? !mcpFormCommand.trim()
+                  : !mcpFormUrl.trim())
                   ? 'bg-agent-muted text-agent-muted-foreground cursor-not-allowed'
                   : 'bg-agent-foreground text-agent-canvas hover:opacity-90'
               }`}
@@ -386,7 +480,9 @@ export function McpSettingsPanel() {
                     )}
                   </div>
                   <p className="text-[11px] text-agent-muted-foreground font-mono truncate">
-                    {server.command} {(server.args || []).join(' ')}
+                    {server.transport === 'streamable-http'
+                      ? server.url
+                      : `${server.command ?? ''} ${(server.args ?? []).join(' ')}`}
                   </p>
                   {server.lastError && (
                     <p className="text-[10px] text-agent-destructive line-clamp-2">
@@ -453,7 +549,7 @@ export function McpSettingsPanel() {
         )}
       </div>
       <p className="text-[10px] text-agent-muted-foreground">
-        已启用服务的工具会以 mcp__服务名__工具名 的形式直接提供给助手调用；新导入或修改后点「测试连接」即可生效。
+        支持 stdio 与 Streamable HTTP。密钥请填写环境变量名，不要写进普通请求头；已启用服务的工具通过 tool_search 提供给助手。
       </p>
 
       {error && (

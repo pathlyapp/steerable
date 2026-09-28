@@ -2,11 +2,33 @@ import { describe, expect, it } from 'vitest';
 
 import {
   llmSectionFromSettings,
+  mcpSectionFromServer,
   previewPortable,
   rewriteAttachmentRefs,
 } from '../../src/local-backend/portable-bundle.js';
 
 describe('portable bundle', () => {
+  it('保留 Streamable HTTP MCP 的传输与环境变量认证引用', () => {
+    expect(mcpSectionFromServer({
+      name: 'remote',
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/mcp',
+      headers: { 'X-Tenant': 'acme' },
+      headersFromEnv: { 'X-Api-Key': 'MCP_API_KEY' },
+      bearerTokenEnvVar: 'MCP_TOKEN',
+      enabled: true,
+    }, false)).toEqual({
+      name: 'remote',
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/mcp',
+      headers: { 'X-Tenant': 'acme' },
+      headersFromEnv: { 'X-Api-Key': 'MCP_API_KEY' },
+      bearerTokenEnvVar: 'MCP_TOKEN',
+      enabled: true,
+      envIncluded: false,
+    });
+  });
+
   it('默认不把模型钥匙写进配置段', () => {
     const section = llmSectionFromSettings(
       {

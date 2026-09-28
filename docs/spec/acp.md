@@ -72,10 +72,10 @@ and environment. Point it at `steerable-sidecar-acp` with the env above.
   `fs.writeTextFile`, file tools round-trip through the editor so unsaved
   buffers are authoritative; `terminal/*` runs one-shot commands on the
   client's terminal.
-- **MCP servers** — `new_session` accepts stdio `mcpServers`; their tools are
-  registered under the `mcp__<server>__<tool>` prefix for the session.
-  HTTP/SSE MCP transports fail loud at session creation (an honest gap, not
-  a silent drop).
+- **MCP servers** — `new_session` accepts stdio and HTTP `mcpServers`; HTTP
+  uses the MCP SDK's Streamable HTTP transport. Their tools are registered
+  under the `mcp__<server>__<tool>` prefix for the session. Legacy SSE and
+  ACP-proxied transports fail loud at session creation.
 
 ## Boundary
 

@@ -837,6 +837,7 @@ export function makeMcpRegistry(options: {
   const toolCache = options.toolCache ?? new Map();
   return {
     list: vi.fn(() => servers),
+    toPublicEntry: vi.fn((server: Record<string, unknown>) => ({ ...server })),
     getCachedTools: vi.fn((id: string) => toolCache.get(id) ?? null),
     serverKey: vi.fn((s: { id: string }) => `key-${s.id}`),
     refreshTools: vi.fn(async (id: string) => {

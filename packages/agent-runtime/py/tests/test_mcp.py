@@ -10,8 +10,11 @@ The end-to-end test runs the full chain: server → catalog → deferred tier
 
 from __future__ import annotations
 
+import socket
+import subprocess
 import sys
 import textwrap
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -24,10 +27,12 @@ from steerable_agent_runtime import (
     LLMMessage,
     McpCatalogError,
     McpError,
+    McpStreamableHttpClient,
     McpStdioClient,
     McpToolInfo,
     RouterToolExecutor,
     ToolRouter,
+    create_mcp_client,
     mcp_invoker,
     parse_mcp_name,
     qualify_mcp_name,
@@ -319,6 +324,69 @@ def fake_server(tmp_path: Path) -> Path:
     return script
 
 
+_FAKE_HTTP_SERVER = textwrap.dedent(
+    """
+    import sys
+
+    from mcp.server.fastmcp import Context, FastMCP
+
+    server = FastMCP(
+        "fake-http-mcp",
+        host="127.0.0.1",
+        port=int(sys.argv[1]),
+        stateless_http=True,
+    )
+
+    @server.tool()
+    def echo_headers(text: str, ctx: Context) -> str:
+        headers = ctx.request_context.request.headers
+        return "|".join(
+            (
+                "echo:" + text,
+                "tenant:" + str(headers.get("x-tenant") == "acme"),
+                "api:" + str(headers.get("x-api-key") == "api-secret"),
+                "auth:" + str(
+                    headers.get("authorization") == "Bearer bearer-secret"
+                ),
+            )
+        )
+
+    server.run(transport="streamable-http")
+    """
+)
+
+
+@pytest.fixture()
+def fake_http_server(tmp_path: Path) -> str:
+    script = tmp_path / "fake_http_mcp_server.py"
+    script.write_text(_FAKE_HTTP_SERVER)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    process = subprocess.Popen(
+        [sys.executable, str(script), str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("fake Streamable HTTP MCP server exited during startup")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                break
+        except OSError:
+            time.sleep(0.05)
+    else:
+        process.terminate()
+        raise RuntimeError("fake Streamable HTTP MCP server did not start")
+    try:
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
 @pytest.mark.asyncio
 async def test_stdio_client_handshake_list_and_call(fake_server: Path) -> None:
     async with McpStdioClient(sys.executable, [str(fake_server)]) as client:
@@ -374,6 +442,93 @@ async def test_stdio_client_use_before_start_fails(fake_server: Path) -> None:
     client = McpStdioClient(sys.executable, [str(fake_server)])
     with pytest.raises(McpError, match="not running"):
         await client.call_tool("echo", {})
+
+
+def test_create_mcp_client_supports_explicit_and_legacy_transports() -> None:
+    assert isinstance(
+        create_mcp_client({"transport": "stdio", "command": "server"}),
+        McpStdioClient,
+    )
+    assert isinstance(create_mcp_client({"command": "server"}), McpStdioClient)
+    assert isinstance(
+        create_mcp_client(
+            {"transport": "streamable-http", "url": "https://example.test/mcp"}
+        ),
+        McpStreamableHttpClient,
+    )
+    assert isinstance(
+        create_mcp_client({"url": "https://example.test/mcp"}),
+        McpStreamableHttpClient,
+    )
+
+
+def test_create_mcp_client_rejects_mixed_transport_config() -> None:
+    with pytest.raises(McpError, match="both 'command' and 'url'"):
+        create_mcp_client(
+            {"command": "server", "url": "https://example.test/mcp"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_client_uses_sdk_and_env_headers(
+    fake_http_server: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MCP_API_KEY", "api-secret")
+    monkeypatch.setenv("MCP_BEARER", "bearer-secret")
+    config = {
+        "transport": "streamable-http",
+        "url": fake_http_server,
+        "headers": {"X-Tenant": "acme"},
+        "headersFromEnv": {"X-Api-Key": "MCP_API_KEY"},
+        "bearerTokenEnvVar": "MCP_BEARER",
+    }
+    async with create_mcp_client(config) as client:
+        tools = await client.list_tools()
+        assert [tool.name for tool in tools] == ["echo_headers"]
+        result = await client.call_tool("echo_headers", {"text": "hello"})
+    assert result.text == "echo:hello|tenant:True|api:True|auth:True"
+    assert "api-secret" not in result.text
+    assert "bearer-secret" not in result.text
+    assert "api-secret" not in repr(config)
+    assert "bearer-secret" not in repr(config)
+
+
+def test_streamable_http_client_requires_env_header_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MISSING_MCP_TOKEN", raising=False)
+    with pytest.raises(McpError, match="MISSING_MCP_TOKEN"):
+        create_mcp_client(
+            {
+                "url": "https://example.test/mcp",
+                "headersFromEnv": {"X-Api-Key": "MISSING_MCP_TOKEN"},
+            }
+        )
+
+
+def test_streamable_http_client_rejects_url_credentials() -> None:
+    with pytest.raises(McpError, match="credentials"):
+        create_mcp_client({"url": "https://user:secret@example.test/mcp"})
+
+
+def test_streamable_http_client_redacts_header_values_from_errors() -> None:
+    client = create_mcp_client(
+        {
+            "url": "https://example.test/mcp",
+            "headers": {"X-Api-Key": "direct-secret"},
+            "headersFromEnv": {"X-Other-Key": "OTHER_KEY"},
+            "bearerTokenEnvVar": "BEARER_KEY",
+        },
+        environ={"OTHER_KEY": "env-secret", "BEARER_KEY": "bearer-secret"},
+    )
+    assert isinstance(client, McpStreamableHttpClient)
+    error = client._error(
+        "test", RuntimeError("direct-secret env-secret bearer-secret")
+    )
+    assert str(error) == (
+        "MCP Streamable HTTP test failed: [redacted] [redacted] [redacted]"
+    )
 
 
 # ---------------------------------------------------------------------------

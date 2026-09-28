@@ -21,8 +21,9 @@ from typing import Any
 from steerable_agent_runtime import (
     CoreLoop,
     LoopConfig,
-    McpStdioClient,
+    McpClient,
     RouterToolExecutor,
+    create_mcp_client,
     mcp_invoker,
     register_mcp_catalog,
     resolve_compaction_policy,
@@ -275,8 +276,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             'Per-run MCP servers as a JSON list: '
-            '\'[{"name","command","args":[],"env":{}}]\'. Each spawns a stdio '
-            "MCP server; its tools are registered under the "
+            '\'[{"name","transport":"stdio","command","args":[],"env":{}},'
+            '{"name","transport":"streamable-http","url"}]\'. Tools are '
+            "registered under the "
             "mcp__<name>__<tool> prefix. Mirrors the sidecar chat path's "
             "'mcp' param."
         ),
@@ -505,20 +507,15 @@ async def _run(
     provider = default_llm_provider_factory(params)
     # mcp: per-run MCP servers, mounted after the workspace tools so their
     # catalogs register on the same router under the mcp__<name>__<tool>
-    # prefix. Clients are closed in the run's finally so no server subprocess
+    # prefix. Clients are closed in the run's finally so no transport
     # outlives the run (completion, error, or hard timeout).
-    mcp_clients: list[McpStdioClient] = []
+    mcp_clients: list[McpClient] = []
     if mcp_servers:
         for index, server in enumerate(mcp_servers):
-            if not isinstance(server, dict) or not server.get("command"):
-                raise ValueError(f"mcp[{index}] requires a non-empty 'command'")
+            if not isinstance(server, dict):
+                raise ValueError(f"mcp[{index}] must be an object")
             name = str(server.get("name") or f"mcp{index}")
-            client = McpStdioClient(
-                str(server["command"]),
-                [str(a) for a in server.get("args") or []],
-                env={str(k): str(v) for k, v in (server.get("env") or {}).items()}
-                or None,
-            )
+            client = create_mcp_client(server)
             await client.start()
             mcp_clients.append(client)
             catalog = await client.list_tools()

@@ -24,6 +24,7 @@ import {
   McpServerRegistry,
   type McpServerEntry,
 } from '../mcp-server-registry.js';
+import { mcpExecutor } from '../mcp-executor.js';
 import { ProjectRegistry, type ProjectRecord } from '../project-registry.js';
 import { getProductConfig } from '../product-config.js';
 import { LocalBackendRouter } from '../local-backend/router.js';
@@ -358,6 +359,7 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
       for (const handle of [...packHandles.values()].reverse()) {
         await handle.dispose?.();
       }
+      await mcpExecutor.shutdownAll();
       await shutdownHostSidecar();
       await closeStorage();
     },

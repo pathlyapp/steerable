@@ -5,8 +5,8 @@ import {
   type McpServerEntry,
 } from '../src/mcp-server-registry.js';
 
-function makeMemoryStore() {
-  let data: McpServerEntry[] = [];
+function makeMemoryStore(initial: McpServerEntry[] = []) {
+  let data: McpServerEntry[] = initial;
   return {
     get: (key: 'mcpServers') => (key === 'mcpServers' ? data : undefined),
     set: (key: 'mcpServers', value: McpServerEntry[]) => {
@@ -35,6 +35,83 @@ describe('mcp-server-registry / CRUD', () => {
     expect(() => registry.create({ name: '  ', command: 'npx' })).toThrow('名称不能为空');
     expect(() => registry.create({ name: 'b', command: ' ' })).toThrow('命令不能为空');
     expect(() => registry.create({ name: 'A', command: 'npx' })).toThrow('同名');
+  });
+
+  it('旧 stdio 记录在读取时迁移为显式 transport', () => {
+    const legacy = {
+      id: 'legacy',
+      name: 'legacy',
+      command: 'npx',
+      args: ['server'],
+      env: {},
+      enabled: true,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    } as McpServerEntry;
+    const registry = new McpServerRegistry(makeMemoryStore([legacy]));
+    expect(registry.list()[0]).toMatchObject({
+      transport: 'stdio',
+      command: 'npx',
+      args: ['server'],
+    });
+  });
+
+  it('创建 Streamable HTTP 服务并拒绝混合配置、非法 URL 和明文 Authorization', () => {
+    const registry = makeRegistry();
+    const entry = registry.create({
+      name: 'remote',
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/mcp',
+      headers: { 'X-Tenant': 'acme' },
+      headersFromEnv: { 'X-Api-Key': 'MCP_API_KEY' },
+      bearerTokenEnvVar: 'MCP_TOKEN',
+    });
+    expect(entry).toMatchObject({
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/mcp',
+    });
+    expect(() => registry.create({
+      name: 'bad-url',
+      transport: 'streamable-http',
+      url: 'file:///tmp/mcp',
+    })).toThrow(/http/);
+    expect(() => registry.create({
+      name: 'mixed',
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/mcp',
+      command: 'node',
+    } as never)).toThrow(/command/);
+    expect(() => registry.create({
+      name: 'secret',
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/mcp',
+      headers: { Authorization: 'Bearer plaintext' },
+    })).toThrow(/Authorization/);
+  });
+
+  it('公开投影不回传 stdio env 或 HTTP header 值', () => {
+    const registry = makeRegistry();
+    const local = registry.create({
+      name: 'local',
+      command: 'node',
+      env: { API_TOKEN: 'secret' },
+    });
+    const remote = registry.create({
+      name: 'remote',
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/mcp',
+      headers: { 'X-Tenant': 'acme' },
+      headersFromEnv: { 'X-Api-Key': 'MCP_API_KEY' },
+      bearerTokenEnvVar: 'MCP_TOKEN',
+    });
+    expect(JSON.stringify(registry.toPublicEntry(local))).not.toContain('secret');
+    const projected = registry.toPublicEntry(remote);
+    expect(JSON.stringify(projected)).not.toContain('acme');
+    expect(projected).toMatchObject({
+      headerNames: ['X-Tenant'],
+      headersFromEnv: { 'X-Api-Key': 'MCP_API_KEY' },
+      bearerTokenEnvVar: 'MCP_TOKEN',
+    });
   });
 
   it('update 改名 / 改启用态，并检测与其他服务的重名', () => {
@@ -176,6 +253,28 @@ describe('mcp-server-registry / importClaudeConfig', () => {
     expect(registry.get('fetch')?.command).toBe('uvx');
   });
 
+  it('导入 Claude/Codex 风格的 Streamable HTTP 配置', () => {
+    const registry = makeRegistry();
+    const result = registry.importClaudeConfig({
+      mcpServers: {
+        remote: {
+          type: 'http',
+          url: 'https://mcp.example.com/mcp',
+          headers: { 'X-Tenant': 'acme' },
+          envHttpHeaders: { 'X-Api-Key': 'MCP_API_KEY' },
+          bearerTokenEnvVar: 'MCP_TOKEN',
+        },
+      },
+    });
+    expect(result.skipped).toEqual([]);
+    expect(registry.get('remote')).toMatchObject({
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/mcp',
+      headersFromEnv: { 'X-Api-Key': 'MCP_API_KEY' },
+      bearerTokenEnvVar: 'MCP_TOKEN',
+    });
+  });
+
   it('重名和缺 command 的条目被跳过', () => {
     const registry = makeRegistry();
     registry.create({ name: 'a', command: 'npx' });
@@ -222,5 +321,28 @@ describe('mcp-server-registry / serverKey', () => {
     // 两个名字清洗后都是 my-tool → 后者追加 id 后缀
     const keys = new Set([registry.serverKey(a), registry.serverKey(b)]);
     expect(keys.size).toBe(2);
+  });
+});
+
+describe('mcp-server-registry / catalog cap', () => {
+  it('fails the whole catalog when a server advertises more than 64 tools', async () => {
+    const registry = new McpServerRegistry(makeMemoryStore(), {
+      async listTools() {
+        return {
+          success: true,
+          tools: Array.from({ length: 65 }, (_, index) => ({
+            name: `tool_${index}`,
+            description: '',
+          })),
+        };
+      },
+      async executeTool() {
+        return { success: true, text: '' };
+      },
+    });
+    const entry = registry.create({ name: 'too-many', command: 'node' });
+    const cached = await registry.refreshTools(entry.id);
+    expect(cached.tools).toEqual([]);
+    expect(cached.error).toMatch(/64/);
   });
 });

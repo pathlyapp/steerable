@@ -1,4 +1,4 @@
-"""MCP client seam: qualified names, capped catalogs, minimal stdio client.
+"""MCP client seam: qualified names, capped catalogs, transport clients.
 
 MCP is the largest unbounded, third-party, mutable source of model-visible
 context an agent system can add, so it lands on the Wave 2 foundation:
@@ -22,9 +22,9 @@ caps.
 Architecture (recorded in docs/roadmap.md): in the desktop product, MCP
 servers are launched host-side (Electron main) and reached through
 `ToolRouter.register_remote` — a Seatbelt-confined sidecar never spawns
-them. `McpStdioClient` exists for hosts that embed the runtime directly
-(CLI agents, tests, non-Electron hosts); it is transport-only and holds no
-loop state.
+them. `McpStdioClient` and `McpStreamableHttpClient` exist for hosts that
+embed the runtime directly (CLI agents, tests, non-Electron hosts); both
+are transport-only and hold no loop state.
 """
 
 from __future__ import annotations
@@ -34,8 +34,15 @@ import json
 import logging
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
-from typing import Any
+from datetime import timedelta
+from typing import Any, Protocol
+from urllib.parse import urlparse
+
+import httpx
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 
 from .errors import RuntimeError as SteerableRuntimeError
 from .tools import RegisteredTool, ToolExposure, ToolRouter
@@ -126,6 +133,26 @@ class McpCallResult:
     structured: Any = None
 
 
+class McpClient(Protocol):
+    """Transport-independent client operations consumed by MCP mounting paths."""
+
+    server_info: dict[str, Any]
+
+    async def __aenter__(self) -> McpClient: ...
+
+    async def __aexit__(self, *exc: Any) -> None: ...
+
+    async def start(self) -> None: ...
+
+    async def aclose(self) -> None: ...
+
+    async def list_tools(self) -> list[McpToolInfo]: ...
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> McpCallResult: ...
+
+
 def register_mcp_catalog(
     router: ToolRouter,
     *,
@@ -178,9 +205,9 @@ def register_mcp_catalog(
 
 
 def mcp_invoker(
-    client: "McpStdioClient",
+    client: McpClient,
 ) -> Callable[[str, dict[str, Any]], Awaitable[Any]]:
-    """Adapt `McpStdioClient.call_tool` to the catalog invoker contract.
+    """Adapt an MCP client's `call_tool` to the catalog invoker contract.
 
     Maps ``isError`` results to failed `ToolResult`s (follow-up allowed —
     the model sees the server's error text and can correct its arguments)
@@ -197,6 +224,214 @@ def mcp_invoker(
         return {"success": True, "data": data}
 
     return _invoke
+
+
+def create_mcp_client(
+    config: Mapping[str, Any],
+    *,
+    environ: Mapping[str, str] | None = None,
+    request_timeout: float = 30.0,
+) -> McpClient:
+    """Build a client from an explicit or legacy-discriminated config entry.
+
+    ``transport`` accepts ``stdio`` and ``streamable-http``. For existing
+    callers, an omitted discriminator is inferred from exactly one of
+    ``command`` or ``url``. Environment-sourced header values are resolved
+    only into the client and are redacted from transport failures.
+    """
+    command = config.get("command")
+    url = config.get("url")
+    if command and url:
+        raise McpError("MCP config cannot contain both 'command' and 'url'")
+
+    transport = config.get("transport")
+    if transport is None:
+        if command:
+            transport = "stdio"
+        elif url:
+            transport = "streamable-http"
+        else:
+            raise McpError("MCP config requires a non-empty 'command' or 'url'")
+
+    if transport == "stdio":
+        if not command:
+            raise McpError("stdio MCP config requires a non-empty 'command'")
+        if url:
+            raise McpError("stdio MCP config cannot contain 'url'")
+        raw_env = config.get("env") or {}
+        if not isinstance(raw_env, Mapping):
+            raise McpError("stdio MCP config 'env' must be an object")
+        return McpStdioClient(
+            str(command),
+            [str(arg) for arg in config.get("args") or []],
+            env={str(key): str(value) for key, value in raw_env.items()} or None,
+            request_timeout=request_timeout,
+        )
+
+    if transport != "streamable-http":
+        raise McpError(f"unsupported MCP transport: {transport!r}")
+    if not url:
+        raise McpError("streamable-http MCP config requires a non-empty 'url'")
+    if command:
+        raise McpError("streamable-http MCP config cannot contain 'command'")
+    parsed = urlparse(str(url))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise McpError("streamable-http MCP config 'url' must be an HTTP(S) URL")
+    if parsed.username or parsed.password:
+        raise McpError("streamable-http MCP config 'url' cannot contain credentials")
+
+    raw_headers = config.get("headers") or {}
+    raw_headers_from_env = config.get("headersFromEnv") or {}
+    if not isinstance(raw_headers, Mapping):
+        raise McpError("streamable-http MCP config 'headers' must be an object")
+    if not isinstance(raw_headers_from_env, Mapping):
+        raise McpError(
+            "streamable-http MCP config 'headersFromEnv' must be an object"
+        )
+    source = os.environ if environ is None else environ
+    headers = {str(name): str(value) for name, value in raw_headers.items()}
+    secret_values = [value for value in headers.values() if value]
+    for raw_name, raw_env_name in raw_headers_from_env.items():
+        env_name = str(raw_env_name)
+        value = source.get(env_name)
+        if not value:
+            raise McpError(
+                f"streamable-http MCP header environment variable "
+                f"{env_name!r} is not set"
+            )
+        headers[str(raw_name)] = value
+        secret_values.append(value)
+    bearer_env = config.get("bearerTokenEnvVar")
+    if bearer_env is not None:
+        env_name = str(bearer_env)
+        value = source.get(env_name)
+        if not value:
+            raise McpError(
+                f"streamable-http MCP bearer environment variable "
+                f"{env_name!r} is not set"
+            )
+        headers["Authorization"] = f"Bearer {value}"
+        secret_values.append(value)
+
+    return McpStreamableHttpClient(
+        str(url),
+        headers=headers,
+        secret_values=secret_values,
+        request_timeout=request_timeout,
+    )
+
+
+class McpStreamableHttpClient:
+    """MCP Streamable HTTP client backed by the official Python MCP SDK."""
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        secret_values: Sequence[str] = (),
+        request_timeout: float = 30.0,
+    ) -> None:
+        self._url = url
+        self._headers = dict(headers or {})
+        self._secret_values = tuple(value for value in secret_values if value)
+        self._request_timeout = request_timeout
+        self._stack: AsyncExitStack | None = None
+        self._session: ClientSession | None = None
+        self.server_info: dict[str, Any] = {}
+
+    async def __aenter__(self) -> McpStreamableHttpClient:
+        await self.start()
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.aclose()
+
+    async def start(self) -> None:
+        if self._stack is not None:
+            raise McpError("McpStreamableHttpClient already started")
+        stack = AsyncExitStack()
+        self._stack = stack
+        try:
+            http_client = await stack.enter_async_context(
+                httpx.AsyncClient(headers=self._headers)
+            )
+            read_stream, write_stream, _session_id = await stack.enter_async_context(
+                streamable_http_client(self._url, http_client=http_client)
+            )
+            session = await stack.enter_async_context(
+                ClientSession(
+                    read_stream,
+                    write_stream,
+                    read_timeout_seconds=timedelta(seconds=self._request_timeout),
+                )
+            )
+            initialized = await session.initialize()
+            self._session = session
+            self.server_info = initialized.serverInfo.model_dump(
+                by_alias=True, exclude_none=True
+            )
+        except Exception as exc:
+            await self.aclose()
+            raise self._error("initialize", exc) from exc
+
+    async def aclose(self) -> None:
+        stack, self._stack = self._stack, None
+        self._session = None
+        if stack is not None:
+            await stack.aclose()
+
+    async def list_tools(self) -> list[McpToolInfo]:
+        session = self._require_session()
+        tools: list[McpToolInfo] = []
+        cursor: str | None = None
+        try:
+            while True:
+                result = await session.list_tools(cursor=cursor)
+                tools.extend(
+                    McpToolInfo(
+                        name=tool.name,
+                        description=tool.description or "",
+                        schema=dict(tool.inputSchema),
+                    )
+                    for tool in result.tools
+                )
+                cursor = result.nextCursor
+                if cursor is None:
+                    return tools
+        except Exception as exc:
+            raise self._error("tools/list", exc) from exc
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> McpCallResult:
+        session = self._require_session()
+        try:
+            result = await session.call_tool(name, arguments)
+        except Exception as exc:
+            raise self._error("tools/call", exc) from exc
+        parts: list[str] = []
+        for content in result.content:
+            if content.type == "text":
+                parts.append(content.text)
+            else:
+                parts.append(f"[mcp {content.type} content]")
+        return McpCallResult(
+            text="\n".join(parts),
+            is_error=result.isError,
+            structured=result.structuredContent,
+        )
+
+    def _require_session(self) -> ClientSession:
+        if self._session is None:
+            raise McpError("MCP Streamable HTTP client is not running")
+        return self._session
+
+    def _error(self, operation: str, exc: Exception) -> McpError:
+        message = str(exc)
+        for secret in self._secret_values:
+            message = message.replace(secret, "[redacted]")
+        return McpError(f"MCP Streamable HTTP {operation} failed: {message}")
 
 
 # ---------------------------------------------------------------------------

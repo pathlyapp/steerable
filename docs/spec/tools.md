@@ -78,6 +78,42 @@ render as a generic card. The UI does not guess a card from a name prefix.
 `ToolRouter.register` copies the Python table into the tool's `metadata`
 under `presentation` unless the caller already set that key.
 
+## MCP transports
+
+MCP servers use an explicit `transport`: `stdio` starts a local child process,
+while `streamable-http` connects to an HTTP(S) endpoint with the official MCP
+SDK. Existing records without the field migrate to `stdio`; a config cannot
+carry both `command` and `url`.
+
+Desktop connections are pooled for five idle minutes and never evicted while
+a call is in flight. Streamable HTTP sessions remain process-local and close
+with DELETE when the host shuts down. SSE reconnect uses bounded exponential
+backoff, and `tools/list_changed` replaces the cached catalog as one
+generation. Legacy SSE-only endpoints are not silently selected after a
+Streamable HTTP failure.
+
+Persistent HTTP configs may contain non-sensitive literal headers. Bearer
+tokens and sensitive header values reference environment variables through
+`bearerTokenEnvVar` and `headersFromEnv`; literal `Authorization` is rejected,
+and the settings API never returns stored env/header values. Every server is
+capped at 64 tools and an over-cap catalog fails as a whole. MCP tools remain
+deferred and are discovered through `tool_search`.
+
+## Shell execution
+
+`local_exec_shell` runs in a pseudo-terminal unless the caller sets `pty` to
+false. A prefix policy decides `allow`, `prompt`, or `forbidden` before any
+process starts. Several matching prefixes keep the stricter decision
+(`allow` < `prompt` < `forbidden`). `forbidden` never starts a process.
+`prompt` waits until the caller passes `execApproval: "allow"`. The existing
+dangerous-command list still blocks before that policy.
+
+A host can point the same call at an SSH destination. The local process is
+`ssh` with `BatchMode=yes`; the script is one remote `bash -lc` argument
+(or `pwsh -Command` when the caller asked for PowerShell). Request
+environment variables are not copied onto that argv. An empty destination
+is rejected before a process starts.
+
 ## Host tools added for parity
 
 The desktop host (the list the model sees when `toolsViaHost` is on) also

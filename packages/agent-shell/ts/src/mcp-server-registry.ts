@@ -10,27 +10,86 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mcpExecutor, type McpServerConfig } from './mcp-executor.js';
+import {
+  MAX_MCP_SERVER_TOOLS,
+  mcpExecutor,
+  type McpExecutorLike,
+  type McpServerConfig,
+} from './mcp-executor.js';
 
-export interface McpServerEntry {
+interface McpServerCommon {
   id: string;
   /** 用户可见名称，也用于生成工具前缀（如 "filesystem"）。 */
   name: string;
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-  cwd?: string;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface CreateMcpServerInput {
+export interface StdioMcpServerEntry extends McpServerCommon {
+  transport: 'stdio';
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd?: string;
+}
+
+export interface StreamableHttpMcpServerEntry extends McpServerCommon {
+  transport: 'streamable-http';
+  url: string;
+  headers: Record<string, string>;
+  headersFromEnv: Record<string, string>;
+  bearerTokenEnvVar?: string;
+  reconnect?: {
+    initialReconnectionDelay?: number;
+    maxReconnectionDelay?: number;
+    reconnectionDelayGrowFactor?: number;
+    maxRetries?: number;
+  };
+}
+
+export type McpServerEntry = StdioMcpServerEntry | StreamableHttpMcpServerEntry;
+
+interface CreateMcpServerCommon {
   name: string;
+  enabled?: boolean;
+}
+
+export interface CreateStdioMcpServerInput extends CreateMcpServerCommon {
+  /** Omitted remains compatible with existing callers and stored product configs. */
+  transport?: 'stdio';
   command: string;
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+}
+
+export interface CreateStreamableHttpMcpServerInput extends CreateMcpServerCommon {
+  transport: 'streamable-http';
+  url: string;
+  headers?: Record<string, string>;
+  headersFromEnv?: Record<string, string>;
+  bearerTokenEnvVar?: string;
+  reconnect?: StreamableHttpMcpServerEntry['reconnect'];
+  command?: never;
+}
+
+export type CreateMcpServerInput =
+  | CreateStdioMcpServerInput
+  | CreateStreamableHttpMcpServerInput;
+
+export interface UpdateMcpServerInput {
+  name?: string;
+  transport?: 'stdio' | 'streamable-http';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  headersFromEnv?: Record<string, string>;
+  bearerTokenEnvVar?: string;
+  reconnect?: StreamableHttpMcpServerEntry['reconnect'];
   enabled?: boolean;
 }
 
@@ -77,14 +136,97 @@ export function sanitizeServerKey(name: string, id: string): string {
   return cleaned || `srv-${id.slice(0, 6)}`;
 }
 
+type TransportFields =
+  | Omit<StdioMcpServerEntry, keyof McpServerCommon>
+  | Omit<StreamableHttpMcpServerEntry, keyof McpServerCommon>;
+
+function normalizeStoredEntry(entry: McpServerEntry): McpServerEntry {
+  if ('transport' in entry) return entry;
+  const legacy = entry as unknown as Omit<StdioMcpServerEntry, 'transport'>;
+  return { ...legacy, transport: 'stdio' };
+}
+
+function normalizeTransportInput(input: CreateMcpServerInput): TransportFields {
+  if (input.transport === 'streamable-http') {
+    const raw = input as unknown as Record<string, unknown>;
+    if (typeof raw.command === 'string' && raw.command.trim()) {
+      throw new Error('Streamable HTTP 配置不能包含 command');
+    }
+    const url = parseMcpHttpUrl(input.url);
+    const headers = { ...(input.headers ?? {}) };
+    if (Object.keys(headers).some((name) => name.toLowerCase() === 'authorization')) {
+      throw new Error('Authorization 不允许明文保存；请使用 bearerTokenEnvVar 或 headersFromEnv');
+    }
+    const bearerTokenEnvVar = input.bearerTokenEnvVar?.trim() || undefined;
+    return {
+      transport: 'streamable-http',
+      url,
+      headers,
+      headersFromEnv: { ...(input.headersFromEnv ?? {}) },
+      bearerTokenEnvVar,
+      reconnect: input.reconnect ? { ...input.reconnect } : undefined,
+    };
+  }
+  if ('url' in input && typeof input.url === 'string' && input.url.trim()) {
+    throw new Error('stdio 配置不能包含 url');
+  }
+  const command = input.command.trim();
+  if (!command) throw new Error('启动命令不能为空');
+  return {
+    transport: 'stdio',
+    command,
+    args: (input.args ?? []).map(String),
+    env: { ...(input.env ?? {}) },
+    cwd: input.cwd?.trim() || undefined,
+  };
+}
+
+function parseMcpHttpUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    throw new Error('MCP HTTP URL 无效');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('MCP HTTP URL 必须使用 http 或 https');
+  }
+  if (url.username || url.password) {
+    throw new Error('MCP HTTP URL 不能包含凭据');
+  }
+  return url.toString();
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      String(item),
+    ]),
+  );
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export class McpServerRegistry {
   /** serverId → 最近一次 listTools 的结果（内存缓存，重启后由后台刷新重建）。 */
   private readonly toolCache = new Map<string, CachedToolList>();
 
-  constructor(private readonly store: McpServerKvStore) {}
+  constructor(
+    private readonly store: McpServerKvStore,
+    private readonly executor: McpExecutorLike = mcpExecutor,
+  ) {}
 
   list(): McpServerEntry[] {
-    return this.store.get(STORE_KEY) ?? [];
+    const stored = this.store.get(STORE_KEY) ?? [];
+    const migrated = stored.map(normalizeStoredEntry);
+    if (migrated.some((entry, index) => entry !== stored[index])) {
+      this.store.set(STORE_KEY, migrated);
+    }
+    return migrated;
   }
 
   get(idOrName: string): McpServerEntry | null {
@@ -106,28 +248,23 @@ export class McpServerRegistry {
 
   create(input: CreateMcpServerInput): McpServerEntry {
     const name = input.name.trim();
-    const command = input.command.trim();
     if (!name) throw new Error('服务名称不能为空');
-    if (!command) throw new Error('启动命令不能为空');
     if (this.get(name)) throw new Error(`已存在同名服务「${name}」`);
 
     const now = new Date().toISOString();
     const entry: McpServerEntry = {
       id: randomUUID(),
       name,
-      command,
-      args: (input.args ?? []).map((a) => String(a)),
-      env: { ...(input.env ?? {}) },
-      cwd: input.cwd?.trim() || undefined,
       enabled: input.enabled ?? true,
       createdAt: now,
       updatedAt: now,
+      ...normalizeTransportInput(input),
     };
     this.store.set(STORE_KEY, [...this.list(), entry]);
     return entry;
   }
 
-  update(id: string, updates: Partial<CreateMcpServerInput>): McpServerEntry {
+  update(id: string, updates: UpdateMcpServerInput): McpServerEntry {
     const servers = this.list();
     const idx = servers.findIndex((s) => s.id === id);
     if (idx === -1) throw new Error('服务不存在');
@@ -139,18 +276,44 @@ export class McpServerRegistry {
     );
     if (nameClash) throw new Error(`已存在同名服务「${nextName}」`);
 
+    const transport = updates.transport ?? current.transport;
+    const transportInput: CreateMcpServerInput = transport === 'stdio'
+      ? {
+          name: nextName,
+          transport: 'stdio',
+          command:
+            updates.command ?? (current.transport === 'stdio' ? current.command : ''),
+          args: updates.args ?? (current.transport === 'stdio' ? current.args : []),
+          env: updates.env ?? (current.transport === 'stdio' ? current.env : {}),
+          cwd: updates.cwd ?? (current.transport === 'stdio' ? current.cwd : undefined),
+        }
+      : {
+          name: nextName,
+          transport: 'streamable-http',
+          url: updates.url ?? (current.transport === 'streamable-http' ? current.url : ''),
+          headers:
+            updates.headers ??
+            (current.transport === 'streamable-http' ? current.headers : {}),
+          headersFromEnv:
+            updates.headersFromEnv ??
+            (current.transport === 'streamable-http' ? current.headersFromEnv : {}),
+          bearerTokenEnvVar:
+            updates.bearerTokenEnvVar ??
+            (current.transport === 'streamable-http'
+              ? current.bearerTokenEnvVar
+              : undefined),
+          reconnect:
+            updates.reconnect ??
+            (current.transport === 'streamable-http' ? current.reconnect : undefined),
+        };
     const next: McpServerEntry = {
-      ...current,
+      id: current.id,
       name: nextName,
-      command:
-        updates.command !== undefined ? updates.command.trim() : current.command,
-      args: updates.args !== undefined ? updates.args.map((a) => String(a)) : current.args,
-      env: updates.env !== undefined ? { ...updates.env } : current.env,
-      cwd: updates.cwd !== undefined ? updates.cwd.trim() || undefined : current.cwd,
       enabled: updates.enabled !== undefined ? updates.enabled : current.enabled,
+      createdAt: current.createdAt,
       updatedAt: new Date().toISOString(),
+      ...normalizeTransportInput(transportInput),
     };
-    if (!next.command) throw new Error('启动命令不能为空');
     servers[idx] = next;
     this.store.set(STORE_KEY, servers);
     // 配置变了，旧工具缓存不可信
@@ -196,8 +359,28 @@ export class McpServerRegistry {
     for (const [name, cfgRaw] of Object.entries(container as Record<string, unknown>)) {
       const cfg = (cfgRaw ?? {}) as Record<string, unknown>;
       const command = typeof cfg.command === 'string' ? cfg.command.trim() : '';
-      if (!command || this.get(name)) {
+      const url = typeof cfg.url === 'string' ? cfg.url.trim() : '';
+      if ((!command && !url) || (command && url) || this.get(name)) {
         result.skipped.push(name);
+        continue;
+      }
+      if (url) {
+        const headers = stringRecord(cfg.headers);
+        const headersFromEnv = stringRecord(
+          cfg.envHttpHeaders ?? cfg.env_http_headers ?? cfg.headersFromEnv,
+        );
+        const bearerTokenEnvVar =
+          stringValue(cfg.bearerTokenEnvVar ?? cfg.bearer_token_env_var) || undefined;
+        const entry = this.create({
+          name: name.trim(),
+          transport: 'streamable-http',
+          url,
+          headers,
+          headersFromEnv,
+          bearerTokenEnvVar,
+          enabled: true,
+        });
+        result.added.push(entry);
         continue;
       }
       const env: Record<string, string> = {};
@@ -229,12 +412,49 @@ export class McpServerRegistry {
   }
 
   toExecutorConfig(entry: McpServerEntry): McpServerConfig {
-    return {
-      command: entry.command,
-      args: entry.args,
-      env: entry.env,
-      cwd: entry.cwd,
+    return entry.transport === 'stdio'
+      ? {
+          transport: 'stdio',
+          command: entry.command,
+          args: entry.args,
+          env: entry.env,
+          cwd: entry.cwd,
+        }
+      : {
+          transport: 'streamable-http',
+          url: entry.url,
+          headers: entry.headers,
+          headersFromEnv: entry.headersFromEnv,
+          bearerTokenEnvVar: entry.bearerTokenEnvVar,
+          reconnect: entry.reconnect,
+        };
+  }
+
+  toPublicEntry(entry: McpServerEntry): Record<string, unknown> {
+    const common = {
+      id: entry.id,
+      name: entry.name,
+      transport: entry.transport,
+      enabled: entry.enabled,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
     };
+    return entry.transport === 'stdio'
+      ? {
+          ...common,
+          command: entry.command,
+          args: [...entry.args],
+          cwd: entry.cwd,
+          envKeys: Object.keys(entry.env).sort(),
+        }
+      : {
+          ...common,
+          url: entry.url,
+          headerNames: Object.keys(entry.headers).sort(),
+          headersFromEnv: { ...entry.headersFromEnv },
+          bearerTokenEnvVar: entry.bearerTokenEnvVar,
+          reconnect: entry.reconnect,
+        };
   }
 
   getCachedTools(serverId: string): CachedToolList | null {
@@ -282,8 +502,27 @@ export class McpServerRegistry {
   async refreshTools(serverId: string): Promise<CachedToolList> {
     const entry = this.list().find((s) => s.id === serverId);
     if (!entry) throw new Error('服务不存在');
-    const result = await mcpExecutor.listTools(this.toExecutorConfig(entry));
-    const cached: CachedToolList = result.success
+    const applyChanged = (tools: CachedToolList['tools']) => {
+      if (tools.length > MAX_MCP_SERVER_TOOLS) return;
+      this.toolCache.set(serverId, {
+        tools: tools.map((tool) => ({ ...tool })),
+        fetchedAt: new Date().toISOString(),
+        error: null,
+      });
+    };
+    const result = await this.executor.listTools(
+      this.toExecutorConfig(entry),
+      applyChanged,
+      (error) => {
+        this.toolCache.set(serverId, {
+          tools: [],
+          fetchedAt: new Date().toISOString(),
+          error,
+        });
+      },
+    );
+    const overCap = (result.tools?.length ?? 0) > MAX_MCP_SERVER_TOOLS;
+    const cached: CachedToolList = result.success && !overCap
       ? {
           tools: (result.tools ?? []).map((t) => ({
             name: t.name,
@@ -293,7 +532,13 @@ export class McpServerRegistry {
           fetchedAt: new Date().toISOString(),
           error: null,
         }
-      : { tools: [], fetchedAt: new Date().toISOString(), error: result.error ?? '未知错误' };
+      : {
+          tools: [],
+          fetchedAt: new Date().toISOString(),
+          error: overCap
+            ? `服务工具数超过每服务 ${MAX_MCP_SERVER_TOOLS} 个的上限`
+            : result.error ?? '未知错误',
+        };
     this.toolCache.set(serverId, cached);
     return cached;
   }

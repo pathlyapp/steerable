@@ -56,7 +56,7 @@
     "client": "DEEPPATH_FORCE_BUNDLED_WEB=1 DEEPPATH_WEB_DIST=${DEEPPATH_WEB_DIST:-../web/app/dist} node node_modules/electron/cli.js dist/main.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@steerable/agent-harness": "workspace:*",
     "@steerable/agent-protocol": "workspace:*",
     "@steerable/pack-sdk": "workspace:*",

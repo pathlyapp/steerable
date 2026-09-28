@@ -1265,6 +1265,34 @@ describe('MCP 服务路由', () => {
     expect((invalid.data as Record<string, any>).error).toContain('command is required');
   });
 
+  it('POST HTTP MCP：传输字段归一后交给注册表', async () => {
+    const mcpRegistry = makeMcpRegistry();
+    const router = makeRouter({ toolRouter: makeToolRouter({ mcpRegistry }) });
+    const created = await router.handle({
+      method: 'POST',
+      path: '/api/v2/mcp/servers',
+      body: {
+        name: 'remote',
+        transport: 'streamable-http',
+        url: 'https://mcp.example.com/mcp',
+        headers: { 'X-Tenant': 7 },
+        headersFromEnv: { 'X-Api-Key': 'MCP_API_KEY' },
+        bearerTokenEnvVar: 'MCP_TOKEN',
+      },
+    });
+    expect(created.status).toBe(200);
+    expect(mcpRegistry.create).toHaveBeenCalledWith({
+      name: 'remote',
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/mcp',
+      headers: { 'X-Tenant': '7' },
+      headersFromEnv: { 'X-Api-Key': 'MCP_API_KEY' },
+      bearerTokenEnvVar: 'MCP_TOKEN',
+      reconnect: undefined,
+      enabled: true,
+    });
+  });
+
   it('PUT /api/v2/mcp/servers/:id：更新后 enabled 服务触发刷新；DELETE 返回 deleted', async () => {
     const mcpRegistry = makeMcpRegistry({
       servers: [{ id: 's1', name: '服务一', enabled: true }],
