@@ -1,3 +1,4 @@
+use crate::clipboard::{self, ClipboardContents};
 use arboard::{Clipboard, ImageData};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
@@ -109,11 +110,13 @@ pub async fn host_save_text_file(
 }
 
 #[tauri::command]
+pub fn host_read_clipboard() -> ClipboardContents {
+    clipboard::read_clipboard()
+}
+
+#[tauri::command]
 pub fn host_read_clipboard_text() -> String {
-    let Ok(mut clipboard) = Clipboard::new() else {
-        return String::new();
-    };
-    clipboard.get_text().unwrap_or_default()
+    clipboard::read_clipboard_text()
 }
 
 #[tauri::command]

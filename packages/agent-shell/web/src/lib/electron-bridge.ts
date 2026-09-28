@@ -197,10 +197,24 @@ export interface HostBridge {
   /**
    * App menu IPC — `Cmd+V` / 编辑 → 粘贴 fires `menu:paste`.
    * WKWebView does not expose that pasteboard to the page, so the renderer
-   * reads it through `readClipboardText`.
+   * reads it through `readClipboard`.
    */
   onMenuPaste?: (callback: () => void) => void;
   offMenuPaste?: () => void;
+  /**
+   * OS pasteboard. `files` are copied paths or a screenshot PNG.
+   * Text is empty when the pasteboard holds files, so the path is not
+   * inserted into the composer as well.
+   */
+  readClipboard?: () => Promise<{
+    text: string;
+    files: Array<{
+      name: string;
+      path?: string;
+      dataBase64?: string;
+      mime?: string;
+    }>;
+  }>;
   /** Plain text from the OS pasteboard. Empty when the clipboard has no text. */
   readClipboardText?: () => Promise<string>;
   /**

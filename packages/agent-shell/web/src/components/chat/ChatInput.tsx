@@ -32,8 +32,9 @@ import {
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
 import type { ExecPolicy } from '@/lib/exec-policy';
 import { getWebChatModes, hostToolCapability, settingsChrome } from '@/lib/host-tools';
-import { hostClipboardAvailable, requestHostPaste } from '@/lib/host-paste';
-import type { AttachmentFile } from '@/lib/attachments';
+import { hostClipboardAvailable, requestHostPaste, type HostClipboardFile } from '@/lib/host-paste';
+import { attachmentFromPath, type AttachmentFile } from '@/lib/attachments';
+import { dropPointHitsRect, hostFileDropAvailable, listenHostFileDrop } from '@/lib/host-file-drop';
 import type { SteerOutcome } from '@steerable/agent-ui';
 import {
   isHiddenSlashSkill,
@@ -714,6 +715,23 @@ function clipboardOf(event: ClipboardEvent<HTMLDivElement>): DataTransfer | null
   return native.clipboardData ?? event.clipboardData ?? null;
 }
 
+function fileFromHostClipboard(file: HostClipboardFile): File | null {
+  if (!file.dataBase64) return null;
+  let binary: string;
+  try {
+    binary = atob(file.dataBase64);
+  } catch {
+    return null;
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new File([bytes], file.name || 'image.png', {
+    type: file.mime || 'application/octet-stream',
+  });
+}
+
 function namePastedImage(file: File, serial: number, now: Date): File {
   if (!file.type.startsWith('image/')) return file;
   if (file.name.trim() && !GENERIC_CLIPBOARD_IMAGE_NAME.test(file.name.trim())) return file;
@@ -835,7 +853,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const compositionEndAtRef = useRef<number>(0);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const dropBoxRef = useRef<HTMLDivElement>(null);
     const pasteSerialRef = useRef(0);
+    const attachDroppedRef = useRef<(paths: string[]) => void>(() => {});
+    const dragHoverRef = useRef<(hovering: boolean) => void>(() => {});
+    const hostPasteFilesRef = useRef<(files: HostClipboardFile[]) => void>(() => {});
     const adoptPastedTextRef = useRef<(text: string) => void>(() => {});
     // 工具栏"空间不足时优先隐藏快捷键提示"的测量 refs，见下方 useLayoutEffect。
     const toolbarRowRef = useRef<HTMLDivElement>(null);
@@ -1240,6 +1262,33 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       path: (file as { path?: string }).path || '',
       file,
     });
+    attachDroppedRef.current = (paths) => {
+      if (disabled || !allowFileAttach) return;
+      addFiles(paths.map(attachmentFromPath));
+    };
+    dragHoverRef.current = (hovering) => {
+      if (disabled || !allowFileAttach) {
+        setIsDragging(false);
+        return;
+      }
+      setIsDragging(hovering);
+    };
+    hostPasteFilesRef.current = (incoming) => {
+      if (disabled || !allowFileAttach) return;
+      const now = new Date();
+      const next: AttachmentFile[] = [];
+      for (const item of incoming) {
+        if (item.path) {
+          next.push(attachmentFromPath(item.path));
+          continue;
+        }
+        const blob = fileFromHostClipboard(item);
+        if (!blob) continue;
+        pasteSerialRef.current += 1;
+        next.push(toAttachment(namePastedImage(blob, pasteSerialRef.current, now)));
+      }
+      if (next.length > 0) addFiles(next);
+    };
 
     // 按钮点击 → 触发隐藏的 <input type="file" multiple>，由浏览器/Electron
     // 直接弹出系统文件选择框（不依赖 IPC，避免「点击无反应」）。
@@ -1449,12 +1498,42 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         event.preventDefault();
         adoptPastedTextRef.current(text);
       };
+      const onHostPasteFiles = (event: Event) => {
+        const files = (event as CustomEvent<HostClipboardFile[]>).detail;
+        if (!Array.isArray(files) || files.length === 0) return;
+        event.preventDefault();
+        hostPasteFilesRef.current(files);
+      };
       editor.addEventListener('compositionstart', onCompositionStart, true);
       editor.addEventListener('hostpaste', onHostPaste);
+      editor.addEventListener('hostpastefiles', onHostPasteFiles);
       return () => {
         editor.removeEventListener('compositionstart', onCompositionStart, true);
         editor.removeEventListener('hostpaste', onHostPaste);
+        editor.removeEventListener('hostpastefiles', onHostPasteFiles);
       };
+    }, []);
+
+    useEffect(() => {
+      if (!hostFileDropAvailable()) return undefined;
+      return listenHostFileDrop((event) => {
+        const box = dropBoxRef.current;
+        if (event.type === 'leave' || !box || event.x == null || event.y == null) {
+          dragHoverRef.current(false);
+          return;
+        }
+        const hit = dropPointHitsRect(
+          { x: event.x, y: event.y },
+          box.getBoundingClientRect(),
+          window.devicePixelRatio,
+        );
+        if (event.type === 'drop') {
+          dragHoverRef.current(false);
+          if (hit) attachDroppedRef.current(event.paths);
+          return;
+        }
+        dragHoverRef.current(hit);
+      });
     }, []);
 
     const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
@@ -1862,6 +1941,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           </div>
         )}
         <div
+          ref={dropBoxRef}
           className={`chat-input-box flex flex-col rounded-agent-lg border bg-agent-canvas shadow-sm transition-all duration-200 ${
             isDragging
               ? 'border-blue-500 ring-2 ring-blue-500/20'

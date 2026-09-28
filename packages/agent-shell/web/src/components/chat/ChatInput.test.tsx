@@ -15,6 +15,35 @@ import type { SteerOutcome } from '@steerable/agent-ui';
 import { ChatInput, type ChatInputProps } from './ChatInput';
 import * as electronBridge from '@/lib/electron-bridge';
 
+const tauriDrop = vi.hoisted(() => ({
+  handler: null as
+    | null
+    | ((payload: {
+        type: 'enter' | 'over' | 'drop' | 'leave';
+        paths?: string[];
+        position?: { x: number; y: number };
+      }) => void),
+}));
+
+vi.mock('@tauri-apps/api/webview', () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: (
+      handler: (event: {
+        payload: {
+          type: 'enter' | 'over' | 'drop' | 'leave';
+          paths?: string[];
+          position?: { x: number; y: number };
+        };
+      }) => void,
+    ) => {
+      tauriDrop.handler = (payload) => handler({ payload });
+      return Promise.resolve(() => {
+        tauriDrop.handler = null;
+      });
+    },
+  }),
+}));
+
 async function flushComposerSync() {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
@@ -762,6 +791,97 @@ describe('ChatInput 粘贴图片', () => {
     await flushComposerSync();
     expect(editor.textContent).toBe('你好世界');
     expect(editor.getAttribute('data-composing')).toBeNull();
+  });
+
+  it('Tauri 拖到输入框上的文件成为附件，框外的放下不收', async () => {
+    window.__TAURI_INTERNALS__ = {};
+    try {
+      renderInput();
+      await act(async () => {});
+      const box = document.querySelector('.chat-input-box');
+      if (!(box instanceof HTMLElement)) throw new Error('missing composer box');
+      vi.spyOn(box, 'getBoundingClientRect').mockReturnValue({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 200,
+        bottom: 80,
+        width: 200,
+        height: 80,
+        toJSON() {
+          return {};
+        },
+      });
+      await act(async () => {
+        tauriDrop.handler?.({ type: 'over', position: { x: 10, y: 10 } });
+      });
+      expect(box.className).toContain('border-blue-500');
+      await act(async () => {
+        tauriDrop.handler?.({
+          type: 'drop',
+          paths: ['/tmp/纪要.docx'],
+          position: { x: 10, y: 10 },
+        });
+      });
+      expect(screen.getByText('纪要.docx')).toBeTruthy();
+      expect(box.className).not.toContain('border-blue-500');
+      await act(async () => {
+        tauriDrop.handler?.({
+          type: 'drop',
+          paths: ['/tmp/other.txt'],
+          position: { x: 900, y: 900 },
+        });
+      });
+      expect(screen.queryByText('other.txt')).toBeNull();
+    } finally {
+      delete window.__TAURI_INTERNALS__;
+    }
+  });
+
+  it('系统剪贴板里的文件路径进入附件，不写入正文', async () => {
+    const onChange = vi.fn();
+    const readClipboard = vi.fn().mockResolvedValue({
+      text: '',
+      files: [{ name: '纪要.docx', path: '/tmp/纪要.docx' }],
+    });
+    const spy = vi.spyOn(electronBridge, 'getHostBridge').mockReturnValue({
+      readClipboard,
+    } as Partial<electronBridge.HostBridge> as electronBridge.HostBridge);
+    renderInput({ onChange });
+    const editor = screen.getByTestId('chat-composer');
+    editor.focus();
+    fireEvent.paste(editor, {
+      clipboardData: { items: [], files: [], getData: () => '' },
+    });
+    try {
+      await act(async () => {});
+      expect(readClipboard).toHaveBeenCalled();
+      expect(screen.getByText('纪要.docx')).toBeTruthy();
+      expect(onChange).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('系统剪贴板里的截图进入附件', async () => {
+    const readClipboard = vi.fn().mockResolvedValue({
+      text: '',
+      files: [{ name: 'image.png', dataBase64: btoa('png'), mime: 'image/png' }],
+    });
+    const spy = vi.spyOn(electronBridge, 'getHostBridge').mockReturnValue({
+      readClipboard,
+    } as Partial<electronBridge.HostBridge> as electronBridge.HostBridge);
+    renderInput();
+    fireEvent.paste(screen.getByTestId('chat-composer'), {
+      clipboardData: { items: [], files: [], getData: () => '' },
+    });
+    try {
+      await act(async () => {});
+      expect(screen.getByText(/^pasted-.*\.png$/)).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('Tauri 页面剪贴板为空时改读系统剪贴板', async () => {

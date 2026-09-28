@@ -1,10 +1,12 @@
+mod clipboard;
 mod commands;
 mod host;
 mod python_runner;
 mod update;
 
 use commands::{
-    host_capture_screenshot, host_read_clipboard_text, host_save_text_file, host_select_directory,
+    host_capture_screenshot, host_read_clipboard, host_read_clipboard_text, host_save_text_file,
+    host_select_directory,
 };
 use host::HostProcess;
 use python_runner::{
@@ -203,6 +205,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
             host_select_directory,
             host_save_text_file,
             host_capture_screenshot,
+            host_read_clipboard,
             host_read_clipboard_text,
             app_release_snapshot,
             app_release_check,

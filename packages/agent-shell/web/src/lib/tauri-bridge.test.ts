@@ -91,4 +91,17 @@ describe('createTauriBridge', () => {
     await expect(bridge.readClipboardText!()).resolves.toBe('粘贴文本');
     expect(mocks.invoke).toHaveBeenCalledWith('host_read_clipboard_text');
   });
+
+  it('reads copied files from the host clipboard', async () => {
+    mocks.invoke.mockResolvedValue({
+      text: '',
+      files: [{ name: '纪要.docx', path: '/tmp/纪要.docx' }],
+    });
+    const bridge = createTauriBridge();
+    await expect(bridge.readClipboard!()).resolves.toEqual({
+      text: '',
+      files: [{ name: '纪要.docx', path: '/tmp/纪要.docx' }],
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith('host_read_clipboard');
+  });
 });

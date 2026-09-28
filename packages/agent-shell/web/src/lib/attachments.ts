@@ -19,6 +19,14 @@ export interface AttachmentFile {
   file?: File;
 }
 
+/** 宿主拖放 / 粘贴只给出绝对路径时，用最后一段作为展示名。 */
+export function attachmentFromPath(path: string): AttachmentFile {
+  const trimmed = path.trim();
+  const parts = trimmed.split(/[/\\]/).filter((part) => part.length > 0);
+  const name = parts[parts.length - 1] ?? trimmed;
+  return { name, path: trimmed };
+}
+
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
 
 /** 扩展名是否为图像（renderer 侧预过滤，后端 image-attachment 会二次校验）。 */

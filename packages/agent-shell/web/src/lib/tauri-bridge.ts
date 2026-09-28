@@ -92,6 +92,11 @@ export function createTauriBridge(): HostBridge {
     offMenuOpenTerminal: terminalMenu.off,
     onMenuPaste: pasteMenu.on,
     offMenuPaste: pasteMenu.off,
+    readClipboard: () =>
+      invoke<{
+        text: string;
+        files: Array<{ name: string; path?: string; dataBase64?: string; mime?: string }>;
+      }>('host_read_clipboard'),
     readClipboardText: () => invoke<string>('host_read_clipboard_text'),
     app: {
       snapshot: () => invoke<AppReleaseSnapshot>('app_release_snapshot'),
