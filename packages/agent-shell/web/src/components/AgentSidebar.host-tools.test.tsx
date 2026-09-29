@@ -32,6 +32,7 @@ const listProjects = vi.fn();
 const openLocalPath = vi.fn();
 
 vi.mock('@/lib/local-api', () => ({
+  LLM_SETTINGS_CHANGED_EVENT: 'steerable:llm-settings-changed',
   listProjects: (...args: unknown[]) => listProjects(...args),
   createProject: vi.fn(),
   updateProject: vi.fn(),

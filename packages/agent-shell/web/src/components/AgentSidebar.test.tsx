@@ -41,6 +41,7 @@ const setChatPinned = vi.fn();
 const getChatLiveStream = vi.fn();
 
 vi.mock('@/lib/local-api', () => ({
+  LLM_SETTINGS_CHANGED_EVENT: 'steerable:llm-settings-changed',
   listProjects: (...args: unknown[]) => listProjects(...args),
   createProject: (...args: unknown[]) => createProject(...args),
   updateProject: (...args: unknown[]) => updateProject(...args),
