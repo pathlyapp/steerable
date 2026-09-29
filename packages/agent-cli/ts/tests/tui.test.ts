@@ -140,6 +140,20 @@ describe('tui screen', () => {
       'local_exec_shell',
       '看完了',
     ]);
+    const withChildren = historyRows([{
+      role: 'assistant',
+      content: 'done',
+      messageMetadata: JSON.stringify({
+        orchestrationChildEvents: [
+          { kind: 'child_spawned', childId: 'c1', task: '查资料', profile: 'researcher', depth: 0 },
+          { kind: 'child_completed', childId: 'c1' },
+        ],
+      }),
+    }]);
+    expect(withChildren.filter((row) => row.kind === 'tree').map((row) => row.kind === 'tree' ? row.text : '')).toEqual([
+      '子任务 1/1',
+      '✓ researcher  查资料  完成',
+    ]);
   });
 
   it('strips markdown markers and formats a finished tool as one line', () => {

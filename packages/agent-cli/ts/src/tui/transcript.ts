@@ -1,3 +1,5 @@
+import { applyChildEvent, childLines, type ChildEvent } from './children.js';
+
 export interface ToolAction {
   id?: string;
   tool?: string;
@@ -77,7 +79,7 @@ export interface StoredMessage {
 }
 
 export type HistoryRow =
-  | { kind: 'user' | 'assistant'; text: string }
+  | { kind: 'user' | 'assistant' | 'tree'; text: string }
   | { kind: 'tool'; action: ToolAction };
 
 /** The list endpoint is newest-first. Dated lists are ordered by time; undated lists stay as given. */
@@ -105,13 +107,14 @@ export function historyRows(messages: readonly StoredMessage[]): HistoryRow[] {
         }
       }
       if (!sawText && message.content) rows.push({ kind: 'assistant', text: message.content });
-      continue;
+    } else {
+      if (message.content) rows.push({ kind: 'assistant', text: message.content });
+      const actions = Array.isArray(meta.executedActions) ? meta.executedActions : [];
+      for (const action of actions) {
+        if (action && typeof action === 'object') rows.push({ kind: 'tool', action: action as ToolAction });
+      }
     }
-    if (message.content) rows.push({ kind: 'assistant', text: message.content });
-    const actions = Array.isArray(meta.executedActions) ? meta.executedActions : [];
-    for (const action of actions) {
-      if (action && typeof action === 'object') rows.push({ kind: 'tool', action: action as ToolAction });
-    }
+    appendChildren(rows, meta.orchestrationChildEvents);
   }
   return rows;
 }
@@ -124,6 +127,15 @@ function inTimeOrder(messages: readonly StoredMessage[]): StoredMessage[] {
   const last = times[times.length - 1] ?? '';
   if (first > last) return [...messages].reverse();
   return [...messages];
+}
+
+function appendChildren(rows: HistoryRow[], events: unknown): void {
+  if (!Array.isArray(events)) return;
+  let children: Parameters<typeof applyChildEvent>[0] = [];
+  for (const event of events) {
+    if (event && typeof event === 'object') children = applyChildEvent(children, event as ChildEvent);
+  }
+  for (const line of childLines(children)) rows.push({ kind: 'tree', text: line });
 }
 
 function parseMeta(raw: string | null | undefined): Record<string, unknown> {
