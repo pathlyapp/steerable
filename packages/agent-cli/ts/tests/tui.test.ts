@@ -137,6 +137,7 @@ describe('tui screen', () => {
     expect(rows.map((row) => row.kind === 'tool' ? row.action.tool : row.text)).toEqual([
       '列出',
       '先看目录',
+      'hidden',
       'local_exec_shell',
       '看完了',
     ]);
@@ -488,6 +489,7 @@ describe('files and sub-agents', () => {
                   messageMetadata: JSON.stringify({
                     timeline: [
                       { type: 'text', content: '先看目录' },
+                      { type: 'reasoning', content: 'hidden' },
                       {
                         type: 'tools',
                         actions: [{
@@ -522,9 +524,32 @@ describe('files and sub-agents', () => {
     expect(userAt).toBeLessThan(screen.indexOf('先看目录'));
     expect(screen.indexOf('先看目录')).toBeLessThan(toolAt);
     expect(toolAt).toBeLessThan(answerAt);
+    expect(screen).toContain('思考');
+    expect(screen).not.toContain('hidden');
     expect(screen).not.toContain('SECRET-LINE');
     session.handleInput('\x0f');
     expect(visibleText(session.render(72))).toContain('SECRET-LINE');
+  });
+
+  it('keeps reasoning on one line until it is expanded', async () => {
+    const client = fakeClient({
+      async *stream() {
+        yield { type: 'reasoning', content: '先想' } as SSEEvent;
+        yield { type: 'reasoning', content: '清楚' } as SSEEvent;
+        yield { type: 'content', content: '结果' } as SSEEvent;
+      },
+    });
+    const session = new AgentTui(client, { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '想一下');
+    await waitFor(() => visibleText(session.render(72)).includes('结果'));
+    const folded = visibleText(session.render(72));
+    expect(folded).toContain('思考');
+    expect(folded).not.toContain('先想清楚');
+    session.handleInput('\x0f');
+    expect(visibleText(session.render(72))).toContain('先想清楚');
+    session.handleInput('\x0f');
+    expect(visibleText(session.render(72))).not.toContain('先想清楚');
   });
 
   it('keeps a finished tool on one line until it is expanded', async () => {

@@ -79,7 +79,7 @@ export interface StoredMessage {
 }
 
 export type HistoryRow =
-  | { kind: 'user' | 'assistant' | 'tree'; text: string }
+  | { kind: 'user' | 'assistant' | 'tree' | 'reasoning'; text: string }
   | { kind: 'tool'; action: ToolAction };
 
 /** The list endpoint is newest-first. Dated lists are ordered by time; undated lists stay as given. */
@@ -100,6 +100,8 @@ export function historyRows(messages: readonly StoredMessage[]): HistoryRow[] {
         if (record.type === 'text' && typeof record.content === 'string' && record.content.length > 0) {
           sawText = true;
           rows.push({ kind: 'assistant', text: record.content });
+        } else if (record.type === 'reasoning' && typeof record.content === 'string' && record.content.length > 0) {
+          rows.push({ kind: 'reasoning', text: record.content });
         } else if (record.type === 'tools' && Array.isArray(record.actions)) {
           for (const action of record.actions) {
             if (action && typeof action === 'object') rows.push({ kind: 'tool', action: action as ToolAction });

@@ -6,7 +6,7 @@ import { keyLabel } from './keys.js';
 import { plainMarkdown } from './transcript.js';
 
 export interface TranscriptLine {
-  kind: 'user' | 'assistant' | 'tool' | 'tree';
+  kind: 'user' | 'assistant' | 'tool' | 'tree' | 'reasoning';
   text?: string;
   name?: string;
   args?: string;
@@ -69,6 +69,12 @@ export function toolBlock(line: TranscriptLine): string[] {
   return [head, ...line.output.split('\n').slice(0, 8).map((row) => `  ${row}`)];
 }
 
+export function reasoningBlock(line: TranscriptLine): string[] {
+  const head = line.streaming ? '思考 …' : '思考';
+  if (!line.open || !line.text) return [head];
+  return [head, ...line.text.split('\n').slice(0, 8).map((row) => `  ${row}`)];
+}
+
 export function chatText(chat: ChatRow): string {
   const mark = chat.selected ? '*' : ' ';
   const busy = chat.busy ? '  只读' : '';
@@ -83,7 +89,7 @@ export function helpLines(): string[] {
     '@ 补全文件',
     '/clear 清屏',
     '/help 帮助',
-    `${keyLabel('agent.tool.toggle')} 展开工具`,
+    `${keyLabel('agent.tool.toggle')} 展开工具或思考`,
   ];
 }
 
@@ -139,6 +145,7 @@ function screenLines(screen: TuiScreen): string[] {
   } else {
     for (const line of screen.lines) {
       if (line.kind === 'tool') lines.push(...toolBlock(line));
+      else if (line.kind === 'reasoning') lines.push(...reasoningBlock(line));
       else if (line.kind === 'user') lines.push(`user ${line.text ?? ''}`);
       else lines.push(...plainMarkdown(line.text ?? '').split('\n'));
     }

@@ -24,6 +24,7 @@ import {
   helpLines,
   pickText,
   readOnlyText,
+  reasoningBlock,
   toolBlock,
   type TranscriptLine,
   type TuiScreen,
@@ -277,6 +278,18 @@ function bodyKey(screen: TuiScreen): string {
 }
 
 function transcriptRow(renderer: CliRenderer, line: TranscriptLine, syntax: SyntaxStyle | null): Renderable {
+  if (line.kind === 'reasoning') {
+    const card = new BoxRenderable(renderer, {
+      width: '100%',
+      border: true,
+      borderStyle: 'rounded',
+      borderColor: warn,
+      paddingLeft: 1,
+      paddingRight: 1,
+    });
+    for (const row of reasoningBlock(line)) card.add(text(renderer, row.startsWith('  ') ? dim : warn, row));
+    return card;
+  }
   if (line.kind === 'tool') {
     const card = new BoxRenderable(renderer, {
       width: '100%',

@@ -175,7 +175,7 @@ export class AgentTui implements Component {
       return;
     }
     if (keys.matches(data, 'agent.tool.toggle')) {
-      this.toggleTool();
+      this.toggleFold();
       return;
     }
     if (this.ask && keys.matches(data, 'tui.input.submit')) {
@@ -560,6 +560,16 @@ export class AgentTui implements Component {
       if (tool) tool.status = '✓';
       return;
     }
+    if (String(event.type) === 'reasoning' && typeof event.content === 'string') {
+      const last = this.lines[this.lines.length - 1];
+      if (last?.kind === 'reasoning') {
+        last.text = `${last.text ?? ''}${event.content}`;
+        last.streaming = true;
+      } else {
+        this.lines.push({ kind: 'reasoning', text: event.content, streaming: true });
+      }
+      return;
+    }
     if (event.type === 'content' && typeof event.content === 'string') {
       const last = this.lines[this.lines.length - 1];
       if (last?.kind === 'assistant') {
@@ -610,8 +620,8 @@ export class AgentTui implements Component {
     }
   }
 
-  private toggleTool(): void {
-    const open = this.lines.find((line) => line.kind === 'tool' && line.open);
+  private toggleFold(): void {
+    const open = this.lines.find((line) => (line.kind === 'tool' || line.kind === 'reasoning') && line.open);
     if (open) {
       open.open = false;
       return;
@@ -619,6 +629,10 @@ export class AgentTui implements Component {
     for (let index = this.lines.length - 1; index >= 0; index -= 1) {
       const line = this.lines[index];
       if (line?.kind === 'tool' && line.status !== '…') {
+        line.open = true;
+        return;
+      }
+      if (line?.kind === 'reasoning' && (line.text ?? '').length > 0) {
         line.open = true;
         return;
       }
