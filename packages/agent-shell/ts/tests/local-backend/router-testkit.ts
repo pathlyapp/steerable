@@ -469,6 +469,11 @@ const harness = vi.hoisted(() => {
     // 类声明存在 TDZ，不能在这里 new；store 在下方模块求值时赋值，
     // vi.mock 工厂在测试文件 import router 时才执行，那时已就绪。
     store: null as unknown as FakeLocalStore,
+    /**
+     * 每个测试文件各自一份。内存会话 id 从 chat-1 重新计，写锁落在这个目录下；
+     * 并行文件若共用一个目录，会把对方的锁当成「会话正在运行」并返回 409。
+     */
+    userDataDir: `/tmp/steerable-router-${crypto.randomUUID()}`,
     /** 技能删除路由的 userSkillsDir（真实 fs 操作，用例可覆写到临时目录）。 */
     userSkillsDir: '/tmp/router-test-user-skills',
     /** getSidecarSupervisor() 的返回值（同步路径：流式/cancel/branches）。 */
@@ -551,7 +556,7 @@ vi.mock('../../src/runtime.js', () => ({
   getAppRootDir: () => '/tmp/app-root',
   // 系统提示词会带上本会话附件目录（项目围栏外的只读
   // 放行根），router.ts 经 chatAttachmentsDirPath() 读它。
-  getUserDataDir: () => '/tmp/user-data',
+  getUserDataDir: () => h.userDataDir,
   getDocumentsDir: () =>
     process.env.STEERABLE_DOCUMENTS_DIR || '/tmp/steerable-test-documents',
   shellOpenPath: (target: string) => h.shellOpenPath(target),

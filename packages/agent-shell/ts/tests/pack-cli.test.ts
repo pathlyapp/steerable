@@ -15,13 +15,13 @@ afterEach(() => {
 
 describe('pack cli commands', () => {
   it('registers commands in order and rejects reserved or duplicate names', () => {
-    registerPackCliCommands('cflog', [{
+    registerPackCliCommands('sample', [{
       name: 'cards',
       summary: 'list cards',
       run: () => 0,
     }]);
     expect(listPackCliCommands().map((command) => command.name)).toEqual(['cards']);
-    expect(() => registerPackCliCommands('cflog', [])).toThrow(/duplicate registration/);
+    expect(() => registerPackCliCommands('sample', [])).toThrow(/duplicate registration/);
     expect(() => registerPackCliCommands('other', [{
       name: 'run',
       summary: 'nope',

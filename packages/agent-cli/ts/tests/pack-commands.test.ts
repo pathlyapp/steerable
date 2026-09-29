@@ -41,7 +41,7 @@ describe('pack commands', () => {
         summary: 'list cards',
         run: async (args, io) => {
           ran.push(args.join(' '));
-          const response = await io.request('POST', '/host/cflog/list-cards', { search: args[0] });
+          const response = await io.request('POST', '/host/sample/list-cards', { search: args[0] });
           io.write(`${response.status}\n`);
           return 0;
         },
