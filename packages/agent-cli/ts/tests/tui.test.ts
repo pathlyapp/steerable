@@ -15,7 +15,7 @@ import { attachmentMessage, completeFiles, mentionAt } from '../src/tui/files.js
 import { formatKey, installAgentKeybindings, keyLabel } from '../src/tui/keys.js';
 import { composerRows, renderScreen, visibleText } from '../src/tui/screen.js';
 import { AgentTui } from '../src/tui/session.js';
-import { formatDuration, plainMarkdown, toolStatus } from '../src/tui/transcript.js';
+import { formatDuration, historyRows, plainMarkdown, toolStatus } from '../src/tui/transcript.js';
 
 afterEach(() => {
   installAgentKeybindings();
@@ -104,6 +104,42 @@ describe('tui screen', () => {
     expect(formatKey('enter', 'linux')).toBe('Enter');
     expect(formatKey('shift+enter', 'linux')).toBe('Shift+Enter');
     expect(formatKey('escape', 'win32')).toBe('Esc');
+  });
+
+  it('restores tool cards from a newest-first history', () => {
+    const rows = historyRows([
+      {
+        role: 'assistant',
+        content: '看完了',
+        createdAt: '2026-09-29T02:00:00.000Z',
+        messageMetadata: JSON.stringify({
+          timeline: [
+            { type: 'text', content: '先看目录' },
+            { type: 'reasoning', content: 'hidden' },
+            {
+              type: 'tools',
+              actions: [{
+                id: 'c1',
+                tool: 'local_exec_shell',
+                arguments: { command: 'ls' },
+                view: { title: 'ls' },
+                success: true,
+                durationMs: 300,
+                result: { stdout: 'SECRET-LINE' },
+              }],
+            },
+            { type: 'text', content: '看完了' },
+          ],
+        }),
+      },
+      { role: 'user', content: '列出', createdAt: '2026-09-29T01:00:00.000Z' },
+    ]);
+    expect(rows.map((row) => row.kind === 'tool' ? row.action.tool : row.text)).toEqual([
+      '列出',
+      '先看目录',
+      'local_exec_shell',
+      '看完了',
+    ]);
   });
 
   it('strips markdown markers and formats a finished tool as one line', () => {
@@ -369,6 +405,63 @@ describe('files and sub-agents', () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it('shows saved tool cards when a chat opens', async () => {
+    const client = fakeClient({
+      request: async (_method, requestPath) => {
+        if (requestPath === '/api/v2/chats') {
+          return { status: 200, data: { chats: [{ id: 'chat-1', title: 'Notes' }] } };
+        }
+        if (requestPath.endsWith('/messages')) {
+          return {
+            status: 200,
+            data: {
+              messages: [
+                {
+                  role: 'assistant',
+                  content: '看完了',
+                  createdAt: '2026-09-29T02:00:00.000Z',
+                  messageMetadata: JSON.stringify({
+                    timeline: [
+                      { type: 'text', content: '先看目录' },
+                      {
+                        type: 'tools',
+                        actions: [{
+                          id: 'c1',
+                          tool: 'local_exec_shell',
+                          arguments: { command: 'ls' },
+                          view: { title: 'ls' },
+                          success: true,
+                          durationMs: 300,
+                          result: { stdout: 'SECRET-LINE' },
+                        }],
+                      },
+                      { type: 'text', content: '看完了' },
+                    ],
+                  }),
+                },
+                { role: 'user', content: '列出', createdAt: '2026-09-29T01:00:00.000Z' },
+              ],
+            },
+          };
+        }
+        return { status: 200, data: { id: 'chat-1', title: 'Notes', model: 'demo-model' } };
+      },
+    });
+    const session = new AgentTui(client, { product: 'Demo', onExit() {} });
+    await session.open();
+    const screen = visibleText(session.render(72));
+    const userAt = screen.indexOf('user 列出');
+    const toolAt = screen.indexOf('▸ local_exec_shell  ls  ✓ 0.3s');
+    const answerAt = screen.indexOf('看完了');
+    expect(userAt).toBeGreaterThanOrEqual(0);
+    expect(userAt).toBeLessThan(screen.indexOf('先看目录'));
+    expect(screen.indexOf('先看目录')).toBeLessThan(toolAt);
+    expect(toolAt).toBeLessThan(answerAt);
+    expect(screen).not.toContain('SECRET-LINE');
+    session.handleInput('\x0f');
+    expect(visibleText(session.render(72))).toContain('SECRET-LINE');
   });
 
   it('keeps a finished tool on one line until it is expanded', async () => {

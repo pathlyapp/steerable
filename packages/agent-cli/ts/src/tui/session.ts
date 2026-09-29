@@ -19,7 +19,7 @@ import {
 } from './files.js';
 import { ensureAgentKeybindings } from './keys.js';
 import { renderScreen, type ChatRow, type TranscriptLine, type TuiScreen } from './screen.js';
-import { toolOutput, toolStatus, type ToolAction } from './transcript.js';
+import { historyRows, toolOutput, toolStatus, type ToolAction } from './transcript.js';
 
 export interface AgentTuiOptions {
   product: string;
@@ -332,12 +332,11 @@ export class AgentTui implements Component {
     this.readOnly = (this.options.busyChatIds ?? []).includes(id)
       || (this.options.dataDir ? listBusyChatIds(this.options.dataDir).includes(id) : false);
     const records = messages.status === 200
-      ? ((messages.data as { messages?: Array<{ role?: string; content?: string }> }).messages ?? [])
+      ? ((messages.data as { messages?: Parameters<typeof historyRows>[0] }).messages ?? [])
       : [];
-    this.lines = records.map((message) => ({
-      kind: message.role === 'user' ? 'user' : 'assistant',
-      text: message.content ?? '',
-    }));
+    this.lines = historyRows(records).map((row) => (
+      row.kind === 'tool' ? toolLine(row.action) : { kind: row.kind, text: row.text }
+    ));
     this.help = false;
     this.children = [];
     this.picks = null;
@@ -567,16 +566,7 @@ export class AgentTui implements Component {
   private applyActions(actions: ToolAction[]): void {
     for (const action of actions) {
       if (!action || typeof action !== 'object') continue;
-      const name = typeof action.tool === 'string' && action.tool ? action.tool : 'tool';
-      const title = typeof action.view?.title === 'string' ? action.view.title : '';
-      const next: TranscriptLine = {
-        kind: 'tool',
-        id: typeof action.id === 'string' ? action.id : undefined,
-        name,
-        args: title && title !== name ? title : toolArgs(action.arguments),
-        status: toolStatus(action),
-        output: toolOutput(action),
-      };
+      const next = toolLine(action);
       const index = next.id
         ? this.lines.findIndex((line) => line.kind === 'tool' && line.id === next.id)
         : -1;
@@ -646,6 +636,19 @@ async function defaultSaveAttachments(
     path: file.path,
     ...(file.error ? { error: file.error } : {}),
   }));
+}
+
+function toolLine(action: ToolAction): TranscriptLine {
+  const name = typeof action.tool === 'string' && action.tool ? action.tool : 'tool';
+  const title = typeof action.view?.title === 'string' ? action.view.title : '';
+  return {
+    kind: 'tool',
+    id: typeof action.id === 'string' ? action.id : undefined,
+    name,
+    args: title && title !== name ? title : toolArgs(action.arguments),
+    status: toolStatus(action),
+    output: toolOutput(action),
+  };
 }
 
 function toolArgs(value: unknown): string {

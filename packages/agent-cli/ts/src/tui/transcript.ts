@@ -68,3 +68,71 @@ function clip(text: string): string {
   const trimmed = text.replace(/\s+$/g, '');
   return trimmed.length > 4000 ? `${trimmed.slice(0, 4000)}…` : trimmed;
 }
+
+export interface StoredMessage {
+  role?: string;
+  content?: string;
+  createdAt?: string | number;
+  messageMetadata?: string | null;
+}
+
+export type HistoryRow =
+  | { kind: 'user' | 'assistant'; text: string }
+  | { kind: 'tool'; action: ToolAction };
+
+/** The list endpoint is newest-first. Dated lists are ordered by time; undated lists stay as given. */
+export function historyRows(messages: readonly StoredMessage[]): HistoryRow[] {
+  const rows: HistoryRow[] = [];
+  for (const message of inTimeOrder(messages)) {
+    if (message.role === 'user') {
+      rows.push({ kind: 'user', text: message.content ?? '' });
+      continue;
+    }
+    const meta = parseMeta(message.messageMetadata);
+    const timeline = Array.isArray(meta.timeline) ? meta.timeline : null;
+    if (timeline) {
+      let sawText = false;
+      for (const block of timeline) {
+        if (!block || typeof block !== 'object') continue;
+        const record = block as Record<string, unknown>;
+        if (record.type === 'text' && typeof record.content === 'string' && record.content.length > 0) {
+          sawText = true;
+          rows.push({ kind: 'assistant', text: record.content });
+        } else if (record.type === 'tools' && Array.isArray(record.actions)) {
+          for (const action of record.actions) {
+            if (action && typeof action === 'object') rows.push({ kind: 'tool', action: action as ToolAction });
+          }
+        }
+      }
+      if (!sawText && message.content) rows.push({ kind: 'assistant', text: message.content });
+      continue;
+    }
+    if (message.content) rows.push({ kind: 'assistant', text: message.content });
+    const actions = Array.isArray(meta.executedActions) ? meta.executedActions : [];
+    for (const action of actions) {
+      if (action && typeof action === 'object') rows.push({ kind: 'tool', action: action as ToolAction });
+    }
+  }
+  return rows;
+}
+
+function inTimeOrder(messages: readonly StoredMessage[]): StoredMessage[] {
+  if (messages.length < 2) return [...messages];
+  const times = messages.map((message) => message.createdAt == null ? null : String(message.createdAt));
+  if (times.some((time) => time == null)) return [...messages];
+  const first = times[0] ?? '';
+  const last = times[times.length - 1] ?? '';
+  if (first > last) return [...messages].reverse();
+  return [...messages];
+}
+
+function parseMeta(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch (error) {
+    void error;
+  }
+  return {};
+}
