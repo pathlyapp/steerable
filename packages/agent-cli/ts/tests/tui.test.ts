@@ -12,6 +12,7 @@ import { yieldsToRenderer } from '../src/tui/run.js';
 import { pageScrollLines, transcriptPage } from '../src/tui/scroll.js';
 import { applyChildEvent } from '../src/tui/children.js';
 import { createDraft, editDraft } from '../src/tui/editor.js';
+import { completeSlash, slashAt } from '../src/tui/commands.js';
 import { attachmentMessage, completeFiles, mentionAt } from '../src/tui/files.js';
 import { formatKey, installAgentKeybindings, keyLabel } from '../src/tui/keys.js';
 import { composerRows, renderScreen, visibleText } from '../src/tui/screen.js';
@@ -370,6 +371,30 @@ describe('prompt history', () => {
     expect(session.snapshot().draft).toBe('已发送');
     session.handleInput('\x0e');
     expect(session.snapshot().draft).toBe('a\nb');
+  });
+});
+
+describe('slash commands', () => {
+  it('lists the commands that already exist and completes one with tab', async () => {
+    expect(slashAt('/mo', 3)).toEqual({ start: 0, query: 'mo' });
+    expect(slashAt('看 /mo', 5)).toBeNull();
+    expect(completeSlash('a').map((pick) => pick.label)).toEqual(['/attach 附加文件']);
+    const session = new AgentTui(fakeClient(), { product: 'Demo', onExit() {} });
+    await session.open();
+    session.handleInput('/');
+    expect(session.snapshot().picks?.map((pick) => pick.label)).toEqual([
+      '/new 新会话',
+      '/model 查看或切换模型',
+      '/attach 附加文件',
+      '/clear 清屏',
+      '/help 帮助',
+    ]);
+    session.handleInput('a');
+    session.handleInput('\t');
+    expect(session.snapshot()).toMatchObject({ draft: '/attach ', picks: null });
+    session.handleInput('\r');
+    await waitFor(() => visibleText(session.render(72)).includes('用法 /attach'));
+    expect(session.snapshot().draft).toBe('');
   });
 });
 

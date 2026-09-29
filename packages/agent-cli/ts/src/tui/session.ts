@@ -8,6 +8,7 @@ import type { SSEEvent } from '@steerable/agent-protocol';
 import { saveAttachmentFiles } from '@steerable/agent-shell/attachments';
 
 import { applyChildEvent, childLines, type ChildRow } from './children.js';
+import { completeSlash, slashAt } from './commands.js';
 import { clearDraft, createDraft, editDraft, insertText, type DraftBuffer } from './editor.js';
 import {
   attachmentMessage,
@@ -190,9 +191,16 @@ export class AgentTui implements Component {
       this.picks = null;
       return;
     }
-    if (this.picks && (keys.matches(data, 'tui.input.tab') || keys.matches(data, 'tui.select.confirm'))) {
+    if (this.picks && keys.matches(data, 'tui.input.tab')) {
       this.acceptPick();
       return;
+    }
+    if (this.picks && keys.matches(data, 'tui.select.confirm')) {
+      const pick = this.picks[this.pickIndex];
+      if (!pick || this.buffer.text.trim() !== pick.insert.trim()) {
+        this.acceptPick();
+        return;
+      }
     }
     if (this.picks && keys.matches(data, 'tui.select.up')) {
       this.pickIndex = Math.max(0, this.pickIndex - 1);
@@ -291,8 +299,20 @@ export class AgentTui implements Component {
   }
 
   private refreshPicks(): void {
+    if (!this.composing()) {
+      this.picks = null;
+      return;
+    }
+    const slash = slashAt(this.buffer.text, this.buffer.cursor);
+    if (slash) {
+      this.pickGeneration += 1;
+      const commands = completeSlash(slash.query);
+      this.picks = commands.length > 0 ? commands : null;
+      this.markPicks();
+      return;
+    }
     const token = mentionAt(this.buffer.text, this.buffer.cursor);
-    if (!token || !this.composing()) {
+    if (!token) {
       this.picks = null;
       return;
     }
@@ -309,7 +329,7 @@ export class AgentTui implements Component {
 
   private acceptPick(): void {
     const pick = this.picks?.[this.pickIndex];
-    const token = mentionAt(this.buffer.text, this.buffer.cursor);
+    const token = slashAt(this.buffer.text, this.buffer.cursor) ?? mentionAt(this.buffer.text, this.buffer.cursor);
     if (!pick?.insert || !token) {
       this.picks = null;
       return;
