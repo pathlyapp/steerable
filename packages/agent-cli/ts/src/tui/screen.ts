@@ -37,6 +37,34 @@ export function renderScreen(screen: TuiScreen, width: number): string[] {
   return box.render(width);
 }
 
+export function toolText(line: TranscriptLine): string {
+  return `▸ ${line.name}  ${line.args}  ${line.status ?? ''}`.trimEnd();
+}
+
+export function chatText(chat: ChatRow): string {
+  const mark = chat.selected ? '*' : ' ';
+  const busy = chat.busy ? '  只读' : '';
+  return `${mark} ${chat.id}  ${chat.title}${busy}`;
+}
+
+export function helpLines(): string[] {
+  return ['/new 新会话', '/model 查看或切换模型', '/clear 清屏', '/help 帮助'];
+}
+
+export function approvalLines(approval: { toolName: string; summary: string }): string[] {
+  return [
+    `审批 ${approval.toolName} ${approval.summary}`.trimEnd(),
+    `${keyLabel('agent.approval.allowOnce')} 本次允许  ${keyLabel('agent.approval.allowSession')} 本会话  ${keyLabel('agent.approval.allowAlways')} 总是`,
+    `${keyLabel('agent.approval.denyOnce')} 拒绝  ${keyLabel('agent.approval.denySession')} 本会话拒绝  ${keyLabel('agent.approval.denyAlways')} 总是拒绝  ${keyLabel('agent.approval.abort')} 中止`,
+  ];
+}
+
+export function footerText(): string {
+  return `${keyLabel('agent.interrupt')} 中断 · ${keyLabel('agent.chats')} 会话 · /help`;
+}
+
+export const readOnlyText = '只读 · 另一个进程正在运行';
+
 export function visibleText(lines: string[]): string {
   return lines.map((line) => line.trimEnd()).join('\n');
 }
@@ -44,31 +72,23 @@ export function visibleText(lines: string[]): string {
 function screenLines(screen: TuiScreen): string[] {
   const lines = [`${screen.product} · ${screen.title} · ${screen.modelName}`];
   if (screen.help) {
-    lines.push('/new 新会话', '/model 查看或切换模型', '/clear 清屏', '/help 帮助');
+    lines.push(...helpLines());
   } else if (screen.chats) {
     lines.push('会话');
-    for (const chat of screen.chats) {
-      const mark = chat.selected ? '*' : ' ';
-      const busy = chat.busy ? '  只读' : '';
-      lines.push(`${mark} ${chat.id}  ${chat.title}${busy}`);
-    }
+    for (const chat of screen.chats) lines.push(chatText(chat));
   } else {
     for (const line of screen.lines) {
-      if (line.kind === 'tool') lines.push(`▸ ${line.name}  ${line.args}  ${line.status ?? ''}`.trimEnd());
+      if (line.kind === 'tool') lines.push(toolText(line));
       else if (line.kind === 'user') lines.push(`user ${line.text ?? ''}`);
       else lines.push(line.text ?? '');
     }
   }
-  if (screen.readOnly) lines.push('只读 · 另一个进程正在运行');
-  if (screen.approval) {
-    lines.push(`审批 ${screen.approval.toolName} ${screen.approval.summary}`.trimEnd());
-    lines.push(`${keyLabel('agent.approval.allowOnce')} 本次允许  ${keyLabel('agent.approval.allowSession')} 本会话  ${keyLabel('agent.approval.allowAlways')} 总是`);
-    lines.push(`${keyLabel('agent.approval.denyOnce')} 拒绝  ${keyLabel('agent.approval.denySession')} 本会话拒绝  ${keyLabel('agent.approval.denyAlways')} 总是拒绝  ${keyLabel('agent.approval.abort')} 中止`);
-  }
+  if (screen.readOnly) lines.push(readOnlyText);
+  if (screen.approval) lines.push(...approvalLines(screen.approval));
   if (screen.ask) lines.push(`追问 ${screen.ask.prompt}`);
   lines.push(`> ${screen.draft}`);
   if (screen.status) lines.push(screen.status);
-  lines.push(`${keyLabel('agent.interrupt')} 中断 · ${keyLabel('agent.chats')} 会话 · /help`);
+  lines.push(footerText());
   return lines;
 }
 

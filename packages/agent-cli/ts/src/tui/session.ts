@@ -60,7 +60,11 @@ export class AgentTui implements Component {
   invalidate(): void {}
 
   render(width: number): string[] {
-    return renderScreen(this.screen(), width);
+    return renderScreen(this.snapshot(), width);
+  }
+
+  snapshot(): TuiScreen {
+    return this.screen();
   }
 
   handleInput(data: string): void {
