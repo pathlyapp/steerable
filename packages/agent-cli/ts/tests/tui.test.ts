@@ -317,6 +317,55 @@ describe('tui session', () => {
   });
 });
 
+describe('prompt history', () => {
+  it('recalls sent lines with up and restores the draft with down', async () => {
+    const session = new AgentTui(fakeClient(), { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '先看目录');
+    await typeLine(session, '再看文件');
+    expect(session.snapshot().draft).toBe('');
+    session.handleInput('\x1b[A');
+    expect(session.snapshot()).toMatchObject({ draft: '再看文件', cursor: '再看文件'.length });
+    session.handleInput('\x1b[A');
+    expect(session.snapshot().draft).toBe('先看目录');
+    session.handleInput('\x1b[B');
+    expect(session.snapshot().draft).toBe('再看文件');
+    session.handleInput('!');
+    session.handleInput('\x1b[B');
+    expect(session.snapshot().draft).toBe('再看文件!');
+  });
+
+  it('moves inside a multiline draft before recalling', async () => {
+    const session = new AgentTui(fakeClient(), { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '已发送');
+    session.handleInput('a');
+    session.handleInput('\n');
+    session.handleInput('b');
+    session.handleInput('\x1b[A');
+    expect(session.snapshot()).toMatchObject({ draft: 'a\nb', cursor: 1 });
+    session.handleInput('\x1b[A');
+    expect(session.snapshot().draft).toBe('已发送');
+  });
+
+  it('recalls with historyPrevious when the caret is not on the first line', async () => {
+    installAgentKeybindings({
+      'tui.editor.historyPrevious': 'ctrl+p',
+      'tui.editor.historyNext': 'ctrl+n',
+    });
+    const session = new AgentTui(fakeClient(), { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '已发送');
+    session.handleInput('a');
+    session.handleInput('\n');
+    session.handleInput('b');
+    session.handleInput('\x10');
+    expect(session.snapshot().draft).toBe('已发送');
+    session.handleInput('\x0e');
+    expect(session.snapshot().draft).toBe('a\nb');
+  });
+});
+
 describe('composer', () => {
   it('edits by grapheme and by word from the key table', () => {
     const draft = createDraft();

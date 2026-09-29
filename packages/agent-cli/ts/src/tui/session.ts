@@ -18,6 +18,15 @@ import {
   type SavedFile,
 } from './files.js';
 import { ensureAgentKeybindings } from './keys.js';
+import {
+  createPromptHistory,
+  leavePromptHistory,
+  onFirstLine,
+  onLastLine,
+  recallPrompt,
+  rememberPrompt,
+  type PromptHistory,
+} from './prompt-history.js';
 import { renderScreen, type ChatRow, type TranscriptLine, type TuiScreen } from './screen.js';
 import { historyRows, toolOutput, toolStatus, type ToolAction } from './transcript.js';
 
@@ -46,6 +55,7 @@ export class AgentTui implements Component {
   private readOnly = false;
   private help = false;
   private buffer: DraftBuffer = createDraft();
+  private prompts: PromptHistory = createPromptHistory();
   private paste: string | null = null;
   private picks: FilePick[] | null = null;
   private pickIndex = 0;
@@ -203,11 +213,31 @@ export class AgentTui implements Component {
       this.attachments.pop();
       return;
     }
-    if (editDraft(this.buffer, data) === 'submit') {
+    if (this.browseHistory(data)) return;
+    const edited = editDraft(this.buffer, data);
+    if (edited === 'submit') {
       void this.submit();
       return;
     }
+    if (edited === 'edited') leavePromptHistory(this.prompts);
     this.refreshPicks();
+  }
+
+  private browseHistory(data: string): boolean {
+    if (!this.composing()) return false;
+    const keys = getKeybindings();
+    const previous = keys.matches(data, 'tui.editor.historyPrevious');
+    const next = keys.matches(data, 'tui.editor.historyNext');
+    const up = keys.matches(data, 'tui.editor.cursorUp') && onFirstLine(this.buffer.text, this.buffer.cursor);
+    const down = keys.matches(data, 'tui.editor.cursorDown')
+      && this.prompts.index >= 0
+      && onLastLine(this.buffer.text, this.buffer.cursor);
+    if (!previous && !next && !up && !down) return false;
+    const direction: -1 | 1 = previous || up ? -1 : 1;
+    const moved = recallPrompt(this.prompts, this.buffer, direction);
+    if (!moved && !previous && !next) return false;
+    this.picks = null;
+    return true;
   }
 
   private composing(): boolean {
@@ -348,6 +378,7 @@ export class AgentTui implements Component {
     const text = this.buffer.text.trim();
     clearDraft(this.buffer);
     this.picks = null;
+    if (text) rememberPrompt(this.prompts, text);
     if (!text && this.attachments.length === 0) return;
     if (text.startsWith('/')) {
       await this.slash(text);
