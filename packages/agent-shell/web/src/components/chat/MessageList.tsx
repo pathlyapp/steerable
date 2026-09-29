@@ -42,10 +42,9 @@ import type { LlmSpeedSnapshot } from './process-status';
  *   - **No per-chat scroll memory across tabs.** Switching chats remounts
  *     this list (parent passes a new `key`), so we don't need the
  *     `chatScrollMemoryRef` machinery.
- *   - **No sticky user-message group / `--user-msg-h` CSS var.** The cloud
- *     product uses these to keep the user prompt pinned at the top of the
- *     viewport while reading long assistant replies; agent UX defers that
- *     to a later phase.
+ *   - **Sticky user-message group per turn.** Grouped turns pin user prompt
+ *     cards at the top with `sticky top-0 z-10 bg-agent-canvas/95 backdrop-blur-xs`
+ *     until the next turn scrolls into view and naturally pushes it off.
  *   - **No load-more on scroll-up.** Local-backend currently hydrates the
  *     last 200 messages on mount (see `AgentPage.tsx`). Pagination is a
  *     phase-2c follow-up.
@@ -247,41 +246,72 @@ export function MessageList({
     scrollToBottom('auto');
   }, [lastMessageId, lastContentLen, lastTimelineSig, suggestedSig, scrollToBottom]);
 
-  // Group consecutive user messages into turns (方案 A).
-  // A group of 2+ user messages renders as a single connected card with
-  // dividers and "↳ 追加" badges, instead of separate disconnected bubbles.
-  type MessageItem =
-    | { type: 'user-group'; messages: ChatMessage[]; key: string }
-    | { type: 'assistant'; message: ChatMessage; originalIndex: number };
+  // Group consecutive messages into conversation turns.
+  // Each turn has an optional user group (1+ consecutive user messages)
+  // and zero or more subsequent assistant messages.
+  // Grouping into turn containers allows the user prompt to be sticky at
+  // the top of the viewport (`sticky top-0`) while scrolling through long
+  // assistant reasoning/tools/markdown in that turn, until the next turn
+  // scrolls into view and naturally pushes it off.
+  type UserGroupItem = { messages: ChatMessage[]; key: string };
+  type AssistantItem = { message: ChatMessage; originalIndex: number };
+  type ConversationTurn = {
+    key: string;
+    userGroup?: UserGroupItem;
+    assistants: AssistantItem[];
+  };
 
-  const groupedItems = useMemo<MessageItem[]>(() => {
-    const items: MessageItem[] = [];
-    let currentUserGroup: ChatMessage[] = [];
+  const conversationTurns = useMemo<ConversationTurn[]>(() => {
+    const turns: ConversationTurn[] = [];
+    let currentTurn: ConversationTurn | null = null;
+    let pendingUserGroup: ChatMessage[] = [];
 
     for (let i = 0; i < visibleMessages.length; i++) {
       const msg = visibleMessages[i];
       if (msg.role === 'user') {
-        currentUserGroup.push(msg);
-      } else {
-        if (currentUserGroup.length > 0) {
-          items.push({
-            type: 'user-group',
-            messages: currentUserGroup,
-            key: `ug-${currentUserGroup[0].id}`,
-          });
-          currentUserGroup = [];
+        if (currentTurn && currentTurn.assistants.length > 0) {
+          // Previous turn already has assistant replies; finalize it
+          turns.push(currentTurn);
+          currentTurn = null;
         }
-        items.push({ type: 'assistant', message: msg, originalIndex: i });
+        pendingUserGroup.push(msg);
+      } else {
+        if (!currentTurn) {
+          currentTurn = {
+            key: pendingUserGroup.length > 0
+              ? `turn-${pendingUserGroup[0].id}`
+              : `turn-head-${msg.id}`,
+            userGroup: pendingUserGroup.length > 0
+              ? {
+                  messages: pendingUserGroup,
+                  key: `ug-${pendingUserGroup[0].id}`,
+                }
+              : undefined,
+            assistants: [],
+          };
+          pendingUserGroup = [];
+        }
+        currentTurn.assistants.push({ message: msg, originalIndex: i });
       }
     }
-    if (currentUserGroup.length > 0) {
-      items.push({
-        type: 'user-group',
-        messages: currentUserGroup,
-        key: `ug-${currentUserGroup[0].id}`,
+
+    if (pendingUserGroup.length > 0) {
+      if (currentTurn) {
+        turns.push(currentTurn);
+      }
+      turns.push({
+        key: `turn-${pendingUserGroup[0].id}`,
+        userGroup: {
+          messages: pendingUserGroup,
+          key: `ug-${pendingUserGroup[0].id}`,
+        },
+        assistants: [],
       });
+    } else if (currentTurn) {
+      turns.push(currentTurn);
     }
-    return items;
+
+    return turns;
   }, [visibleMessages]);
 
   return (
@@ -294,148 +324,154 @@ export function MessageList({
           emptyState ?? null
         ) : (
           <div className="mx-auto w-full max-w-3xl space-y-4">
-            {groupedItems.map((item) => {
-              if (item.type === 'user-group') {
-                if (item.messages.length === 1) {
-                  return (
-                    <UserMessage
-                      key={item.messages[0].id}
-                      message={item.messages[0]}
-                      agents={agents}
-                      chats={chats}
-                    />
-                  );
-                }
-                // Multiple consecutive user messages: render as a unified combined card.
-                return (
-                  <div
-                    key={item.key}
-                    className="group/user-group"
-                    data-message-role="user-group"
-                  >
-                    <div className="flex justify-start">
-                      <div className="mx-auto w-full max-w-[var(--chat-input-box-width)] overflow-hidden rounded-agent-lg border border-agent-border/80 bg-agent-muted/70 shadow-sm">
-                        {item.messages.map((msg, idx) => (
-                          <UserMessage
-                            key={msg.id}
-                            message={msg}
-                            agents={agents}
-                            chats={chats}
-                            isGrouped
-                            isAppended={idx > 0}
-                          />
-                        ))}
+            {conversationTurns.map((turn) => (
+              <div
+                key={turn.key}
+                className="conversation-turn relative space-y-4"
+                data-conversation-turn={turn.key}
+              >
+                {turn.userGroup && (
+                  <div className="sticky top-0 z-10 -mx-3 px-3 py-1 bg-agent-canvas/95 backdrop-blur-xs">
+                    {turn.userGroup.messages.length === 1 ? (
+                      <UserMessage
+                        key={turn.userGroup.messages[0].id}
+                        message={turn.userGroup.messages[0]}
+                        agents={agents}
+                        chats={chats}
+                      />
+                    ) : (
+                      <div
+                        key={turn.userGroup.key}
+                        className="group/user-group"
+                        data-message-role="user-group"
+                      >
+                        <div className="flex justify-start">
+                          <div className="mx-auto w-full max-w-[var(--chat-input-box-width)] overflow-hidden rounded-agent-lg border border-agent-border/80 bg-agent-muted/70 shadow-sm">
+                            {turn.userGroup.messages.map((msg, idx) => (
+                              <UserMessage
+                                key={msg.id}
+                                message={msg}
+                                agents={agents}
+                                chats={chats}
+                                isGrouped
+                                isAppended={idx > 0}
+                              />
+                            ))}
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
-                );
-              }
+                )}
 
-              const message = item.message;
-              const isLast = item.originalIndex === visibleMessages.length - 1;
-              // Action attribution: prefer the per-message map (set when the
-              // backend's `message_id` event reconciles the stream-time queue
-              // with the DB id). The framework keeps the in-flight assistant's
-              // placeholder id even after the backend emits `message_id`, so
-              // the current page cannot always key by DB id until reload.
-              // Keep showing `currentTurnActions` on the latest assistant turn
-              // after streaming ends; it is cleared when the next turn starts.
-              const persistedActions =
-                executedActionsByMessageId?.[message.id];
-              const isStreamingTail = isStreaming && isLast;
-              const isCurrentTurnTail =
-                isLast && currentTurnActions !== undefined && currentTurnActions.length > 0;
-              const actions = persistedActions
-                ?? (isStreamingTail || isCurrentTurnTail ? currentTurnActions : undefined);
-              const persistedChildren = orchestrationChildrenByMessageId?.[message.id];
-              const isChildrenTail =
-                isLast && currentTurnChildren !== undefined && currentTurnChildren.length > 0;
-              const childList = persistedChildren
-                ?? (isStreamingTail || isChildrenTail ? currentTurnChildren : undefined);
+                {turn.assistants.map((item) => {
+                  const message = item.message;
+                  const isLast = item.originalIndex === visibleMessages.length - 1;
+                  // Action attribution: prefer the per-message map (set when the
+                  // backend's `message_id` event reconciles the stream-time queue
+                  // with the DB id). The framework keeps the in-flight assistant's
+                  // placeholder id even after the backend emits `message_id`, so
+                  // the current page cannot always key by DB id until reload.
+                  // Keep showing `currentTurnActions` on the latest assistant turn
+                  // after streaming ends; it is cleared when the next turn starts.
+                  const persistedActions =
+                    executedActionsByMessageId?.[message.id];
+                  const isStreamingTail = isStreaming && isLast;
+                  const isCurrentTurnTail =
+                    isLast && currentTurnActions !== undefined && currentTurnActions.length > 0;
+                  const actions = persistedActions
+                    ?? (isStreamingTail || isCurrentTurnTail ? currentTurnActions : undefined);
+                  const persistedChildren = orchestrationChildrenByMessageId?.[message.id];
+                  const isChildrenTail =
+                    isLast && currentTurnChildren !== undefined && currentTurnChildren.length > 0;
+                  const childList = persistedChildren
+                    ?? (isStreamingTail || isChildrenTail ? currentTurnChildren : undefined);
 
-              let isPlanMode = false;
-              if (message.messageMetadata) {
-                try {
-                  const meta = JSON.parse(message.messageMetadata);
-                  if (meta?.mode === 'plan') {
+                  let isPlanMode = false;
+                  if (message.messageMetadata) {
+                    try {
+                      const meta = JSON.parse(message.messageMetadata);
+                      if (meta?.mode === 'plan') {
+                        isPlanMode = true;
+                      }
+                    } catch {}
+                  } else if (isStreamingTail && mode === 'plan') {
                     isPlanMode = true;
                   }
-                } catch {}
-              } else if (isStreamingTail && mode === 'plan') {
-                isPlanMode = true;
-              }
 
-              const persistedTimeline = timelineByMessageId?.[message.id];
-              const isCurrentTimelineTail = isLast && currentTurnTimeline !== undefined;
-              const turnTimeline = persistedTimeline
-                ?? (isStreamingTail || isCurrentTimelineTail ? currentTurnTimeline : undefined);
+                  const persistedTimeline = timelineByMessageId?.[message.id];
+                  const isCurrentTimelineTail = isLast && currentTurnTimeline !== undefined;
+                  const turnTimeline = persistedTimeline
+                    ?? (isStreamingTail || isCurrentTimelineTail ? currentTurnTimeline : undefined);
 
-              const persistedTurnFiles = turnFilesByMessageId?.[message.id];
-              const isTurnFilesTail =
-                isLast && currentTurnFiles !== undefined && currentTurnFiles.length > 0;
-              const turnFiles = persistedTurnFiles
-                ?? (isTurnFilesTail ? currentTurnFiles : undefined);
+                  const persistedTurnFiles = turnFilesByMessageId?.[message.id];
+                  const isTurnFilesTail =
+                    isLast && currentTurnFiles !== undefined && currentTurnFiles.length > 0;
+                  const turnFiles = persistedTurnFiles
+                    ?? (isTurnFilesTail ? currentTurnFiles : undefined);
 
-              const metadataJson =
-                typeof message.messageMetadata === 'string'
-                  ? message.messageMetadata
-                  : undefined;
-              let previousUser: ChatMessage | undefined;
-              let previousUserCreatedAt: string | undefined;
-              for (let i = item.originalIndex - 1; i >= 0; i -= 1) {
-                if (visibleMessages[i].role === 'user') {
-                  previousUser = visibleMessages[i];
-                  previousUserCreatedAt = previousUser.createdAt;
-                  break;
-                }
-              }
-              const durationMs = isStreamingTail
-                ? undefined
-                : durationByMessageId?.[message.id]
-                  ?? readPersistedDurationMs(metadataJson)
-                  ?? inferDurationMs(previousUserCreatedAt, message.createdAt);
-              const persistedSpeed = llmSpeedByMessageId?.[message.id];
-              const isSpeedTail = isLast && currentLlmSpeed !== undefined;
-              const llmSpeed =
-                persistedSpeed
-                ?? (isStreamingTail || isSpeedTail ? currentLlmSpeed : undefined);
+                  const metadataJson =
+                    typeof message.messageMetadata === 'string'
+                      ? message.messageMetadata
+                      : undefined;
+                  let previousUser: ChatMessage | undefined;
+                  let previousUserCreatedAt: string | undefined;
+                  for (let i = item.originalIndex - 1; i >= 0; i -= 1) {
+                    if (visibleMessages[i].role === 'user') {
+                      previousUser = visibleMessages[i];
+                      previousUserCreatedAt = previousUser.createdAt;
+                      break;
+                    }
+                  }
+                  const durationMs = isStreamingTail
+                    ? undefined
+                    : durationByMessageId?.[message.id]
+                      ?? readPersistedDurationMs(metadataJson)
+                      ?? inferDurationMs(previousUserCreatedAt, message.createdAt);
+                  const persistedSpeed = llmSpeedByMessageId?.[message.id];
+                  const isSpeedTail = isLast && currentLlmSpeed !== undefined;
+                  const llmSpeed =
+                    persistedSpeed
+                    ?? (isStreamingTail || isSpeedTail ? currentLlmSpeed : undefined);
 
-              return (
-                <div key={message.id}>
-                  <AssistantMessage
-                    message={message}
-                    isStreaming={isStreamingTail}
-                    agents={agents}
-                    chats={chats}
-                    chatId={chatId}
-                    currentAgent={currentAgent}
-                    executedActions={actions}
-                    timeline={turnTimeline}
-                    orchestrationChildren={childList}
-                    previousUser={previousUser}
-                    currentRound={isStreamingTail ? currentRound : undefined}
-                    isPlanMode={isPlanMode}
-                    onRegenerate={onRegenerate}
-                    startedAtMs={isStreamingTail ? currentTurnStartedAtMs : undefined}
-                    durationMs={durationMs}
-                    llmSpeed={llmSpeed}
-                    turnFiles={turnFiles}
-                    onShare={message.id === lastAssistantId ? onShare : undefined}
-                    onInspectTask={onInspectTask}
-                  />
-                  {!isStreaming &&
-                  message.id === lastAssistantId &&
-                  suggestedReplies &&
-                  suggestedReplies.length > 0 &&
-                  onSelectSuggestion ? (
-                    <SuggestedReplies
-                      suggestions={suggestedReplies}
-                      onSelect={onSelectSuggestion}
-                    />
-                  ) : null}
-                </div>
-              );
-            })}
+                  return (
+                    <div key={message.id}>
+                      <AssistantMessage
+                        message={message}
+                        isStreaming={isStreamingTail}
+                        agents={agents}
+                        chats={chats}
+                        chatId={chatId}
+                        currentAgent={currentAgent}
+                        executedActions={actions}
+                        timeline={turnTimeline}
+                        orchestrationChildren={childList}
+                        previousUser={previousUser}
+                        currentRound={isStreamingTail ? currentRound : undefined}
+                        isPlanMode={isPlanMode}
+                        onRegenerate={onRegenerate}
+                        startedAtMs={isStreamingTail ? currentTurnStartedAtMs : undefined}
+                        durationMs={durationMs}
+                        llmSpeed={llmSpeed}
+                        turnFiles={turnFiles}
+                        onShare={message.id === lastAssistantId ? onShare : undefined}
+                        onInspectTask={onInspectTask}
+                      />
+                      {!isStreaming &&
+                      message.id === lastAssistantId &&
+                      suggestedReplies &&
+                      suggestedReplies.length > 0 &&
+                      onSelectSuggestion ? (
+                        <SuggestedReplies
+                          suggestions={suggestedReplies}
+                          onSelect={onSelectSuggestion}
+                        />
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
             {/* W7-1: 中断提示卡在消息列尾部、与最后一条用户消息同列——
                 视觉上隶属于被截断的那一轮，而非全局横幅。流式期间不显示
                 （进行中的流不是中断）。 */}
