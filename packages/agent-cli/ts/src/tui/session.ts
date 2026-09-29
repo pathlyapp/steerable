@@ -62,6 +62,8 @@ export class AgentTui implements Component {
   private pickIndex = 0;
   private pickGeneration = 0;
   private attachments: Array<{ name: string; path: string }> = [];
+  private queue: Array<{ text: string; files: Array<{ name: string; path: string }> }> = [];
+  private sending = false;
   private children: ChildRow[] = [];
   private readonly cwd: string;
   private status = '';
@@ -131,6 +133,7 @@ export class AgentTui implements Component {
     if (keys.matches(data, 'agent.interrupt')) {
       if (this.turnAbort && !this.turnAbort.signal.aborted) {
         this.turnAbort.abort();
+        this.queue = [];
         this.status = '已中断';
         return;
       }
@@ -285,6 +288,7 @@ export class AgentTui implements Component {
       picks: this.pickRows(),
       attachments: this.attachments.map((file) => file.name),
       children: this.children,
+      queued: this.queue.map((item) => item.text || item.files.map((file) => file.name).join(' ')),
     };
   }
 
@@ -408,10 +412,46 @@ export class AgentTui implements Component {
       this.status = '只读 · 另一个进程正在运行';
       return;
     }
-    const prepared = await this.prepareMessage(text);
+    const files = this.attachments.splice(0);
+    if (this.sending) {
+      this.queue.push({ text, files });
+      this.touch();
+      return;
+    }
+    this.sending = true;
+    try {
+      await this.sendPrepared(text, files);
+      while (!this.stopped && this.queue.length > 0) {
+        const next = this.queue.shift();
+        if (!next) break;
+        await this.sendPrepared(next.text, next.files);
+      }
+    } finally {
+      this.sending = false;
+      this.touch();
+    }
+  }
+
+  private async sendPrepared(text: string, files: Array<{ name: string; path: string }>): Promise<void> {
+    const prepared = await this.prepareOwned(text, files);
     this.lines.push({ kind: 'user', text: prepared.message });
+    this.touch();
     this.pending = this.runTurn(prepared.message, prepared.images);
     await this.pending;
+  }
+
+  private async prepareOwned(
+    text: string,
+    files: Array<{ name: string; path: string }>,
+  ): Promise<{ message: string; images: Array<{ path: string; name: string }> }> {
+    const added = this.attachments.splice(0);
+    this.attachments = files;
+    try {
+      return await this.prepareMessage(text);
+    } finally {
+      const failed = this.attachments;
+      this.attachments = [...added, ...failed];
+    }
   }
 
   private async slash(text: string): Promise<void> {
@@ -549,6 +589,7 @@ export class AgentTui implements Component {
         this.children = [];
         this.touch();
       }
+      if (controller.signal.aborted) this.queue = [];
       if (this.turnAbort === controller) this.turnAbort = null;
     }
   }

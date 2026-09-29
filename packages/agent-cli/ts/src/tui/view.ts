@@ -53,6 +53,7 @@ export class OpenTuiView {
   private readonly overlay: BoxRenderable;
   private readonly picks: BoxRenderable;
   private readonly attached: TextRenderable;
+  private readonly queued: TextRenderable;
   private readonly composer: BoxRenderable;
   private readonly draft: TextRenderable;
   private readonly status: TextRenderable;
@@ -126,6 +127,8 @@ export class OpenTuiView {
       visible: false,
     });
     this.attached = text(renderer, warn);
+    this.queued = text(renderer, warn);
+    this.queued.visible = false;
     this.composer = new BoxRenderable(renderer, {
       width: '100%',
       height: 1,
@@ -159,6 +162,7 @@ export class OpenTuiView {
     shell.add(this.overlay);
     shell.add(this.picks);
     shell.add(this.attached);
+    shell.add(this.queued);
     shell.add(this.composer);
     shell.add(this.status);
     shell.add(footerBar);
@@ -182,6 +186,10 @@ export class OpenTuiView {
     const attached = attachmentText(screen.attachments ?? []);
     this.attached.content = attached;
     this.attached.visible = attached.length > 0;
+    const queued = screen.queued ?? [];
+    this.queued.content = queued.map((item) => `排队 ${item}`).join('\n');
+    this.queued.visible = queued.length > 0;
+    this.queued.height = queued.length;
     this.paintOverlay(screen);
     this.paintPicks(screen);
 

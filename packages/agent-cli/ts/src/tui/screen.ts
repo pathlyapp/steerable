@@ -45,6 +45,7 @@ export interface TuiScreen {
   picks?: PickRow[] | null;
   attachments?: string[];
   children?: ChildRow[];
+  queued?: string[];
 }
 
 export function draftHint(): string {
@@ -157,6 +158,7 @@ function screenLines(screen: TuiScreen): string[] {
   for (const pick of screen.picks ?? []) lines.push(pickText(pick));
   const attached = attachmentText(screen.attachments ?? []);
   if (attached) lines.push(attached);
+  for (const item of screen.queued ?? []) lines.push(`排队 ${item}`);
   lines.push(draftLine(screen.draft, screen.cursor));
   if (screen.status) lines.push(screen.status);
   lines.push(footerText());

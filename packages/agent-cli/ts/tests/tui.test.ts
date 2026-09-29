@@ -398,6 +398,75 @@ describe('slash commands', () => {
   });
 });
 
+describe('follow-up queue', () => {
+  it('sends the next line only after the current turn finishes', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const client = fakeClient({
+      async *stream() {
+        calls += 1;
+        if (calls === 1) {
+          yield { type: 'content', content: '先回答' } as SSEEvent;
+          await gate;
+          yield { type: 'content', content: '说完' } as SSEEvent;
+          return;
+        }
+        yield { type: 'content', content: '下一轮' } as SSEEvent;
+      },
+    });
+    const session = new AgentTui(client, { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '第一句');
+    await waitFor(() => visibleText(session.render(72)).includes('先回答'));
+    await typeLine(session, '第二句');
+    const waiting = visibleText(session.render(72));
+    expect(waiting).toContain('排队 第二句');
+    expect(waiting).not.toContain('user 第二句');
+    expect(calls).toBe(1);
+    release();
+    await waitFor(() => visibleText(session.render(72)).includes('下一轮'));
+    const done = visibleText(session.render(72));
+    expect(done).toContain('user 第二句');
+    expect(done).not.toContain('排队');
+    expect(calls).toBe(2);
+  });
+
+  it('drops a queued line when the turn is interrupted', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const client = fakeClient({
+      async *stream() {
+        calls += 1;
+        yield { type: 'content', content: '先回答' } as SSEEvent;
+        await gate;
+      },
+    });
+    const session = new AgentTui(client, { product: 'Demo', onExit() {} });
+    try {
+      await session.open();
+      await typeLine(session, '第一句');
+      await waitFor(() => visibleText(session.render(72)).includes('先回答'));
+      await typeLine(session, '第二句');
+      expect(visibleText(session.render(72))).toContain('排队 第二句');
+      session.handleInput('\x03');
+      expect(visibleText(session.render(72))).not.toContain('排队');
+      expect(visibleText(session.render(72))).toContain('已中断');
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(visibleText(session.render(72))).not.toContain('user 第二句');
+      expect(calls).toBe(1);
+    } finally {
+      release();
+    }
+  });
+});
+
 describe('composer', () => {
   it('edits by grapheme and by word from the key table', () => {
     const draft = createDraft();
