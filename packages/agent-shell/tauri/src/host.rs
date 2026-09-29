@@ -588,7 +588,14 @@ fn node_compatible_path(path: &Path) -> PathBuf {
 fn spawn_group(command: &mut Command) -> std::io::Result<GroupChild> {
     #[cfg(windows)]
     {
-        return command.group().kill_on_drop(true).spawn();
+        // node.exe is a console-subsystem binary. Hide it once this host is a
+        // GUI app, or Windows opens a second console at launch.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        return command
+            .group()
+            .kill_on_drop(true)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
     }
     #[cfg(not(windows))]
     {

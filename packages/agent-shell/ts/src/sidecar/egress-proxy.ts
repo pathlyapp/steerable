@@ -192,6 +192,7 @@ export function downloadPublishedEgress(repoRoot: string, cacheDir: string): Pro
     const child = spawn(python, [script, 'egress', '--artifact-lock', '--target', 'host', '--out', cacheDir], {
       cwd: repoRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     });
     const timer = setTimeout(() => child.kill(), EGRESS_DOWNLOAD_TIMEOUT_MS);
     let stdout = '';
@@ -524,6 +525,7 @@ export async function startEgressProxy(
 ): Promise<EgressProxyHandle> {
   const child: EgressProxyChild = spawn(plan.command, plan.args, {
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
     // 凭证与控制 token 经 env 传入代理进程——argv 在 ps 里可见，env 不入
     // 命令行。
     env: plan.broker

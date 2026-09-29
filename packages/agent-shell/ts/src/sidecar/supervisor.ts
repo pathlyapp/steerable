@@ -529,6 +529,7 @@ export class SidecarSupervisor extends EventEmitter {
       cwd: this.options.cwd,
       env: { ...process.env, ...this.options.env, ...spawnPlan.env },
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     }) as ChildProcessWithoutNullStreams;
     this.child = child;
     this.attachListeners(child);

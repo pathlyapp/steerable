@@ -368,6 +368,11 @@ async fn install(app: AppHandle, custom_url: Option<String>) -> PythonRunnerSnap
         .args(["--runner", &context.target.runner, "--progress", "true"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -571,12 +576,17 @@ async fn validate_local(path: &Path) -> Result<(), String> {
     if !path.is_absolute() || !path.is_file() {
         return Err("Python path must be an existing absolute file".into());
     }
-    let output = Command::new(path)
-        .args([
-            "-c",
-            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
-        ])
-        .output()
+    let mut command = Command::new(path);
+    command.args([
+        "-c",
+        "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+    ]);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command.output()
         .await
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
