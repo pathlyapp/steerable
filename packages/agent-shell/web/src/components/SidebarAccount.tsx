@@ -126,18 +126,20 @@ export function SidebarAccount() {
       </div>
       {account.status === 'ready' && account.total ? (
         <>
-          <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5 text-xs">
-            <span className="shrink-0 text-agent-foreground">{t('Account balance')}</span>
+          <div className="mt-1.5 flex items-center justify-between gap-1.5 text-xs">
+            <span className="shrink-0 text-agent-foreground" title={t('Account balance')}>
+              {t('Balance')}
+            </span>
             <div className="flex min-w-0 items-center justify-end gap-1">
               <span
                 data-testid="sidebar-account-total"
-                className="truncate font-medium tabular-nums text-agent-foreground"
+                className="shrink-0 font-medium tabular-nums text-agent-foreground"
               >
                 {formatMoney(account.total, account.currency)}
               </span>
               {availableLabel ? (
                 <span
-                  className={`shrink-0 text-[10px] ${account.available ? 'text-emerald-600' : 'text-amber-600'}`}
+                  className={`min-w-0 truncate text-[10px] ${account.available ? 'text-emerald-600' : 'text-amber-600'}`}
                 >
                   {availableLabel}
                 </span>
@@ -146,7 +148,7 @@ export function SidebarAccount() {
           </div>
           {detail ? (
             <p
-              className="mt-1 truncate px-0.5 text-[9px] leading-none text-agent-muted-foreground"
+              className="mt-1 truncate text-[9px] leading-none text-agent-muted-foreground"
               title={detail}
             >
               {detail}
