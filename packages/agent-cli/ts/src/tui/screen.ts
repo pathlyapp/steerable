@@ -91,6 +91,7 @@ export function helpLines(): string[] {
     '/clear 清屏',
     '/help 帮助',
     `${keyLabel('agent.tool.toggle')} 展开工具或思考`,
+    `${keyLabel('agent.clipboard.paste')} 粘贴图片`,
   ];
 }
 

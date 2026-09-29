@@ -20,6 +20,7 @@ declare module '@earendil-works/pi-tui' {
     'agent.approval.denyAlways': true;
     'agent.approval.abort': true;
     'agent.tool.toggle': true;
+    'agent.clipboard.paste': true;
   }
 }
 
@@ -34,6 +35,10 @@ export const AGENT_KEYBINDINGS = {
   'agent.approval.denyAlways': { defaultKeys: 'shift+a', description: 'Always deny this tool' },
   'agent.approval.abort': { defaultKeys: 'escape', description: 'Abort the turn' },
   'agent.tool.toggle': { defaultKeys: 'ctrl+o', description: 'Expand the latest finished tool' },
+  'agent.clipboard.paste': {
+    defaultKeys: process.platform === 'win32' ? 'alt+v' : 'ctrl+v',
+    description: 'Paste an image or text from the clipboard',
+  },
 } as const satisfies KeybindingDefinitions;
 
 const DEFINITIONS: KeybindingDefinitions = { ...TUI_KEYBINDINGS, ...AGENT_KEYBINDINGS };

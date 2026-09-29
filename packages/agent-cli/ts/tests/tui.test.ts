@@ -12,6 +12,7 @@ import { yieldsToRenderer } from '../src/tui/run.js';
 import { pageScrollLines, transcriptPage } from '../src/tui/scroll.js';
 import { applyChildEvent } from '../src/tui/children.js';
 import { createDraft, editDraft } from '../src/tui/editor.js';
+import { imageExtension } from '../src/tui/clipboard.js';
 import { completeSlash, slashAt } from '../src/tui/commands.js';
 import { attachmentMessage, completeFiles, mentionAt } from '../src/tui/files.js';
 import { formatKey, installAgentKeybindings, keyLabel } from '../src/tui/keys.js';
@@ -464,6 +465,36 @@ describe('follow-up queue', () => {
     } finally {
       release();
     }
+  });
+});
+
+describe('clipboard paste', () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+  it('attaches a pasted image and inserts clipboard text when there is no image', async () => {
+    expect(imageExtension(png)).toBe('png');
+    expect(imageExtension(new Uint8Array([1, 2, 3]))).toBeNull();
+    const imageSession = new AgentTui(fakeClient(), {
+      product: 'Demo',
+      onExit() {},
+      readClipboard: async () => ({ image: png }),
+    });
+    await imageSession.open();
+    imageSession.handleInput('\x16');
+    await waitFor(() => (imageSession.snapshot().attachments ?? []).length === 1);
+    const name = imageSession.snapshot().attachments?.[0] ?? '';
+    expect(name).toMatch(/^clipboard-[0-9a-f]+\.png$/);
+    expect(imageSession.snapshot().status).toBe(`已附加 ${name}`);
+
+    const textSession = new AgentTui(fakeClient(), {
+      product: 'Demo',
+      onExit() {},
+      readClipboard: async () => ({ text: '贴上' }),
+    });
+    await textSession.open();
+    textSession.handleInput('\x16');
+    await waitFor(() => textSession.snapshot().draft === '贴上');
+    expect(textSession.snapshot().attachments ?? []).toEqual([]);
   });
 });
 

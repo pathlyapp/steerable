@@ -8,6 +8,7 @@ import type { SSEEvent } from '@steerable/agent-protocol';
 import { saveAttachmentFiles } from '@steerable/agent-shell/attachments';
 
 import { applyChildEvent, childLines, type ChildRow } from './children.js';
+import { readSystemClipboard, saveClipboardImage, type ClipboardRead } from './clipboard.js';
 import { completeSlash, slashAt } from './commands.js';
 import { clearDraft, createDraft, editDraft, insertText, type DraftBuffer } from './editor.js';
 import {
@@ -37,6 +38,7 @@ export interface AgentTuiOptions {
   busyChatIds?: string[];
   cwd?: string;
   saveAttachments?: (chatId: string, files: Array<{ name: string; path: string }>) => Promise<SavedFile[]>;
+  readClipboard?: () => Promise<ClipboardRead>;
   onExit: () => void;
   onChange?: () => void;
 }
@@ -224,6 +226,10 @@ export class AgentTui implements Component {
       this.attachments.pop();
       return;
     }
+    if (this.composing() && keys.matches(data, 'agent.clipboard.paste')) {
+      void this.pasteClipboard();
+      return;
+    }
     if (this.browseHistory(data)) return;
     const edited = editDraft(this.buffer, data);
     if (edited === 'submit') {
@@ -232,6 +238,37 @@ export class AgentTui implements Component {
     }
     if (edited === 'edited') leavePromptHistory(this.prompts);
     this.refreshPicks();
+  }
+
+  private async pasteClipboard(): Promise<void> {
+    const read = this.options.readClipboard ?? readSystemClipboard;
+    let payload: ClipboardRead;
+    try {
+      payload = await read();
+    } catch (error) {
+      void error;
+      this.status = '剪贴板不可用';
+      this.touch();
+      return;
+    }
+    const bytes = payload.image;
+    if (bytes && bytes.length > 0) {
+      const saved = await saveClipboardImage(bytes);
+      if (!saved) {
+        this.status = '剪贴板里的图片格式不支持';
+        this.touch();
+        return;
+      }
+      this.attachments.push(saved);
+      this.status = `已附加 ${saved.name}`;
+      this.touch();
+      return;
+    }
+    if (payload.text) {
+      insertText(this.buffer, payload.text);
+      this.refreshPicks();
+      this.touch();
+    }
   }
 
   private browseHistory(data: string): boolean {
