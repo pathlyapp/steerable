@@ -16,9 +16,13 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+      - uses: astral-sh/setup-uv@v6
       - run: pnpm install --frozen-lockfile
       - run: pnpm gen
       - run: pnpm build
+      # CLI coexistence tests boot the real sidecar. It resolves the repo
+      # .venv that `uv sync` creates; without that, those tests exit 1.
+      - run: uv sync
       - run: pnpm test
       - run: pnpm check:drift
       # agent-shell 产品中立门禁（3.2 随 shell 上提到本仓）：shell 源码与
