@@ -85,7 +85,10 @@ export type { ExecPolicy, McpToolItem, SkillItem };
  *   - Compact-mode responsive layout.
  */
 
-const MIN_HEIGHT_PX = 36;
+// Empty field should read as two lines of space. Two lines of text measure
+// 40px (`pt-2` + two 16px line boxes) and still look like one row, so the
+// floor is one line box taller.
+const MIN_HEIGHT_PX = 56;
 const MAX_HEIGHT_PX = 220;
 const MENTION_PATTERN = /(@[^\s@]+)/g;
 const MAX_MENTION_SUGGESTIONS = 8;
