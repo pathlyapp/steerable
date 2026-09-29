@@ -9,6 +9,7 @@ import type { SSEEvent } from '@steerable/agent-protocol';
 import { getNativeClipboard } from '@earendil-works/pi-tui';
 import { createCli } from '../src/cli.js';
 import { yieldsToRenderer } from '../src/tui/run.js';
+import { pageScrollLines, transcriptPage } from '../src/tui/scroll.js';
 import { applyChildEvent } from '../src/tui/children.js';
 import { createDraft, editDraft } from '../src/tui/editor.js';
 import { attachmentMessage, completeFiles, mentionAt } from '../src/tui/files.js';
@@ -88,6 +89,11 @@ describe('tui screen', () => {
   });
 
   it('lets the renderer see capability replies and treats shifted return as a newline', () => {
+    expect(transcriptPage('\x1b[5~')).toBe(-1);
+    expect(transcriptPage('\x1b[6~')).toBe(1);
+    expect(transcriptPage('\r')).toBe(0);
+    expect(pageScrollLines(24, -1)).toBe(-20);
+    expect(pageScrollLines(2, 1)).toBe(1);
     expect(yieldsToRenderer('\x1b[?5u')).toBe(true);
     expect(yieldsToRenderer('\x1b[13;2u')).toBe(false);
     expect(yieldsToRenderer('\r')).toBe(false);

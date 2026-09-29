@@ -29,6 +29,7 @@ import {
   type TranscriptLine,
   type TuiScreen,
 } from './screen.js';
+import { pageScrollLines } from './scroll.js';
 import { plainMarkdown } from './transcript.js';
 
 const canvas = '#16161e';
@@ -162,6 +163,11 @@ export class OpenTuiView {
     shell.add(this.status);
     shell.add(footerBar);
     renderer.root.add(shell);
+  }
+
+  scrollPage(direction: -1 | 1): void {
+    const height = this.body.viewport.height;
+    this.body.scrollBy(pageScrollLines(typeof height === 'number' ? height : 0, direction));
   }
 
   apply(screen: TuiScreen): void {

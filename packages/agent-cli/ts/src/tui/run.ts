@@ -2,6 +2,7 @@ import { ProcessTerminal, TuiAltScreen, type Terminal } from '@earendil-works/pi
 import type { AgentClient } from '@steerable/agent-client';
 
 import { installAgentKeybindings } from './keys.js';
+import { transcriptPage } from './scroll.js';
 import { AgentTui } from './session.js';
 
 export async function runTui(options: {
@@ -51,6 +52,11 @@ async function runOpenTui(options: {
     const view = new OpenTuiView(renderer);
     renderer.prependInputHandler((sequence) => {
       if (yieldsToRenderer(sequence)) return false;
+      const page = transcriptPage(sequence);
+      if (page !== 0) {
+        view.scrollPage(page);
+        return true;
+      }
       session.handleInput(sequence);
       return true;
     });
