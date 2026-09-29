@@ -19,6 +19,7 @@ declare module '@earendil-works/pi-tui' {
     'agent.approval.denySession': true;
     'agent.approval.denyAlways': true;
     'agent.approval.abort': true;
+    'agent.tool.toggle': true;
   }
 }
 
@@ -32,6 +33,7 @@ export const AGENT_KEYBINDINGS = {
   'agent.approval.denySession': { defaultKeys: 'shift+n', description: 'Deny this tool for the chat' },
   'agent.approval.denyAlways': { defaultKeys: 'shift+a', description: 'Always deny this tool' },
   'agent.approval.abort': { defaultKeys: 'escape', description: 'Abort the turn' },
+  'agent.tool.toggle': { defaultKeys: 'ctrl+o', description: 'Expand the latest finished tool' },
 } as const satisfies KeybindingDefinitions;
 
 const DEFINITIONS: KeybindingDefinitions = { ...TUI_KEYBINDINGS, ...AGENT_KEYBINDINGS };
@@ -50,14 +52,47 @@ export function keyLabel(id: Keybinding): string {
   return formatKey(key);
 }
 
-function formatKey(key: string): string {
+const MAC_NAME: Record<string, string> = {
+  ctrl: 'Control',
+  control: 'Control',
+  shift: 'Shift',
+  alt: 'Option',
+  opt: 'Option',
+  option: 'Option',
+  meta: 'Command',
+  cmd: 'Command',
+  command: 'Command',
+  super: 'Command',
+  enter: 'Return',
+  return: 'Return',
+  escape: 'Esc',
+  esc: 'Esc',
+  tab: 'Tab',
+  backspace: 'Delete',
+  delete: 'Forward Delete',
+  space: 'Space',
+};
+
+export function formatKey(key: string, platform = process.platform): string {
+  if (/^shift\+[a-z]$/.test(key)) return key.slice('shift+'.length).toUpperCase();
+  if (platform === 'darwin') {
+    const parts = key.split('+');
+    return parts.map((part, index) => macName(part, parts.length > 1 && index === parts.length - 1)).join('+');
+  }
   if (key === 'escape') return 'Esc';
   if (key === 'enter') return 'Enter';
-  if (/^shift\+[a-z]$/.test(key)) return key.slice('shift+'.length).toUpperCase();
   if (!key.includes('+')) return key;
-  return key.split('+').map((part) => {
-    if (part === 'ctrl') return 'Ctrl';
-    if (part.length === 1) return part.toUpperCase();
-    return part[0]!.toUpperCase() + part.slice(1);
-  }).join('+');
+  return key.split('+').map((part) => wordPart(part)).join('+');
+}
+
+function macName(part: string, chordKey: boolean): string {
+  if (MAC_NAME[part]) return MAC_NAME[part];
+  if (part.length === 1) return chordKey ? part.toUpperCase() : part;
+  return part[0]!.toUpperCase() + part.slice(1);
+}
+
+function wordPart(part: string): string {
+  if (part === 'ctrl') return 'Ctrl';
+  if (part.length === 1) return part.toUpperCase();
+  return part[0]!.toUpperCase() + part.slice(1);
 }

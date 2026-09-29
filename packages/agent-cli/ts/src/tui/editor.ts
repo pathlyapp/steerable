@@ -42,7 +42,7 @@ export function splitAtCursor(text: string, cursor: number): { before: string; h
  */
 export function editDraft(draft: DraftBuffer, data: string): 'submit' | 'edited' | 'ignored' {
   const keys = getKeybindings();
-  if (keys.matches(data, 'tui.input.newLine')) {
+  if (keys.matches(data, 'tui.input.newLine') || isLegacyNewline(data)) {
     insertText(draft, '\n');
     return 'edited';
   }
@@ -197,6 +197,11 @@ function graphemesOf(text: string): Grapheme[] {
 
 function isSpace(text: string): boolean {
   return text.length > 0 && /^\s+$/u.test(text);
+}
+
+function isLegacyNewline(data: string): boolean {
+  if (data === '\x1b\r' || data === '\x1b[13;2~') return true;
+  return data.length > 1 && data.includes('\x1b') && data.includes('\r');
 }
 
 function isPrintable(data: string): boolean {

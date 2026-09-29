@@ -19,6 +19,7 @@ import {
 } from './files.js';
 import { ensureAgentKeybindings } from './keys.js';
 import { renderScreen, type ChatRow, type TranscriptLine, type TuiScreen } from './screen.js';
+import { toolOutput, toolStatus, type ToolAction } from './transcript.js';
 
 export interface AgentTuiOptions {
   product: string;
@@ -161,6 +162,10 @@ export class AgentTui implements Component {
     }
     if (keys.matches(data, 'agent.chats')) {
       this.showChats();
+      return;
+    }
+    if (keys.matches(data, 'agent.tool.toggle')) {
+      this.toggleTool();
       return;
     }
     if (this.ask && keys.matches(data, 'tui.input.submit')) {
@@ -488,6 +493,7 @@ export class AgentTui implements Component {
         this.touch();
       }
     } finally {
+      for (const line of this.lines) line.streaming = false;
       if (this.children.length > 0) {
         for (const line of childLines(this.children)) this.lines.push({ kind: 'tree', text: line });
         this.children = [];
@@ -498,6 +504,10 @@ export class AgentTui implements Component {
   }
 
   private observe(event: SSEEvent, signal: AbortSignal): void {
+    if (String(event.type) === 'executed_actions' && Array.isArray(event.actions)) {
+      this.applyActions(event.actions as ToolAction[]);
+      return;
+    }
     if (String(event.type) === 'orchestration_child') {
       this.children = applyChildEvent(this.children, {
         kind: event.kind,
@@ -522,8 +532,12 @@ export class AgentTui implements Component {
     }
     if (event.type === 'content' && typeof event.content === 'string') {
       const last = this.lines[this.lines.length - 1];
-      if (last?.kind === 'assistant') last.text = `${last.text ?? ''}${event.content}`;
-      else this.lines.push({ kind: 'assistant', text: event.content });
+      if (last?.kind === 'assistant') {
+        last.text = `${last.text ?? ''}${event.content}`;
+        last.streaming = true;
+      } else {
+        this.lines.push({ kind: 'assistant', text: event.content, streaming: true });
+      }
       return;
     }
     if (event.type === 'error' && !signal.aborted) {
@@ -547,6 +561,46 @@ export class AgentTui implements Component {
         if (payload.requestId) this.ask = { requestId: payload.requestId, prompt: payload.prompt ?? '' };
       }
       this.touch();
+    }
+  }
+
+  private applyActions(actions: ToolAction[]): void {
+    for (const action of actions) {
+      if (!action || typeof action !== 'object') continue;
+      const name = typeof action.tool === 'string' && action.tool ? action.tool : 'tool';
+      const title = typeof action.view?.title === 'string' ? action.view.title : '';
+      const next: TranscriptLine = {
+        kind: 'tool',
+        id: typeof action.id === 'string' ? action.id : undefined,
+        name,
+        args: title && title !== name ? title : toolArgs(action.arguments),
+        status: toolStatus(action),
+        output: toolOutput(action),
+      };
+      const index = next.id
+        ? this.lines.findIndex((line) => line.kind === 'tool' && line.id === next.id)
+        : -1;
+      if (index >= 0) {
+        next.open = this.lines[index]?.open;
+        this.lines[index] = next;
+      } else {
+        this.lines.push(next);
+      }
+    }
+  }
+
+  private toggleTool(): void {
+    const open = this.lines.find((line) => line.kind === 'tool' && line.open);
+    if (open) {
+      open.open = false;
+      return;
+    }
+    for (let index = this.lines.length - 1; index >= 0; index -= 1) {
+      const line = this.lines[index];
+      if (line?.kind === 'tool' && line.status !== '…') {
+        line.open = true;
+        return;
+      }
     }
   }
 

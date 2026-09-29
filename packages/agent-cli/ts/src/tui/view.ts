@@ -1,6 +1,8 @@
 import {
   BoxRenderable,
+  MarkdownRenderable,
   ScrollBoxRenderable,
+  SyntaxStyle,
   TextRenderable,
   dim as dimText,
   reverse,
@@ -22,10 +24,11 @@ import {
   helpLines,
   pickText,
   readOnlyText,
-  toolText,
+  toolBlock,
   type TranscriptLine,
   type TuiScreen,
 } from './screen.js';
+import { plainMarkdown } from './transcript.js';
 
 const canvas = '#16161e';
 const bar = '#24283b';
@@ -55,9 +58,16 @@ export class OpenTuiView {
   private bodyKey = '';
   private overlayKey = '';
   private picksKey = '';
+  private readonly syntax: SyntaxStyle | null;
 
   constructor(renderer: CliRenderer) {
     this.renderer = renderer;
+    try {
+      this.syntax = SyntaxStyle.create();
+    } catch (error) {
+      void error;
+      this.syntax = null;
+    }
     const shell = new BoxRenderable(renderer, {
       width: '100%',
       height: '100%',
@@ -244,7 +254,7 @@ export class OpenTuiView {
       }
       return;
     }
-    for (const line of screen.lines) this.body.add(transcriptRow(renderer, line));
+    for (const line of screen.lines) this.body.add(transcriptRow(renderer, line, this.syntax));
     for (const line of childLines(screen.children ?? [])) this.body.add(text(renderer, tool, line));
   }
 }
@@ -252,7 +262,7 @@ export class OpenTuiView {
 function draftContent(draft: string, cursor: number): StyledText {
   const { before, head, after } = splitAtCursor(draft, cursor);
   const mark = reverse('▍');
-  if (draft.length === 0) return t`> ${mark} ${dimText(draftHint)}`;
+  if (draft.length === 0) return t`> ${mark} ${dimText(draftHint())}`;
   if (head.length === 0) return t`> ${before}${mark}`;
   return t`> ${before}${mark}${head}${after}`;
 }
@@ -266,7 +276,7 @@ function bodyKey(screen: TuiScreen): string {
   });
 }
 
-function transcriptRow(renderer: CliRenderer, line: TranscriptLine): Renderable {
+function transcriptRow(renderer: CliRenderer, line: TranscriptLine, syntax: SyntaxStyle | null): Renderable {
   if (line.kind === 'tool') {
     const card = new BoxRenderable(renderer, {
       width: '100%',
@@ -276,13 +286,24 @@ function transcriptRow(renderer: CliRenderer, line: TranscriptLine): Renderable 
       paddingLeft: 1,
       paddingRight: 1,
     });
-    card.add(text(renderer, tool, toolText(line)));
+    for (const row of toolBlock(line)) card.add(text(renderer, row.startsWith('  ') ? dim : tool, row));
     return card;
   }
   if (line.kind === 'user') {
     return text(renderer, user, `user ${line.text ?? ''}`);
   }
-  return text(renderer, ink, line.text && line.text.length > 0 ? line.text : ' ');
+  if (line.kind === 'assistant' && syntax) {
+    return new MarkdownRenderable(renderer, {
+      content: line.text && line.text.length > 0 ? line.text : ' ',
+      syntaxStyle: syntax,
+      fg: ink,
+      conceal: true,
+      streaming: line.streaming === true,
+      width: '100%',
+    });
+  }
+  const plain = plainMarkdown(line.text ?? '');
+  return text(renderer, ink, plain.length > 0 ? plain : ' ');
 }
 
 function text(renderer: CliRenderer, fg: string, content = ''): TextRenderable {

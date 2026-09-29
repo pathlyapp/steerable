@@ -50,6 +50,7 @@ async function runOpenTui(options: {
     });
     const view = new OpenTuiView(renderer);
     renderer.prependInputHandler((sequence) => {
+      if (yieldsToRenderer(sequence)) return false;
       session.handleInput(sequence);
       return true;
     });
@@ -82,6 +83,14 @@ function runPlainTui(options: {
     void session.open().then(() => tui.requestRender());
     tui.start();
   });
+}
+
+/** Terminal reports (capability replies, focus) must reach the renderer so Shift+Enter stays distinct from Enter. */
+export function yieldsToRenderer(sequence: string): boolean {
+  if (sequence === '\x1b[I' || sequence === '\x1b[O') return true;
+  if (sequence.startsWith('\x1b]') || sequence.startsWith('\x1bP') || sequence.startsWith('\x1b_')) return true;
+  if (sequence.startsWith('\x1b[?')) return true;
+  return /^\x1b\[\d+(;\d+)?R$/.test(sequence);
 }
 
 function openTuiUnavailable(error: unknown): boolean {

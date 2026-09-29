@@ -3,6 +3,7 @@ import { Box, CURSOR_MARKER, Text, type Component } from '@earendil-works/pi-tui
 import { childLines, type ChildRow } from './children.js';
 import { splitAtCursor } from './editor.js';
 import { keyLabel } from './keys.js';
+import { plainMarkdown } from './transcript.js';
 
 export interface TranscriptLine {
   kind: 'user' | 'assistant' | 'tool' | 'tree';
@@ -10,6 +11,10 @@ export interface TranscriptLine {
   name?: string;
   args?: string;
   status?: string;
+  id?: string;
+  output?: string;
+  open?: boolean;
+  streaming?: boolean;
 }
 
 export interface ChatRow {
@@ -42,7 +47,9 @@ export interface TuiScreen {
   children?: ChildRow[];
 }
 
-export const draftHint = '输入消息，Enter 发送，Shift+Enter 换行';
+export function draftHint(): string {
+  return `输入消息，${keyLabel('tui.input.submit')} 发送，${keyLabel('tui.input.newLine')} 换行`;
+}
 
 const caret = '▍';
 
@@ -56,6 +63,12 @@ export function toolText(line: TranscriptLine): string {
   return `▸ ${line.name}  ${line.args}  ${line.status ?? ''}`.trimEnd();
 }
 
+export function toolBlock(line: TranscriptLine): string[] {
+  const head = toolText(line);
+  if (!line.open || !line.output) return [head];
+  return [head, ...line.output.split('\n').slice(0, 8).map((row) => `  ${row}`)];
+}
+
 export function chatText(chat: ChatRow): string {
   const mark = chat.selected ? '*' : ' ';
   const busy = chat.busy ? '  只读' : '';
@@ -63,7 +76,15 @@ export function chatText(chat: ChatRow): string {
 }
 
 export function helpLines(): string[] {
-  return ['/new 新会话', '/model 查看或切换模型', '/attach 附加文件', '@ 补全文件', '/clear 清屏', '/help 帮助'];
+  return [
+    '/new 新会话',
+    '/model 查看或切换模型',
+    '/attach 附加文件',
+    '@ 补全文件',
+    '/clear 清屏',
+    '/help 帮助',
+    `${keyLabel('agent.tool.toggle')} 展开工具`,
+  ];
 }
 
 export function pickText(pick: PickRow): string {
@@ -88,13 +109,13 @@ export function footerText(): string {
 
 export function draftLine(draft: string, cursor: number): string {
   const { before, head, after } = splitAtCursor(draft, cursor);
-  if (draft.length === 0) return `> ${CURSOR_MARKER}${caret} ${draftHint}`;
+  if (draft.length === 0) return `> ${CURSOR_MARKER}${caret} ${draftHint()}`;
   return `> ${before}${CURSOR_MARKER}${caret}${head}${after}`;
 }
 
 export function composerRows(draft: string, columns: number): number {
   const width = Math.max(1, columns);
-  const shown = draft.length > 0 ? draft : `▍ ${draftHint}`;
+  const shown = draft.length > 0 ? draft : `▍ ${draftHint()}`;
   let rows = 0;
   for (const line of shown.split('\n')) {
     rows += Math.max(1, Math.ceil(displayWidth(`> ${line}`) / width));
@@ -117,9 +138,9 @@ function screenLines(screen: TuiScreen): string[] {
     for (const chat of screen.chats) lines.push(chatText(chat));
   } else {
     for (const line of screen.lines) {
-      if (line.kind === 'tool') lines.push(toolText(line));
+      if (line.kind === 'tool') lines.push(...toolBlock(line));
       else if (line.kind === 'user') lines.push(`user ${line.text ?? ''}`);
-      else lines.push(line.text ?? '');
+      else lines.push(...plainMarkdown(line.text ?? '').split('\n'));
     }
   }
   if (!screen.help && !screen.chats) lines.push(...childLines(screen.children ?? []));

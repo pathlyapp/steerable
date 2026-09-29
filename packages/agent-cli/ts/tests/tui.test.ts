@@ -8,12 +8,14 @@ import type { AgentClient } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import { getNativeClipboard } from '@earendil-works/pi-tui';
 import { createCli } from '../src/cli.js';
+import { yieldsToRenderer } from '../src/tui/run.js';
 import { applyChildEvent } from '../src/tui/children.js';
 import { createDraft, editDraft } from '../src/tui/editor.js';
 import { attachmentMessage, completeFiles, mentionAt } from '../src/tui/files.js';
-import { installAgentKeybindings } from '../src/tui/keys.js';
+import { formatKey, installAgentKeybindings, keyLabel } from '../src/tui/keys.js';
 import { composerRows, renderScreen, visibleText } from '../src/tui/screen.js';
 import { AgentTui } from '../src/tui/session.js';
+import { formatDuration, plainMarkdown, toolStatus } from '../src/tui/transcript.js';
 
 afterEach(() => {
   installAgentKeybindings();
@@ -62,7 +64,7 @@ describe('tui screen', () => {
     expect(approval).toContain('n 拒绝');
     expect(approval).toContain('N 本会话拒绝');
     expect(approval).toContain('A 总是拒绝');
-    expect(approval).toContain('Esc 中止');
+    expect(approval).toContain(`${keyLabel('agent.approval.abort')} 中止`);
 
     const busy = visibleText(renderScreen({
       product: 'Demo',
@@ -83,6 +85,32 @@ describe('tui screen', () => {
     }, 72));
     expect(busy).toContain('chat-2  Build  只读');
     expect(busy).toContain('只读 · 另一个进程正在运行');
+  });
+
+  it('lets the renderer see capability replies and treats shifted return as a newline', () => {
+    expect(yieldsToRenderer('\x1b[?5u')).toBe(true);
+    expect(yieldsToRenderer('\x1b[13;2u')).toBe(false);
+    expect(yieldsToRenderer('\r')).toBe(false);
+  });
+
+  it('uses mac key names on darwin and pc names on other platforms', () => {
+    expect(formatKey('ctrl+c', 'darwin')).toBe('Control+C');
+    expect(formatKey('enter', 'darwin')).toBe('Return');
+    expect(formatKey('shift+enter', 'darwin')).toBe('Shift+Return');
+    expect(formatKey('escape', 'darwin')).toBe('Esc');
+    expect(formatKey('y', 'darwin')).toBe('y');
+    expect(formatKey('shift+n', 'darwin')).toBe('N');
+    expect(formatKey('ctrl+c', 'linux')).toBe('Ctrl+C');
+    expect(formatKey('enter', 'linux')).toBe('Enter');
+    expect(formatKey('shift+enter', 'linux')).toBe('Shift+Enter');
+    expect(formatKey('escape', 'win32')).toBe('Esc');
+  });
+
+  it('strips markdown markers and formats a finished tool as one line', () => {
+    expect(formatDuration(300)).toBe('0.3s');
+    expect(toolStatus({})).toBe('…');
+    expect(toolStatus({ success: true, durationMs: 300 })).toBe('✓ 0.3s');
+    expect(plainMarkdown('# 结果\n\n**完成** `ls`\n```\nkeep\n```')).toBe('结果\n\n完成 ls\nkeep');
   });
 });
 
@@ -230,9 +258,12 @@ describe('tui session', () => {
     session.handleInput('\x1b[C');
     session.handleInput('\n');
     expect(session.snapshot().draft).toBe('你!好\n');
+    session.handleInput('\x1b[13;2u');
+    session.handleInput('\x1b\r');
+    expect(session.snapshot().draft).toBe('你!好\n\n\n');
     expect(composerRows(session.snapshot().draft, 40)).toBeGreaterThan(1);
     session.handleInput('\x1b[200~粘贴\x1b[201~');
-    expect(session.snapshot().draft).toBe('你!好\n粘贴');
+    expect(session.snapshot().draft).toBe('你!好\n\n\n粘贴');
   });
 });
 
@@ -338,6 +369,40 @@ describe('files and sub-agents', () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it('keeps a finished tool on one line until it is expanded', async () => {
+    const client = fakeClient({
+      async *stream() {
+        yield { type: 'content', content: '# 结果\n\n**完成**' } as SSEEvent;
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'call-1',
+            tool: 'local_exec_shell',
+            arguments: { command: 'ls -la' },
+            view: { title: 'ls -la' },
+            success: true,
+            durationMs: 300,
+            result: { stdout: 'SECRET-LINE\nfile.txt' },
+          }],
+        } as SSEEvent;
+      },
+    });
+    const session = new AgentTui(client, { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, 'list');
+    await waitFor(() => visibleText(session.render(72)).includes('✓ 0.3s'));
+    const folded = visibleText(session.render(72));
+    expect(folded).toContain('▸ local_exec_shell  ls -la  ✓ 0.3s');
+    expect(folded).toContain('结果');
+    expect(folded).toContain('完成');
+    expect(folded).not.toContain('**完成**');
+    expect(folded).not.toContain('SECRET-LINE');
+    session.handleInput('\x0f');
+    expect(visibleText(session.render(72))).toContain('SECRET-LINE');
+    session.handleInput('\x0f');
+    expect(visibleText(session.render(72))).not.toContain('SECRET-LINE');
   });
 });
 
