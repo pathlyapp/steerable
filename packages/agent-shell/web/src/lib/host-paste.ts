@@ -42,10 +42,7 @@ export function requestHostPaste(target?: HTMLElement | null): void {
   const readText = bridge?.readClipboardText;
   if ((!readClipboard && !readText) || pending) return;
   pending = true;
-  const read = readClipboard
-    ? readClipboard()
-    : readText!().then((text) => ({ text, files: [] as HostClipboardFile[] }));
-  void read
+  void readHostClipboard(readClipboard, readText)
     .then((clip) => {
       if (clip.files.length > 0) insertHostFiles(clip.files, target ?? null);
       if (clip.text) insertHostText(clip.text, target ?? null);
@@ -55,6 +52,30 @@ export function requestHostPaste(target?: HTMLElement | null): void {
     })
     .finally(() => {
       pending = false;
+    });
+}
+
+/**
+ * Prefer the rich pasteboard (text, files, screenshots). Desktop capabilities
+ * may allow only `host_read_clipboard_text`; a denial of the rich command must
+ * still insert plain text.
+ */
+function readHostClipboard(
+  readClipboard: (() => Promise<HostClipboard>) | undefined,
+  readText: (() => Promise<string>) | undefined,
+): Promise<HostClipboard> {
+  const plain = (): Promise<HostClipboard> => {
+    if (!readText) return Promise.reject(new Error('clipboard text is unavailable'));
+    return readText().then((text) => ({ text, files: [] }));
+  };
+  if (!readClipboard) return plain();
+  return Promise.resolve()
+    .then(() => readClipboard())
+    .catch((error: unknown) => {
+      if (!readText) throw error;
+      return plain().catch(() => {
+        throw error;
+      });
     });
 }
 

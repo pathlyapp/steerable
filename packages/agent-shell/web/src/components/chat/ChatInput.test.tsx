@@ -888,6 +888,47 @@ describe('ChatInput 粘贴图片', () => {
     }
   });
 
+  it('Ctrl+V 读系统剪贴板，输入法把 key 标成非 v 时也粘贴', async () => {
+    const onChange = vi.fn();
+    const readClipboard = vi.fn().mockResolvedValue({ text: '快捷键', files: [] });
+    const spy = vi.spyOn(electronBridge, 'getHostBridge').mockReturnValue({
+      readClipboard,
+    } as Partial<electronBridge.HostBridge> as electronBridge.HostBridge);
+    renderInput({ onChange });
+    const editor = screen.getByTestId('chat-composer');
+    editor.focus();
+    const canceled = !fireEvent.keyDown(editor, { key: 'Unidentified', code: 'KeyV', ctrlKey: true });
+    try {
+      await act(async () => {});
+      expect(canceled).toBe(true);
+      expect(readClipboard).toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledWith('快捷键');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('富剪贴板命令被拒绝时，Ctrl+V 仍粘贴纯文本', async () => {
+    const onChange = vi.fn();
+    const readClipboard = vi.fn().mockRejectedValue(new Error('not allowed'));
+    const readClipboardText = vi.fn().mockResolvedValue('纯文本');
+    const spy = vi.spyOn(electronBridge, 'getHostBridge').mockReturnValue({
+      readClipboard,
+      readClipboardText,
+    } as Partial<electronBridge.HostBridge> as electronBridge.HostBridge);
+    renderInput({ onChange });
+    const editor = screen.getByTestId('chat-composer');
+    editor.focus();
+    fireEvent.keyDown(editor, { key: 'v', ctrlKey: true });
+    try {
+      await act(async () => {});
+      expect(readClipboardText).toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledWith('纯文本');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('Tauri 页面剪贴板为空时改读系统剪贴板', async () => {
     const onChange = vi.fn();
     const readClipboardText = vi.fn().mockResolvedValue('系统剪贴板');

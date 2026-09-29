@@ -1571,12 +1571,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     };
 
     const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-      if (
-        hostClipboardAvailable() &&
+      // Cmd/Ctrl+V never reaches a paste event when the app menu owns the
+      // shortcut, and WKWebView leaves that event's clipboard empty. Read the
+      // OS pasteboard instead. Match `code` too: with an IME, `key` may not be "v".
+      const pasteShortcut =
         (event.metaKey || event.ctrlKey) &&
         !event.altKey &&
-        event.key.toLowerCase() === 'v'
-      ) {
+        (event.key.toLowerCase() === 'v' || event.key === '\u0016' || event.code === 'KeyV');
+      if (hostClipboardAvailable() && pasteShortcut) {
         event.preventDefault();
         requestHostPaste(event.currentTarget);
         return;
