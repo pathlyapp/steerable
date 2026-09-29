@@ -254,6 +254,35 @@ describe('会话路由', () => {
     expect(await h.store.getChat(data.chatId)).not.toBeNull();
   });
 
+  it('POST compact folds older messages, fork copies them, and rewind drops the newest user turn', async () => {
+    const chat = await h.store.createChat('原对话', 'agent-a', null);
+    await h.store.addMessage(chat.id, 'user', '较早问题');
+    await h.store.addMessage(chat.id, 'assistant', '较早回答');
+    await h.store.addMessage(chat.id, 'user', '最新问题');
+    await h.store.addMessage(chat.id, 'assistant', '最新回答');
+    const router = makeRouter();
+    const compacted = await router.handle({ method: 'POST', path: `/api/v2/chats/${chat.id}/compact` });
+    expect(compacted).toMatchObject({ status: 200, data: { compacted: 2 } });
+    const folded = (await h.store.listMessages(chat.id)).map((message) => message.content);
+    expect(folded[0]).toBe('最新回答');
+    expect(folded[1]).toBe('最新问题');
+    expect(folded[2]).toContain('已压缩 2 条');
+    expect(folded[2]).toContain('较早问题');
+
+    const forked = await router.handle({ method: 'POST', path: `/api/v2/chats/${chat.id}/fork` });
+    const forkId = (forked.data as { chatId?: string }).chatId ?? '';
+    expect(forked.status).toBe(200);
+    expect((await h.store.listMessages(forkId)).map((message) => message.content)).toEqual([
+      '最新回答',
+      '最新问题',
+      folded[2],
+    ]);
+
+    const rewound = await router.handle({ method: 'POST', path: `/api/v2/chats/${forkId}/rewind` });
+    expect(rewound).toMatchObject({ status: 200, data: { removed: 2 } });
+    expect((await h.store.listMessages(forkId)).map((message) => message.content)).toEqual([folded[2]]);
+  });
+
   it('无项目对话工作区落在 Documents/应用名/conversations/<chatId>', async () => {
     const documentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-ws-'));
     const prev = process.env.STEERABLE_DOCUMENTS_DIR;

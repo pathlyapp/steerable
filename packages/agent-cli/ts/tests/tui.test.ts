@@ -9,7 +9,9 @@ import type { SSEEvent } from '@steerable/agent-protocol';
 import { getNativeClipboard } from '@earendil-works/pi-tui';
 import { createCli } from '../src/cli.js';
 import { yieldsToRenderer } from '../src/tui/run.js';
-import { pageScrollLines, transcriptPage } from '../src/tui/scroll.js';
+import { pageScrollLines, transcriptEdge, transcriptPage } from '../src/tui/scroll.js';
+import { searchHits } from '../src/tui/search.js';
+import { formatUsage } from '../src/tui/usage.js';
 import { applyChildEvent } from '../src/tui/children.js';
 import { createDraft, editDraft } from '../src/tui/editor.js';
 import { imageExtension } from '../src/tui/clipboard.js';
@@ -94,6 +96,17 @@ describe('tui screen', () => {
     expect(transcriptPage('\x1b[5~')).toBe(-1);
     expect(transcriptPage('\x1b[6~')).toBe(1);
     expect(transcriptPage('\r')).toBe(0);
+    expect(transcriptEdge('\x1b[H')).toBe('top');
+    expect(transcriptEdge('\x1b[F')).toBe('bottom');
+    expect(transcriptEdge('\r')).toBeNull();
+    const hits = searchHits(
+      [{ kind: 'assistant', text: '先看目录' }, { kind: 'tool', name: 'local_exec_shell', args: 'ls', output: 'SECRET' }],
+      'secret',
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ line: 1 });
+    expect(hits[0]?.snippet).toContain('SECRET');
+    expect(formatUsage({ totals: { turns: 3, totalTokens: 1200, costUsd: 0.02 } })).toBe('用量 3 回合 · 1200 token · $0.02');
     expect(pageScrollLines(24, -1)).toBe(-20);
     expect(pageScrollLines(2, 1)).toBe(1);
     expect(yieldsToRenderer('\x1b[?5u')).toBe(true);
@@ -389,6 +402,18 @@ describe('slash commands', () => {
       '/attach 附加文件',
       '/clear 清屏',
       '/help 帮助',
+      '/status 用量',
+      '/skills 技能',
+      '/mcp MCP',
+      '/export 导出会话',
+      '/compact 压缩上下文',
+      '/plan 计划模式',
+      '/tasks 后台任务',
+      '/fork 分叉',
+      '/rewind 回退',
+      '/permissions 会话权限',
+      '/copy 复制回答',
+      '/editor 外部编辑器',
     ]);
     session.handleInput('a');
     session.handleInput('\t');
@@ -718,6 +743,225 @@ describe('files and sub-agents', () => {
   });
 });
 
+describe('transcript tools', () => {
+  it('searches the transcript, steps matches, and leaves the draft alone', async () => {
+    const session = new AgentTui(fakeClient({
+      async *stream(_path, body) {
+        yield { type: 'content', content: `回声 ${String((body as { message?: string }).message ?? '')}` } as SSEEvent;
+      },
+    }), { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '目录');
+    await typeLine(session, '文件');
+    await waitFor(() => visibleText(session.render(72)).includes('回声 文件'));
+    session.handleInput('\x1b[102;6u');
+    session.handleInput('回');
+    session.handleInput('声');
+    expect(visibleText(session.render(72))).toContain('搜索 回声  1/2');
+    expect(session.snapshot().draft).toBe('');
+    session.handleInput('\r');
+    expect(visibleText(session.render(72))).toContain('搜索 回声  2/2');
+    session.handleInput('\x1b[13;2u');
+    expect(visibleText(session.render(72))).toContain('搜索 回声  1/2');
+    session.handleInput('\x1b');
+    expect(visibleText(session.render(72))).not.toContain('搜索 回声');
+    await typeLine(session, '/help');
+    expect(visibleText(session.render(72))).toContain('搜索记录');
+  });
+
+  it('jumps home and end through the snapshot the picture reads', async () => {
+    const seen: Array<'top' | 'bottom' | null> = [];
+    const session = new AgentTui(fakeClient(), {
+      product: 'Demo',
+      onExit() {},
+      onChange() {
+        seen.push(session.snapshot().scroll ?? null);
+      },
+    });
+    await session.open();
+    seen.length = 0;
+    session.handleInput('\x1b[H');
+    session.handleInput('\x1b[F');
+    expect(seen).toEqual(['top', 'bottom']);
+  });
+
+  it('pulls the queued line back into an empty composer', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const session = new AgentTui(fakeClient({
+      async *stream() {
+        yield { type: 'content', content: '先回答' } as SSEEvent;
+        await gate;
+      },
+    }), { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '第一句');
+    await waitFor(() => visibleText(session.render(72)).includes('先回答'));
+    await typeLine(session, '第二句');
+    expect(visibleText(session.render(72))).toContain('排队 第二句');
+    session.handleInput('\x1bp');
+    expect(session.snapshot().draft).toBe('第二句');
+    expect(visibleText(session.render(72))).toContain('已取回');
+    expect(visibleText(session.render(72))).not.toContain('排队');
+    release();
+    await session.settled();
+  });
+
+  it('copies the latest reply, edits the draft outside, and shows a file diff', async () => {
+    const copied: string[] = [];
+    const session = new AgentTui(fakeClient({
+      async *stream() {
+        yield { type: 'content', content: '可以复制' } as SSEEvent;
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'edit-1',
+            tool: 'local_edit_file',
+            arguments: { path: 'a.txt' },
+            view: { title: 'a.txt' },
+            success: true,
+            durationMs: 10,
+            result: { diff: '--- a\n+++ b\n-old\n+new line' },
+          }],
+        } as SSEEvent;
+      },
+    }), {
+      product: 'Demo',
+      onExit() {},
+      writeClipboard: async (text) => {
+        copied.push(text);
+      },
+      editInEditor: async () => '改过的草稿',
+    });
+    await session.open();
+    await typeLine(session, '改文件');
+    await waitFor(() => visibleText(session.render(72)).includes('a.txt'));
+    session.handleInput('\x1bc');
+    await waitFor(() => visibleText(session.render(72)).includes('已复制'));
+    expect(copied).toEqual(['可以复制']);
+    const folded = visibleText(session.render(72));
+    expect(folded).not.toContain('+new line');
+    session.handleInput('\x0f');
+    expect(visibleText(session.render(72))).toContain('+new line');
+    session.handleInput('\x1be');
+    await waitFor(() => session.snapshot().draft === '改过的草稿');
+  });
+
+  it('lists usage, skills, mcp, tasks, and exports the chat', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tui-export-'));
+    const session = new AgentTui(chatClient({
+      '/usage/summary': { totals: { turns: 3, totalTokens: 1200, costUsd: 0.02 } },
+      '/chat-agents/skills': { skills: [{ name: 'review', description: '看代码' }] },
+      '/mcp/servers': { servers: [{ name: 'files', toolCount: 2 }] },
+      '/tasks': { tasks: [{ task: '跑测试', status: 'running' }] },
+    }), { product: 'Demo', exportDir: dir, onExit() {} });
+    await session.open();
+    await typeLine(session, '/status');
+    await waitFor(() => visibleText(session.render(72)).includes('用量 3 回合 · 1200 token · $0.02'));
+    await typeLine(session, '/skills');
+    await waitFor(() => visibleText(session.render(72)).includes('技能 review  看代码'));
+    await typeLine(session, '/mcp');
+    await waitFor(() => visibleText(session.render(72)).includes('MCP files  2 个工具'));
+    await typeLine(session, '/tasks');
+    await waitFor(() => visibleText(session.render(72)).includes('后台 跑测试  进行中'));
+    await typeLine(session, 'hello');
+    await typeLine(session, '/export');
+    await waitFor(() => visibleText(session.render(72)).includes('已导出'));
+    const written = await fs.readFile(path.join(dir, 'chat-1.md'), 'utf8');
+    expect(written).toContain('## user');
+    expect(written).toContain('hello');
+  });
+
+  it('follows an in-process live turn, then compacts, forks, and rewinds', async () => {
+    let liveCalls = 0;
+    const session = new AgentTui(fakeClient({
+      request: async (method, requestPath) => {
+        if (requestPath.endsWith('/live-stream')) {
+          liveCalls += 1;
+          if (liveCalls === 1) return { status: 200, data: { active: true, content: '写到一半' } };
+          return { status: 200, data: { active: false } };
+        }
+        if (method === 'POST' && requestPath.endsWith('/compact')) return { status: 200, data: { compacted: 2 } };
+        if (method === 'POST' && requestPath.endsWith('/fork')) return { status: 200, data: { chatId: 'chat-fork' } };
+        if (method === 'POST' && requestPath.endsWith('/rewind')) return { status: 200, data: { removed: 1 } };
+        if (requestPath.endsWith('/messages')) {
+          if (requestPath.includes('chat-fork')) return { status: 200, data: { messages: [{ role: 'user', content: '分叉过来', createdAt: '1' }] } };
+          if (liveCalls > 1 && requestPath.includes('rewind') === false) {
+            return { status: 200, data: { messages: [{ role: 'assistant', content: '已压缩 2 条', createdAt: '1' }] } };
+          }
+          return { status: 200, data: { messages: [] } };
+        }
+        if (requestPath.includes('chat-fork')) return { status: 200, data: { id: 'chat-fork', title: '分叉' } };
+        if (method === 'GET' && requestPath === '/api/v2/chats') {
+          return { status: 200, data: { chats: [{ id: 'chat-1', title: 'Notes' }] } };
+        }
+        if (requestPath.startsWith('/api/v2/chats/')) return { status: 200, data: { id: 'chat-1', title: 'Notes' } };
+        return { status: 200, data: { model: 'demo-model' } };
+      },
+    }), { product: 'Demo', liveIntervalMs: 15, onExit() {} });
+    await session.open();
+    await waitFor(() => visibleText(session.render(72)).includes('写到一半'));
+    await waitFor(() => !visibleText(session.render(72)).includes('运行中'));
+    await typeLine(session, '/compact');
+    await waitFor(() => visibleText(session.render(72)).includes('已压缩 2 条'));
+    await typeLine(session, '/fork');
+    await waitFor(() => visibleText(session.render(72)).includes('分叉过来'));
+    expect(visibleText(session.render(72))).toContain('已分叉');
+    await typeLine(session, '/rewind');
+    await waitFor(() => visibleText(session.render(72)).includes('已回退'));
+  });
+
+  it('sends plan mode, lists todos, and cycles session permission', async () => {
+    const bodies: unknown[] = [];
+    const decisions: string[] = [];
+    let pushEvent: (event: { channel: string; payload: unknown }) => void = () => {};
+    const queued = new Promise<{ channel: string; payload: unknown }>((resolve) => {
+      pushEvent = resolve;
+    });
+    const session = new AgentTui(fakeClient({
+      async *stream(_path, body) {
+        bodies.push(body);
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            tool: 'todo_write',
+            arguments: { todos: [{ content: '写测试', status: 'in_progress' }, { content: '补实现', status: 'pending' }] },
+          }],
+        } as SSEEvent;
+        yield { type: 'content', content: '按计划来' } as SSEEvent;
+      },
+      async *events() {
+        yield await queued;
+      },
+      async decideApproval(_id, kind) {
+        decisions.push(kind);
+        return true;
+      },
+    }), { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '/plan');
+    expect(visibleText(session.render(72))).toContain('模式 计划');
+    await typeLine(session, '做个方案');
+    await waitFor(() => visibleText(session.render(72)).includes('▸ 写测试'));
+    expect(visibleText(session.render(72))).toContain('○ 补实现');
+    expect(bodies[0]).toMatchObject({ mode: 'plan', message: '做个方案' });
+    await typeLine(session, '/permissions');
+    expect(visibleText(session.render(72))).toContain('权限 本会话自动');
+    pushEvent({
+      channel: 'approval:request',
+      payload: { requestId: 'req-9', toolName: 'local_exec_shell', arguments: { command: 'ls' } },
+    });
+    await waitFor(() => decisions.includes('allow_for_session'));
+    expect(visibleText(session.render(72))).not.toContain('审批');
+    await typeLine(session, '/permissions');
+    await typeLine(session, '不该发出去');
+    expect(visibleText(session.render(72))).toContain('权限 只读');
+    expect(visibleText(session.render(72))).not.toContain('user 不该发出去');
+  });
+});
+
 describe('tui command', () => {
   it('refuses to start when stdin is not a terminal', async () => {
     const stderr = capture();
@@ -736,6 +980,25 @@ describe('tui command', () => {
     expect(() => getNativeClipboard()).not.toThrow();
   });
 });
+
+function chatClient(routes: Record<string, unknown>): AgentClient {
+  return fakeClient({
+    request: async (method, requestPath) => {
+      for (const [suffix, data] of Object.entries(routes)) {
+        if (requestPath.endsWith(suffix)) return { status: 200, data };
+      }
+      if (method === 'GET' && requestPath === '/api/v2/chats') {
+        return { status: 200, data: { chats: [{ id: 'chat-1', title: 'Notes' }] } };
+      }
+      if (requestPath.endsWith('/messages')) return { status: 200, data: { messages: [] } };
+      if (requestPath.startsWith('/api/v2/chats/')) return { status: 200, data: { id: 'chat-1', title: 'Notes' } };
+      return { status: 200, data: { model: 'demo-model', chats: [] } };
+    },
+    async *stream() {
+      yield { type: 'content', content: 'ok' } as SSEEvent;
+    },
+  });
+}
 
 function fakeClient(overrides: Partial<AgentClient> = {}): AgentClient {
   return {

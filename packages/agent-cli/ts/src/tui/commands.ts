@@ -6,6 +6,18 @@ const COMMANDS = [
   { name: 'attach', hint: '附加文件' },
   { name: 'clear', hint: '清屏' },
   { name: 'help', hint: '帮助' },
+  { name: 'status', hint: '用量' },
+  { name: 'skills', hint: '技能' },
+  { name: 'mcp', hint: 'MCP' },
+  { name: 'export', hint: '导出会话' },
+  { name: 'compact', hint: '压缩上下文' },
+  { name: 'plan', hint: '计划模式' },
+  { name: 'tasks', hint: '后台任务' },
+  { name: 'fork', hint: '分叉' },
+  { name: 'rewind', hint: '回退' },
+  { name: 'permissions', hint: '会话权限' },
+  { name: 'copy', hint: '复制回答' },
+  { name: 'editor', hint: '外部编辑器' },
 ] as const;
 
 export interface SlashToken {

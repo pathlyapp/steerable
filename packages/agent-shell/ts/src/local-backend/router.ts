@@ -118,6 +118,7 @@ import {
 } from '../project-home.js';
 import type { TaskService } from './task-service.js';
 import { registerLiveStream, getLiveStream, removeLiveStream } from './live-stream.js';
+import { compactHistory, forkHistory, rewindFrom, type StoredTurn } from './history-edit.js';
 import {
   beginPackTurnObservers,
   collectPackExecWritableRoots,
@@ -1054,6 +1055,43 @@ export class LocalBackendRouter {
       }
       await supervisor.cancelChat(streamId);
       return { status: 200, data: { success: true } };
+    }
+
+    const compactMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/compact$/);
+    if (compactMatch && method === 'POST') {
+      const chatId = compactMatch[1];
+      const chat = await this.store.getChat(chatId);
+      if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+      const plan = compactHistory(await this.historyTurns(chatId));
+      if (!plan) return { status: 200, data: { compacted: 0 } };
+      await this.store.deleteMessagesFrom(chatId, plan.deleteFromId);
+      for (const write of plan.writes) {
+        await this.store.addMessage(chatId, write.role, write.content, write.messageMetadata);
+      }
+      return { status: 200, data: { compacted: plan.compacted } };
+    }
+
+    const forkMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/fork$/);
+    if (forkMatch && method === 'POST') {
+      const chatId = forkMatch[1];
+      const chat = await this.store.getChat(chatId);
+      if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+      const created = await this.store.createChat(chat.title || '分叉', chat.agentId, chat.projectId);
+      for (const write of forkHistory(await this.historyTurns(chatId))) {
+        await this.store.addMessage(created.id, write.role, write.content, write.messageMetadata);
+      }
+      return { status: 200, data: { chatId: created.id } };
+    }
+
+    const rewindMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/rewind$/);
+    if (rewindMatch && method === 'POST') {
+      const chatId = rewindMatch[1];
+      const chat = await this.store.getChat(chatId);
+      if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+      const cut = rewindFrom(await this.historyTurns(chatId));
+      if (!cut) return { status: 200, data: { removed: 0 } };
+      const removed = await this.store.deleteMessagesFrom(chatId, cut.deleteFromId);
+      return { status: 200, data: { removed } };
     }
 
     if (method === 'GET' && pathname === '/api/v2/chat-agents') {
@@ -4001,6 +4039,16 @@ export class LocalBackendRouter {
    */
   private sseData(data: unknown): string {
     return `data: ${JSON.stringify(data)}\n\n`;
+  }
+
+  private async historyTurns(chatId: string): Promise<StoredTurn[]> {
+    const messages = await this.store.listMessages(chatId);
+    return messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      messageMetadata: message.messageMetadata,
+    }));
   }
 
   private toRecord(body: unknown): Record<string, unknown> {

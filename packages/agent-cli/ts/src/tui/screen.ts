@@ -13,6 +13,7 @@ export interface TranscriptLine {
   status?: string;
   id?: string;
   output?: string;
+  diff?: string;
   open?: boolean;
   streaming?: boolean;
 }
@@ -46,6 +47,13 @@ export interface TuiScreen {
   attachments?: string[];
   children?: ChildRow[];
   queued?: string[];
+  search?: string | null;
+  searchFocus?: number | null;
+  scroll?: 'top' | 'bottom' | null;
+  panel?: string[] | null;
+  mode?: 'agent' | 'plan';
+  permission?: 'ask' | 'auto' | 'read';
+  todos?: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed' }>;
 }
 
 export function draftHint(): string {
@@ -66,8 +74,11 @@ export function toolText(line: TranscriptLine): string {
 
 export function toolBlock(line: TranscriptLine): string[] {
   const head = toolText(line);
-  if (!line.open || !line.output) return [head];
-  return [head, ...line.output.split('\n').slice(0, 8).map((row) => `  ${row}`)];
+  if (!line.open) return [head];
+  const rows: string[] = [];
+  if (line.diff) rows.push(...line.diff.split('\n').slice(0, 12).map((row) => `  ${row}`));
+  if (line.output) rows.push(...line.output.split('\n').slice(0, 8).map((row) => `  ${row}`));
+  return rows.length > 0 ? [head, ...rows] : [head];
 }
 
 export function reasoningBlock(line: TranscriptLine): string[] {
@@ -92,6 +103,23 @@ export function helpLines(): string[] {
     '/help 帮助',
     `${keyLabel('agent.tool.toggle')} 展开工具或思考`,
     `${keyLabel('agent.clipboard.paste')} 粘贴图片`,
+    `${keyLabel('tui.altScreen.search')} 搜索记录`,
+    `${keyLabel('tui.altScreen.top')} 记录顶  ${keyLabel('tui.altScreen.bottom')} 记录底`,
+    `${keyLabel('agent.queue.pull')} 取回排队`,
+    `${keyLabel('agent.copy.reply')} 复制回答`,
+    `${keyLabel('agent.editor')} 外部编辑器`,
+    '/status 用量',
+    '/skills 技能',
+    '/mcp MCP',
+    '/export 导出会话',
+    '/compact 压缩上下文',
+    '/plan 计划模式',
+    '/tasks 后台任务',
+    '/fork 分叉',
+    '/rewind 回退',
+    '/permissions 会话权限',
+    '/copy 复制回答',
+    '/editor 外部编辑器',
   ];
 }
 
@@ -153,6 +181,7 @@ function screenLines(screen: TuiScreen): string[] {
     }
   }
   if (!screen.help && !screen.chats) lines.push(...childLines(screen.children ?? []));
+  lines.push(...bannerLines(screen));
   if (screen.readOnly) lines.push(readOnlyText);
   if (screen.approval) lines.push(...approvalLines(screen.approval));
   if (screen.ask) lines.push(`追问 ${screen.ask.prompt}`);
@@ -160,10 +189,29 @@ function screenLines(screen: TuiScreen): string[] {
   const attached = attachmentText(screen.attachments ?? []);
   if (attached) lines.push(attached);
   for (const item of screen.queued ?? []) lines.push(`排队 ${item}`);
+  if (screen.search) lines.push(screen.search);
   lines.push(draftLine(screen.draft, screen.cursor));
   if (screen.status) lines.push(screen.status);
   lines.push(footerText());
   return lines;
+}
+
+export function bannerLines(screen: TuiScreen): string[] {
+  const lines: string[] = [];
+  if (!screen.help && !screen.chats) {
+    for (const todo of screen.todos ?? []) lines.push(todoText(todo));
+  }
+  if (screen.mode === 'plan') lines.push('模式 计划');
+  if (screen.permission === 'auto') lines.push('权限 本会话自动');
+  if (screen.permission === 'read') lines.push('权限 只读');
+  for (const row of screen.panel ?? []) lines.push(row);
+  return lines;
+}
+
+function todoText(todo: { content: string; status: 'pending' | 'in_progress' | 'completed' }): string {
+  if (todo.status === 'completed') return `✓ ${todo.content}`;
+  if (todo.status === 'in_progress') return `▸ ${todo.content}`;
+  return `○ ${todo.content}`;
 }
 
 function displayWidth(text: string): number {

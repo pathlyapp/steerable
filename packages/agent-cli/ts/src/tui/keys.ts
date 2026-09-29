@@ -21,6 +21,9 @@ declare module '@earendil-works/pi-tui' {
     'agent.approval.abort': true;
     'agent.tool.toggle': true;
     'agent.clipboard.paste': true;
+    'agent.queue.pull': true;
+    'agent.copy.reply': true;
+    'agent.editor': true;
   }
 }
 
@@ -39,6 +42,9 @@ export const AGENT_KEYBINDINGS = {
     defaultKeys: process.platform === 'win32' ? 'alt+v' : 'ctrl+v',
     description: 'Paste an image or text from the clipboard',
   },
+  'agent.queue.pull': { defaultKeys: 'alt+up', description: 'Pull the latest queued line back into the composer' },
+  'agent.copy.reply': { defaultKeys: 'alt+c', description: 'Copy the latest assistant reply' },
+  'agent.editor': { defaultKeys: 'alt+e', description: 'Edit the draft in an external editor' },
 } as const satisfies KeybindingDefinitions;
 
 const DEFINITIONS: KeybindingDefinitions = { ...TUI_KEYBINDINGS, ...AGENT_KEYBINDINGS };

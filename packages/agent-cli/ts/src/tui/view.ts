@@ -17,6 +17,7 @@ import { childLines } from './children.js';
 import {
   approvalLines,
   attachmentText,
+  bannerLines,
   chatText,
   composerRows,
   draftHint,
@@ -54,6 +55,8 @@ export class OpenTuiView {
   private readonly picks: BoxRenderable;
   private readonly attached: TextRenderable;
   private readonly queued: TextRenderable;
+  private readonly search: TextRenderable;
+  private readonly banner: TextRenderable;
   private readonly composer: BoxRenderable;
   private readonly draft: TextRenderable;
   private readonly status: TextRenderable;
@@ -129,6 +132,10 @@ export class OpenTuiView {
     this.attached = text(renderer, warn);
     this.queued = text(renderer, warn);
     this.queued.visible = false;
+    this.search = text(renderer, warn);
+    this.search.visible = false;
+    this.banner = text(renderer, warn);
+    this.banner.visible = false;
     this.composer = new BoxRenderable(renderer, {
       width: '100%',
       height: 1,
@@ -162,7 +169,9 @@ export class OpenTuiView {
     shell.add(this.overlay);
     shell.add(this.picks);
     shell.add(this.attached);
+    shell.add(this.banner);
     shell.add(this.queued);
+    shell.add(this.search);
     shell.add(this.composer);
     shell.add(this.status);
     shell.add(footerBar);
@@ -172,6 +181,11 @@ export class OpenTuiView {
   scrollPage(direction: -1 | 1): void {
     const height = this.body.viewport.height;
     this.body.scrollBy(pageScrollLines(typeof height === 'number' ? height : 0, direction));
+  }
+
+  scrollEdge(edge: 'top' | 'bottom'): void {
+    if (edge === 'top') this.body.scrollTo(0);
+    else this.body.scrollTo(this.body.scrollHeight);
   }
 
   apply(screen: TuiScreen): void {
@@ -190,6 +204,16 @@ export class OpenTuiView {
     this.queued.content = queued.map((item) => `排队 ${item}`).join('\n');
     this.queued.visible = queued.length > 0;
     this.queued.height = queued.length;
+    const search = screen.search ?? '';
+    this.search.content = search;
+    this.search.visible = search.length > 0;
+    this.search.height = search.length > 0 ? 1 : 0;
+    const banner = bannerLines(screen);
+    this.banner.content = banner.join('\n');
+    this.banner.visible = banner.length > 0;
+    this.banner.height = banner.length;
+    if (screen.scroll) this.scrollEdge(screen.scroll);
+    if (typeof screen.searchFocus === 'number') this.body.scrollChildIntoView(`line-${screen.searchFocus}`);
     this.paintOverlay(screen);
     this.paintPicks(screen);
 
@@ -269,7 +293,9 @@ export class OpenTuiView {
       }
       return;
     }
-    for (const line of screen.lines) this.body.add(transcriptRow(renderer, line, this.syntax));
+    screen.lines.forEach((line, index) => {
+      this.body.add(transcriptRow(renderer, line, this.syntax, `line-${index}`));
+    });
     for (const line of childLines(screen.children ?? [])) this.body.add(text(renderer, tool, line));
   }
 }
@@ -291,9 +317,10 @@ function bodyKey(screen: TuiScreen): string {
   });
 }
 
-function transcriptRow(renderer: CliRenderer, line: TranscriptLine, syntax: SyntaxStyle | null): Renderable {
+function transcriptRow(renderer: CliRenderer, line: TranscriptLine, syntax: SyntaxStyle | null, id: string): Renderable {
   if (line.kind === 'reasoning') {
     const card = new BoxRenderable(renderer, {
+      id,
       width: '100%',
       border: true,
       borderStyle: 'rounded',
@@ -306,6 +333,7 @@ function transcriptRow(renderer: CliRenderer, line: TranscriptLine, syntax: Synt
   }
   if (line.kind === 'tool') {
     const card = new BoxRenderable(renderer, {
+      id,
       width: '100%',
       border: true,
       borderStyle: 'rounded',
@@ -317,10 +345,11 @@ function transcriptRow(renderer: CliRenderer, line: TranscriptLine, syntax: Synt
     return card;
   }
   if (line.kind === 'user') {
-    return text(renderer, user, `user ${line.text ?? ''}`);
+    return text(renderer, user, `user ${line.text ?? ''}`, id);
   }
   if (line.kind === 'assistant' && syntax) {
     return new MarkdownRenderable(renderer, {
+      id,
       content: line.text && line.text.length > 0 ? line.text : ' ',
       syntaxStyle: syntax,
       fg: ink,
@@ -330,9 +359,9 @@ function transcriptRow(renderer: CliRenderer, line: TranscriptLine, syntax: Synt
     });
   }
   const plain = plainMarkdown(line.text ?? '');
-  return text(renderer, ink, plain.length > 0 ? plain : ' ');
+  return text(renderer, ink, plain.length > 0 ? plain : ' ', id);
 }
 
-function text(renderer: CliRenderer, fg: string, content = ''): TextRenderable {
-  return new TextRenderable(renderer, { content, fg, wrapMode: 'word' });
+function text(renderer: CliRenderer, fg: string, content = '', id?: string): TextRenderable {
+  return new TextRenderable(renderer, { ...(id ? { id } : {}), content, fg, wrapMode: 'word' });
 }

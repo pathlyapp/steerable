@@ -1,4 +1,7 @@
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 import { getKeybindings, type Component } from '@earendil-works/pi-tui';
@@ -8,7 +11,7 @@ import type { SSEEvent } from '@steerable/agent-protocol';
 import { saveAttachmentFiles } from '@steerable/agent-shell/attachments';
 
 import { applyChildEvent, childLines, type ChildRow } from './children.js';
-import { readSystemClipboard, saveClipboardImage, type ClipboardRead } from './clipboard.js';
+import { readSystemClipboard, saveClipboardImage, writeSystemClipboard, type ClipboardRead } from './clipboard.js';
 import { completeSlash, slashAt } from './commands.js';
 import { clearDraft, createDraft, editDraft, insertText, type DraftBuffer } from './editor.js';
 import {
@@ -19,6 +22,7 @@ import {
   type FilePick,
   type SavedFile,
 } from './files.js';
+import { markdownChat } from './export-chat.js';
 import { ensureAgentKeybindings } from './keys.js';
 import {
   createPromptHistory,
@@ -30,7 +34,11 @@ import {
   type PromptHistory,
 } from './prompt-history.js';
 import { renderScreen, type ChatRow, type TranscriptLine, type TuiScreen } from './screen.js';
+import { searchHits, searchLabel } from './search.js';
+import { transcriptEdge } from './scroll.js';
+import { todosFromAction, type SessionTodo } from './todos.js';
 import { historyRows, toolOutput, toolStatus, type ToolAction } from './transcript.js';
+import { formatUsage } from './usage.js';
 
 export interface AgentTuiOptions {
   product: string;
@@ -39,6 +47,10 @@ export interface AgentTuiOptions {
   cwd?: string;
   saveAttachments?: (chatId: string, files: Array<{ name: string; path: string }>) => Promise<SavedFile[]>;
   readClipboard?: () => Promise<ClipboardRead>;
+  writeClipboard?: (text: string) => Promise<void>;
+  editInEditor?: (text: string) => Promise<string>;
+  exportDir?: string;
+  liveIntervalMs?: number;
   onExit: () => void;
   onChange?: () => void;
 }
@@ -66,6 +78,13 @@ export class AgentTui implements Component {
   private attachments: Array<{ name: string; path: string }> = [];
   private queue: Array<{ text: string; files: Array<{ name: string; path: string }> }> = [];
   private sending = false;
+  private search: { query: string; index: number } | null = null;
+  private scroll: 'top' | 'bottom' | null = null;
+  private panel: string[] | null = null;
+  private mode: 'agent' | 'plan' = 'agent';
+  private permission: 'ask' | 'auto' | 'read' = 'ask';
+  private todos: SessionTodo[] = [];
+  private liveGeneration = 0;
   private children: ChildRow[] = [];
   private readonly cwd: string;
   private status = '';
@@ -110,6 +129,7 @@ export class AgentTui implements Component {
   handleInput(data: string): void {
     this.applyInput(data);
     this.touch();
+    this.scroll = null;
   }
 
   private applyInput(data: string): void {
@@ -182,6 +202,34 @@ export class AgentTui implements Component {
     }
     if (keys.matches(data, 'agent.tool.toggle')) {
       this.toggleFold();
+      return;
+    }
+    const edge = this.composing() ? transcriptEdge(data) : null;
+    if (edge) {
+      this.scroll = edge;
+      return;
+    }
+    if (this.search && this.composing() && this.editSearch(data)) return;
+    if (this.composing() && keys.matches(data, 'tui.altScreen.search')) {
+      this.search = { query: '', index: 0 };
+      this.panel = null;
+      this.picks = null;
+      return;
+    }
+    if (this.panel && keys.matches(data, 'tui.select.cancel')) {
+      this.panel = null;
+      return;
+    }
+    if (this.composing() && keys.matches(data, 'agent.queue.pull')) {
+      this.pullQueue();
+      return;
+    }
+    if (this.composing() && keys.matches(data, 'agent.copy.reply')) {
+      void this.copyReply();
+      return;
+    }
+    if (this.composing() && keys.matches(data, 'agent.editor')) {
+      void this.editDraftExternal();
       return;
     }
     if (this.ask && keys.matches(data, 'tui.input.submit')) {
@@ -326,7 +374,67 @@ export class AgentTui implements Component {
       attachments: this.attachments.map((file) => file.name),
       children: this.children,
       queued: this.queue.map((item) => item.text || item.files.map((file) => file.name).join(' ')),
+      search: this.searchBar().label,
+      searchFocus: this.searchBar().focus,
+      scroll: this.scroll,
+      panel: this.panel,
+      mode: this.mode,
+      permission: this.permission,
+      todos: this.todos,
     };
+  }
+
+  private searchBar(): { label: string | null; focus: number | null } {
+    if (!this.search) return { label: null, focus: null };
+    const hits = searchHits(this.lines, this.search.query);
+    const index = hits.length === 0 ? 0 : this.search.index % hits.length;
+    return {
+      label: searchLabel(this.search.query, hits, index),
+      focus: hits[index]?.line ?? null,
+    };
+  }
+
+  private editSearch(data: string): boolean {
+    if (!this.search) return false;
+    const keys = getKeybindings();
+    if (keys.matches(data, 'tui.altScreen.search') || keys.matches(data, 'tui.altScreen.searchClose')) {
+      this.search = null;
+      return true;
+    }
+    const hits = searchHits(this.lines, this.search.query);
+    if (keys.matches(data, 'tui.altScreen.searchNext')) {
+      if (hits.length > 0) this.search.index = (this.search.index + 1) % hits.length;
+      return true;
+    }
+    if (keys.matches(data, 'tui.altScreen.searchPrevious')) {
+      if (hits.length > 0) this.search.index = (this.search.index - 1 + hits.length) % hits.length;
+      return true;
+    }
+    if (keys.matches(data, 'tui.editor.deleteCharBackward')) {
+      this.search.query = [...this.search.query].slice(0, -1).join('');
+      this.search.index = 0;
+      return true;
+    }
+    if ([...data].length === 1 && data >= ' ' && !data.includes('\x1b')) {
+      this.search.query += data;
+      this.search.index = 0;
+      return true;
+    }
+    return false;
+  }
+
+  private pullQueue(): void {
+    const item = this.queue.pop();
+    if (!item) return;
+    if (this.buffer.text.length > 0) {
+      this.queue.push(item);
+      this.status = '输入框里还有字';
+      return;
+    }
+    this.buffer.text = item.text;
+    this.buffer.cursor = [...item.text].length;
+    this.attachments.push(...item.files);
+    this.status = '已取回';
   }
 
   private pickRows(): TuiScreen['picks'] {
@@ -425,14 +533,21 @@ export class AgentTui implements Component {
     const records = messages.status === 200
       ? ((messages.data as { messages?: Parameters<typeof historyRows>[0] }).messages ?? [])
       : [];
-    this.lines = historyRows(records).map((row) => (
-      row.kind === 'tool' ? toolLine(row.action) : { kind: row.kind, text: row.text }
-    ));
+    this.todos = [];
+    this.lines = historyRows(records).map((row) => {
+      if (row.kind !== 'tool') return { kind: row.kind, text: row.text };
+      const next = todosFromAction(row.action.tool, row.action.arguments, row.action.result);
+      if (next) this.todos = next;
+      return toolLine(row.action);
+    });
     this.help = false;
+    this.search = null;
+    this.panel = null;
     this.children = [];
     this.picks = null;
     this.attachments = [];
     this.touch();
+    this.armLive(id);
   }
 
   private async submit(): Promise<void> {
@@ -447,6 +562,11 @@ export class AgentTui implements Component {
     }
     if (this.readOnly) {
       this.status = '只读 · 另一个进程正在运行';
+      return;
+    }
+    if (this.permission === 'read') {
+      this.status = '权限 只读';
+      this.touch();
       return;
     }
     const files = this.attachments.splice(0);
@@ -534,6 +654,60 @@ export class AgentTui implements Component {
       this.touch();
       return;
     }
+    if (command === 'status') {
+      const summary = await this.client.request('GET', '/api/v2/usage/summary', undefined);
+      this.status = summary.status === 200 ? formatUsage(summary.data as { totals?: { turns?: number; totalTokens?: number; costUsd?: number } }) : '用量不可用';
+      this.touch();
+      return;
+    }
+    if (command === 'skills') {
+      await this.showList('GET', '/api/v2/chat-agents/skills', 'skills', (row) => `技能 ${textField(row, 'name')}${textField(row, 'description') ? `  ${textField(row, 'description')}` : ''}`, '没有技能');
+      return;
+    }
+    if (command === 'mcp') {
+      await this.showList('GET', '/api/v2/mcp/servers', 'servers', (row) => `MCP ${textField(row, 'name') || textField(row, 'id')}  ${numberField(row, 'toolCount')} 个工具`, '没有 MCP');
+      return;
+    }
+    if (command === 'export') {
+      await this.exportChat();
+      return;
+    }
+    if (command === 'compact') {
+      await this.compactChat();
+      return;
+    }
+    if (command === 'plan') {
+      this.mode = this.mode === 'plan' ? 'agent' : 'plan';
+      this.status = this.mode === 'plan' ? '计划模式' : '对话模式';
+      this.touch();
+      return;
+    }
+    if (command === 'tasks') {
+      await this.showTasks();
+      return;
+    }
+    if (command === 'fork') {
+      await this.forkChat();
+      return;
+    }
+    if (command === 'rewind') {
+      await this.rewindChat();
+      return;
+    }
+    if (command === 'permissions') {
+      this.permission = this.permission === 'ask' ? 'auto' : this.permission === 'auto' ? 'read' : 'ask';
+      this.status = this.permission === 'ask' ? '权限 询问' : this.permission === 'auto' ? '权限 本会话自动' : '权限 只读';
+      this.touch();
+      return;
+    }
+    if (command === 'copy') {
+      await this.copyReply();
+      return;
+    }
+    if (command === 'editor') {
+      await this.editDraftExternal();
+      return;
+    }
     this.status = `unknown command /${command}`;
     this.touch();
   }
@@ -611,9 +785,12 @@ export class AgentTui implements Component {
     this.children = [];
     this.status = '';
     try {
+      const payload: { message: string; images?: Array<{ path: string; name: string }>; mode?: 'plan' } = { message: text };
+      if (images.length > 0) payload.images = images;
+      if (this.mode === 'plan') payload.mode = 'plan';
       for await (const event of this.client.stream(
         `/api/v2/chats/${encodeURIComponent(this.chatId)}/send`,
-        { message: text, ...(images.length > 0 ? { images } : {}) },
+        payload,
         controller.signal,
       )) {
         this.observe(event, controller.signal);
@@ -689,6 +866,11 @@ export class AgentTui implements Component {
       if (event.channel === 'approval:request') {
         const payload = event.payload as { requestId?: string; toolName?: string; arguments?: unknown };
         if (!payload.requestId) continue;
+        if (this.permission === 'auto') {
+          void this.client.decideApproval(payload.requestId, 'allow_for_session');
+          this.touch();
+          continue;
+        }
         this.approval = {
           requestId: payload.requestId,
           toolName: payload.toolName || 'tool',
@@ -705,6 +887,8 @@ export class AgentTui implements Component {
   private applyActions(actions: ToolAction[]): void {
     for (const action of actions) {
       if (!action || typeof action !== 'object') continue;
+      const nextTodos = todosFromAction(action.tool, action.arguments, action.result);
+      if (nextTodos) this.todos = nextTodos;
       const next = toolLine(action);
       const index = next.id
         ? this.lines.findIndex((line) => line.kind === 'tool' && line.id === next.id)
@@ -735,6 +919,163 @@ export class AgentTui implements Component {
         return;
       }
     }
+  }
+
+  private armLive(chatId: string): void {
+    const generation = ++this.liveGeneration;
+    void this.pollLive(chatId, generation);
+  }
+
+  private async pollLive(chatId: string, generation: number): Promise<void> {
+    if (this.stopped || this.chatId !== chatId || generation !== this.liveGeneration) return;
+    const live = await this.client.request('GET', `/api/v2/chats/${encodeURIComponent(chatId)}/live-stream`, undefined);
+    if (this.stopped || this.chatId !== chatId || generation !== this.liveGeneration) return;
+    if (live.status !== 200 || !live.data || typeof live.data !== 'object') return;
+    const data = live.data as { active?: boolean; content?: string; executedActions?: ToolAction[] };
+    if (data.active !== true) {
+      if (this.status === '运行中') this.status = '';
+      this.touch();
+      return;
+    }
+    this.status = '运行中';
+    if (typeof data.content === 'string' && data.content.length > 0) {
+      const streaming = [...this.lines].reverse().find((line) => line.kind === 'assistant' && line.streaming);
+      if (streaming) streaming.text = data.content;
+      else if (!this.lines.some((line) => line.kind === 'assistant' && line.text === data.content)) {
+        this.lines.push({ kind: 'assistant', text: data.content, streaming: true });
+      }
+    }
+    if (Array.isArray(data.executedActions)) this.applyActions(data.executedActions);
+    this.touch();
+    const wait = this.options.liveIntervalMs ?? 1000;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, wait);
+    });
+    await this.pollLive(chatId, generation);
+  }
+
+  private async showList(
+    method: 'GET',
+    requestPath: string,
+    key: string,
+    format: (row: Record<string, unknown>) => string,
+    empty: string,
+  ): Promise<void> {
+    const listed = await this.client.request(method, requestPath, undefined);
+    const rows = listed.status === 200 && listed.data && typeof listed.data === 'object'
+      ? (listed.data as Record<string, unknown>)[key]
+      : [];
+    const lines = Array.isArray(rows)
+      ? rows.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object').map(format)
+      : [];
+    this.panel = lines.length > 0 ? lines : [empty];
+    this.touch();
+  }
+
+  private async showTasks(): Promise<void> {
+    if (!this.chatId) {
+      this.status = '还没有会话';
+      this.touch();
+      return;
+    }
+    const listed = await this.client.request('GET', `/api/v2/chats/${encodeURIComponent(this.chatId)}/tasks`, undefined);
+    const rows = listed.status === 200 && listed.data && typeof listed.data === 'object'
+      ? (listed.data as { tasks?: Array<{ task?: string; status?: string }> }).tasks ?? []
+      : [];
+    this.panel = rows.length > 0
+      ? rows.map((task) => `后台 ${task.task ?? ''}  ${taskStatus(task.status)}`)
+      : ['没有后台任务'];
+    this.touch();
+  }
+
+  private async exportChat(): Promise<void> {
+    const messages = this.lines
+      .filter((line) => line.kind === 'user' || line.kind === 'assistant')
+      .map((line) => ({ role: line.kind, content: line.text ?? '' }));
+    const file = path.join(this.options.exportDir ?? os.tmpdir(), `${this.chatId ?? 'chat'}.md`);
+    await fs.writeFile(file, markdownChat(this.title, messages));
+    this.status = `已导出 ${file}`;
+    this.touch();
+  }
+
+  private async compactChat(): Promise<void> {
+    if (!this.chatId) return;
+    const result = await this.client.request('POST', `/api/v2/chats/${encodeURIComponent(this.chatId)}/compact`, {});
+    const compacted = result.status === 200 ? numberField(result.data, 'compacted') : 0;
+    if (result.status !== 200) {
+      this.status = '压缩失败';
+      this.touch();
+      return;
+    }
+    if (compacted === 0) {
+      this.status = '没有可压缩的记录';
+      this.touch();
+      return;
+    }
+    await this.openChat(this.chatId);
+    this.status = `已压缩 ${compacted} 条`;
+    this.touch();
+  }
+
+  private async forkChat(): Promise<void> {
+    if (!this.chatId) return;
+    const created = await this.client.request('POST', `/api/v2/chats/${encodeURIComponent(this.chatId)}/fork`, {});
+    const chatId = created.status === 200 ? textField(created.data, 'chatId') : '';
+    if (!chatId) {
+      this.status = '分叉失败';
+      this.touch();
+      return;
+    }
+    await this.openChat(chatId);
+    this.status = '已分叉';
+    this.touch();
+  }
+
+  private async rewindChat(): Promise<void> {
+    if (!this.chatId) return;
+    const result = await this.client.request('POST', `/api/v2/chats/${encodeURIComponent(this.chatId)}/rewind`, {});
+    const removed = result.status === 200 ? numberField(result.data, 'removed') : 0;
+    if (result.status !== 200 || removed === 0) {
+      this.status = '没有可回退的回合';
+      this.touch();
+      return;
+    }
+    await this.openChat(this.chatId);
+    this.status = '已回退';
+    this.touch();
+  }
+
+  private async copyReply(): Promise<void> {
+    const text = [...this.lines].reverse().find((line) => line.kind === 'assistant' && (line.text ?? '').length > 0)?.text ?? '';
+    if (!text) {
+      this.status = '没有可复制的回答';
+      this.touch();
+      return;
+    }
+    const write = this.options.writeClipboard ?? writeSystemClipboard;
+    try {
+      await write(text);
+      this.status = '已复制';
+    } catch (error) {
+      void error;
+      this.status = '剪贴板不可用';
+    }
+    this.touch();
+  }
+
+  private async editDraftExternal(): Promise<void> {
+    const edit = this.options.editInEditor ?? editWithEditor;
+    try {
+      const next = await edit(this.buffer.text);
+      this.buffer.text = next.replace(/\r\n/g, '\n');
+      this.buffer.cursor = [...this.buffer.text].length;
+      leavePromptHistory(this.prompts);
+      this.refreshPicks();
+    } catch (error) {
+      void error;
+      this.status = '编辑器不可用';
+    }
+    this.touch();
   }
 
   private async decide(kind: ApprovalDecisionKind): Promise<void> {
@@ -791,7 +1132,53 @@ function toolLine(action: ToolAction): TranscriptLine {
     args: title && title !== name ? title : toolArgs(action.arguments),
     status: toolStatus(action),
     output: toolOutput(action),
+    ...(diffOf(action) ? { diff: diffOf(action) } : {}),
   };
+}
+
+function diffOf(action: ToolAction): string | undefined {
+  const result = action.result;
+  if (!result || typeof result !== 'object') return undefined;
+  const diff = (result as { diff?: unknown }).diff;
+  return typeof diff === 'string' && diff.length > 0 ? diff : undefined;
+}
+
+function textField(value: unknown, key: string): string {
+  if (!value || typeof value !== 'object') return '';
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === 'string' ? field : '';
+}
+
+function numberField(value: unknown, key: string): number {
+  if (!value || typeof value !== 'object') return 0;
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === 'number' && Number.isFinite(field) ? field : 0;
+}
+
+function taskStatus(status: string | undefined): string {
+  if (status === 'running') return '进行中';
+  if (status === 'completed') return '完成';
+  if (status === 'failed') return '失败';
+  if (status === 'blocked') return '等待';
+  return status ?? '';
+}
+
+async function editWithEditor(text: string): Promise<string> {
+  const editor = process.env.VISUAL || process.env.EDITOR;
+  if (!editor) throw new Error('editor unavailable');
+  const file = path.join(os.tmpdir(), `steerable-draft-${randomUUID().slice(0, 8)}.md`);
+  await fs.writeFile(file, text);
+  const code = await new Promise<number>((resolve, reject) => {
+    const child = spawn(editor, [file], { stdio: 'inherit' });
+    child.on('error', reject);
+    child.on('exit', (status) => resolve(status ?? 1));
+  });
+  const next = await fs.readFile(file, 'utf8');
+  await fs.unlink(file).catch((error: unknown) => {
+    void error;
+  });
+  if (code !== 0) throw new Error(`editor exited ${code}`);
+  return next;
 }
 
 function toolArgs(value: unknown): string {

@@ -13,6 +13,15 @@ export function transcriptPage(sequence: string): -1 | 1 | 0 {
   return 0;
 }
 
+/** Home / End jump the transcript. `null` means the key belongs to the composer. */
+export function transcriptEdge(sequence: string): 'top' | 'bottom' | null {
+  ensureAgentKeybindings();
+  const keys = getKeybindings();
+  if (keys.matches(sequence, 'tui.altScreen.top')) return 'top';
+  if (keys.matches(sequence, 'tui.altScreen.bottom')) return 'bottom';
+  return null;
+}
+
 /** One page, keeping a few lines of overlap so the reader can see where they were. */
 export function pageScrollLines(viewportHeight: number, direction: -1 | 1): number {
   const rows = Number.isFinite(viewportHeight) ? viewportHeight : 0;

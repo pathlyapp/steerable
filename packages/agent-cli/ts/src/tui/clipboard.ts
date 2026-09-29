@@ -34,6 +34,12 @@ export async function saveClipboardImage(bytes: Uint8Array): Promise<{ name: str
 }
 
 /** Image first, then text. An empty clipboard returns an empty result. */
+export async function writeSystemClipboard(text: string): Promise<void> {
+  const clipboard = getNativeClipboard();
+  if (!clipboard?.setText) throw new Error('clipboard unavailable');
+  await clipboard.setText(text);
+}
+
 export async function readSystemClipboard(): Promise<ClipboardRead> {
   const clipboard = getNativeClipboard();
   if (!clipboard) return {};
