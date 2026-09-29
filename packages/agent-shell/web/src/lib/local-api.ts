@@ -736,6 +736,25 @@ export async function getSidecarSandboxPosture() {
   });
 }
 
+/** 当前 DeepSeek / Kimi 密钥在供应商侧的真实余额。其他厂商为 unsupported。 */
+export interface LlmAccount {
+  status: 'ready' | 'unsupported' | 'missing_key' | 'failed';
+  provider: 'deepseek' | 'moonshot' | null;
+  label: string;
+  available: boolean | null;
+  currency: string | null;
+  total: string | null;
+  granted: string | null;
+  toppedUp: string | null;
+}
+
+export async function getLlmAccount(refresh = false) {
+  return bridge().localBackend.request<LlmAccount>({
+    method: 'GET',
+    path: refresh ? '/api/v2/llm/account?refresh=1' : '/api/v2/llm/account',
+  });
+}
+
 export async function getLlmSettings() {
   return bridge().localBackend.request<LlmSettings>({
     method: 'GET',
@@ -743,12 +762,17 @@ export async function getLlmSettings() {
   });
 }
 
+/** 模型设置保存后通知侧栏重新读取供应商余额。 */
+export const LLM_SETTINGS_CHANGED_EVENT = 'steerable:llm-settings-changed';
+
 export async function setLlmSettings(input: LlmSettings) {
-  return bridge().localBackend.request<LlmSettings>({
+  const saved = await bridge().localBackend.request<LlmSettings>({
     method: 'POST',
     path: '/api/v2/local-settings/llm',
     body: input,
   });
+  window.dispatchEvent(new Event(LLM_SETTINGS_CHANGED_EVENT));
+  return saved;
 }
 
 /* ---------------- LLM link diagnosis ---------------- */

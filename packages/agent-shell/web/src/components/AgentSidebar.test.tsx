@@ -48,6 +48,16 @@ vi.mock('@/lib/local-api', () => ({
   openLocalPath: (...args: unknown[]) => openLocalPath(...args),
   setChatPinned: (...args: unknown[]) => setChatPinned(...args),
   getChatLiveStream: (chatId: string) => getChatLiveStream(chatId),
+  getLlmAccount: async () => ({
+    status: 'unsupported',
+    provider: null,
+    label: '',
+    available: null,
+    currency: null,
+    total: null,
+    granted: null,
+    toppedUp: null,
+  }),
 }));
 
 vi.mock('@/brand', () => ({

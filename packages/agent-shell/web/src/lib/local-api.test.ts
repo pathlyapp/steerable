@@ -329,6 +329,18 @@ describe('local-api LLM 设置与目录', () => {
     expect(request).toHaveBeenCalledWith({ method: 'GET', path: '/api/v2/sidecar/sandbox-posture' });
   });
 
+  it('getLlmAccount 读取供应商余额，refresh 带查询参数', async () => {
+    const request = installBridge();
+    request.mockResolvedValue({ status: 'unsupported' });
+    await api.getLlmAccount();
+    expect(request).toHaveBeenLastCalledWith({ method: 'GET', path: '/api/v2/llm/account' });
+    await api.getLlmAccount(true);
+    expect(request).toHaveBeenLastCalledWith({
+      method: 'GET',
+      path: '/api/v2/llm/account?refresh=1',
+    });
+  });
+
   it('getLlmSettings / setLlmSettings 读写同一端点', async () => {
     const request = installBridge();
     request.mockResolvedValue({});

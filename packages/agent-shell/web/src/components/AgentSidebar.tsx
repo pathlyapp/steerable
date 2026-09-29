@@ -61,6 +61,7 @@
  *   │   今天                          │
  *   │   ...（无项目对话，按日期分组）  │ ← 无项目排在项目分组之后
  *   ├─────────────────────────────────┤
+ *   │ DeepSeek           可用 ↻   │ ← DeepSeek / Kimi 时显示供应商账户余额
  *   │ ⚙ 设置                   v0.2.2 │ ← /settings；右侧是当前版本，检查更新在设置页
  *   └─────────────────────────────────┘
  *
@@ -116,6 +117,7 @@ import {
   SidebarVersionLabel,
   useAppRelease,
 } from "@/components/SidebarRelease";
+import { SidebarAccount } from "@/components/SidebarAccount";
 import { CreateProjectModal } from "@/components/CreateProjectModal";
 import { t } from "@/i18n";
 
@@ -1249,6 +1251,7 @@ export function AgentSidebar({
 
       {/* ───── Footer: 设置 ───── */}
       <div className="flex-shrink-0 border-t border-agent-border/40 px-2.5 py-1.5">
+        <SidebarAccount />
         {hasGeneralSettingsChrome() && (
         <button
           type="button"

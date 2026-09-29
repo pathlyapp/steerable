@@ -1653,6 +1653,29 @@ describe('Insights 与用量路由', () => {
     expect((failed.data as Record<string, any>).detail).toBe('upload_failed_kept_local');
   });
 
+  it('GET /api/v2/llm/account：未保存设置时不带着空密钥去请求 DeepSeek', async () => {
+    const res = await makeRouter().handle({ method: 'GET', path: '/api/v2/llm/account' });
+    expect(res.status).toBe(200);
+    expect(res.data).toMatchObject({
+      status: 'missing_key',
+      provider: 'deepseek',
+      label: 'DeepSeek',
+    });
+  });
+
+  it('GET /api/v2/llm/account：其他供应商不查询余额', async () => {
+    await h.store.setLlmSettings({
+      provider: 'openai-compat',
+      vendorId: 'openai',
+      model: 'gpt-4o',
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: 'sk-test',
+    });
+    const res = await makeRouter().handle({ method: 'GET', path: '/api/v2/llm/account' });
+    expect(res.status).toBe(200);
+    expect(res.data).toMatchObject({ status: 'unsupported', provider: null });
+  });
+
   it('GET /api/v2/usage/summary：days 参数透传，非法值回落 30', async () => {
     const router = makeRouter();
     const res = await router.handle({ method: 'GET', path: '/api/v2/usage/summary?days=7' });

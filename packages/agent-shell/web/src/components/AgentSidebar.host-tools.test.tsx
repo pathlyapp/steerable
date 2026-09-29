@@ -37,6 +37,16 @@ vi.mock('@/lib/local-api', () => ({
   updateProject: vi.fn(),
   deleteProject: vi.fn(),
   openLocalPath: (...args: unknown[]) => openLocalPath(...args),
+  getLlmAccount: async () => ({
+    status: 'unsupported',
+    provider: null,
+    label: '',
+    available: null,
+    currency: null,
+    total: null,
+    granted: null,
+    toppedUp: null,
+  }),
 }));
 
 vi.mock('@/brand', () => ({

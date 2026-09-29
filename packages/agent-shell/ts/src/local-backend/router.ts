@@ -79,6 +79,7 @@ import {
 } from '../host-tools-runtime.js';
 import { SidecarSupervisor } from '../sidecar/index.js';
 import { diagnoseLlmConnection } from './llm-diagnose.js';
+import { readLlmAccount } from './llm-account.js';
 import {
   brandSkillVars,
   buildSystemPrompt,
@@ -1788,6 +1789,14 @@ export class LocalBackendRouter {
         return { status: 503, data: { error: 'sidecar 未就绪', posture: null, egress } };
       }
       return { status: 200, data: { posture: supervisor.getSandboxPosture(), egress } };
+    }
+
+    if (method === 'GET' && pathname === '/api/v2/llm/account') {
+      const settings = resolveRuntimeLlmSettings(await this.store.getLlmSettings());
+      const account = await readLlmAccount(settings, {
+        refresh: url.searchParams.get('refresh') === '1',
+      });
+      return { status: 200, data: account };
     }
 
     if (pathname === '/api/v2/local-settings/llm') {

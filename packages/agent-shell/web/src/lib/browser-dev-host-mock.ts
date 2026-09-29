@@ -484,6 +484,19 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
     return { success: true, message: 'deleted in browser mock', chatId: deleteChatId } as T;
   }
 
+  if (method === 'GET' && cleanPath === '/api/v2/llm/account') {
+    return {
+      status: 'unsupported',
+      provider: null,
+      label: '',
+      available: null,
+      currency: null,
+      total: null,
+      granted: null,
+      toppedUp: null,
+    } as T;
+  }
+
   throw new Error(`Browser dev mock does not implement ${method} ${path}`);
 }
 
