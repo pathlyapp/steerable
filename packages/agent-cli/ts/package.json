@@ -33,7 +33,7 @@
     "provenance": true
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=26"
   },
   "scripts": {
     "gen": "echo agent-cli",

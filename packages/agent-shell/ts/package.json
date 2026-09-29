@@ -42,7 +42,7 @@
     "provenance": true
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=26"
   },
   "scripts": {
     "gen": "echo agent-shell-ts",
@@ -59,7 +59,7 @@
     "@steerable/agent-harness": "workspace:*",
     "@steerable/agent-protocol": "workspace:*",
     "@steerable/pack-sdk": "workspace:*",
-    "better-sqlite3": "^11.9.1",
+    "better-sqlite3": "^12.11.1",
     "conf": "10.2.0",
     "dotenv": "^17.4.2",
     "he": "^1.2.0",

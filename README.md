@@ -19,7 +19,7 @@ Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM 
 [![PyPI: sidecar](https://img.shields.io/pypi/v/steerable-sidecar?label=steerable-sidecar&color=3776ab)](https://pypi.org/project/steerable-sidecar/)
 
 [![Python](https://img.shields.io/badge/python-%E2%89%A53.10-blue?logo=python&logoColor=white)](https://www.python.org/)
-[![Node](https://img.shields.io/badge/node-%E2%89%A522-green?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/node-%E2%89%A526-green?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Sigstore](https://img.shields.io/badge/npm%20provenance-sigstore-orange)](https://docs.npmjs.com/generating-provenance-statements)
 
 [Docs](https://steerableframework.com/) · [Storybook](https://steerableframework.com/storybook/) · [Live demo](https://steerableframework.com/demo/) · [Examples](./examples) · [Releases](https://github.com/pathlyapp/steerable/releases) · [Discussions](https://github.com/pathlyapp/steerable/discussions)
@@ -162,7 +162,7 @@ pnpm agent-shell:web       # BS mode: builds shell + neutral web app, boots the 
 pnpm agent-shell:client    # desktop client mode: same build, launched as an Electron window
 
 npm install -g @steerable/agent-cli
-steerable-cli              # command line and terminal session; Node 22
+steerable-cli              # command line and terminal session; Node 26
 ```
 
 Both are the production code path (prod web build, shell default preload) — the browser-dev Electron mock is dev-server-only and tree-shaken out of prod builds, so it never appears here.

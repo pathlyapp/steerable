@@ -91,7 +91,7 @@ One command boots a full agent shell; every layer underneath ships as its own pa
 <div class="sf-run-pane sf-run-pane--cli">
 <pre><code><span class="sf-cmd">npm install -g @steerable/agent-cli</span>
 <span class="sf-cmd"><b>steerable-cli</b></span></code></pre>
-<div class="sf-out">→ steerable-cli opens a terminal session. Node 22.</div>
+<div class="sf-out">→ steerable-cli opens a terminal session. Node 26.</div>
 </div>
 </div>
 </div>
