@@ -75,26 +75,44 @@ body {
  * ToolExecutionCard header: CJK status labels (已完成 / 失败 / …) wrap at
  * every character when the flex row is squeezed. Keep the trailing status
  * cluster at content width; let the truncated summary take the leftover.
- * Host-side until @steerable/agent-ui ships the same layout classes.
+ *
+ * WKWebView (Tauri) lays out flex items of a <button> in the border box, so
+ * padding-right on that button does not inset 「已完成」. Clear that padding
+ * and inset the status with margin. The card also puts the same inset on an
+ * inner span; these direct-child rules only match the older button markup.
  */
-.steerable-tool-execution > button > span.truncate {
+.steerable-tool-execution span.truncate {
   min-width: 0;
   flex: 1 1 0%;
 }
 
-.steerable-tool-execution > button > span.ml-auto {
+.steerable-tool-execution span.ml-auto {
   flex-shrink: 0;
   white-space: nowrap;
 }
 
-/* 12px 字号下收紧工具行：框架卡默认还是 px-3 py-2。 */
-.steerable-tool-execution > button {
-  gap: 0.375rem;
-  padding: 0.25rem 0.625rem;
+.steerable-tool-execution > div > button.flex-1 {
+  padding-left: 0;
+  padding-right: 0;
+  padding-inline: 0;
 }
 
-.steerable-tool-execution > button + div {
-  padding: 0.375rem 0.625rem;
+.steerable-tool-execution > div > button.flex-1 > span.ml-auto {
+  margin-inline-end: 0.625rem;
+}
+
+.steerable-tool-execution > div > button.flex-1.pl-2\.5 > :first-child {
+  margin-inline-start: 0.625rem;
+}
+
+.steerable-tool-execution > div > button.shrink-0 {
+  padding-left: 0;
+  padding-right: 0;
+  padding-inline: 0;
+}
+
+.steerable-tool-execution > div > button.shrink-0 > svg {
+  margin-inline: 0.625rem;
 }
 
 /*

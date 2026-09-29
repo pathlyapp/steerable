@@ -112,11 +112,14 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="flex shrink-0 items-center px-2.5 py-1 text-[var(--agent-muted-foreground,#6b7280)]"
+            className="flex shrink-0 items-center text-[var(--agent-muted-foreground,#6b7280)]"
             aria-expanded={expanded}
             aria-label={expanded ? '收起详情' : '展开详情'}
           >
-            {expanded ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+            {/* WKWebView ignores horizontal padding on a flex button. */}
+            <span className="flex items-center px-2.5 py-1">
+              {expanded ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+            </span>
           </button>
         )}
         <button
@@ -125,29 +128,31 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
             if (onActivate) onActivate();
             else if (expandable) setExpanded((v) => !v);
           }}
-          className={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-2.5 text-left ${expandable ? '' : 'pl-2.5'} ${onActivate ? 'cursor-pointer hover:bg-[var(--agent-muted,#f3f4f6)]/60' : ''}`}
+          className={`flex min-w-0 flex-1 text-left ${onActivate ? 'cursor-pointer hover:bg-[var(--agent-muted,#f3f4f6)]/60' : ''}`}
           aria-expanded={onActivate ? undefined : expanded}
           aria-label={onActivate ? activateTitle : undefined}
           title={onActivate ? activateTitle : undefined}
           data-testid={onActivate ? 'tool-activate' : undefined}
         >
-          {lead ?? (
-            <ZapIcon size={12} className="shrink-0 text-[var(--agent-muted-foreground,#6b7280)]" />
-          )}
-          <span className="shrink-0 font-medium text-[var(--agent-foreground,#111827)]">
-            {title}
-          </span>
-          {payload.summary && (
-            <span className="min-w-0 flex-1 truncate text-[var(--agent-muted-foreground,#6b7280)]">
-              {payload.summary}
-            </span>
-          )}
-          <span className="ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap">
-            <StatusIcon status={status} />
-            <span className={STATUS_TONE[status]}>{STATUS_LABEL[status]}</span>
-            {typeof payload.durationMs === 'number' && (
-              <span className="text-[var(--agent-muted-foreground,#9ca3af)]">· {payload.durationMs}ms</span>
+          <span className={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-2.5 ${expandable ? '' : 'pl-2.5'}`}>
+            {lead ?? (
+              <ZapIcon size={12} className="shrink-0 text-[var(--agent-muted-foreground,#6b7280)]" />
             )}
+            <span className="shrink-0 font-medium text-[var(--agent-foreground,#111827)]">
+              {title}
+            </span>
+            {payload.summary && (
+              <span className="min-w-0 flex-1 truncate text-[var(--agent-muted-foreground,#6b7280)]">
+                {payload.summary}
+              </span>
+            )}
+            <span className="ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap">
+              <StatusIcon status={status} />
+              <span className={STATUS_TONE[status]}>{STATUS_LABEL[status]}</span>
+              {typeof payload.durationMs === 'number' && (
+                <span className="text-[var(--agent-muted-foreground,#9ca3af)]">· {payload.durationMs}ms</span>
+              )}
+            </span>
           </span>
         </button>
       </div>
