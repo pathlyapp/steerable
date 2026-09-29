@@ -85,6 +85,18 @@ export function TerminalView({
     //   Cmd+V / Ctrl+Shift+V → 从剪贴板读出来 paste 到 PTY
     //   Cmd/Ctrl+A  → 全选
     const isMac = navigator.platform.toUpperCase().includes('MAC');
+    // WKWebView's navigator.clipboard.readText() is empty or prompts; the
+    // desktop host reads the OS pasteboard directly.
+    const pasteFromClipboard = () => {
+      const readText = bridge?.readClipboardText
+        ? () => bridge.readClipboardText!()
+        : () => navigator.clipboard.readText();
+      void readText()
+        .then((text) => {
+          if (text) term.paste(text);
+        })
+        .catch(() => {});
+    };
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true;
       const mod = isMac ? event.metaKey : event.ctrlKey;
@@ -103,12 +115,8 @@ export function TerminalView({
         (isMac && mod && key === 'v') ||
         (!isMac && event.ctrlKey && event.shiftKey && key === 'v')
       ) {
-        void navigator.clipboard
-          .readText()
-          .then((text) => {
-            if (text) term.paste(text);
-          })
-          .catch(() => {});
+        event.preventDefault();
+        pasteFromClipboard();
         return false;
       }
       if (mod && key === 'a' && !event.shiftKey) {
@@ -125,12 +133,7 @@ export function TerminalView({
         void navigator.clipboard.writeText(sel).catch(() => {});
         term.clearSelection();
       } else {
-        void navigator.clipboard
-          .readText()
-          .then((text) => {
-            if (text) term.paste(text);
-          })
-          .catch(() => {});
+        pasteFromClipboard();
       }
     };
     containerRef.current.addEventListener('contextmenu', onContextMenu);

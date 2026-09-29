@@ -88,13 +88,23 @@ export function hostClipboardAvailable(): boolean {
 
 function isEditable(target: EventTarget | null): target is HTMLElement {
   return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
+    !isTerminalInput(target) &&
+    (target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      (target instanceof HTMLElement && target.isContentEditable))
   );
 }
 
+/**
+ * xterm's hidden textarea. The terminal pastes into its PTY itself; text
+ * written into this textarea never reaches the shell.
+ */
+function isTerminalInput(target: EventTarget | null): boolean {
+  return target instanceof HTMLTextAreaElement && target.closest('.xterm') !== null;
+}
+
 function focusedEditable(): HTMLElement | null {
+  if (isTerminalInput(document.activeElement)) return null;
   if (isEditable(document.activeElement)) return document.activeElement;
   if (lastEditable?.isConnected) return lastEditable;
   return null;

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as hostBridge from './host-bridge';
-import { requestHostPaste } from './host-paste';
+import { installHostPaste, requestHostPaste } from './host-paste';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -35,5 +35,38 @@ describe('requestHostPaste', () => {
     });
     expect(readClipboard).toHaveBeenCalledOnce();
     expect(readClipboardText).toHaveBeenCalledOnce();
+  });
+
+  it('menu paste leaves the composer alone while the terminal has focus', async () => {
+    let menuPaste: (() => void) | undefined;
+    const readClipboardText = vi.fn().mockResolvedValue('ls');
+    vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
+      readClipboardText,
+      onMenuPaste: (callback: () => void) => {
+        menuPaste = callback;
+      },
+    } as Partial<hostBridge.HostBridge> as hostBridge.HostBridge);
+    installHostPaste();
+    const composer = editable();
+    const pasted: string[] = [];
+    composer.addEventListener('hostpaste', (event) => {
+      pasted.push((event as CustomEvent<string>).detail);
+    });
+    composer.focus();
+    const terminal = document.createElement('div');
+    terminal.className = 'xterm';
+    const helper = document.createElement('textarea');
+    terminal.appendChild(helper);
+    document.body.appendChild(terminal);
+    helper.focus();
+
+    menuPaste?.();
+
+    await vi.waitFor(() => {
+      expect(readClipboardText).toHaveBeenCalledOnce();
+    });
+    await Promise.resolve();
+    expect(pasted).toEqual([]);
+    expect(helper.value).toBe('');
   });
 });
