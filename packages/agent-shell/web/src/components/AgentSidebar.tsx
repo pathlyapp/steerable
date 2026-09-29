@@ -881,7 +881,9 @@ export function AgentSidebar({
     };
   }, [bridge, handleOpenNewChat]);
 
-  // Auto-load next page when the chat scroller approaches the bottom.
+  // Auto-load next page when the chat scroller approaches the bottom. Project
+  // groups need the complete list: otherwise an older project chat outside the
+  // first page makes its project incorrectly render as empty.
   // Throttled by `isLoadingMoreChats` inside the hook.
   useEffect(() => {
     const container = chatScrollRef.current;
@@ -892,7 +894,9 @@ export function AgentSidebar({
       const nearBottom =
         container.scrollTop + container.clientHeight >=
         container.scrollHeight - 60;
-      if (nearBottom) void loadMoreChats();
+      const needsCompleteProjectGroups =
+        showProjectsChrome && projects.length > 0;
+      if (nearBottom || needsCompleteProjectGroups) void loadMoreChats();
     };
     container.addEventListener("scroll", maybeLoadMore, { passive: true });
     const tickId = window.requestAnimationFrame(maybeLoadMore);
@@ -906,6 +910,8 @@ export function AgentSidebar({
     loadMoreChats,
     isRecentsExpanded,
     normalizedChats.length,
+    projects.length,
+    showProjectsChrome,
   ]);
 
   const hasElectron = hasHostBridge();

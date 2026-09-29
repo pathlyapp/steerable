@@ -83,6 +83,22 @@ describe('useChatList', () => {
     expect(result.current.hasMoreChats).toBe(false);
   });
 
+  it('coalesces concurrent loadMoreChats calls for the same page', async () => {
+    const { transport, listChats } = makeTransport();
+    const { result } = renderHook(() => useChatList({ transport, pageSize: 50 }));
+
+    await waitFor(() => expect(result.current.chats.length).toBe(2));
+
+    await act(async () => {
+      const first = result.current.loadMoreChats();
+      const second = result.current.loadMoreChats();
+      await Promise.all([first, second]);
+    });
+
+    expect(listChats).toHaveBeenCalledTimes(2);
+    expect(result.current.chats.map((c) => c.id)).toEqual(['c1', 'c2', 'c3']);
+  });
+
   it('patchChatTitle updates without re-fetching', async () => {
     const { transport, listChats } = makeTransport();
     const { result } = renderHook(() => useChatList({ transport, pageSize: 50 }));

@@ -811,6 +811,47 @@ describe('AgentSidebar 副作用', () => {
 });
 
 describe('AgentSidebar 项目模式（Electron）', () => {
+  it('项目分组主动加载后续页，避免较旧会话被误报为空', async () => {
+    const scrollHeight = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollHeight',
+    );
+    const clientHeight = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'clientHeight',
+    );
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get: () => 1_000,
+    });
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get: () => 100,
+    });
+
+    try {
+      enterElectron([makeProject({ id: 'proj-old', name: '旧项目' })]);
+      const loadMoreChats = vi.fn(async () => {});
+      renderSidebar('/agent', vi.fn(), {
+        data: { hasMoreChats: true, loadMoreChats },
+      });
+
+      await screen.findByText('旧项目');
+      await waitFor(() => expect(loadMoreChats).toHaveBeenCalled());
+    } finally {
+      Object.defineProperty(
+        HTMLElement.prototype,
+        'scrollHeight',
+        scrollHeight ?? { configurable: true, get: () => 0 },
+      );
+      Object.defineProperty(
+        HTMLElement.prototype,
+        'clientHeight',
+        clientHeight ?? { configurable: true, get: () => 0 },
+      );
+    }
+  });
+
   it('项目分组渲染在前，孤儿会话回落到无项目日期分组', async () => {
     enterElectron([makeProject({ id: 'proj-1', name: '项目甲' })]);
     const inProject = makeChat({ id: 'c-in', title: '项目内会话', projectId: 'proj-1' });
