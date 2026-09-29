@@ -1,8 +1,22 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
 import { getKeybindings, type Component } from '@earendil-works/pi-tui';
 import { listBusyChatIds, type AgentClient } from '@steerable/agent-client';
 import type { ApprovalDecisionKind } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
+import { saveAttachmentFiles } from '@steerable/agent-shell/attachments';
 
+import { applyChildEvent, childLines, type ChildRow } from './children.js';
+import { clearDraft, createDraft, editDraft, insertText, type DraftBuffer } from './editor.js';
+import {
+  attachmentMessage,
+  completeFiles,
+  isImagePath,
+  mentionAt,
+  type FilePick,
+  type SavedFile,
+} from './files.js';
 import { ensureAgentKeybindings } from './keys.js';
 import { renderScreen, type ChatRow, type TranscriptLine, type TuiScreen } from './screen.js';
 
@@ -10,6 +24,8 @@ export interface AgentTuiOptions {
   product: string;
   dataDir?: string;
   busyChatIds?: string[];
+  cwd?: string;
+  saveAttachments?: (chatId: string, files: Array<{ name: string; path: string }>) => Promise<SavedFile[]>;
   onExit: () => void;
   onChange?: () => void;
 }
@@ -28,7 +44,14 @@ export class AgentTui implements Component {
   private ask: { requestId: string; prompt: string } | null = null;
   private readOnly = false;
   private help = false;
-  private draft = '';
+  private buffer: DraftBuffer = createDraft();
+  private paste: string | null = null;
+  private picks: FilePick[] | null = null;
+  private pickIndex = 0;
+  private pickGeneration = 0;
+  private attachments: Array<{ name: string; path: string }> = [];
+  private children: ChildRow[] = [];
+  private readonly cwd: string;
   private status = '';
   private stopped = false;
   private turnAbort: AbortController | null = null;
@@ -37,6 +60,7 @@ export class AgentTui implements Component {
   constructor(client: AgentClient, options: AgentTuiOptions) {
     this.client = client;
     this.options = options;
+    this.cwd = options.cwd ?? process.cwd();
     ensureAgentKeybindings();
   }
 
@@ -68,8 +92,27 @@ export class AgentTui implements Component {
   }
 
   handleInput(data: string): void {
-    if (data.length > 1 && !data.includes('\x1b')) {
-      for (const char of data) this.handleInput(char);
+    this.applyInput(data);
+    this.touch();
+  }
+
+  private applyInput(data: string): void {
+    if (this.paste !== null || data.includes('\x1b[200~')) {
+      if (!this.composing()) this.paste = null;
+      else this.consumePaste(data);
+      return;
+    }
+    const chars = [...data];
+    if (chars.length > 1 && !data.includes('\x1b')) {
+      for (let index = 0; index < chars.length; index += 1) {
+        const char = chars[index] ?? '';
+        if (char === '\r' && chars[index + 1] === '\n') {
+          this.applyInput('\r');
+          index += 1;
+          continue;
+        }
+        this.applyInput(char);
+      }
       return;
     }
     const keys = getKeybindings();
@@ -122,25 +165,64 @@ export class AgentTui implements Component {
     }
     if (this.ask && keys.matches(data, 'tui.input.submit')) {
       const requestId = this.ask.requestId;
-      const answer = this.draft;
-      this.draft = '';
+      const answer = this.buffer.text;
+      clearDraft(this.buffer);
       this.ask = null;
       void this.client.answerAsk(requestId, { text: answer });
       return;
     }
-    if (keys.matches(data, 'tui.input.newLine')) {
-      this.draft += '\n';
+    if (this.picks && keys.matches(data, 'tui.select.cancel')) {
+      this.picks = null;
       return;
     }
-    if (keys.matches(data, 'tui.input.submit')) {
+    if (this.picks && (keys.matches(data, 'tui.input.tab') || keys.matches(data, 'tui.select.confirm'))) {
+      this.acceptPick();
+      return;
+    }
+    if (this.picks && keys.matches(data, 'tui.select.up')) {
+      this.pickIndex = Math.max(0, this.pickIndex - 1);
+      this.markPicks();
+      return;
+    }
+    if (this.picks && keys.matches(data, 'tui.select.down')) {
+      this.pickIndex = Math.min(this.picks.length - 1, this.pickIndex + 1);
+      this.markPicks();
+      return;
+    }
+    if (
+      keys.matches(data, 'tui.editor.deleteCharBackward')
+      && this.buffer.text.length === 0
+      && this.buffer.cursor === 0
+      && this.attachments.length > 0
+    ) {
+      this.attachments.pop();
+      return;
+    }
+    if (editDraft(this.buffer, data) === 'submit') {
       void this.submit();
       return;
     }
-    if (keys.matches(data, 'tui.editor.deleteCharBackward')) {
-      this.draft = [...this.draft].slice(0, -1).join('');
-      return;
+    this.refreshPicks();
+  }
+
+  private composing(): boolean {
+    return !this.approval && !this.help && !this.chats;
+  }
+
+  private consumePaste(data: string): void {
+    let chunk = data;
+    if (this.paste === null) {
+      this.paste = '';
+      chunk = chunk.replaceAll('\x1b[200~', '');
     }
-    if (data.length > 0 && [...data].every((char) => char >= ' ' && char !== '\x7f')) this.draft += data;
+    this.paste += chunk;
+    const end = this.paste.indexOf('\x1b[201~');
+    if (end < 0) return;
+    const text = this.paste.slice(0, end).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const rest = this.paste.slice(end + '\x1b[201~'.length);
+    this.paste = null;
+    if (text.length > 0) insertText(this.buffer, text);
+    if (rest.length > 0) this.applyInput(rest);
   }
 
   private screen(): TuiScreen {
@@ -154,9 +236,54 @@ export class AgentTui implements Component {
       chats: this.chats,
       readOnly: this.readOnly,
       help: this.help,
-      draft: this.draft,
+      draft: this.buffer.text,
+      cursor: this.buffer.cursor,
       status: this.status,
+      picks: this.pickRows(),
+      attachments: this.attachments.map((file) => file.name),
+      children: this.children,
     };
+  }
+
+  private pickRows(): TuiScreen['picks'] {
+    if (!this.picks || this.picks.length === 0) return null;
+    return this.picks.map((pick, index) => ({ label: pick.label, selected: index === this.pickIndex }));
+  }
+
+  private markPicks(): void {
+    if (!this.picks) return;
+    if (this.pickIndex >= this.picks.length) this.pickIndex = Math.max(0, this.picks.length - 1);
+  }
+
+  private refreshPicks(): void {
+    const token = mentionAt(this.buffer.text, this.buffer.cursor);
+    if (!token || !this.composing()) {
+      this.picks = null;
+      return;
+    }
+    const generation = ++this.pickGeneration;
+    const query = token.query;
+    void completeFiles(this.cwd, query).then((files) => {
+      if (generation !== this.pickGeneration) return;
+      if (!mentionAt(this.buffer.text, this.buffer.cursor)) return;
+      this.picks = files.length > 0 ? files : [{ label: '无匹配', insert: '', directory: false }];
+      this.markPicks();
+      this.touch();
+    });
+  }
+
+  private acceptPick(): void {
+    const pick = this.picks?.[this.pickIndex];
+    const token = mentionAt(this.buffer.text, this.buffer.cursor);
+    if (!pick?.insert || !token) {
+      this.picks = null;
+      return;
+    }
+    const next = `${this.buffer.text.slice(0, token.start)}${pick.insert}${this.buffer.text.slice(this.buffer.cursor)}`;
+    this.buffer.text = next;
+    this.buffer.cursor = token.start + pick.insert.length;
+    if (pick.directory) this.refreshPicks();
+    else this.picks = null;
   }
 
   private showChats(): void {
@@ -165,7 +292,10 @@ export class AgentTui implements Component {
     this.chats = this.rows.map((chat, row) => ({ ...chat, selected: row === this.selected }));
     void this.loadChats().then((rows) => {
       this.rows = rows;
-      if (this.chats) this.markSelection();
+      if (!this.chats) return;
+      if (this.selected >= rows.length) this.selected = Math.max(0, rows.length - 1);
+      this.chats = rows.map((chat, row) => ({ ...chat, selected: row === this.selected }));
+      this.touch();
     });
   }
 
@@ -204,13 +334,17 @@ export class AgentTui implements Component {
       text: message.content ?? '',
     }));
     this.help = false;
+    this.children = [];
+    this.picks = null;
+    this.attachments = [];
     this.touch();
   }
 
   private async submit(): Promise<void> {
-    const text = this.draft.trim();
-    this.draft = '';
-    if (!text) return;
+    const text = this.buffer.text.trim();
+    clearDraft(this.buffer);
+    this.picks = null;
+    if (!text && this.attachments.length === 0) return;
     if (text.startsWith('/')) {
       await this.slash(text);
       return;
@@ -219,8 +353,9 @@ export class AgentTui implements Component {
       this.status = '只读 · 另一个进程正在运行';
       return;
     }
-    this.lines.push({ kind: 'user', text });
-    this.pending = this.runTurn(text);
+    const prepared = await this.prepareMessage(text);
+    this.lines.push({ kind: 'user', text: prepared.message });
+    this.pending = this.runTurn(prepared.message, prepared.images);
     await this.pending;
   }
 
@@ -229,6 +364,10 @@ export class AgentTui implements Component {
     if (command === 'help') {
       this.help = true;
       this.touch();
+      return;
+    }
+    if (command === 'attach') {
+      await this.attach(rest.join(' '));
       return;
     }
     if (command === 'clear') {
@@ -267,31 +406,108 @@ export class AgentTui implements Component {
     this.touch();
   }
 
-  private async runTurn(text: string): Promise<void> {
-    if (!this.chatId) {
-      const created = await this.client.request('POST', '/api/v2/chats/new', {});
-      this.chatId = (created.data as { chatId?: string }).chatId ?? 'draft';
-      this.title = this.chatId;
+  private async attach(target: string): Promise<void> {
+    if (this.readOnly) {
+      this.status = '只读 · 另一个进程正在运行';
       this.touch();
+      return;
     }
+    if (!target) {
+      this.status = this.attachments.length > 0
+        ? this.attachments.map((file) => file.name).join('  ')
+        : '用法 /attach <路径>';
+      this.touch();
+      return;
+    }
+    const full = path.resolve(this.cwd, target);
+    let fileStat;
+    try {
+      fileStat = await fs.stat(full);
+    } catch {
+      this.status = '找不到文件';
+      this.touch();
+      return;
+    }
+    if (!fileStat.isFile()) {
+      this.status = '不是文件';
+      this.touch();
+      return;
+    }
+    const name = path.basename(full);
+    this.attachments.push({ name, path: full });
+    this.status = `已附加 ${name}`;
+    this.touch();
+  }
+
+  private async prepareMessage(text: string): Promise<{ message: string; images: Array<{ path: string; name: string }> }> {
+    if (this.attachments.length === 0) return { message: text, images: [] };
+    await this.ensureChat();
+    const chatId = this.chatId ?? '';
+    const save = this.options.saveAttachments ?? defaultSaveAttachments;
+    const saved = await save(chatId, this.attachments);
+    const stored: SavedFile[] = [];
+    const kept: Array<{ name: string; path: string }> = [];
+    saved.forEach((file, index) => {
+      if (file.path && !file.error) stored.push(file);
+      else {
+        const original = this.attachments[index];
+        if (original) kept.push(original);
+      }
+    });
+    this.attachments = kept;
+    if (kept.length > 0) {
+      this.status = saved.filter((file) => file.error).map((file) => file.error).join(' ');
+    }
+    return {
+      message: attachmentMessage(text, stored),
+      images: stored.filter((file) => isImagePath(file.path)).map((file) => ({ path: file.path, name: file.name })),
+    };
+  }
+
+  private async ensureChat(): Promise<void> {
+    if (this.chatId) return;
+    const created = await this.client.request('POST', '/api/v2/chats/new', {});
+    this.chatId = (created.data as { chatId?: string }).chatId ?? 'draft';
+    this.title = this.chatId;
+  }
+
+  private async runTurn(text: string, images: Array<{ path: string; name: string }> = []): Promise<void> {
+    await this.ensureChat();
+    if (!this.chatId) return;
     const controller = new AbortController();
     this.turnAbort = controller;
+    this.children = [];
     this.status = '';
     try {
       for await (const event of this.client.stream(
         `/api/v2/chats/${encodeURIComponent(this.chatId)}/send`,
-        { message: text },
+        { message: text, ...(images.length > 0 ? { images } : {}) },
         controller.signal,
       )) {
         this.observe(event, controller.signal);
         this.touch();
       }
     } finally {
+      if (this.children.length > 0) {
+        for (const line of childLines(this.children)) this.lines.push({ kind: 'tree', text: line });
+        this.children = [];
+        this.touch();
+      }
       if (this.turnAbort === controller) this.turnAbort = null;
     }
   }
 
   private observe(event: SSEEvent, signal: AbortSignal): void {
+    if (String(event.type) === 'orchestration_child') {
+      this.children = applyChildEvent(this.children, {
+        kind: event.kind,
+        childId: event.childId,
+        task: event.task,
+        profile: event.profile,
+        depth: event.depth,
+      });
+      return;
+    }
     if (event.type === 'tool_call') {
       const payload = event.payload ?? {};
       const name = typeof payload.name === 'string' ? payload.name : 'tool';
@@ -343,6 +559,7 @@ export class AgentTui implements Component {
   }
 
   private touch(): void {
+    if (this.stopped) return;
     this.options.onChange?.();
   }
 
@@ -363,6 +580,18 @@ function approvalKind(data: string): ApprovalDecisionKind | null {
   if (keys.matches(data, 'agent.approval.denyAlways')) return 'deny_always';
   if (keys.matches(data, 'agent.approval.abort')) return 'abort';
   return null;
+}
+
+async function defaultSaveAttachments(
+  chatId: string,
+  files: Array<{ name: string; path: string }>,
+): Promise<SavedFile[]> {
+  const saved = await saveAttachmentFiles(chatId, files);
+  return saved.files.map((file) => ({
+    name: file.name,
+    path: file.path,
+    ...(file.error ? { error: file.error } : {}),
+  }));
 }
 
 function toolArgs(value: unknown): string {

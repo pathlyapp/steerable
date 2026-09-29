@@ -2,15 +2,25 @@ import {
   BoxRenderable,
   ScrollBoxRenderable,
   TextRenderable,
+  dim as dimText,
+  reverse,
+  t,
   type CliRenderer,
   type Renderable,
+  type StyledText,
 } from '@opentui/core';
 
+import { splitAtCursor } from './editor.js';
+import { childLines } from './children.js';
 import {
   approvalLines,
+  attachmentText,
   chatText,
+  composerRows,
+  draftHint,
   footerText,
   helpLines,
+  pickText,
   readOnlyText,
   toolText,
   type TranscriptLine,
@@ -36,11 +46,15 @@ export class OpenTuiView {
   private readonly body: ScrollBoxRenderable;
   private readonly readOnly: TextRenderable;
   private readonly overlay: BoxRenderable;
+  private readonly picks: BoxRenderable;
+  private readonly attached: TextRenderable;
+  private readonly composer: BoxRenderable;
   private readonly draft: TextRenderable;
   private readonly status: TextRenderable;
   private readonly footer: TextRenderable;
   private bodyKey = '';
   private overlayKey = '';
+  private picksKey = '';
 
   constructor(renderer: CliRenderer) {
     this.renderer = renderer;
@@ -89,15 +103,32 @@ export class OpenTuiView {
       visible: false,
     });
 
-    const input = new BoxRenderable(renderer, {
+    this.picks = new BoxRenderable(renderer, {
+      width: '100%',
+      border: true,
+      borderStyle: 'rounded',
+      borderColor: user,
+      backgroundColor: '#1a1b2e',
+      paddingLeft: 1,
+      paddingRight: 1,
+      visible: false,
+    });
+    this.attached = text(renderer, warn);
+    this.composer = new BoxRenderable(renderer, {
       width: '100%',
       height: 1,
+      flexShrink: 0,
       backgroundColor: bar,
       paddingLeft: 1,
       paddingRight: 1,
     });
-    this.draft = text(renderer, prompt);
-    input.add(this.draft);
+    this.draft = new TextRenderable(renderer, {
+      content: '',
+      fg: prompt,
+      width: '100%',
+      wrapMode: 'word',
+    });
+    this.composer.add(this.draft);
 
     this.status = text(renderer, warn);
     this.footer = text(renderer, dim);
@@ -114,7 +145,9 @@ export class OpenTuiView {
     shell.add(this.body);
     shell.add(this.readOnly);
     shell.add(this.overlay);
-    shell.add(input);
+    shell.add(this.picks);
+    shell.add(this.attached);
+    shell.add(this.composer);
     shell.add(this.status);
     shell.add(footerBar);
     renderer.root.add(shell);
@@ -124,11 +157,16 @@ export class OpenTuiView {
     this.heading.content = `${screen.product}  ${screen.title}`;
     this.model.content = screen.modelName;
     this.readOnly.visible = screen.readOnly;
-    this.draft.content = `> ${screen.draft}`;
+    this.draft.content = draftContent(screen.draft, screen.cursor);
+    this.composer.height = composerRows(screen.draft, Math.max(1, this.renderer.width - 2));
     this.status.content = screen.status;
     this.status.visible = screen.status.length > 0;
     this.footer.content = footerText();
+    const attached = attachmentText(screen.attachments ?? []);
+    this.attached.content = attached;
+    this.attached.visible = attached.length > 0;
     this.paintOverlay(screen);
+    this.paintPicks(screen);
 
     const key = bodyKey(screen);
     if (key === this.bodyKey) return;
@@ -153,6 +191,27 @@ export class OpenTuiView {
     this.overlay.height = lines.length === 0 ? 0 : lines.length + 2;
     if (lines.length === 0) return;
     this.overlay.add(new TextRenderable(this.renderer, {
+      content: lines.join('\n'),
+      fg: ink,
+      width: '100%',
+      height: lines.length,
+      wrapMode: 'none',
+    }));
+  }
+
+  private paintPicks(screen: TuiScreen): void {
+    const lines = (screen.picks ?? []).map(pickText);
+    const key = lines.join('\n');
+    if (key === this.picksKey) return;
+    this.picksKey = key;
+    for (const child of this.picks.getChildren()) {
+      this.picks.remove(child);
+      child.destroyRecursively();
+    }
+    this.picks.visible = lines.length > 0;
+    this.picks.height = lines.length === 0 ? 0 : lines.length + 2;
+    if (lines.length === 0) return;
+    this.picks.add(new TextRenderable(this.renderer, {
       content: lines.join('\n'),
       fg: ink,
       width: '100%',
@@ -186,7 +245,16 @@ export class OpenTuiView {
       return;
     }
     for (const line of screen.lines) this.body.add(transcriptRow(renderer, line));
+    for (const line of childLines(screen.children ?? [])) this.body.add(text(renderer, tool, line));
   }
+}
+
+function draftContent(draft: string, cursor: number): StyledText {
+  const { before, head, after } = splitAtCursor(draft, cursor);
+  const mark = reverse('▍');
+  if (draft.length === 0) return t`> ${mark} ${dimText(draftHint)}`;
+  if (head.length === 0) return t`> ${before}${mark}`;
+  return t`> ${before}${mark}${head}${after}`;
 }
 
 function bodyKey(screen: TuiScreen): string {
@@ -194,6 +262,7 @@ function bodyKey(screen: TuiScreen): string {
     help: screen.help,
     chats: screen.chats,
     lines: screen.lines,
+    children: screen.children ?? [],
   });
 }
 

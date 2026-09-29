@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { Writable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -5,8 +8,11 @@ import type { AgentClient } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import { getNativeClipboard } from '@earendil-works/pi-tui';
 import { createCli } from '../src/cli.js';
+import { applyChildEvent } from '../src/tui/children.js';
+import { createDraft, editDraft } from '../src/tui/editor.js';
+import { attachmentMessage, completeFiles, mentionAt } from '../src/tui/files.js';
 import { installAgentKeybindings } from '../src/tui/keys.js';
-import { renderScreen, visibleText } from '../src/tui/screen.js';
+import { composerRows, renderScreen, visibleText } from '../src/tui/screen.js';
 import { AgentTui } from '../src/tui/session.js';
 
 afterEach(() => {
@@ -29,6 +35,7 @@ describe('tui screen', () => {
       readOnly: false,
       help: false,
       draft: '',
+      cursor: 0,
       status: '',
     }, 72));
     expect(tool).toContain('Demo · Notes · demo-model');
@@ -45,6 +52,7 @@ describe('tui screen', () => {
       readOnly: false,
       help: false,
       draft: '',
+      cursor: 0,
       status: '',
     }, 72));
     expect(approval).toContain('审批 local_exec_shell rm -rf build');
@@ -70,6 +78,7 @@ describe('tui screen', () => {
       readOnly: true,
       help: false,
       draft: '',
+      cursor: 0,
       status: '',
     }, 72));
     expect(busy).toContain('chat-2  Build  只读');
@@ -196,6 +205,140 @@ describe('tui session', () => {
     await typeLine(session, 'hello');
     expect(visibleText(session.render(72))).not.toContain('user hello');
   });
+
+  it('paints each keystroke before enter', async () => {
+    const painted: string[] = [];
+    const session = new AgentTui(fakeClient(), {
+      product: 'Demo',
+      onExit() {},
+      onChange() {
+        painted.push(session.snapshot().draft);
+      },
+    });
+    await session.open();
+    painted.length = 0;
+    session.handleInput('你');
+    session.handleInput('好');
+    expect(session.snapshot()).toMatchObject({ draft: '你好', cursor: 2 });
+    expect(painted).toEqual(['你', '你好']);
+    const screen = visibleText(session.render(72));
+    expect(screen).toContain('你好');
+    expect(screen).not.toContain('user 你好');
+    session.handleInput('\x1b[D');
+    session.handleInput('!');
+    expect(session.snapshot().draft).toBe('你!好');
+    session.handleInput('\x1b[C');
+    session.handleInput('\n');
+    expect(session.snapshot().draft).toBe('你!好\n');
+    expect(composerRows(session.snapshot().draft, 40)).toBeGreaterThan(1);
+    session.handleInput('\x1b[200~粘贴\x1b[201~');
+    expect(session.snapshot().draft).toBe('你!好\n粘贴');
+  });
+});
+
+describe('composer', () => {
+  it('edits by grapheme and by word from the key table', () => {
+    const draft = createDraft();
+    editDraft(draft, '👍');
+    editDraft(draft, '\x7f');
+    expect(draft).toEqual({ text: '', cursor: 0 });
+    editDraft(draft, 'a');
+    editDraft(draft, 'b');
+    editDraft(draft, ' ');
+    editDraft(draft, 'c');
+    editDraft(draft, 'd');
+    editDraft(draft, '\x17');
+    expect(draft.text).toBe('ab ');
+    editDraft(draft, '\x1b[D');
+    editDraft(draft, '\x1b[D');
+    editDraft(draft, '\x1b[D');
+    editDraft(draft, 'x');
+    expect(draft).toEqual({ text: 'xab ', cursor: 1 });
+    editDraft(draft, '\x1b[A');
+    expect(draft.cursor).toBe(1);
+    editDraft(draft, '\n');
+    editDraft(draft, 'z');
+    editDraft(draft, '\x1b[A');
+    expect(draft.text).toBe('x\nzab ');
+    expect(draft.cursor).toBe(1);
+    editDraft(draft, '\x1b[B');
+    expect(draft.cursor).toBe(3);
+  });
+});
+
+describe('files and sub-agents', () => {
+  it('completes an @ path, attaches a file, and shows the child tree', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tui-files-'));
+    try {
+      await fs.mkdir(path.join(root, 'src'));
+      await fs.writeFile(path.join(root, 'src', 'notes.txt'), 'x');
+      await fs.writeFile(path.join(root, 'picture.png'), 'x');
+      expect((await completeFiles(root, '')).map((pick) => pick.label)).toEqual(['src/', 'picture.png']);
+      expect(mentionAt('@src/no', '@src/no'.length)).toEqual({ start: 0, query: 'src/no' });
+      expect(attachmentMessage('看这个', [{ path: '/stored/picture.png' }])).toContain('`/stored/picture.png`');
+      const folded = applyChildEvent([], {
+        kind: 'child_spawned',
+        childId: 'c1',
+        task: '查资料',
+        profile: 'researcher',
+        depth: 1,
+      });
+      expect(applyChildEvent(folded, { kind: 'child_completed', childId: 'c1' })[0]?.status).toBe('completed');
+
+      const bodies: unknown[] = [];
+      const session = new AgentTui(fakeClient({
+        request: async (method, requestPath) => {
+          if (method === 'POST' && requestPath === '/api/v2/chats/new') {
+            return { status: 200, data: { chatId: 'chat-1' } };
+          }
+          return { status: 200, data: { chats: [], model: 'demo-model' } };
+        },
+        stream: async function* (_requestPath, body) {
+          bodies.push(body);
+          yield {
+            type: 'orchestration_child',
+            kind: 'child_spawned',
+            childId: 'c1',
+            task: '查资料',
+            profile: 'researcher',
+            depth: 1,
+          } as SSEEvent;
+          yield { type: 'orchestration_child', kind: 'child_completed', childId: 'c1' } as SSEEvent;
+          yield { type: 'content', content: 'done' } as SSEEvent;
+        },
+      }), {
+        product: 'Demo',
+        cwd: root,
+        saveAttachments: async (_chatId, files) => files.map((file) => ({
+          name: file.name,
+          path: `/stored/${file.name}`,
+        })),
+        onExit() {},
+      });
+      await session.open();
+      session.handleInput('@');
+      await waitFor(() => visibleText(session.render(72)).includes('src/'));
+      session.handleInput('\t');
+      await waitFor(() => visibleText(session.render(72)).includes('notes.txt'));
+      session.handleInput('\t');
+      expect(session.snapshot().draft).toBe('@src/notes.txt ');
+
+      clearDraftFor(session);
+      await typeLine(session, '/attach picture.png');
+      await waitFor(() => visibleText(session.render(72)).includes('已附加 picture.png'));
+      await typeLine(session, '看这个');
+      await waitFor(() => visibleText(session.render(72)).includes('done'));
+      const screen = visibleText(session.render(72));
+      expect(screen).toContain('researcher');
+      expect(screen).toContain('子任务 1/1');
+      expect(screen).toContain('完成');
+      const body = bodies[0] as { message?: string; images?: Array<{ path: string }> };
+      expect(body.message).toContain('/stored/picture.png');
+      expect(body.images?.[0]?.path).toBe('/stored/picture.png');
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('tui command', () => {
@@ -228,6 +371,11 @@ function fakeClient(overrides: Partial<AgentClient> = {}): AgentClient {
     close: async () => {},
     ...overrides,
   };
+}
+
+function clearDraftFor(session: AgentTui): void {
+  const draft = session.snapshot().draft;
+  for (let index = 0; index < [...draft].length; index += 1) session.handleInput('\x7f');
 }
 
 async function typeLine(session: AgentTui, text: string): Promise<void> {

@@ -52,6 +52,7 @@ export function keyLabel(id: Keybinding): string {
 
 function formatKey(key: string): string {
   if (key === 'escape') return 'Esc';
+  if (key === 'enter') return 'Enter';
   if (/^shift\+[a-z]$/.test(key)) return key.slice('shift+'.length).toUpperCase();
   if (!key.includes('+')) return key;
   return key.split('+').map((part) => {
