@@ -69,7 +69,6 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Comparison: comparison.md
-  - Roadmap: roadmap.md
   - Evals: evals.md
   - Spec:
       - Overview: spec/overview.md
@@ -84,7 +83,8 @@ nav:
       - CoreLoop: spec/core-loop.md
       - Engine compatibility: spec/engine-compatibility.md
       - Compaction: spec/compaction.md
-  - UI Components: ui/index.md
+  - UI:
+      - Components: ui/index.md
 
 plugins:
   - search

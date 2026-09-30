@@ -1,7 +1,6 @@
 """Typed append-only history — the model-visible record and its projection.
 
-Wave 1 foundation (docs/roadmap.md "Wave 1 — the foundation"): the
-model-visible transcript becomes a *projection* of a typed, append-only
+The model-visible transcript is a *projection* of a typed, append-only
 record instead of a mutable ``list[LLMMessage]`` that hooks rewrite in
 place.
 

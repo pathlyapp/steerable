@@ -19,7 +19,7 @@ caps.
   finds them through the ``tool_search`` seam instead of paying for every
   schema in every request. Hosts pin favorites with ``exposure="direct"``.
 
-Architecture (recorded in docs/roadmap.md): in the desktop product, MCP
+In the desktop product, MCP
 servers are launched host-side (Electron main) and reached through
 `ToolRouter.register_remote` — a Seatbelt-confined sidecar never spawns
 them. `McpStdioClient` and `McpStreamableHttpClient` exist for hosts that

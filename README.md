@@ -58,7 +58,7 @@ Every agent SDK assumes the model emits clean, structured `tool_calls`. Local, q
 
 | The problem you've already solved twice | Steerable's answer |
 |---|---|
-| **"The model emitted a tool call as prose. Again."** Local, quantized, and cheap models break the assumptions every SDK makes about structured `tool_calls`. | The **model-quality layer** — the part no vendor SDK will build for you. `pseudo.py` recovers *and executes* malformed calls in three formats (MiniMax XML, DeepSeek `<function=>`, markdown); a `before_completion` veto answers `accept`/`retry`/`narrate` on a completion draft; grounding judges catch fabricated data; token estimates self-calibrate against observed usage. See the [roadmap](https://steerableframework.com/roadmap/#the-differentiator-the-model-quality-layer). |
+| **"The model emitted a tool call as prose. Again."** Local, quantized, and cheap models break the assumptions every SDK makes about structured `tool_calls`. | The **model-quality layer** — the part no vendor SDK will build for you. `pseudo.py` recovers *and executes* malformed calls in three formats (MiniMax XML, DeepSeek `<function=>`, markdown); a `before_completion` veto answers `accept`/`retry`/`narrate` on a completion draft; grounding judges catch fabricated data; token estimates self-calibrate against observed usage. |
 | **"What shape is this SSE stream?"** Every team invents their own envelope; FE and BE drift. | One JSON Schema → generated **TypeScript types + Pydantic models**, in lockstep release. `content`, `tool_call`, `tool_result`, `error`, `done`, `budget_exhausted` all standardised; conformance test suite verifies the two language SDKs stay byte-compatible. |
 | **Tool dispatch / budgets / retries / safety regex** | `agent-harness` (Py): `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, `is_terminal_result`, command-safety patterns. **Pure functions, zero I/O coupling** — drop into FastAPI / Celery / a notebook. 49 unit + golden tests. |
 | **LLM provider abstraction** | `agent-runtime` (Py): one `LLMProvider` interface across **four wire protocols** — OpenAI-compatible chat/completions (Ollama, vLLM, DeepSeek, Groq, …), OpenAI Responses, Anthropic-native, Gemini-native — with a live gateway model catalog, per-vendor sampling presets, `@tool` decorator, `ToolRouter`, SSE-over-HTTP and stdio JSON-RPC transports. |
@@ -341,12 +341,10 @@ If you're using Steerable in production, send a PR adding your project here.
 | **0.x consolidation** | 🟢 in progress | Stable surface API, integration tests against downstream repos, downstream lockfile bumps semi-automated |
 | **0.3+ Trusted Publishing** | ✅ done | npm `--provenance` (sigstore) + PyPI Trusted Publishing over OIDC; cross-platform sidecar build/sign matrix in GHA |
 | **0.4+ Sidecar slimming** | ✅ done | `install_only_stripped` distro landed; darwin-arm64 bundle 94.7 MB (was ~700 MB class), CI budgets back at the 320 MB design target |
-| **0.5–0.6 Architecture-review waves 0–4** | ✅ done | Append-only model-visible history, world-state diffing with `cache_control` emission, tool exposure tiers + `tool_search`, MCP client, approval algebra, per-exec sandbox, AG-UI/ACP peer transports, plugin lifecycle, gateway model catalog — details in the [roadmap](https://steerableframework.com/roadmap/) |
+| **0.5–0.6 Architecture-review waves 0–4** | ✅ done | Append-only model-visible history, world-state diffing with `cache_control` emission, tool exposure tiers + `tool_search`, MCP client, approval algebra, per-exec sandbox, AG-UI/ACP peer transports, plugin lifecycle, gateway model catalog |
 | **1.0** | ⚪ gated on | One full minor cycle without breaking changes; spec freeze (`additionalProperties` semantics locked); shared `1.0.0` decision for protocol+harness pair |
 
-Where the architecture is headed, what's genuinely missing, and what's explicitly out of scope: **[Architecture Review & Roadmap](https://steerableframework.com/roadmap/)** — a gap scorecard against Codex and DeepSeek Harness, with the honest negatives.
-
-Public follow-up themes live in [`docs/roadmap.md`](./docs/roadmap.md). Pre-1.0 contract: minor (`0.X`) is the breaking-change axis.
+Pre-1.0 contract: minor (`0.X`) is the breaking-change axis.
 
 ---
 

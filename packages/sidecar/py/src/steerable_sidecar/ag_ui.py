@@ -2,8 +2,8 @@
 
 The sidecar's bespoke ``stream.chunk`` notifications stay for DeepPath
 byte-compatibility; this renderer is the peer that proves the loop's event
-taxonomy is transport-neutral (the roadmap's protocol-positioning call:
-transports render wire formats; the taxonomy does not bend to them).
+taxonomy is transport-neutral: transports render wire formats, and the
+taxonomy does not bend to them.
 
 Mapping (LoopEventKind → AG-UI):
 

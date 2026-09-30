@@ -1,6 +1,6 @@
 """Content parts — the structured form of ``LLMMessage.content``.
 
-Wave 1 (docs/roadmap.md "Wave 1 — the foundation"): message content is a
+Message content is a
 list of typed parts instead of a bare string, unblocking multimodal input,
 structured output, and (Wave 2) per-block cache annotations.
 
