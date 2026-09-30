@@ -38,6 +38,7 @@ from steerable_agent_harness.policy import ToolMode, decide_tool_mode
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
 from .errors import ApprovalAborted
+from .sandboxed import DEFAULT_SHELL_TOOLS
 
 if TYPE_CHECKING:
     from .loop import LoopContext, ToolExecutor
@@ -142,9 +143,9 @@ _PATH_ARG_TOOLS = {
 def declared_target_paths(request: ApprovalRequest) -> list[str] | None:
     """Filesystem targets of a path-scoped tool, or None when the call is not one.
 
-    ``None`` means the approver cannot prove the call stays inside the
-    project, so the interactive prompt still runs. Shell commands stay in
-    that bucket: the command text can name paths the cwd does not.
+    ``None`` means this approver cannot prove the call from its path
+    arguments. Shell commands are judged separately, from the sandbox and
+    the working directory, not from the command text.
     """
     if request.tool_name == "present_files":
         files = request.arguments.get("files")
@@ -192,18 +193,46 @@ def path_inside_writable_roots(raw: str, roots: list[str]) -> bool:
     return False
 
 
-class WorkspaceAutoApprover:
-    """Skip the host prompt when every declared path is already inside a writable root.
+def shell_stays_in_workspace(request: ApprovalRequest, roots: list[str]) -> bool:
+    """True when a shell call's working directory is inside a writable root.
 
-    The allow is request-scoped. The next call is judged again, so an
-    in-project ``present_files`` does not grant the same tool outside the
-    project. Calls with no path we can check, or any path outside the roots,
-    fall through to the inner approver.
+    The command text is not parsed. Confinement is the OS sandbox's job:
+    writes outside the roots fail there. An omitted cwd uses the host's
+    project directory. An explicit cwd outside the roots, or one that
+    climbs out with ``..``, still needs a prompt.
+    """
+    if request.tool_name not in DEFAULT_SHELL_TOOLS or not roots:
+        return False
+    cwd = request.arguments.get("cwd")
+    if cwd is None:
+        return True
+    if not isinstance(cwd, str) or not cwd.strip():
+        return True
+    return path_inside_writable_roots(cwd, roots)
+
+
+class WorkspaceAutoApprover:
+    """Skip the host prompt for work the workspace sandbox already confines.
+
+    Path-scoped tools (``local_write_file``, ``local_edit_file``, reads,
+    ``present_files``) skip when every declared path is inside a writable
+    root. Shell tools skip only when the OS exec sandbox is on and the
+    working directory is inside those roots — the same split Codex uses
+    between ``workspace-write`` and ``on-request``. The allow is
+    request-scoped. The next call is judged again. Anything else falls
+    through to the inner approver.
     """
 
-    def __init__(self, inner: Approver, writable_roots: list[str]) -> None:
+    def __init__(
+        self,
+        inner: Approver,
+        writable_roots: list[str],
+        *,
+        sandbox_enforced: bool = False,
+    ) -> None:
         self._inner = inner
         self._roots = [root for root in writable_roots if isinstance(root, str) and root.strip()]
+        self._sandbox_enforced = sandbox_enforced
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
         paths = declared_target_paths(request)
@@ -213,6 +242,8 @@ class WorkspaceAutoApprover:
             and all(path_inside_writable_roots(path, self._roots) for path in paths)
         ):
             return ApprovalDecision("allow_once", "path is inside a writable project root")
+        if self._sandbox_enforced and shell_stays_in_workspace(request, self._roots):
+            return ApprovalDecision("allow_once", "command stays inside the workspace sandbox")
         return await self._inner.approve(request)
 
 

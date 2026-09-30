@@ -1894,10 +1894,11 @@ class Sidecar:
             # In-project file targets do not ask. Roots come from the host's
             # project fence (still sent when 「完整权限」 turns the OS sandbox
             # off). The exec sandbox list is the fallback for callers that
-            # only set that. The prompt stays for paths outside those roots
-            # and for tools whose paths we cannot see (shell). allow_once is
-            # not cached, so the next call is judged on its own paths. Sits
-            # under policy rules so an explicit deny still wins.
+            # only set that. Shell calls skip the prompt only while that
+            # sandbox is actually on and the cwd stays in the roots; with
+            # the sandbox off, or a cwd outside the roots, the prompt stays.
+            # allow_once is not cached, so the next call is judged on its
+            # own paths. Sits under policy rules so an explicit deny still wins.
             raw_roots = approval.get("writableRoots")
             if (
                 not raw_roots
@@ -1921,7 +1922,13 @@ class Sidecar:
                     return host
                 from steerable_agent_runtime.approval import WorkspaceAutoApprover
 
-                return WorkspaceAutoApprover(host, writable_roots)
+                return WorkspaceAutoApprover(
+                    host,
+                    writable_roots,
+                    sandbox_enforced=bool(
+                        isinstance(exec_sandbox, dict) and exec_sandbox.get("enabled")
+                    ),
+                )
 
             if policy_path:
                 from steerable_agent_runtime import (

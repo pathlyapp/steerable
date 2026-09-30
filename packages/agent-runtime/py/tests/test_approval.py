@@ -569,3 +569,56 @@ async def test_workspace_auto_approver_does_not_cache_the_tool_name(tmp_path) ->
     assert inside.kind == "allow_once"
     assert outside.kind == "deny_once"
     assert len(inner.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_auto_approver_allows_sandboxed_shell_inside_writable_roots(tmp_path) -> None:
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover
+
+    project = tmp_path / "111-2"
+    project.mkdir()
+    source = tmp_path / "sources"
+    source.mkdir()
+    inner = _ScriptedApprover([ApprovalDecision("deny_once", "should not ask")])
+    approver = WorkspaceAutoApprover(inner, [str(project), str(source)], sandbox_enforced=True)
+
+    omitted = await approver.approve(_request("local_exec_shell", {"command": "mkdir notes"}))
+    nested = await approver.approve(
+        _request("local_exec_shell", {"command": "touch a.md", "cwd": str(project / "notes")})
+    )
+    linked = await approver.approve(
+        _request("bash", {"command": "ls", "cwd": str(source / "raw")})
+    )
+    relative = await approver.approve(
+        _request("shell", {"command": "pwd", "cwd": "subdir"})
+    )
+
+    assert omitted.kind == "allow_once"
+    assert nested.kind == "allow_once"
+    assert linked.kind == "allow_once"
+    assert relative.kind == "allow_once"
+    assert inner.requests == []
+
+
+@pytest.mark.asyncio
+async def test_workspace_auto_approver_asks_for_shell_that_leaves_the_sandbox(tmp_path) -> None:
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover
+
+    project = tmp_path / "111-2"
+    project.mkdir()
+    inner = _ScriptedApprover([ApprovalDecision("allow_once", "user allowed")] * 3)
+    confined = WorkspaceAutoApprover(inner, [str(project)], sandbox_enforced=True)
+    open_sandbox = WorkspaceAutoApprover(inner, [str(project)], sandbox_enforced=False)
+
+    outside = await confined.approve(
+        _request("local_exec_shell", {"command": "ls", "cwd": str(tmp_path / "other")})
+    )
+    climbed = await confined.approve(
+        _request("local_exec_shell", {"command": "ls", "cwd": "../outside"})
+    )
+    unsandboxed = await open_sandbox.approve(
+        _request("local_exec_shell", {"command": "ls", "cwd": str(project)})
+    )
+
+    assert [item.kind for item in (outside, climbed, unsandboxed)] == ["allow_once"] * 3
+    assert [item.tool_name for item in inner.requests] == ["local_exec_shell"] * 3

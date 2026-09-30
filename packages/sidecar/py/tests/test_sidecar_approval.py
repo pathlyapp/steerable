@@ -330,6 +330,81 @@ async def test_host_mode_skips_in_project_files_when_exec_sandbox_is_off(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_host_mode_skips_prompt_for_sandboxed_shell_inside_writable_roots(tmp_path) -> None:
+    project = tmp_path / "111-2"
+    (project / "notes").mkdir(parents=True)
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="c1",
+                    name="local_exec_shell",
+                    arguments={"command": "touch a.md", "cwd": str(project / "notes")},
+                )
+            ),
+            _text_round("wrote"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"local_exec_shell": {"success": True, "data": {"stdout": ""}}},
+        approvals={"kind": "deny_once", "reason": "should not ask"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host", "writableRoots": [str(project)]},
+            execSandbox={"enabled": True, "writableRoots": [str(project)], "requireBackend": False},
+        ),
+    )
+
+    assert host.approval_requests == []
+    assert [c["name"] for c in host.reverse_calls] == ["local_exec_shell"]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_still_asks_for_shell_when_exec_sandbox_is_off(tmp_path) -> None:
+    project = tmp_path / "111-2"
+    project.mkdir()
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="c1",
+                    name="local_exec_shell",
+                    arguments={"command": "ls", "cwd": str(project)},
+                )
+            ),
+            _text_round("ran"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"local_exec_shell": {"success": True, "data": {"stdout": ""}}},
+        approvals={"kind": "allow_once"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host", "writableRoots": [str(project)]},
+            execSandbox={"enabled": False, "writableRoots": []},
+        ),
+    )
+
+    assert len(host.approval_requests) == 1
+    assert host.approval_requests[0]["toolName"] == "local_exec_shell"
+    assert [c["name"] for c in host.reverse_calls] == ["local_exec_shell"]
+
+
+@pytest.mark.asyncio
 async def test_host_mode_denial_skips_execution() -> None:
     provider = _ScriptedProvider(
         [
