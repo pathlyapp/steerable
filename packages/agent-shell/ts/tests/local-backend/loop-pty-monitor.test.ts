@@ -71,9 +71,13 @@ describe('LoopPtyMonitor', () => {
     await vi.waitFor(() => expect(wake).toHaveBeenCalledOnce());
     expect(wake).toHaveBeenCalledWith('chat-1', {
       trigger: 'loop',
-      message: 'check build',
+      message: expect.stringContaining(`Loop ID: ${loop.id}`),
       sourceId: loop.id,
     });
+    const message = wake.mock.calls[0]?.[1].message ?? '';
+    expect(message).toContain('<loop-task>\ncheck build\n</loop-task>');
+    expect(message).toContain('call loop_stop');
+    expect(message).toContain('open-ended recurring work');
   });
 
   it('ignores markers from other terminals and retries naturally after busy', async () => {

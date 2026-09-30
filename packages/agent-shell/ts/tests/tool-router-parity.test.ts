@@ -59,7 +59,7 @@ describe('host parity tools', () => {
     };
     const monitor = {
       start: vi.fn(() => loop),
-      list: vi.fn(() => [loop]),
+      list: vi.fn((chatId?: string) => chatId === undefined || chatId === loop.chatId ? [loop] : []),
       stop: vi.fn(() => true),
     };
     router.setLoopMonitor(monitor);
@@ -84,6 +84,11 @@ describe('host parity tools', () => {
       { name: 'loop_stop', arguments: { id: 'loop-1' } },
       { chatId: 'chat-1' },
     )).toEqual({ success: true });
+    expect(await router.execute(
+      { name: 'loop_stop', arguments: { id: 'loop-1' } },
+      { chatId: 'chat-2' },
+    )).toEqual({ success: false, error: 'loop not found', needsFollowup: true });
+    expect(monitor.stop).toHaveBeenCalledOnce();
   });
 
   it('grep stays inside the project and goal updates check the revision', async () => {

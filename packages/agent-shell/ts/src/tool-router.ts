@@ -980,15 +980,17 @@ export class ToolRouter {
       {
         name: 'loop_create',
         description:
-          'Arm a recurring local loop for this chat after running the requested work once in the current turn. '
-          + 'Each interval wakes this same chat with prompt until loop_stop is called or the host exits.',
+          'Start recurring local work for this chat after running it once in the current turn. '
+          + 'Each interval wakes this chat until the loop is stopped or the host exits.',
         mode: 'safe_write',
         inputSchema: {
           type: 'object',
           properties: {
             prompt: {
               type: 'string',
-              description: 'Self-contained work to run on every wake.',
+              description:
+                'Self-contained work to run on every wake. Include the terminal condition for finite monitoring; '
+                + 'omit a terminal condition for open-ended recurring work.',
             },
             intervalSeconds: {
               type: 'integer',

@@ -89,9 +89,10 @@ wakeChat(chatId: string, input: { trigger: 'goal' | 'loop'; message: string; sou
 与 Cursor 本地 `/loop` 相同，loop 不建立持久化数据模型：
 
 1. `loop_create` 用 `TerminalManager.spawn()` 创建独立后台 PTY，并写入 `sleep → 输出标记行` 的循环脚本；不占用可见主终端。
-2. 宿主监听该 PTY 的 `data` 事件。收到完整的 `__STEERABLE_LOOP_WAKE__:<loopId>` 标记行时，从内存注册表取回 prompt，并调用 `wakeChat(..., { trigger: 'loop' })`。
+2. 宿主监听该 PTY 的 `data` 事件。收到完整的 `__STEERABLE_LOOP_WAKE__:<loopId>` 标记行时，从内存注册表取回 prompt，构造包含 loop id、原始任务与停止规则的内部提示，并调用 `wakeChat(..., { trigger: 'loop' })`。
 3. 会话忙时忽略本次标记；shell 下一次输出会自然重试，不另建调度队列。
-4. `loop_stop` 终止对应 PTY；PTY 退出时从内存注册表删除。宿主退出时 `TerminalManager.killAll()` 会停止所有 loop。
+4. 有限监控在每次唤醒时根据当前证据判断终态；成功、失败、取消或用户指定的其他终态确认后，模型调用 `loop_stop`，终止对应 PTY 并报告最终结果。证据不足时保留 loop。
+5. 没有终止条件的长期周期任务不会自动停止。用户调用 `loop_stop`、PTY 退出或宿主退出时停止；宿主退出时 `TerminalManager.killAll()` 会终止所有 loop。
 
 注册表只保存 `{ loopId, chatId, terminalSessionId, prompt, intervalMs }`，不写 SQLite。工具为 `loop_create`、`loop_list`、`loop_stop`；Web/TUI 展示的也是这份受监控进程状态。
 
@@ -119,7 +120,7 @@ wakeChat(chatId: string, input: { trigger: 'goal' | 'loop'; message: string; sou
 保留 `10-goal` 与 `11-loop`，把它们改成与 Cursor 相同的薄编排层：
 
 - `/goal` 解析目标、重述验收范围、恰好调用一次 `create_goal`，然后本回合立即开始第一项实际工作；不自行创建状态文件或用 `todo_write` 代替 goal。
-- `/loop` 解析间隔与 prompt，调用 `loop_create`；不在当前回合里 `sleep`，不把整个循环塞进 `task_run`。
+- `/loop` 解析间隔与 prompt，先立即执行一次。有限监控若已到终态则不创建 loop；否则把检查方法与终止条件写入自包含 prompt 后调用 `loop_create`。长期周期任务不虚构终止条件；两类任务都不在当前回合里 `sleep`，不把整个循环塞进 `task_run`。
 - skill 只说明模型如何使用能力；即使不通过 slash，原生工具、状态机与 UI 管理入口仍然完整可用。
 
 ## 实施顺序

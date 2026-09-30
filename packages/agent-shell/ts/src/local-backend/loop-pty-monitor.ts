@@ -56,7 +56,7 @@ export class LoopPtyMonitor {
       if (!loop) continue;
       void this.wakeChat(loop.chatId, {
         trigger: 'loop',
-        message: loop.prompt,
+        message: buildLoopWakePrompt(loop),
         sourceId: loop.id,
       }).catch((error: unknown) => {
         console.warn('[loop-monitor] chat wake failed', {
@@ -153,6 +153,20 @@ export class LoopPtyMonitor {
     this.buffers.delete(loop.terminalSessionId);
     this.onChange?.(loop.chatId, this.list(loop.chatId));
   }
+}
+
+function buildLoopWakePrompt(loop: MonitoredLoop): string {
+  return `This is a scheduled loop wake.
+Loop ID: ${loop.id}
+Use current workspace and external state to perform this task:
+
+<loop-task>
+${loop.prompt}
+</loop-task>
+
+If the task describes finite monitoring, verify its terminal condition from current evidence. Success, failure, cancellation, or another explicitly requested terminal state ends that monitoring. When it is terminal, call loop_stop with id "${loop.id}" exactly once, then report the final outcome. If it is not terminal, report the current state and leave the loop running for its next wake.
+
+Do not stop open-ended recurring work unless the task itself says when it ends. Do not create a replacement loop.`;
 }
 
 function loopScript(shell: string, id: string, intervalSeconds: number): string {

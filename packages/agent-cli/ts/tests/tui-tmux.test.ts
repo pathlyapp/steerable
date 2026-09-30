@@ -27,6 +27,14 @@ describe('tui tmux smoke', () => {
       expect(waitFor('listed')).toContain('listed');
       send('/goal ship demo', 'Enter');
       expect(waitFor('goal wake completed')).toContain('目标续跑');
+      send('/loop 1s monitor demo until complete', 'Enter');
+      expect(waitFor('loop monitoring pending')).toContain('Loop 触发');
+      const completedLoop = waitFor('loop reached terminal state');
+      expect(completedLoop).not.toContain('Loop · 1 个运行中');
+      send('/loop 1s recurring demo', 'Enter');
+      expect(waitFor('Loop · 1 个运行中')).toContain('loop armed loop-recurring');
+      send('/loop stop loop-recurring', 'Enter');
+      expect(waitFor('Loop 已停止')).not.toContain('Loop · 1 个运行中');
       send('hang', 'Enter');
       expect(waitFor('running')).toContain('running');
       send('C-c');
@@ -38,7 +46,7 @@ describe('tui tmux smoke', () => {
     } finally {
       spawnSync('tmux', ['kill-session', '-t', session], { encoding: 'utf8' });
     }
-  }, 15_000);
+  }, 20_000);
 });
 
 function send(...keys: string[]): void {
