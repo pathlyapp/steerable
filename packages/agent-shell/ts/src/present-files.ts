@@ -10,6 +10,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import type { ArtifactPurpose } from './local-backend/turn-file-selection.js';
 
 export const PRESENT_FILES_TOOL_NAME = 'present_files';
 
@@ -23,8 +24,9 @@ export const PRESENT_FILES_SCHEMA = {
     'When a file you created or updated is an output the user asked to receive ' +
     '(spreadsheet, slide deck, document, report, image, exported archive), call this after writing it ' +
     'and before your final reply, including files produced by scripts or commands. ' +
-    'Do not present helper scripts, scratch files, render previews made only to check your work, ' +
-    'or intermediate exports. Files you write but do not present are still listed to the user as edited files.',
+    'Set purpose="output" for every independent deliverable. If you include a preview or intermediate ' +
+    'file for context, label it purpose="preview" or purpose="intermediate"; those files stay in the ' +
+    'edited-files list. Do not label helper scripts or layout-check screenshots as outputs.',
   mode: 'read' as const,
   inputSchema: {
     type: 'object',
@@ -45,6 +47,12 @@ export const PRESENT_FILES_SCHEMA = {
               type: 'string',
               description: 'Optional one-line summary shown on the file card.',
             },
+            purpose: {
+              type: 'string',
+              enum: ['output', 'preview', 'intermediate'],
+              description:
+                'Use output for an independent final deliverable; preview/intermediate never creates a deliverable card.',
+            },
           },
           required: ['path'],
           additionalProperties: false,
@@ -59,6 +67,7 @@ export const PRESENT_FILES_SCHEMA = {
 export interface PresentedFile {
   path: string;
   description?: string;
+  purpose?: ArtifactPurpose;
 }
 
 /**
@@ -98,7 +107,17 @@ export function readPresentedArgs(
     if (!resolved) continue;
     const description =
       typeof record.description === 'string' ? record.description.trim() : '';
-    out.push({ path: resolved, ...(description ? { description } : {}) });
+    const purpose =
+      record.purpose === 'output' ||
+      record.purpose === 'preview' ||
+      record.purpose === 'intermediate'
+        ? record.purpose
+        : undefined;
+    out.push({
+      path: resolved,
+      ...(description ? { description } : {}),
+      ...(purpose ? { purpose } : {}),
+    });
   }
   return out;
 }

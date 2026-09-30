@@ -1236,6 +1236,8 @@ describe('回合产物文件列表', () => {
           kind: expect.stringMatching(/^(created|modified)$/),
           size: 9,
           category: 'deliverable',
+          selection: 'resolved',
+          deliverySource: 'inference',
         },
       ]);
 

@@ -62,6 +62,28 @@ describe('parseTurnFiles', () => {
       },
     ]);
   });
+
+  it('保留后端已经解析的选择状态与证据来源', () => {
+    expect(
+      parseTurnFiles([
+        {
+          path: '/proj/报告.pdf',
+          kind: 'created',
+          category: 'deliverable',
+          selection: 'resolved',
+          deliverySource: 'final-reference',
+        },
+      ]),
+    ).toEqual([
+      {
+        path: '/proj/报告.pdf',
+        kind: 'created',
+        category: 'deliverable',
+        selection: 'resolved',
+        deliverySource: 'final-reference',
+      },
+    ]);
+  });
 });
 
 describe('splitTurnFilePath', () => {
@@ -174,5 +196,64 @@ describe('groupTurnFiles', () => {
     expect(intermediates).toHaveLength(3);
     expect(totalAdditions).toBe(205);
     expect(totalDeletions).toBe(0);
+  });
+
+  it('同名预览 PDF 不和幻灯片一起占卡片；只标了预览时改升幻灯片', () => {
+    const deck = '/work/4432-自我介绍.pptx';
+    const preview = '/work/4432-自我介绍-预览.pdf';
+    const both = groupTurnFiles([
+      { path: deck, kind: 'created', category: 'deliverable', description: '10 页可编辑自我介绍' },
+      {
+        path: preview,
+        kind: 'created',
+        category: 'deliverable',
+        description: '图像版预览 PDF，用于快速查看与分享',
+      },
+    ]);
+    expect(both.deliverables.map((f) => f.path)).toEqual([deck]);
+    expect(both.intermediates.map((f) => f.path)).toEqual([preview]);
+
+    const previewOnly = groupTurnFiles([
+      { path: preview, kind: 'created', category: 'deliverable' },
+      { path: deck, kind: 'created', category: 'intermediate' },
+    ]);
+    expect(previewOnly.deliverables.map((f) => f.path)).toEqual([deck]);
+    expect(previewOnly.intermediates.map((f) => f.path)).toEqual([preview]);
+  });
+
+  it('后端已解析时保留结构化声明的两个同名 output', () => {
+    const deck = '/work/介绍.pptx';
+    const pdf = '/work/介绍.pdf';
+    const grouped = groupTurnFiles([
+      {
+        path: deck,
+        kind: 'created',
+        category: 'deliverable',
+        selection: 'resolved',
+        deliverySource: 'generation',
+      },
+      {
+        path: pdf,
+        kind: 'created',
+        category: 'deliverable',
+        selection: 'resolved',
+        deliverySource: 'generation',
+      },
+    ]);
+
+    expect(grouped.deliverables.map((file) => file.path)).toEqual([deck, pdf]);
+    expect(grouped.intermediates).toEqual([]);
+  });
+
+  it('旧历史记录也折叠预览子目录里的同名 PDF', () => {
+    const deck = '/work/王泰-自我介绍-v4.pptx';
+    const preview = '/work/preview4/王泰-自我介绍-v4-预览.pdf';
+    const grouped = groupTurnFiles([
+      { path: preview, kind: 'created', category: 'deliverable' },
+      { path: deck, kind: 'created', category: 'deliverable' },
+    ]);
+
+    expect(grouped.deliverables.map((file) => file.path)).toEqual([deck]);
+    expect(grouped.intermediates.map((file) => file.path)).toEqual([preview]);
   });
 });

@@ -67,7 +67,13 @@ describe('collectTurnFiles 工作区扫描', () => {
     const files = await collectTurnFiles({ roots: [root], sinceMs });
 
     expect(files).toEqual([
-      { path: existing, kind: 'modified', size: 7, category: 'intermediate' },
+      {
+        path: existing,
+        kind: 'modified',
+        size: 7,
+        category: 'intermediate',
+        selection: 'resolved',
+      },
     ]);
   });
 
@@ -448,6 +454,285 @@ describe('collectTurnFiles 命令文本路径字面量', () => {
     expect(isIgnoredFileName('公司介绍.pptx')).toBe(false);
   });
 
+  it('预览 PDF 和幻灯片都点名时只留可编辑文件；只点名预览时改升幻灯片', async () => {
+    const sinceMs = turnStart();
+    const deck = path.join(root, '4432-自我介绍.pptx');
+    const preview = path.join(root, '4432-自我介绍-预览.pdf');
+    const shot = path.join(root, '_预览_大事记页.png');
+    await fs.writeFile(deck, 'ppt');
+    await fs.writeFile(preview, 'pdf');
+    await fs.writeFile(shot, 'png');
+
+    const both = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      projectRoot: root,
+      actions: [
+        {
+          tool: 'present_files',
+          arguments: {
+            files: [
+              { path: deck, description: '10 页可编辑自我介绍' },
+              { path: preview, description: '图像版预览 PDF，用于快速查看与分享' },
+            ],
+          },
+          success: true,
+        },
+      ],
+    });
+    expect(
+      Object.fromEntries(
+        both.map((f) => [path.basename(f.path), { category: f.category, description: f.description ?? null }]),
+      ),
+    ).toEqual({
+      '4432-自我介绍-预览.pdf': { category: 'intermediate', description: null },
+      '4432-自我介绍.pptx': { category: 'deliverable', description: '10 页可编辑自我介绍' },
+      '_预览_大事记页.png': { category: 'intermediate', description: null },
+    });
+
+    const previewOnly = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      projectRoot: root,
+      actions: [
+        {
+          tool: 'present_files',
+          arguments: { files: [{ path: preview, description: '图像版预览' }] },
+          success: true,
+        },
+      ],
+    });
+    expect(previewOnly.find((f) => f.path === deck)?.category).toBe('deliverable');
+    expect(previewOnly.find((f) => f.path === preview)?.category).toBe('intermediate');
+  });
+
+  it('生成流程的结构化 purpose 高于最终引用和文件名启发式', async () => {
+    const sinceMs = turnStart();
+    const deck = path.join(root, '介绍.pptx');
+    const preview = path.join(root, '介绍-预览.pdf');
+    await fs.writeFile(deck, 'deck');
+    await fs.writeFile(preview, 'preview');
+
+    const files = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      finalText: `[下载幻灯片](<${deck}>) [下载预览](<${preview}>)`,
+      actions: [
+        {
+          tool: 'artifact_generator',
+          result: {
+            artifacts: [
+              {
+                path: deck,
+                purpose: 'output',
+                description: '可编辑幻灯片',
+              },
+              { path: preview, purpose: 'preview' },
+            ],
+          },
+          success: true,
+        },
+      ],
+    });
+
+    expect(
+      files.map((file) => ({
+        name: path.basename(file.path),
+        category: file.category,
+        source: file.deliverySource ?? null,
+        description: file.description ?? null,
+      })),
+    ).toEqual([
+      {
+        name: '介绍-预览.pdf',
+        category: 'intermediate',
+        source: null,
+        description: null,
+      },
+      {
+        name: '介绍.pptx',
+        category: 'deliverable',
+        source: 'generation',
+        description: '可编辑幻灯片',
+      },
+    ]);
+  });
+
+  it('生成流程明确声明两个独立 output 时不折叠同名 PDF', async () => {
+    const sinceMs = turnStart();
+    const deck = path.join(root, '介绍.pptx');
+    const pdf = path.join(root, '介绍.pdf');
+    await fs.writeFile(deck, 'deck');
+    await fs.writeFile(pdf, 'pdf');
+
+    const files = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      actions: [
+        {
+          result: {
+            data: {
+              artifacts: [
+                { path: deck, purpose: 'output' },
+                { path: pdf, purpose: 'output' },
+              ],
+            },
+          },
+          success: true,
+        },
+      ],
+    });
+
+    expect(files.map((file) => [path.basename(file.path), file.category, file.deliverySource])).toEqual([
+      ['介绍.pdf', 'deliverable', 'generation'],
+      ['介绍.pptx', 'deliverable', 'generation'],
+    ]);
+  });
+
+  it('最终回复明确引用的同名 PDF 与幻灯片都保留', async () => {
+    const sinceMs = turnStart();
+    const deck = path.join(root, '介绍.pptx');
+    const pdf = path.join(root, '介绍.pdf');
+    await fs.writeFile(deck, 'deck');
+    await fs.writeFile(pdf, 'pdf');
+
+    const files = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      finalText:
+        `可编辑版：\`${deck}\`\n` +
+        `分享版：:codex-file-citation{path="${pdf}" purpose="output"}`,
+    });
+
+    expect(files.map((file) => [path.basename(file.path), file.category, file.deliverySource])).toEqual([
+      ['介绍.pdf', 'deliverable', 'final-reference'],
+      ['介绍.pptx', 'deliverable', 'final-reference'],
+    ]);
+  });
+
+  it('最终回复的普通路径引用仍会纠正明显的跨目录预览 PDF', async () => {
+    const sinceMs = turnStart();
+    const deck = path.join(root, '王泰-自我介绍-v4.pptx');
+    const preview = path.join(root, 'preview4', '王泰-自我介绍-v4-预览.pdf');
+    await fs.mkdir(path.dirname(preview));
+    await fs.writeFile(deck, 'deck');
+    await fs.writeFile(preview, 'preview');
+
+    const files = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      finalText: `- \`${deck}\`\n- \`${preview}\``,
+    });
+
+    expect(
+      files.map((file) => [path.basename(file.path), file.category, file.deliverySource ?? null]),
+    ).toEqual([
+      ['王泰-自我介绍-v4-预览.pdf', 'intermediate', null],
+      ['王泰-自我介绍-v4.pptx', 'deliverable', 'final-reference'],
+    ]);
+  });
+
+  it('present_files 的显式 purpose 优先，旧调用才使用启发式纠错', async () => {
+    const sinceMs = turnStart();
+    const deck = path.join(root, '介绍.pptx');
+    const preview = path.join(root, '介绍-预览.pdf');
+    await fs.writeFile(deck, 'deck');
+    await fs.writeFile(preview, 'preview');
+
+    const files = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      actions: [
+        {
+          tool: 'present_files',
+          arguments: {
+            files: [
+              { path: deck, purpose: 'output' },
+              { path: preview, purpose: 'preview' },
+            ],
+          },
+          success: true,
+        },
+      ],
+    });
+
+    expect(files.map((file) => [path.basename(file.path), file.category, file.deliverySource ?? null])).toEqual([
+      ['介绍-预览.pdf', 'intermediate', null],
+      ['介绍.pptx', 'deliverable', 'present-files'],
+    ]);
+  });
+
+  it('没点名时只自动升办公文件；单独一张图会升，超过四张不猜', async () => {
+    const sinceMs = turnStart();
+    const deck = path.join(root, '介绍.pptx');
+    const preview = path.join(root, '介绍-预览.pdf');
+    await fs.writeFile(deck, 'ppt');
+    await fs.writeFile(preview, 'pdf');
+    const withDeck = await collectTurnFiles({ roots: [root], sinceMs });
+    expect(withDeck.map((f) => [path.basename(f.path), f.category])).toEqual([
+      ['介绍-预览.pdf', 'intermediate'],
+      ['介绍.pptx', 'deliverable'],
+    ]);
+
+    const posterDir = path.join(root, 'posters');
+    await fs.mkdir(posterDir);
+    await fs.writeFile(path.join(posterDir, '海报.png'), 'png');
+    const oneImage = await collectTurnFiles({ roots: [posterDir], sinceMs });
+    expect(oneImage.map((f) => f.category)).toEqual(['deliverable']);
+
+    const manyDir = path.join(root, 'shots');
+    await fs.mkdir(manyDir);
+    for (const name of ['a.png', 'b.png', 'c.png', 'd.png', 'e.png']) {
+      await fs.writeFile(path.join(manyDir, name), name);
+    }
+    const many = await collectTurnFiles({ roots: [manyDir], sinceMs });
+    expect(many.every((f) => f.category === 'intermediate')).toBe(true);
+  });
+
+  it('文档和同名 PDF 都点名时两张卡片都留', async () => {
+    const sinceMs = turnStart();
+    const doc = path.join(root, '报告.docx');
+    const pdf = path.join(root, '报告.pdf');
+    await fs.writeFile(doc, 'doc');
+    await fs.writeFile(pdf, 'pdf');
+    const files = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      actions: [
+        {
+          tool: 'present_files',
+          arguments: { files: [{ path: doc }, { path: pdf }] },
+          success: true,
+        },
+      ],
+    });
+    expect(files.map((f) => f.category)).toEqual(['deliverable', 'deliverable']);
+  });
+
+  it('NFD 声明路径和扫描到的 NFC 文件名是同一份交付', async () => {
+    const sinceMs = turnStart();
+    const name = '公司介绍.pptx';
+    const filePath = path.join(root, name);
+    await fs.writeFile(filePath, 'ppt');
+    const files = await collectTurnFiles({
+      roots: [root],
+      sinceMs,
+      projectRoot: root,
+      actions: [
+        {
+          tool: 'present_files',
+          arguments: {
+            files: [{ path: path.join(root, name.normalize('NFD')), description: '12 页' }],
+          },
+          success: true,
+        },
+      ],
+    });
+    const decks = files.filter((f) => path.basename(f.path).normalize('NFC') === name);
+    expect(decks).toHaveLength(1);
+    expect(decks[0].category).toBe('deliverable');
+  });
+
   it('正确分类交付物与中间修改文件', () => {
     expect(classifyFileCategory('/work/报价方案.xlsx')).toBe('deliverable');
     expect(classifyFileCategory('/work/介绍.pptx')).toBe('deliverable');
@@ -505,7 +790,14 @@ describe('collectTurnFiles 命令文本路径字面量', () => {
     });
 
     expect(files).toEqual([
-      { path: existing, kind: 'modified', size: 4, category: 'deliverable' },
+      {
+        path: existing,
+        kind: 'modified',
+        size: 4,
+        category: 'deliverable',
+        selection: 'resolved',
+        deliverySource: 'present-files',
+      },
     ]);
   });
 

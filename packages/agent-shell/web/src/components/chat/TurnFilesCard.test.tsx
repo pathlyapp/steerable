@@ -103,6 +103,31 @@ describe('TurnFilesCard', () => {
     expect(screen.getByText('proj/_预览_大事记页.png')).toBeTruthy();
   });
 
+  it('同名预览 PDF 收进已编辑，卡片只留幻灯片', () => {
+    render(
+      <TurnFilesCard
+        files={[
+          makeFile({
+            path: '/proj/4432-自我介绍.pptx',
+            category: 'deliverable',
+            description: '10 页可编辑自我介绍',
+          }),
+          makeFile({
+            path: '/proj/preview4/4432-自我介绍-预览.pdf',
+            category: 'deliverable',
+            description: '图像版预览 PDF，用于快速查看与分享',
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('4432-自我介绍.pptx')).toBeTruthy();
+    expect(screen.getByText('10 页可编辑自我介绍')).toBeTruthy();
+    expect(document.querySelectorAll('[data-deliverable-card]')).toHaveLength(1);
+    expect(screen.queryByText('4432-自我介绍-预览.pdf')).toBeNull();
+    expect(screen.getByText('Changed 1 files')).toBeTruthy();
+  });
+
   it('点击 打开方式 按钮打开交付物文件', async () => {
     render(<TurnFilesCard files={[makeFile()]} />);
 

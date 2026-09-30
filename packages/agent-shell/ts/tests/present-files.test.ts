@@ -35,6 +35,29 @@ describe('executePresentFiles', () => {
     });
   });
 
+  it('保留 output / preview / intermediate 的结构化用途', async () => {
+    await fs.writeFile(path.join(root, '介绍.pptx'), 'deck');
+    await fs.writeFile(path.join(root, '介绍-预览.pdf'), 'preview');
+
+    const result = await executePresentFiles(
+      {
+        files: [
+          { path: '介绍.pptx', purpose: 'output' },
+          { path: '介绍-预览.pdf', purpose: 'preview' },
+        ],
+      },
+      root,
+    );
+
+    expect(result).toEqual({
+      success: true,
+      presented: [
+        { path: path.join(root, '介绍.pptx'), purpose: 'output' },
+        { path: path.join(root, '介绍-预览.pdf'), purpose: 'preview' },
+      ],
+    });
+  });
+
   it('文件不存在、是目录、或无项目根的相对路径：整次失败并逐个说明', async () => {
     await fs.mkdir(path.join(root, 'out'));
     await fs.writeFile(path.join(root, 'ok.pdf'), 'p');

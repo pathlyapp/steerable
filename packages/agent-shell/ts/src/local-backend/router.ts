@@ -3874,6 +3874,7 @@ export class LocalBackendRouter {
         sinceMs: turnStartedAtMs,
         actions: executedActions,
         projectRoot: workspaceRoot,
+        finalText: assistantText,
       });
     } catch (turnFilesErr) {
       console.warn('[local-backend] collect turn files failed', turnFilesErr);
