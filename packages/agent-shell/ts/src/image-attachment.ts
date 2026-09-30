@@ -3,9 +3,10 @@
  * actually see, replacing the old behavior of dropping only the file *path*
  * into the prompt text.
  *
- * Decoding / downscaling runs only when an {@link ImageDecoder} is supplied;
- * otherwise the original bytes pass through under the encoded cap. These caps
- * are enforced before the image ever reaches the model:
+ * PNG and JPEG are decoded by the built-in raster decoder so the host can
+ * crop and downscale without Electron. Pass `null` to skip that decoder and
+ * forward the original bytes under the encoded cap. These caps are enforced
+ * before the image ever reaches the model:
  *
  *   - source bytes  (`IMAGE_MAX_SOURCE_BYTES`) — refuse to read huge files;
  *   - long-edge px  (`IMAGE_MAX_DIMENSION`)    — downscale so the provider's
@@ -20,6 +21,7 @@
 import { readFileSync, statSync } from 'fs';
 import { basename, extname } from 'path';
 import type { LlmImage } from './llm/types.js';
+import { builtinRasterSupports, createRasterImageDecoder } from './raster-image.js';
 
 /** Refuse to read source files larger than this (10 MB). */
 export const IMAGE_MAX_SOURCE_BYTES = 10 * 1024 * 1024;
@@ -90,6 +92,23 @@ export function isImagePath(path: string): boolean {
   return IMAGE_EXTENSIONS.has(extname(path).toLowerCase());
 }
 
+let builtinDecoder: ImageDecoder | null = null;
+
+/**
+ * `undefined` selects the built-in PNG/JPEG decoder. `null` keeps the
+ * original-bytes path. An explicit decoder (tests, or a host native image)
+ * replaces the built-in one.
+ */
+function resolveImageDecoder(
+  filePath: string,
+  decoder: ImageDecoder | null | undefined,
+): ImageDecoder | null {
+  if (decoder !== undefined) return decoder;
+  if (!builtinRasterSupports(filePath)) return null;
+  builtinDecoder ??= createRasterImageDecoder();
+  return builtinDecoder;
+}
+
 /**
  * Validate the wire value (`metadata.images` from the renderer) into a clean
  * input list. Anything that isn't an object with a non-empty string `path`
@@ -138,7 +157,7 @@ export function computeTargetSize(
  */
 export function processViewImage(
   input: ViewImageInput,
-  decoder: ImageDecoder | null = null,
+  decoder?: ImageDecoder | null,
 ): ViewImageResult {
   if (!isImagePath(input.path)) {
     return {
@@ -171,11 +190,17 @@ export function processViewImage(
     };
   }
 
-  if (!decoder) {
+  const resolved = resolveImageDecoder(input.path, decoder);
+  if (!resolved) {
     return viewImageWithoutDecoder(input, sourceBytes, maxEdge);
   }
 
-  let rendered = decoder.createFromPath(input.path);
+  let rendered: DecodedImage;
+  try {
+    rendered = resolved.createFromPath(input.path);
+  } catch {
+    return { success: false, error: '不是可识别的图片', needsFollowup: true };
+  }
   if (rendered.isEmpty()) {
     return { success: false, error: '不是可识别的图片', needsFollowup: true };
   }
@@ -354,7 +379,7 @@ function formatMb(bytes: number): string {
  */
 export function processImageAttachments(
   files: ImageAttachmentInput[],
-  decoder: ImageDecoder | null = null,
+  decoder?: ImageDecoder | null,
 ): ProcessedImageAttachments {
   const images: LlmImage[] = [];
   const notes: string[] = [];
@@ -375,7 +400,8 @@ export function processImageAttachments(
       continue;
     }
 
-    if (!decoder) {
+    const fileDecoder = resolveImageDecoder(file.path, decoder);
+    if (!fileDecoder) {
       // The bytes are already an image the provider can read; pass them
       // through when they fit the encoded cap.
       if (sourceBytes > IMAGE_MAX_ENCODED_BYTES) {
@@ -397,7 +423,13 @@ export function processImageAttachments(
       continue;
     }
 
-    const image = decoder.createFromPath(file.path);
+    let image: DecodedImage;
+    try {
+      image = fileDecoder.createFromPath(file.path);
+    } catch {
+      notes.push(`- ${label}：不是可识别的图片，未附加`);
+      continue;
+    }
     if (image.isEmpty()) {
       notes.push(`- ${label}：不是可识别的图片，未附加`);
       continue;
