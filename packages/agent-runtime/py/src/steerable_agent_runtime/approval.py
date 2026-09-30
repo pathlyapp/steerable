@@ -214,6 +214,8 @@ def shell_stays_in_workspace(request: ApprovalRequest, roots: list[str]) -> bool
 class WorkspaceAutoApprover:
     """Skip the host prompt for work the workspace sandbox already confines.
 
+    Embedders may also name host-owned control tools whose effects are limited
+    to internal session state and therefore need no interactive consent.
     Path-scoped tools (``local_write_file``, ``local_edit_file``, reads,
     ``present_files``) skip when every declared path is inside a writable
     root. Shell tools skip only when the OS exec sandbox is on and the
@@ -229,12 +231,16 @@ class WorkspaceAutoApprover:
         writable_roots: list[str],
         *,
         sandbox_enforced: bool = False,
+        auto_allow_tools: tuple[str, ...] = (),
     ) -> None:
         self._inner = inner
         self._roots = [root for root in writable_roots if isinstance(root, str) and root.strip()]
         self._sandbox_enforced = sandbox_enforced
+        self._auto_allow_tools = frozenset(auto_allow_tools)
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
+        if request.tool_name in self._auto_allow_tools:
+            return ApprovalDecision("allow_once", "trusted host control tool")
         paths = declared_target_paths(request)
         if (
             self._roots

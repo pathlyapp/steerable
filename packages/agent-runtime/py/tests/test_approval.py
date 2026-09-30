@@ -513,6 +513,25 @@ async def test_workspace_auto_approver_allows_paths_inside_writable_roots(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_workspace_auto_approver_allows_named_host_control_tools() -> None:
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover
+
+    inner = _ScriptedApprover([ApprovalDecision("deny_once", "should not ask")])
+    approver = WorkspaceAutoApprover(
+        inner,
+        [],
+        auto_allow_tools=("update_goal", "loop_stop"),
+    )
+
+    goal = await approver.approve(_request("update_goal", {"action": "complete"}))
+    loop = await approver.approve(_request("loop_stop", {"id": "loop-1"}))
+
+    assert goal.kind == "allow_once"
+    assert loop.kind == "allow_once"
+    assert inner.requests == []
+
+
+@pytest.mark.asyncio
 async def test_workspace_auto_approver_asks_when_a_path_leaves_the_project(tmp_path) -> None:
     from steerable_agent_runtime.approval import WorkspaceAutoApprover
 

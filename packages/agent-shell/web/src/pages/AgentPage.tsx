@@ -43,6 +43,8 @@ import {
   type SuggestedRepliesState,
 } from "@/components/chat/suggested-replies-model";
 import { useChatTasks } from "@/components/chat/useChatTasks";
+import { useGoalAndLoops } from "@/components/chat/useGoalAndLoops";
+import { GoalLoopStatusBar } from "@/components/chat/GoalLoopStatusBar";
 import { LuListChecks, LuArrowRight } from "react-icons/lu";
 import { LocalLlmSettingsModal } from "@/components/LocalLlmSettingsModal";
 import {
@@ -398,6 +400,12 @@ function AgentChatView({
     finished: finishedTasks,
     dismissFinished,
   } = useChatTasks(chatId);
+  const {
+    goal,
+    loops,
+    refreshGoal,
+    refreshLoops,
+  } = useGoalAndLoops(chatId);
   const handleInspectTask = useCallback(
     (task: InspectTaskInput) => {
       ctx.inspectTask({
@@ -416,6 +424,7 @@ function AgentChatView({
   // 把「正在运行 + 部分产出」恢复出来。initialLiveStream 是挂载时同步拿到的
   // 首帧，之后由轮询持续刷新。
   const [liveStream, setLiveStream] = useState<ChatLiveStream>(initialLiveStream);
+  const liveStreamEpochRef = useRef(0);
 
   // ── executed_actions plumbing ────────────────────────────────────────
   // Local-backend emits `{type: 'executed_actions', actions: [...]}` AFTER each
@@ -693,6 +702,36 @@ function AgentChatView({
     onStreamError: handleStreamError,
   });
 
+  useEffect(() => {
+    const bridge = getHostBridge();
+    if (!bridge?.onPackEvent) return;
+    const offStarted = bridge.onPackEvent('chat-turn-started', (value) => {
+      const payload = value as { chatId?: string };
+      if (payload.chatId === chatId) {
+        liveStreamEpochRef.current += 1;
+        setLiveStream((current) => ({ ...current, active: true }));
+      }
+    });
+    const offFinished = bridge.onPackEvent('chat-turn-finished', (value) => {
+      const payload = value as { chatId?: string };
+      if (payload.chatId !== chatId) return;
+      liveStreamEpochRef.current += 1;
+      setLiveStream({ active: false });
+      void bridge.localBackend.request<{
+        messages?: LocalChatMessage[];
+      }>({
+        method: "GET",
+        path: `/api/v2/chats/${encodeURIComponent(chatId)}/messages?limit=200`,
+      }).then((response) => {
+        if (response.messages) setMessages(chronological(response.messages));
+      });
+    });
+    return () => {
+      offStarted();
+      offFinished();
+    };
+  }, [chatId, setMessages]);
+
   // ── 切回恢复：远端回合仍在跑，但本 mount 不是发起者 ──────────────────
   // useChatStream.isStreaming 只在本 mount 自己发起的流时为 true；切回后的
   // 新 mount 没发起流，所以 isStreaming=false，但后端快照 liveStream.active
@@ -735,10 +774,13 @@ function AgentChatView({
   useEffect(() => {
     if (!remoteStreaming) return;
     let cancelled = false;
+    const epoch = liveStreamEpochRef.current;
     const poll = async () => {
       try {
         const next = await getChatLiveStream(chatId);
-        if (!cancelled) setLiveStream(next ?? { active: false });
+        if (!cancelled && liveStreamEpochRef.current === epoch) {
+          setLiveStream(next ?? { active: false });
+        }
       } catch {
         /* 保持上一帧快照 */
       }
@@ -1258,6 +1300,15 @@ function AgentChatView({
         }
         inputBanner={
           <>
+            <GoalLoopStatusBar
+              chatId={chatId}
+              goal={goal}
+              loops={loops}
+              onChanged={() => {
+                void refreshGoal();
+                void refreshLoops();
+              }}
+            />
             {/* W6-5 项目信任门控：项目含规则文件但未信任时提示授权。 */}
             {showProjectsChrome ? (
             <ProjectTrustBanner

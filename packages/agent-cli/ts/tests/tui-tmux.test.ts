@@ -25,6 +25,8 @@ describe('tui tmux smoke', () => {
       expect(waitFor('审批')).toContain('local_exec_shell');
       send('y');
       expect(waitFor('listed')).toContain('listed');
+      send('/goal ship demo', 'Enter');
+      expect(waitFor('goal wake completed')).toContain('目标续跑');
       send('hang', 'Enter');
       expect(waitFor('running')).toContain('running');
       send('C-c');
@@ -36,7 +38,7 @@ describe('tui tmux smoke', () => {
     } finally {
       spawnSync('tmux', ['kill-session', '-t', session], { encoding: 'utf8' });
     }
-  });
+  }, 15_000);
 });
 
 function send(...keys: string[]): void {

@@ -38,6 +38,7 @@ const listChatTasks = vi.fn();
 const getLlmModels = vi.fn();
 const getLlmSettings = vi.fn();
 const trackBehavior = vi.fn();
+const packEventHandlers = new Map<string, (value: unknown) => void>();
 
 vi.mock('@/lib/host-bridge', () => ({
   hasHostBridge: () => electronState.active,
@@ -68,6 +69,12 @@ vi.mock('@/lib/host-bridge', () => ({
             suggestedRepliesHandler = callback;
             return () => {
               if (suggestedRepliesHandler === callback) suggestedRepliesHandler = null;
+            };
+          },
+          onPackEvent: (event: string, callback: (value: unknown) => void) => {
+            packEventHandlers.set(event, callback);
+            return () => {
+              if (packEventHandlers.get(event) === callback) packEventHandlers.delete(event);
             };
           },
         }
@@ -273,6 +280,7 @@ beforeEach(() => {
   localStorage.clear();
   electronState.active = true;
   suggestedRepliesHandler = null;
+  packEventHandlers.clear();
   bridgeRequest.mockImplementation(defaultBridgeRequest);
   getChatLiveStream.mockResolvedValue({ active: false });
   listProjects.mockResolvedValue({ projects: [] });
@@ -815,6 +823,43 @@ describe('AgentPage 远端回合恢复', () => {
     expect(await screen.findByText('远端正在输出')).toBeTruthy();
     // 远端运行中等同流式：输入区显示停止按钮
     expect(await screen.findByRole('button', { name: 'Stop generating' })).toBeTruthy();
+  });
+
+  it('后端主动回合广播开始流式状态，结束后重新水合消息', async () => {
+    let finished = false;
+    bridgeRequest.mockImplementation((input: { method: string; path: string }) => {
+      if (input.path.includes('/messages')) {
+        return Promise.resolve({
+          messages: finished
+            ? [{
+                id: 'a-wake',
+                chatId: 'chat-1',
+                role: 'assistant',
+                content: '后台目标已继续',
+                createdAt: '2026-09-01T08:06:00.000Z',
+              }]
+            : [],
+          interrupted: false,
+        });
+      }
+      return defaultBridgeRequest(input);
+    });
+    renderPage('/agent/chat-1', makeCtx());
+    await screen.findByRole('textbox');
+
+    getChatLiveStream.mockResolvedValue({ active: true, status: 'running' });
+    act(() => {
+      packEventHandlers.get('chat-turn-started')?.({ chatId: 'chat-1' });
+    });
+    expect(await screen.findByRole('button', { name: 'Stop generating' })).toBeTruthy();
+
+    finished = true;
+    getChatLiveStream.mockResolvedValue({ active: false });
+    act(() => {
+      packEventHandlers.get('chat-turn-finished')?.({ chatId: 'chat-1' });
+    });
+    expect(await screen.findByText('后台目标已继续')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Send message' })).toBeTruthy();
   });
 });
 

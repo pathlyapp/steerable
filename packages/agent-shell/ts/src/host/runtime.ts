@@ -30,6 +30,7 @@ import { getProductConfig } from '../product-config.js';
 import { LocalBackendRouter } from '../local-backend/router.js';
 import { WorktreeService } from '../local-backend/worktree-service.js';
 import { TaskService } from '../local-backend/task-service.js';
+import { LoopPtyMonitor } from '../local-backend/loop-pty-monitor.js';
 import {
   LOCAL_SCOPE,
   closeStorage,
@@ -277,6 +278,12 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
     taskService,
     broadcast: broadcastMain,
   });
+  const loopMonitor = new LoopPtyMonitor(
+    terminalManager,
+    (chatId, input) => localBackendRouter!.wakeChat(chatId, input),
+    (chatId, loops) => broadcastMain('loop-changed', { chatId, loops }),
+  );
+  toolRouter.setLoopMonitor(loopMonitor);
 
   // W4-1 / W8：sidecar 反向通道的审批桥与提问桥。
   const approvalBridge = createApprovalBridge({
@@ -375,6 +382,7 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
         clearTimeout(warmTimer);
         warmTimer = null;
       }
+      loopMonitor.dispose();
       terminalManager.killAll();
       // 包装配逆序关停（后装配的先停）。
       for (const handle of [...packHandles.values()].reverse()) {

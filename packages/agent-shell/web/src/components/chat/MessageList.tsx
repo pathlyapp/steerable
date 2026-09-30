@@ -54,6 +54,22 @@ import type { LlmSpeedSnapshot } from './process-status';
 
 const NEAR_BOTTOM_THRESHOLD_PX = 100;
 
+function internalTrigger(message: ChatMessage): 'goal' | 'loop' | null {
+  if (!message.messageMetadata) return null;
+  try {
+    const metadata = JSON.parse(message.messageMetadata) as {
+      internal?: unknown;
+      trigger?: unknown;
+    };
+    if (metadata.internal !== true) return null;
+    return metadata.trigger === 'goal' || metadata.trigger === 'loop'
+      ? metadata.trigger
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 interface MessageListProps {
   messages: ChatMessage[];
   isStreaming: boolean;
@@ -330,15 +346,20 @@ export function MessageList({
                 className="conversation-turn relative space-y-4"
                 data-conversation-turn={turn.key}
               >
-                {turn.userGroup && (
+                {turn.userGroup &&
+                !turn.userGroup.messages.every((message) => internalTrigger(message) !== null) ? (
                   <div className="sticky top-0 z-10 -mx-3 px-3 py-1 bg-agent-canvas/95 backdrop-blur-xs">
                     {turn.userGroup.messages.length === 1 ? (
-                      <UserMessage
-                        key={turn.userGroup.messages[0].id}
-                        message={turn.userGroup.messages[0]}
-                        agents={agents}
-                        chats={chats}
-                      />
+                      internalTrigger(turn.userGroup.messages[0]) ? (
+                        null
+                      ) : (
+                        <UserMessage
+                          key={turn.userGroup.messages[0].id}
+                          message={turn.userGroup.messages[0]}
+                          agents={agents}
+                          chats={chats}
+                        />
+                      )
                     ) : (
                       <div
                         key={turn.userGroup.key}
@@ -348,21 +369,25 @@ export function MessageList({
                         <div className="flex justify-start">
                           <div className="mx-auto w-full max-w-[var(--chat-input-box-width)] overflow-hidden rounded-agent-lg border border-agent-border/80 bg-agent-muted/70 shadow-sm">
                             {turn.userGroup.messages.map((msg, idx) => (
-                              <UserMessage
-                                key={msg.id}
-                                message={msg}
-                                agents={agents}
-                                chats={chats}
-                                isGrouped
-                                isAppended={idx > 0}
-                              />
+                              internalTrigger(msg) ? (
+                                null
+                              ) : (
+                                <UserMessage
+                                  key={msg.id}
+                                  message={msg}
+                                  agents={agents}
+                                  chats={chats}
+                                  isGrouped
+                                  isAppended={idx > 0}
+                                />
+                              )
                             ))}
                           </div>
                         </div>
                       </div>
                     )}
                   </div>
-                )}
+                ) : null}
 
                 {turn.assistants.map((item) => {
                   const message = item.message;

@@ -143,6 +143,15 @@ from .stream_chunks import RawChunkBridgeHooks
 
 logger = logging.getLogger("steerable_sidecar")
 
+_AUTO_APPROVED_HOST_CONTROL_TOOLS = (
+    "get_goal",
+    "create_goal",
+    "update_goal",
+    "loop_create",
+    "loop_list",
+    "loop_stop",
+)
+
 PROTOCOL_VERSION = "0.1.0"
 
 # asyncio's default 64 KiB StreamReader limit kills the read loop with
@@ -1918,8 +1927,6 @@ class Sidecar:
                     amendment_sink=amendment_sink,
                     chat_id=approval_chat_id,
                 )
-                if not writable_roots:
-                    return host
                 from steerable_agent_runtime.approval import WorkspaceAutoApprover
 
                 return WorkspaceAutoApprover(
@@ -1928,6 +1935,7 @@ class Sidecar:
                     sandbox_enforced=bool(
                         isinstance(exec_sandbox, dict) and exec_sandbox.get("enabled")
                     ),
+                    auto_allow_tools=_AUTO_APPROVED_HOST_CONTROL_TOOLS,
                 )
 
             if policy_path:

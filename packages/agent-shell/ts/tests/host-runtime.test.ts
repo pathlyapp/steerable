@@ -36,6 +36,9 @@ const mocks = vi.hoisted(() => ({
   refreshAllEnabled: vi.fn(async () => {}),
   seedProductServers: vi.fn(),
   setTaskServices: vi.fn(),
+  setLoopMonitor: vi.fn(),
+  loopMonitorConstructed: vi.fn(),
+  loopMonitorDispose: vi.fn(),
   registerToolContributions: vi.fn(),
   listModelSchemas: vi.fn(() => []),
   packAssemblies: new Map<string, (deps: unknown) => unknown>(),
@@ -63,6 +66,7 @@ vi.mock('../src/terminal-manager.js', () => ({
 vi.mock('../src/tool-router.js', () => ({
   ToolRouter: class {
     setTaskServices = mocks.setTaskServices;
+    setLoopMonitor = mocks.setLoopMonitor;
     registerToolContributions = mocks.registerToolContributions;
     listModelSchemas = mocks.listModelSchemas;
   },
@@ -84,6 +88,15 @@ vi.mock('../src/local-backend/router.js', () => ({
   LocalBackendRouter: class {
     resolveChatProject = vi.fn(() => null);
     resolveChatWorkspaceRoot = vi.fn(async () => '/tmp/chat-ws');
+    wakeChat = vi.fn(async () => ({ started: true }));
+  },
+}));
+vi.mock('../src/local-backend/loop-pty-monitor.js', () => ({
+  LoopPtyMonitor: class {
+    dispose = mocks.loopMonitorDispose;
+    constructor(...args: unknown[]) {
+      mocks.loopMonitorConstructed(...args);
+    }
   },
 }));
 vi.mock('../src/local-backend/worktree-service.js', () => ({ WorktreeService: class {} }));
@@ -160,6 +173,8 @@ describe('createHostRuntime · 装配', () => {
     expect(rt.taskService).toBeDefined();
     expect(rt.localBackendRouter).toBeDefined();
     expect(mocks.setTaskServices).toHaveBeenCalledOnce();
+    expect(mocks.loopMonitorConstructed).toHaveBeenCalledOnce();
+    expect(mocks.setLoopMonitor).toHaveBeenCalledOnce();
     expect(mocks.bindWorkspaceSkillRoots).toHaveBeenCalledOnce();
     expect(mocks.seedProductServers).toHaveBeenCalledOnce();
   });
@@ -300,6 +315,7 @@ describe('shutdown', () => {
     const rt = await createHostRuntime(makeOptions());
     await rt.shutdown();
     expect(mocks.terminalKillAll).toHaveBeenCalledOnce();
+    expect(mocks.loopMonitorDispose).toHaveBeenCalledOnce();
     expect(order).toEqual(['b', 'a']);
     expect(mocks.shutdownHostSidecar).toHaveBeenCalledOnce();
   });

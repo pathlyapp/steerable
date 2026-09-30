@@ -7,6 +7,9 @@ const queue: Array<{ channel: string; payload: unknown }> = [];
 const waiters: Array<(item: { channel: string; payload: unknown } | null) => void> = [];
 let closed = false;
 let decided: () => void = () => {};
+let goal: { objective: string; phase: string; turns: number } | null = null;
+let liveActive = false;
+let proactiveFinished = false;
 
 function push(item: { channel: string; payload: unknown } | null): void {
   const waiter = waiters.shift();
@@ -20,10 +23,61 @@ const client: AgentClient = {
     if (method === 'GET' && requestPath === '/api/v2/chats') return { status: 200, data: { chats: [] } };
     if (method === 'GET' && requestPath === '/api/v2/local-settings/llm') return { status: 200, data: { model: 'demo-model' } };
     if (method === 'POST' && requestPath === '/api/v2/chats/new') return { status: 200, data: { chatId: 'chat-1' } };
+    if (method === 'GET' && requestPath.endsWith('/goal')) return { status: 200, data: { goal } };
+    if (method === 'GET' && requestPath.endsWith('/loops')) return { status: 200, data: { loops: [] } };
+    if (method === 'GET' && requestPath.endsWith('/live-stream')) {
+      return {
+        status: 200,
+        data: liveActive ? { active: true, content: 'goal wake running' } : { active: false },
+      };
+    }
+    if (method === 'GET' && requestPath.endsWith('/messages')) {
+      return {
+        status: 200,
+        data: {
+          messages: proactiveFinished
+            ? [
+                {
+                  role: 'user',
+                  content: '<objective>hidden</objective>',
+                  messageMetadata: JSON.stringify({
+                    internal: true,
+                    trigger: 'goal',
+                    sourceId: 'goal-1',
+                  }),
+                },
+                { role: 'assistant', content: 'goal wake completed' },
+              ]
+            : [],
+        },
+      };
+    }
     return { status: 200, data: {} };
   },
   async *stream(_requestPath, body, signal) {
     const message = String((body as { message?: string }).message ?? '');
+    if (message.startsWith('/goal ')) {
+      goal = { objective: message.slice('/goal '.length), phase: 'active', turns: 1 };
+      push({ channel: 'goal-changed', payload: { chatId: 'chat-1', goal } });
+      yield { type: 'content', content: 'goal accepted' } as SSEEvent;
+      setTimeout(() => {
+        liveActive = true;
+        push({
+          channel: 'chat-turn-started',
+          payload: { chatId: 'chat-1', trigger: 'goal', sourceId: 'goal-1' },
+        });
+        setTimeout(() => {
+          liveActive = false;
+          proactiveFinished = true;
+          goal = { ...goal!, turns: 2 };
+          push({
+            channel: 'chat-turn-finished',
+            payload: { chatId: 'chat-1', trigger: 'goal', status: 'completed' },
+          });
+        }, 250);
+      }, 100);
+      return;
+    }
     if (message.includes('hang')) {
       yield { type: 'content', content: 'running' } as SSEEvent;
       await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve()));

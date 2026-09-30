@@ -50,6 +50,7 @@ describe('GoalStore', () => {
       id: first.id,
       revision: first.revision,
       action: 'complete',
+      actor: 'model',
     });
     expect(done.goal?.phase).toBe('complete');
 
@@ -79,6 +80,7 @@ describe('GoalStore', () => {
       id: goal.id,
       revision: goal.revision,
       action: 'edit',
+      actor: 'user',
     })).toMatchObject({ success: false, error: 'edit 需要 objective' });
     expect((await goals.get('chat-1')).goal?.revision).toBe(1);
 
@@ -87,6 +89,7 @@ describe('GoalStore', () => {
       id: goal.id,
       revision: 1,
       action: 'edit',
+      actor: 'user',
       objective: ' 改写后的目标 ',
     });
     expect(edited.goal).toMatchObject({ objective: '改写后的目标', revision: 2, phase: 'active' });
@@ -96,6 +99,7 @@ describe('GoalStore', () => {
       id: goal.id,
       revision: 2,
       action: 'pause',
+      actor: 'user',
     });
     expect(paused.goal?.phase).toBe('paused');
     expect(await goals.update({
@@ -103,6 +107,7 @@ describe('GoalStore', () => {
       id: goal.id,
       revision: 3,
       action: 'pause',
+      actor: 'user',
     })).toMatchObject({ success: false });
 
     const blocked = await goals.update({
@@ -110,6 +115,7 @@ describe('GoalStore', () => {
       id: goal.id,
       revision: 3,
       action: 'blocked',
+      actor: 'model',
     });
     expect(blocked).toMatchObject({ success: false, error: 'blocked 需要 reason' });
 
@@ -118,6 +124,7 @@ describe('GoalStore', () => {
       id: goal.id,
       revision: 3,
       action: 'blocked',
+      actor: 'model',
       reason: '缺测试环境',
     });
     expect(withReason.goal).toMatchObject({
@@ -131,6 +138,7 @@ describe('GoalStore', () => {
       id: goal.id,
       revision: 4,
       action: 'resume',
+      actor: 'user',
     });
     expect(resumed.goal).toMatchObject({ phase: 'active', revision: 5 });
     expect(resumed.goal?.blockedReason).toBeUndefined();
@@ -144,18 +152,21 @@ describe('GoalStore', () => {
       id: goal.id,
       revision: 0,
       action: 'complete',
+      actor: 'model',
     })).toMatchObject({ success: false, needsFollowup: true, goal: { revision: 1 } });
     expect(await goals.update({
       chatId: 'chat-1',
       id: 'missing',
       revision: 1,
       action: 'complete',
+      actor: 'model',
     })).toMatchObject({ success: false });
     expect(await goals.update({
       chatId: 'chat-1',
       id: goal.id,
       revision: 1,
       action: 'archive',
+      actor: 'model',
     })).toMatchObject({ success: false, needsFollowup: true });
     expect((await goals.get('chat-1')).goal?.phase).toBe('active');
   });
@@ -170,6 +181,44 @@ describe('GoalStore', () => {
       id: goal.id,
       objective: '只属于这一席',
       revision: 1,
+      turns: 0,
     });
+  });
+
+  it('模型不能 edit 或 resume，用户不能 blocked', async () => {
+    const { goals } = store();
+    const goal = await created(goals);
+    expect(await goals.update({
+      chatId: 'chat-1',
+      id: goal.id,
+      revision: 1,
+      action: 'edit',
+      actor: 'model',
+      objective: '偷偷缩小目标',
+    })).toMatchObject({ success: false });
+
+    expect(await goals.update({
+      chatId: 'chat-1',
+      id: goal.id,
+      revision: 1,
+      action: 'blocked',
+      actor: 'user',
+      reason: '用户不能伪造模型核对',
+    })).toMatchObject({ success: false });
+  });
+
+  it('记录回合不改变 revision，clear 删除目标，并广播变化', async () => {
+    const { goals } = store();
+    const changes: Array<StoredGoal | null> = [];
+    goals.onChange((_chatId, goal) => changes.push(goal));
+    const goal = await created(goals);
+
+    const afterTurn = await goals.recordTurn('chat-1', goal.id);
+    expect(afterTurn).toMatchObject({ turns: 1, revision: 1 });
+    expect((await goals.get('chat-1')).goal).toMatchObject({ turns: 1, revision: 1 });
+
+    expect(await goals.clear('chat-1')).toEqual({ success: true, goal: null });
+    expect((await goals.get('chat-1')).goal).toBeNull();
+    expect(changes.map((change) => change?.turns ?? null)).toEqual([0, 1, null]);
   });
 });

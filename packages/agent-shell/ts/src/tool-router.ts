@@ -38,7 +38,8 @@ import {
 } from './present-files.js';
 import { isHostToolCapabilityEnabled } from './host-tools.js';
 import { getResolvedHostTools } from './host-tools-runtime.js';
-import { GoalStore, GOAL_ACTIONS } from './goal-store.js';
+import { GoalStore, MODEL_GOAL_ACTIONS } from './goal-store.js';
+import type { LoopPtyMonitor } from './local-backend/loop-pty-monitor.js';
 import { searchGlob, searchGrep } from './workspace-search.js';
 
 /** 已注册 MCP 服务的动态工具名前缀：`mcp__<serverKey>__<toolName>`。 */
@@ -226,10 +227,24 @@ export class ToolRouter {
    */
   private taskService: TaskService | null = null;
   private worktreeService: WorktreeService | null = null;
+  private loopMonitor: Pick<LoopPtyMonitor, 'start' | 'list' | 'stop'> | null = null;
 
   setTaskServices(services: { taskService: TaskService; worktreeService: WorktreeService } | null): void {
     this.taskService = services?.taskService ?? null;
     this.worktreeService = services?.worktreeService ?? null;
+  }
+
+  setLoopMonitor(monitor: Pick<LoopPtyMonitor, 'start' | 'list' | 'stop'> | null): void {
+    this.loopMonitor = monitor;
+  }
+
+  listMonitoredLoops(chatId: string) {
+    return this.loopMonitor?.list(chatId) ?? [];
+  }
+
+  stopMonitoredLoop(chatId: string, loopId: string): boolean {
+    if (!this.loopMonitor?.list(chatId).some((loop) => loop.id === loopId)) return false;
+    return this.loopMonitor.stop(loopId);
   }
 
   /** 会话目标的持久化。缺省写到用户数据目录；测试注入临时文件。 */
@@ -239,7 +254,8 @@ export class ToolRouter {
     this.goalStore = store;
   }
 
-  private goals(): GoalStore {
+  /** 目标工具使用的存储；LocalBackendRouter 的续跑与目标路由共用同一实例。 */
+  goals(): GoalStore {
     if (!this.goalStore) this.goalStore = GoalStore.default();
     return this.goalStore;
   }
@@ -598,6 +614,7 @@ export class ToolRouter {
         },
       },
       ...this.listParityToolSchemas(),
+      ...this.listLoopToolSchemas(),
       // ─── 4.6a/4.6b 跨 turn 后台任务 + git worktree 隔离 ─────────────
       // 服务未接线（CLI/test）时一个 schema 都不出——模型看不到不可用的工具。
       ...this.listTaskAndWorktreeSchemas(),
@@ -741,8 +758,9 @@ export class ToolRouter {
       {
         name: 'create_goal',
         description:
-          'Create a persisted goal for this chat when the user\'s request is a long-running objective. '
-          + 'Not for single-turn work. Fails if an unfinished goal already exists — update that one instead.',
+          'Create a persisted goal for this chat. Only when the user explicitly asks to track a goal; never infer one from an ordinary task. '
+          + 'While the goal is active the host keeps starting follow-up turns until you mark it complete or blocked. '
+          + 'Fails if an unfinished goal already exists.',
         mode: 'safe_write',
         inputSchema: {
           type: 'object',
@@ -756,17 +774,17 @@ export class ToolRouter {
       {
         name: 'update_goal',
         description:
-          'Change the current goal. Pass the id and revision from get_goal. '
-          + 'action is edit (needs objective), pause, resume, complete, or blocked (needs reason). '
-          + 'A stale revision is rejected; re-read and retry.',
+          'Change the current goal\'s status. Pass the id and revision from get_goal; a stale revision is rejected, re-read and retry. '
+          + 'complete: only after checking every requirement of the objective against current evidence (files, command output, test results) and no required work remains. '
+          + 'blocked (needs reason): only after the same blocker has recurred for at least three consecutive goal turns and no safe next action exists; never because the work is hard or slow. '
+          + 'pause: only when the user explicitly asks. Resuming and editing the objective are user-only.',
         mode: 'safe_write',
         inputSchema: {
           type: 'object',
           properties: {
             id: { type: 'string' },
             revision: { type: 'integer' },
-            action: { type: 'string', enum: [...GOAL_ACTIONS] },
-            objective: { type: 'string', description: 'Required for action=edit.' },
+            action: { type: 'string', enum: [...MODEL_GOAL_ACTIONS] },
             reason: { type: 'string', description: 'Required for action=blocked.' },
           },
           required: ['id', 'revision', 'action'],
@@ -950,6 +968,51 @@ export class ToolRouter {
             name: { type: 'string', description: 'Worktree name or path.' },
           },
           required: ['name'],
+          additionalProperties: false,
+        },
+      },
+    ];
+  }
+
+  private listLoopToolSchemas(): ToolSchema[] {
+    if (!this.loopMonitor) return [];
+    return [
+      {
+        name: 'loop_create',
+        description:
+          'Arm a recurring local loop for this chat after running the requested work once in the current turn. '
+          + 'Each interval wakes this same chat with prompt until loop_stop is called or the host exits.',
+        mode: 'safe_write',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            prompt: {
+              type: 'string',
+              description: 'Self-contained work to run on every wake.',
+            },
+            intervalSeconds: {
+              type: 'integer',
+              description: 'Positive fixed interval in seconds.',
+            },
+          },
+          required: ['prompt', 'intervalSeconds'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'loop_list',
+        description: 'List recurring local loops owned by this chat.',
+        mode: 'read',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      },
+      {
+        name: 'loop_stop',
+        description: 'Stop one recurring local loop owned by this chat.',
+        mode: 'safe_write',
+        inputSchema: {
+          type: 'object',
+          properties: { id: { type: 'string' } },
+          required: ['id'],
           additionalProperties: false,
         },
       },
@@ -1283,6 +1346,10 @@ export class ToolRouter {
       case 'create_goal':
       case 'update_goal':
         return this.executeGoalTool(call.name, args, context);
+      case 'loop_create':
+      case 'loop_list':
+      case 'loop_stop':
+        return this.executeLoopTool(call.name, args, context);
       case 'job_list':
       case 'job_output':
       case 'job_kill':
@@ -1388,9 +1455,45 @@ export class ToolRouter {
       id: String(args.id || ''),
       revision: typeof args.revision === 'number' ? args.revision : Number.NaN,
       action: String(args.action || ''),
-      objective: typeof args.objective === 'string' ? args.objective : undefined,
+      actor: 'model',
       reason: typeof args.reason === 'string' ? args.reason : undefined,
     });
+  }
+
+  private executeLoopTool(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecContext,
+  ): unknown {
+    const chatId = this.requireChatContext(context, 'loop tools');
+    if (!this.loopMonitor) {
+      return { success: false, error: 'loop monitor unavailable', needsFollowup: true };
+    }
+    if (name === 'loop_list') {
+      return { success: true, loops: this.loopMonitor.list(chatId) };
+    }
+    if (name === 'loop_stop') {
+      const id = String(args.id || '');
+      const owned = this.loopMonitor.list(chatId).some((loop) => loop.id === id);
+      if (!owned) return { success: false, error: 'loop not found', needsFollowup: true };
+      return { success: this.loopMonitor.stop(id) };
+    }
+    try {
+      const loop = this.loopMonitor.start({
+        chatId,
+        prompt: String(args.prompt || ''),
+        intervalSeconds:
+          typeof args.intervalSeconds === 'number' ? args.intervalSeconds : Number.NaN,
+        cwd: context?.projectRoot ?? undefined,
+      });
+      return { success: true, loop };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        needsFollowup: true,
+      };
+    }
   }
 
   private async executeJobTool(
@@ -1425,6 +1528,12 @@ export class ToolRouter {
     if (!chatId) {
       throw new Error('任务/worktree 工具需要 chatId 调用上下文');
     }
+    return chatId;
+  }
+
+  private requireChatContext(context: ToolExecContext | undefined, owner: string): string {
+    const chatId = context?.chatId;
+    if (!chatId) throw new Error(`${owner} 需要 chatId 调用上下文`);
     return chatId;
   }
 

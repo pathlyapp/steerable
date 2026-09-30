@@ -26,6 +26,11 @@ import {
   resolveAutoContinueMax,
 } from './auto-continue-helper.js';
 import {
+  buildActiveGoalContext,
+  buildGoalContinuationPrompt,
+  shouldContinueGoal,
+} from './goal-continuation-helper.js';
+import {
   buildAmbientDelegateRoster,
   buildDelegateDispatchInstruction,
   buildDelegateRosterHint,
@@ -171,6 +176,19 @@ export type StreamEmit = (sseChunk: string) => void;
 
 export interface StreamResult {
   status: number;
+  /** Internal turn outcome used by automatic goal continuation. */
+  turn?: {
+    completionStatus: string;
+    madeProgress: boolean;
+  };
+}
+
+export type ChatWakeTrigger = 'goal' | 'loop';
+
+export interface WakeResult {
+  started: boolean;
+  reason?: 'busy' | 'failed';
+  status?: number;
 }
 
 /**
@@ -371,6 +389,12 @@ export class LocalBackendRouter {
     this.resolveStore = options.resolveStore ?? (() => options.store);
     this.broadcast = options.broadcast ?? null;
     this.taskService = options.taskService ?? null;
+    const goals = (this.toolRouter as ToolRouter & {
+      goals?: () => { onChange(listener: (chatId: string, goal: unknown) => void): () => void };
+    }).goals?.();
+    goals?.onChange((chatId, goal) => {
+      this.broadcast?.('goal-changed', { chatId, goal });
+    });
   }
 
   private get store(): ScopedStore {
@@ -393,6 +417,78 @@ export class LocalBackendRouter {
     const { method } = request;
     const url = new URL(request.path, 'http://local.backend');
     const pathname = url.pathname;
+
+    const goalMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/goal$/);
+    if (goalMatch) {
+      const chatId = goalMatch[1];
+      const chat = await this.store.getChat(chatId);
+      if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+      const goals = this.toolRouter.goals();
+      if (method === 'GET') {
+        const result = await goals.get(chatId);
+        return { status: 200, data: { goal: result.goal ?? null } };
+      }
+      if (method === 'POST') {
+        const payload = this.toRecord(request.body);
+        const action = String(payload.action || '');
+        if (action === 'set') {
+          const result = await goals.create(chatId, String(payload.objective || ''));
+          if (result.success && result.goal) {
+            this.startGoalWake(chatId, result.goal);
+          }
+          return {
+            status: result.success ? 200 : 409,
+            data: result.success ? { goal: result.goal } : { detail: result.error, goal: result.goal },
+          };
+        }
+        if (action === 'clear') {
+          const result = await goals.clear(chatId);
+          return { status: 200, data: { goal: result.goal ?? null } };
+        }
+        const current = (await goals.get(chatId)).goal;
+        if (!current) return { status: 404, data: { detail: 'goal not found' } };
+        const result = await goals.update({
+          chatId,
+          id: current.id,
+          revision: current.revision,
+          action,
+          actor: 'user',
+          objective: typeof payload.objective === 'string' ? payload.objective : undefined,
+        });
+        if (result.success && result.goal && action === 'resume') {
+          this.startGoalWake(chatId, result.goal);
+        }
+        return {
+          status: result.success ? 200 : 400,
+          data: result.success ? { goal: result.goal } : { detail: result.error, goal: result.goal },
+        };
+      }
+      return this.notFound('Not found');
+    }
+
+    const loopsMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/loops$/);
+    if (loopsMatch && method === 'GET') {
+      const chatId = loopsMatch[1];
+      if (!await this.store.getChat(chatId)) {
+        return { status: 404, data: { detail: 'chat not found' } };
+      }
+      return {
+        status: 200,
+        data: { loops: this.toolRouter.listMonitoredLoops(chatId) },
+      };
+    }
+    const loopMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/loops\/([^/]+)$/);
+    if (loopMatch && method === 'DELETE') {
+      const chatId = loopMatch[1];
+      if (!await this.store.getChat(chatId)) {
+        return { status: 404, data: { detail: 'chat not found' } };
+      }
+      const success = this.toolRouter.stopMonitoredLoop(chatId, loopMatch[2]);
+      return {
+        status: success ? 200 : 404,
+        data: success ? { success: true } : { detail: 'loop not found' },
+      };
+    }
 
     if (method === 'GET' && pathname === '/api/v2/auth/me') {
       const authProvider = getAuthProvider();
@@ -2179,6 +2275,22 @@ export class LocalBackendRouter {
     return this.fallbackResponse(method, pathname);
   }
 
+  private startGoalWake(
+    chatId: string,
+    goal: { id: string; objective: string; turns: number },
+  ): void {
+    void this.wakeChat(chatId, {
+      trigger: 'goal',
+      message: buildGoalContinuationPrompt(goal),
+      sourceId: goal.id,
+    }).catch((error: unknown) => {
+      console.warn('[goal] chat wake failed', {
+        chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
   /**
    * 对未显式实现的路由做"温柔降级"：GET 返回空集合/空对象，不让 UI 因 404 抛错跳到
    * not-found；其他方法返回 success:true 让前端流程继续。所有兜底都在主进程终端
@@ -2234,8 +2346,92 @@ export class LocalBackendRouter {
   ): Promise<StreamResult> {
     return this.storeContext.run(
       this.resolveStore(request.principal),
-      () => this.handleStreamScoped(request, emit, options),
+      async () => {
+        const result = await this.handleStreamScoped(request, emit, options);
+        await this.continueActiveGoal(request, result, options);
+        return result;
+      },
     );
+  }
+
+  /**
+   * Start one host-initiated turn in an idle chat, then continue an active
+   * goal if that turn still leaves work to do.
+   */
+  async wakeChat(
+    chatId: string,
+    input: {
+      trigger: ChatWakeTrigger;
+      message: string;
+      sourceId: string;
+    },
+  ): Promise<WakeResult> {
+    return this.storeContext.run(this.store, async () => {
+      this.broadcast?.('chat-turn-started', {
+        chatId,
+        trigger: input.trigger,
+        sourceId: input.sourceId,
+      });
+      const result = await this.handleStreamScoped(
+        {
+          method: 'POST',
+          path: `/api/v2/chats/${encodeURIComponent(chatId)}/send`,
+          body: {
+            message: input.message,
+            internal: true,
+            trigger: input.trigger,
+            sourceId: input.sourceId,
+          },
+        },
+        () => {},
+      );
+      this.broadcast?.('chat-turn-finished', {
+        chatId,
+        trigger: input.trigger,
+        sourceId: input.sourceId,
+        status: result.turn?.completionStatus ?? result.status,
+      });
+      if (result.status === 409) return { started: false, reason: 'busy', status: result.status };
+      if (result.status !== 200) return { started: false, reason: 'failed', status: result.status };
+      await this.continueActiveGoal(
+        {
+          method: 'POST',
+          path: `/api/v2/chats/${encodeURIComponent(chatId)}/send`,
+          body: { internal: true, trigger: input.trigger, sourceId: input.sourceId },
+        },
+        result,
+        {},
+      );
+      return { started: true, status: result.status };
+    });
+  }
+
+  private async continueActiveGoal(
+    request: LocalBackendRequest,
+    result: StreamResult,
+    options: StreamOptions,
+  ): Promise<void> {
+    if (!result.turn) return;
+    const pathname = new URL(request.path, 'http://local.backend').pathname;
+    const match = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/(?:send|run|agent)$/);
+    if (!match) return;
+    const chatId = decodeURIComponent(match[1]);
+    const goals = this.toolRouter.goals();
+    const current = (await goals.get(chatId)).goal;
+    if (!current) return;
+    const recorded = await goals.recordTurn(chatId, current.id);
+    if (!recorded) return;
+    if (!shouldContinueGoal({
+      phase: recorded.phase,
+      completionStatus: result.turn.completionStatus,
+      madeProgress: result.turn.madeProgress,
+      aborted: options.signal?.aborted === true,
+    })) return;
+    await this.wakeChat(chatId, {
+      trigger: 'goal',
+      message: buildGoalContinuationPrompt(recorded),
+      sourceId: recorded.id,
+    });
   }
 
   private async handleStreamScoped(
@@ -2439,8 +2635,22 @@ export class LocalBackendRouter {
       chatAgents,
     );
     if (!regenerateMatch && !isResume) {
-      const userMeta = mentionedAgentIds.length > 0
-        ? JSON.stringify({ mentionedAgentIds })
+      const internal =
+        payload.internal === true &&
+        (payload.trigger === 'goal' || payload.trigger === 'loop') &&
+        typeof payload.sourceId === 'string';
+      const userMetadata = {
+        ...(mentionedAgentIds.length > 0 ? { mentionedAgentIds } : {}),
+        ...(internal
+          ? {
+              internal: true,
+              trigger: payload.trigger,
+              sourceId: payload.sourceId,
+            }
+          : {}),
+      };
+      const userMeta = Object.keys(userMetadata).length > 0
+        ? JSON.stringify(userMetadata)
         : null;
       const userMessage = await this.store.addMessage(chatId, 'user', userMessageText, userMeta);
       currentUserMessageId = userMessage.id;
@@ -2818,10 +3028,15 @@ export class LocalBackendRouter {
     const runtimeEnvironment = this.buildRuntimeEnvironmentContext(chatMode);
     // 名录进 realityCheck：两条系统提示拼装路径（技能拼装 / 用户整段覆盖）
     // 都会带上它，且位置在末尾——不动技能正文那段 prompt cache 前缀。
+    const activeGoal = (await this.toolRouter.goals().get(chatId)).goal;
+    const goalContext = activeGoal?.phase === 'active'
+      ? buildActiveGoalContext(activeGoal.objective)
+      : '';
     const realityCheck =
       runtimeEnvironment +
       this.buildToolRealityCheck(turnTools, polluted, chatMode) +
-      buildDelegateRosterHint([...delegates.mention, ...delegates.ambient]);
+      buildDelegateRosterHint([...delegates.mention, ...delegates.ambient]) +
+      goalContext;
 
     // 用户显式覆盖（payload.systemPrompt 优先 / settings.systemPrompt 自定义了且非默认值次之）走
     // "整段替换"路径，保持旧行为可被外部完全控制；否则交给 skill-based
@@ -3989,7 +4204,13 @@ export class LocalBackendRouter {
       assistantText,
       completionStatus,
     });
-    return { status: 200 };
+    return {
+      status: 200,
+      turn: {
+        completionStatus,
+        madeProgress: executedActions.length > 0 || assistantText.length > 0,
+      },
+    };
   }
 
   /**

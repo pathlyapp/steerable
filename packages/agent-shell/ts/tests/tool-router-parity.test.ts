@@ -46,6 +46,46 @@ describe('host parity tools', () => {
     expect(names).toEqual(expect.arrayContaining(['job_list', 'job_output', 'job_kill', 'task_run']));
   });
 
+  it('lists and executes loop tools only after a PTY monitor is wired', async () => {
+    const router = routerAt(scratch());
+    expect(router.listSchemas().map((schema) => schema.name)).not.toContain('loop_create');
+
+    const loop = {
+      id: 'loop-1',
+      chatId: 'chat-1',
+      terminalSessionId: 'terminal-1',
+      prompt: 'check build',
+      intervalSeconds: 5,
+    };
+    const monitor = {
+      start: vi.fn(() => loop),
+      list: vi.fn(() => [loop]),
+      stop: vi.fn(() => true),
+    };
+    router.setLoopMonitor(monitor);
+    expect(router.listSchemas().map((schema) => schema.name)).toEqual(
+      expect.arrayContaining(['loop_create', 'loop_list', 'loop_stop']),
+    );
+    expect(await router.execute(
+      { name: 'loop_create', arguments: { prompt: 'check build', intervalSeconds: 5 } },
+      { chatId: 'chat-1', projectRoot: '/tmp/project' },
+    )).toMatchObject({ success: true, loop: { id: 'loop-1' } });
+    expect(monitor.start).toHaveBeenCalledWith({
+      chatId: 'chat-1',
+      prompt: 'check build',
+      intervalSeconds: 5,
+      cwd: '/tmp/project',
+    });
+    expect(await router.execute(
+      { name: 'loop_list', arguments: {} },
+      { chatId: 'chat-1' },
+    )).toEqual({ success: true, loops: [loop] });
+    expect(await router.execute(
+      { name: 'loop_stop', arguments: { id: 'loop-1' } },
+      { chatId: 'chat-1' },
+    )).toEqual({ success: true });
+  });
+
   it('grep stays inside the project and goal updates check the revision', async () => {
     const root = scratch();
     mkdirSync(path.join(root, 'src'));

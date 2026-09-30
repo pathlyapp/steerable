@@ -2,6 +2,8 @@
  * 会话目标。每个 chat 一份，写在用户数据目录的 goals.json。
  *
  * 修订号做乐观并发：update_goal 必须带上一次读到的 revision。
+ * 模型与用户的可用动作不同（见 `MODEL_GOAL_ACTIONS`）：恢复与改写目标
+ * 只能由用户发起，模型不能自己把暂停或阻塞的目标重新激活。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -16,6 +18,8 @@ export type GoalPhase = 'active' | 'paused' | 'blocked' | 'complete';
 
 export type GoalAction = 'edit' | 'pause' | 'resume' | 'complete' | 'blocked';
 
+export type GoalActor = 'model' | 'user';
+
 export const GOAL_ACTIONS: readonly GoalAction[] = [
   'edit',
   'pause',
@@ -24,6 +28,12 @@ export const GOAL_ACTIONS: readonly GoalAction[] = [
   'blocked',
 ];
 
+/** update_goal 对模型开放的动作。 */
+export const MODEL_GOAL_ACTIONS: readonly GoalAction[] = ['pause', 'complete', 'blocked'];
+
+/** 用户（路由 / 命令）可用的动作；blocked 只由模型在阻塞核对后设置。 */
+export const USER_GOAL_ACTIONS: readonly GoalAction[] = ['edit', 'pause', 'resume', 'complete'];
+
 export interface StoredGoal {
   id: string;
   chatId: string;
@@ -31,6 +41,9 @@ export interface StoredGoal {
   objective: string;
   phase: GoalPhase;
   blockedReason?: string;
+  /** 目标存在期间跑过的回合数，含用户消息回合与自动续跑回合。 */
+  turns: number;
+  createdAt: number;
   updatedAt: number;
 }
 
@@ -45,13 +58,25 @@ export interface GoalToolResult {
   needsFollowup?: boolean;
 }
 
+export type GoalChangeListener = (chatId: string, goal: StoredGoal | null) => void;
+
 export class GoalStore {
   private pending: Promise<void> = Promise.resolve();
+  private readonly listeners = new Set<GoalChangeListener>();
 
   constructor(private readonly filePath: string) {}
 
   static default(): GoalStore {
     return new GoalStore(path.join(getUserDataDir(), 'goals.json'));
+  }
+
+  /**
+   * 订阅本实例写入的目标变化（创建、更新、清除、回合计数）。
+   * @returns 取消订阅
+   */
+  onChange(listener: GoalChangeListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   async get(chatId: string): Promise<GoalToolResult> {
@@ -73,16 +98,20 @@ export class GoalStore {
           needsFollowup: true,
         };
       }
+      const now = Date.now();
       const goal: StoredGoal = {
         id: randomUUID(),
         chatId,
         revision: 1,
         objective: text,
         phase: 'active',
-        updatedAt: Date.now(),
+        turns: 0,
+        createdAt: now,
+        updatedAt: now,
       };
       data.goals[chatId] = goal;
       await this.write(data);
+      this.emit(chatId, goal);
       return { success: true, goal };
     });
   }
@@ -92,13 +121,15 @@ export class GoalStore {
     id: string;
     revision: number;
     action: string;
+    actor: GoalActor;
     objective?: string;
     reason?: string;
   }): Promise<GoalToolResult> {
-    if (!GOAL_ACTIONS.includes(input.action as GoalAction)) {
+    const allowed = input.actor === 'model' ? MODEL_GOAL_ACTIONS : USER_GOAL_ACTIONS;
+    if (!allowed.includes(input.action as GoalAction)) {
       return {
         success: false,
-        error: `action 必须是 ${GOAL_ACTIONS.join(' | ')}`,
+        error: `action 必须是 ${allowed.join(' | ')}`,
         needsFollowup: true,
       };
     }
@@ -121,8 +152,48 @@ export class GoalStore {
       if ('error' in next) return { success: false, error: next.error, goal: current, needsFollowup: true };
       data.goals[input.chatId] = next;
       await this.write(data);
+      this.emit(input.chatId, next);
       return { success: true, goal: next };
     });
+  }
+
+  /** 删除本会话的目标记录（用户 `/goal clear`）。 */
+  async clear(chatId: string): Promise<GoalToolResult> {
+    return this.queue(async () => {
+      const data = await this.read();
+      if (!data.goals[chatId]) return { success: true, goal: null };
+      delete data.goals[chatId];
+      await this.write(data);
+      this.emit(chatId, null);
+      return { success: true, goal: null };
+    });
+  }
+
+  /**
+   * 给仍是 `goalId` 的目标记一回合。不改 revision：回合发生在两次模型
+   * 读写之间，计数不应让模型手里的 revision 失效。
+   */
+  async recordTurn(chatId: string, goalId: string): Promise<StoredGoal | null> {
+    return this.queue(async () => {
+      const data = await this.read();
+      const current = data.goals[chatId];
+      if (!current || current.id !== goalId) return null;
+      const next: StoredGoal = { ...current, turns: current.turns + 1, updatedAt: Date.now() };
+      data.goals[chatId] = next;
+      await this.write(data);
+      this.emit(chatId, next);
+      return next;
+    });
+  }
+
+  private emit(chatId: string, goal: StoredGoal | null): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(chatId, goal);
+      } catch (err) {
+        console.warn('[goal-store] change listener failed', err);
+      }
+    }
   }
 
   private queue<T>(fn: () => Promise<T>): Promise<T> {
@@ -151,6 +222,10 @@ export class GoalStore {
       const raw = await readFile(this.filePath, 'utf8');
       const parsed = JSON.parse(raw) as FileShape;
       if (!parsed || typeof parsed !== 'object' || !parsed.goals) return { goals: {} };
+      for (const goal of Object.values(parsed.goals)) {
+        goal.turns ??= 0;
+        goal.createdAt ??= goal.updatedAt;
+      }
       return parsed;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;

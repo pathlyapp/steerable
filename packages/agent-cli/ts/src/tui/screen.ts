@@ -54,6 +54,13 @@ export interface TuiScreen {
   mode?: 'agent' | 'plan';
   permission?: 'ask' | 'auto' | 'read';
   todos?: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed' }>;
+  goal?: {
+    objective: string;
+    phase: 'active' | 'paused' | 'blocked' | 'complete';
+    turns: number;
+    blockedReason?: string;
+  } | null;
+  loops?: Array<{ id: string; prompt: string; intervalSeconds: number }>;
 }
 
 export function draftHint(): string {
@@ -114,6 +121,8 @@ export function helpLines(): string[] {
     '/export 导出会话',
     '/compact 压缩上下文',
     '/plan 计划模式',
+    '/goal <目标> 持续执行',
+    '/loop <间隔> <任务> 循环执行',
     '/tasks 后台任务',
     '/fork 分叉',
     '/rewind 回退',
@@ -199,6 +208,10 @@ function screenLines(screen: TuiScreen): string[] {
 export function bannerLines(screen: TuiScreen): string[] {
   const lines: string[] = [];
   if (!screen.help && !screen.chats) {
+    if (screen.goal) lines.push(goalText(screen.goal));
+    if ((screen.loops?.length ?? 0) > 0) {
+      lines.push(`Loop · ${screen.loops!.length} 个运行中`);
+    }
     for (const todo of screen.todos ?? []) lines.push(todoText(todo));
   }
   if (screen.mode === 'plan') lines.push('模式 计划');
@@ -206,6 +219,18 @@ export function bannerLines(screen: TuiScreen): string[] {
   if (screen.permission === 'read') lines.push('权限 只读');
   for (const row of screen.panel ?? []) lines.push(row);
   return lines;
+}
+
+function goalText(goal: NonNullable<TuiScreen['goal']>): string {
+  const objective = goal.objective.length > 48
+    ? `${goal.objective.slice(0, 47)}…`
+    : goal.objective;
+  if (goal.phase === 'blocked') {
+    return `目标 · 阻塞 · ${objective}${goal.blockedReason ? ` · ${goal.blockedReason}` : ''}`;
+  }
+  if (goal.phase === 'paused') return `目标 · 暂停 · ${objective}`;
+  if (goal.phase === 'complete') return `目标 · 完成 · ${objective}`;
+  return `目标 · ${objective} · 第 ${goal.turns} 轮`;
 }
 
 function todoText(todo: { content: string; status: 'pending' | 'in_progress' | 'completed' }): string {

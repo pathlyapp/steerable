@@ -12,6 +12,8 @@ const COMMANDS = [
   { name: 'export', hint: '导出会话' },
   { name: 'compact', hint: '压缩上下文' },
   { name: 'plan', hint: '计划模式' },
+  { name: 'goal', hint: '持续目标' },
+  { name: 'loop', hint: '循环执行' },
   { name: 'tasks', hint: '后台任务' },
   { name: 'fork', hint: '分叉' },
   { name: 'rewind', hint: '回退' },

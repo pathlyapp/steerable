@@ -341,6 +341,60 @@ export async function getChatLiveStream(chatId: string) {
   });
 }
 
+export interface LocalGoal {
+  id: string;
+  chatId: string;
+  revision: number;
+  objective: string;
+  phase: 'active' | 'paused' | 'blocked' | 'complete';
+  blockedReason?: string;
+  turns: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export async function getChatGoal(chatId: string) {
+  return bridge().localBackend.request<{ goal: LocalGoal | null }>({
+    method: 'GET',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/goal`,
+  });
+}
+
+export async function updateChatGoal(
+  chatId: string,
+  body:
+    | { action: 'edit'; objective: string }
+    | { action: 'pause' | 'resume' | 'complete' | 'clear' },
+) {
+  return bridge().localBackend.request<{ goal: LocalGoal | null }>({
+    method: 'POST',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/goal`,
+    body,
+  });
+}
+
+export interface LocalMonitoredLoop {
+  id: string;
+  chatId: string;
+  terminalSessionId: string;
+  prompt: string;
+  intervalSeconds: number;
+}
+
+export async function listChatLoops(chatId: string) {
+  return bridge().localBackend.request<{ loops: LocalMonitoredLoop[] }>({
+    method: 'GET',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/loops`,
+  });
+}
+
+export async function stopChatLoop(chatId: string, loopId: string) {
+  return bridge().localBackend.request<{ success: boolean }>({
+    method: 'DELETE',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/loops/${encodeURIComponent(loopId)}`,
+  });
+}
+
 /** 按 chatId 取消运行中的回合（切回后新挂载的视图手里没有原 streamId）。 */
 export async function cancelChatTurn(chatId: string) {
   return bridge().localBackend.request<{ success: boolean; reason?: string }>({

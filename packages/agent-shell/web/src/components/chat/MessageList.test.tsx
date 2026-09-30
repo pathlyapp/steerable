@@ -95,4 +95,37 @@ describe('MessageList 回合吸顶结构 (Turn-based Sticky Grouping)', () => {
     expect(turnElements[0].querySelector('.sticky.top-0')).toBeNull();
     expect(turnElements[0].textContent).toContain('你好，我是智能助手。');
   });
+
+  it('隐藏内部 goal/loop 唤醒，只显示正常的助手回复', () => {
+    const messages: ChatMessage[] = [
+      {
+        id: 'u-goal',
+        role: 'user',
+        content: '<objective>do not show</objective>',
+        createdAt: '2026-09-29T06:00:00.000Z',
+        messageMetadata: JSON.stringify({
+          internal: true,
+          trigger: 'goal',
+          sourceId: 'goal-1',
+        }),
+      },
+      {
+        id: 'a-goal',
+        role: 'assistant',
+        content: '继续执行',
+        createdAt: '2026-09-29T06:00:01.000Z',
+      },
+    ];
+    const { queryByTestId, queryByText } = render(
+      <MessageList
+        messages={messages}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+      />,
+    );
+    expect(queryByTestId('internal-turn-goal')).toBeNull();
+    expect(queryByText(/do not show/)).toBeNull();
+    expect(queryByText('继续执行')).not.toBeNull();
+  });
 });

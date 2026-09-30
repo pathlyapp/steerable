@@ -55,6 +55,19 @@ export interface AgentTuiOptions {
   onChange?: () => void;
 }
 
+interface SessionGoal {
+  objective: string;
+  phase: 'active' | 'paused' | 'blocked' | 'complete';
+  turns: number;
+  blockedReason?: string;
+}
+
+interface SessionLoop {
+  id: string;
+  prompt: string;
+  intervalSeconds: number;
+}
+
 export class AgentTui implements Component {
   private readonly client: AgentClient;
   private readonly options: AgentTuiOptions;
@@ -84,6 +97,10 @@ export class AgentTui implements Component {
   private mode: 'agent' | 'plan' = 'agent';
   private permission: 'ask' | 'auto' | 'read' = 'ask';
   private todos: SessionTodo[] = [];
+  private goal: SessionGoal | null = null;
+  private loops: SessionLoop[] = [];
+  private backendTurnActive = false;
+  private loopExitArmed = false;
   private liveGeneration = 0;
   private children: ChildRow[] = [];
   private readonly cwd: string;
@@ -381,6 +398,8 @@ export class AgentTui implements Component {
       mode: this.mode,
       permission: this.permission,
       todos: this.todos,
+      goal: this.goal,
+      loops: this.loops,
     };
   }
 
@@ -546,6 +565,8 @@ export class AgentTui implements Component {
     this.children = [];
     this.picks = null;
     this.attachments = [];
+    await this.refreshGoal(id);
+    await this.refreshLoops(id);
     this.touch();
     this.armLive(id);
   }
@@ -556,7 +577,7 @@ export class AgentTui implements Component {
     this.picks = null;
     if (text) rememberPrompt(this.prompts, text);
     if (!text && this.attachments.length === 0) return;
-    if (text.startsWith('/')) {
+    if (text.startsWith('/') && !isSkillFacadeCommand(text)) {
       await this.slash(text);
       return;
     }
@@ -570,14 +591,18 @@ export class AgentTui implements Component {
       return;
     }
     const files = this.attachments.splice(0);
-    if (this.sending) {
-      this.queue.push({ text, files });
+    this.queue.push({ text, files });
+    if (this.sending || this.backendTurnActive) {
       this.touch();
       return;
     }
+    await this.drainQueue();
+  }
+
+  private async drainQueue(): Promise<void> {
+    if (this.sending || this.backendTurnActive) return;
     this.sending = true;
     try {
-      await this.sendPrepared(text, files);
       while (!this.stopped && this.queue.length > 0) {
         const next = this.queue.shift();
         if (!next) break;
@@ -682,6 +707,14 @@ export class AgentTui implements Component {
       this.touch();
       return;
     }
+    if (command === 'goal') {
+      await this.manageGoal(rest);
+      return;
+    }
+    if (command === 'loop') {
+      await this.manageLoop(rest);
+      return;
+    }
     if (command === 'tasks') {
       await this.showTasks();
       return;
@@ -710,6 +743,64 @@ export class AgentTui implements Component {
     }
     this.status = `unknown command /${command}`;
     this.touch();
+  }
+
+  private async manageGoal(parts: string[]): Promise<void> {
+    if (!this.chatId) {
+      this.status = '还没有会话';
+      return;
+    }
+    if (parts.length === 0) {
+      await this.refreshGoal(this.chatId);
+      this.status = this.goal ? '' : '没有持续目标';
+      return;
+    }
+    const action = parts[0];
+    if (!['edit', 'pause', 'resume', 'complete', 'clear'].includes(action)) {
+      this.status = '用法 /goal [edit <目标>|pause|resume|complete|clear]';
+      return;
+    }
+    const objective = parts.slice(1).join(' ').trim();
+    if (action === 'edit' && !objective) {
+      this.status = '用法 /goal edit <目标>';
+      return;
+    }
+    const response = await this.client.request(
+      'POST',
+      `/api/v2/chats/${encodeURIComponent(this.chatId)}/goal`,
+      { action, ...(objective ? { objective } : {}) },
+    );
+    if (response.status !== 200) {
+      this.status = `目标操作失败 (${response.status})`;
+      return;
+    }
+    this.goal = (response.data as { goal?: SessionGoal | null }).goal ?? null;
+    this.status = '';
+  }
+
+  private async manageLoop(parts: string[]): Promise<void> {
+    if (!this.chatId) {
+      this.status = '还没有会话';
+      return;
+    }
+    if (parts[0] === 'list') {
+      await this.refreshLoops(this.chatId);
+      this.panel = this.loops.length > 0
+        ? this.loops.map((loop) => `Loop ${loop.id}  每 ${loop.intervalSeconds} 秒  ${loop.prompt}`)
+        : ['没有运行中的 Loop'];
+      return;
+    }
+    if (parts[0] === 'stop' && parts[1]) {
+      const response = await this.client.request(
+        'DELETE',
+        `/api/v2/chats/${encodeURIComponent(this.chatId)}/loops/${encodeURIComponent(parts[1])}`,
+        undefined,
+      );
+      this.status = response.status === 200 ? 'Loop 已停止' : `停止 Loop 失败 (${response.status})`;
+      await this.refreshLoops(this.chatId);
+      return;
+    }
+    this.status = '用法 /loop list | /loop stop <id>';
   }
 
   private async attach(target: string): Promise<void> {
@@ -879,6 +970,26 @@ export class AgentTui implements Component {
       } else if (event.channel === 'ask-user:request') {
         const payload = event.payload as { requestId?: string; prompt?: string };
         if (payload.requestId) this.ask = { requestId: payload.requestId, prompt: payload.prompt ?? '' };
+      } else if (event.channel === 'goal-changed') {
+        const payload = event.payload as { chatId?: string; goal?: SessionGoal | null };
+        if (payload.chatId === this.chatId) this.goal = payload.goal ?? null;
+      } else if (event.channel === 'loop-changed') {
+        const payload = event.payload as { chatId?: string; loops?: SessionLoop[] };
+        if (payload.chatId === this.chatId) this.loops = payload.loops ?? [];
+      } else if (event.channel === 'chat-turn-started') {
+        const payload = event.payload as { chatId?: string };
+        if (payload.chatId === this.chatId) {
+          this.backendTurnActive = true;
+          this.armLive(payload.chatId, true);
+        }
+      } else if (event.channel === 'chat-turn-finished') {
+        const payload = event.payload as { chatId?: string };
+        if (payload.chatId === this.chatId) {
+          this.backendTurnActive = false;
+          await this.reloadMessages(payload.chatId);
+          await this.refreshGoal(payload.chatId);
+          void this.drainQueue();
+        }
       }
       this.touch();
     }
@@ -921,18 +1032,25 @@ export class AgentTui implements Component {
     }
   }
 
-  private armLive(chatId: string): void {
+  private armLive(chatId: string, waitForStart = false): void {
     const generation = ++this.liveGeneration;
-    void this.pollLive(chatId, generation);
+    void this.pollLive(chatId, generation, waitForStart ? 10 : 0);
   }
 
-  private async pollLive(chatId: string, generation: number): Promise<void> {
+  private async pollLive(chatId: string, generation: number, startRetries: number): Promise<void> {
     if (this.stopped || this.chatId !== chatId || generation !== this.liveGeneration) return;
     const live = await this.client.request('GET', `/api/v2/chats/${encodeURIComponent(chatId)}/live-stream`, undefined);
     if (this.stopped || this.chatId !== chatId || generation !== this.liveGeneration) return;
     if (live.status !== 200 || !live.data || typeof live.data !== 'object') return;
     const data = live.data as { active?: boolean; content?: string; executedActions?: ToolAction[] };
     if (data.active !== true) {
+      if (startRetries > 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, this.options.liveIntervalMs ?? 1000);
+        });
+        await this.pollLive(chatId, generation, startRetries - 1);
+        return;
+      }
       if (this.status === '运行中') this.status = '';
       this.touch();
       return;
@@ -951,7 +1069,49 @@ export class AgentTui implements Component {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, wait);
     });
-    await this.pollLive(chatId, generation);
+    await this.pollLive(chatId, generation, 0);
+  }
+
+  private async refreshGoal(chatId: string): Promise<void> {
+    const response = await this.client.request(
+      'GET',
+      `/api/v2/chats/${encodeURIComponent(chatId)}/goal`,
+      undefined,
+    );
+    this.goal = response.status === 200 && response.data && typeof response.data === 'object'
+      ? ((response.data as { goal?: SessionGoal | null }).goal ?? null)
+      : null;
+  }
+
+  private async refreshLoops(chatId: string): Promise<void> {
+    const response = await this.client.request(
+      'GET',
+      `/api/v2/chats/${encodeURIComponent(chatId)}/loops`,
+      undefined,
+    );
+    this.loops = response.status === 200 && response.data && typeof response.data === 'object'
+      ? ((response.data as { loops?: SessionLoop[] }).loops ?? [])
+      : [];
+  }
+
+  private async reloadMessages(chatId: string): Promise<void> {
+    const response = await this.client.request(
+      'GET',
+      `/api/v2/chats/${encodeURIComponent(chatId)}/messages`,
+      undefined,
+    );
+    if (response.status !== 200) return;
+    const records = (response.data as {
+      messages?: Parameters<typeof historyRows>[0];
+    }).messages ?? [];
+    this.todos = [];
+    this.lines = historyRows(records).map((row) => {
+      if (row.kind !== 'tool') return { kind: row.kind, text: row.text };
+      const next = todosFromAction(row.action.tool, row.action.arguments, row.action.result);
+      if (next) this.todos = next;
+      return toolLine(row.action);
+    });
+    this.touch();
   }
 
   private async showList(
@@ -1092,6 +1252,12 @@ export class AgentTui implements Component {
   }
 
   private exit(): void {
+    if (this.loops.length > 0 && !this.loopExitArmed) {
+      this.loopExitArmed = true;
+      this.status = '活动 Loop 会随本进程停止；再按一次退出';
+      this.touch();
+      return;
+    }
     this.stopped = true;
     this.turnAbort?.abort();
     this.options.onExit();
@@ -1161,6 +1327,16 @@ function taskStatus(status: string | undefined): string {
   if (status === 'failed') return '失败';
   if (status === 'blocked') return '等待';
   return status ?? '';
+}
+
+function isSkillFacadeCommand(text: string): boolean {
+  if (/^\/goal(?:\s|$)/.test(text)) {
+    return !/^\/goal(?:\s+(?:edit|pause|resume|complete|clear)(?:\s|$)|\s*$)/.test(text);
+  }
+  if (/^\/loop(?:\s|$)/.test(text)) {
+    return !/^\/loop\s+(?:list|stop)(?:\s|$)/.test(text);
+  }
+  return false;
 }
 
 async function editWithEditor(text: string): Promise<string> {

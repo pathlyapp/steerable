@@ -18,7 +18,9 @@
  * 真实拼装逻辑上，mock 只停在进程外边界。
  */
 import { vi } from 'vitest';
+import path from 'node:path';
 import { resetProductConfigForTests } from '../../src/product-config.js';
+import { GoalStore } from '../../src/goal-store.js';
 
 import type {
   ChatAgentRecord,
@@ -764,6 +766,7 @@ export const DEFAULT_TOOL_SCHEMAS: ToolSchemaStub[] = [
  */
 export function makeToolRouter(overrides: Record<string, unknown> = {}) {
   const schemas = (overrides.schemas as ToolSchemaStub[] | undefined) ?? DEFAULT_TOOL_SCHEMAS;
+  const goalStore = new GoalStore(path.join(h.userDataDir, `goals-${crypto.randomUUID()}.json`));
   const applyPolicy = (policy?: { mode: string; tools: string[] }) => {
     if (!policy || policy.mode === 'all') return schemas;
     if (policy.mode === 'allowlist') return schemas.filter((s) => policy.tools.includes(s.name));
@@ -777,6 +780,7 @@ export function makeToolRouter(overrides: Record<string, unknown> = {}) {
     getSchemaByName: vi.fn((name: string) => schemas.find((s) => s.name === name) ?? null),
     projectRegistry: null as unknown,
     mcpRegistry: null as unknown,
+    goals: () => goalStore,
     ...overrides,
   };
 }

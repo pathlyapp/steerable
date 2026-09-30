@@ -86,11 +86,16 @@ export type HistoryRow =
 export function historyRows(messages: readonly StoredMessage[]): HistoryRow[] {
   const rows: HistoryRow[] = [];
   for (const message of inTimeOrder(messages)) {
+    const meta = parseMeta(message.messageMetadata);
     if (message.role === 'user') {
+      if (meta.internal === true) {
+        const trigger = meta.trigger === 'loop' ? 'Loop 触发' : '目标续跑';
+        rows.push({ kind: 'tree', text: trigger });
+        continue;
+      }
       rows.push({ kind: 'user', text: message.content ?? '' });
       continue;
     }
-    const meta = parseMeta(message.messageMetadata);
     const timeline = Array.isArray(meta.timeline) ? meta.timeline : null;
     if (timeline) {
       let sawText = false;

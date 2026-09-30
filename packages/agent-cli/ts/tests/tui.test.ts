@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentClient } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
@@ -27,6 +27,49 @@ afterEach(() => {
 });
 
 describe('tui screen', () => {
+  it('renders native goal state without a turn cap', () => {
+    const active = visibleText(renderScreen({
+      product: 'Demo',
+      title: 'Goal',
+      modelName: 'demo-model',
+      lines: [],
+      approval: null,
+      ask: null,
+      chats: null,
+      readOnly: false,
+      help: false,
+      draft: '',
+      cursor: 0,
+      status: '',
+      goal: { objective: '完整实现目标', phase: 'active', turns: 3 },
+      loops: [{ id: 'l1', prompt: '检查构建', intervalSeconds: 300 }],
+    }, 72));
+    expect(active).toContain('目标 · 完整实现目标 · 第 3 轮');
+    expect(active).toContain('Loop · 1 个运行中');
+
+    const blocked = visibleText(renderScreen({
+      product: 'Demo',
+      title: 'Goal',
+      modelName: 'demo-model',
+      lines: [],
+      approval: null,
+      ask: null,
+      chats: null,
+      readOnly: false,
+      help: false,
+      draft: '',
+      cursor: 0,
+      status: '',
+      goal: {
+        objective: '完整实现目标',
+        phase: 'blocked',
+        turns: 3,
+        blockedReason: '需要用户凭据',
+      },
+    }, 72));
+    expect(blocked).toContain('目标 · 阻塞 · 完整实现目标 · 需要用户凭据');
+  });
+
   it('renders a tool card, the seven approval decisions, and a read-only occupied chat', () => {
     const tool = visibleText(renderScreen({
       product: 'Demo',
@@ -175,6 +218,24 @@ describe('tui screen', () => {
     expect(withChildren.filter((row) => row.kind === 'tree').map((row) => row.kind === 'tree' ? row.text : '')).toEqual([
       '子任务 1/1',
       '✓ researcher  查资料  完成',
+    ]);
+  });
+
+  it('renders internal wake messages as notices instead of user text', () => {
+    expect(historyRows([
+      {
+        role: 'user',
+        content: '<objective>secret prompt</objective>',
+        messageMetadata: JSON.stringify({ internal: true, trigger: 'goal', sourceId: 'g1' }),
+      },
+      {
+        role: 'user',
+        content: 'check build',
+        messageMetadata: JSON.stringify({ internal: true, trigger: 'loop', sourceId: 'l1' }),
+      },
+    ])).toEqual([
+      { kind: 'tree', text: '目标续跑' },
+      { kind: 'tree', text: 'Loop 触发' },
     ]);
   });
 
@@ -408,6 +469,8 @@ describe('slash commands', () => {
       '/export 导出会话',
       '/compact 压缩上下文',
       '/plan 计划模式',
+      '/goal 持续目标',
+      '/loop 循环执行',
       '/tasks 后台任务',
       '/fork 分叉',
       '/rewind 回退',
@@ -421,6 +484,118 @@ describe('slash commands', () => {
     session.handleInput('\r');
     await waitFor(() => visibleText(session.render(72)).includes('用法 /attach'));
     expect(session.snapshot().draft).toBe('');
+  });
+
+  it('passes /goal and /loop through to their skills', async () => {
+    const bodies: unknown[] = [];
+    const session = new AgentTui(fakeClient({
+      async *stream(_path, body) {
+        bodies.push(body);
+        yield { type: 'content', content: 'ok' } as SSEEvent;
+      },
+    }), { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '/goal ship the release');
+    await typeLine(session, '/loop 5m check CI');
+    await waitFor(() => bodies.length === 2);
+    expect(bodies).toEqual([
+      { message: '/goal ship the release' },
+      { message: '/loop 5m check CI' },
+    ]);
+  });
+
+  it('routes deterministic goal and loop management commands to native endpoints', async () => {
+    const requests: Array<{ method: string; path: string; body: unknown }> = [];
+    const client = fakeClient({
+      request: async (method, requestPath, body) => {
+        requests.push({ method, path: requestPath, body });
+        if (requestPath === '/api/v2/chats') {
+          return { status: 200, data: { chats: [{ id: 'chat-1', title: 'Demo' }] } };
+        }
+        if (requestPath.endsWith('/goal') && method === 'GET') {
+          return {
+            status: 200,
+            data: { goal: { objective: 'Ship', phase: 'paused', turns: 2 } },
+          };
+        }
+        if (requestPath.endsWith('/goal') && method === 'POST') {
+          return {
+            status: 200,
+            data: { goal: { objective: 'Ship better', phase: 'active', turns: 2 } },
+          };
+        }
+        if (requestPath.endsWith('/loops')) {
+          return {
+            status: 200,
+            data: {
+              loops: [{
+                id: 'loop-1',
+                prompt: 'check CI',
+                intervalSeconds: 60,
+                terminalSessionId: 'terminal-1',
+              }],
+            },
+          };
+        }
+        return { status: 200, data: {} };
+      },
+    });
+    const session = new AgentTui(client, { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '/goal');
+    await typeLine(session, '/goal edit Ship better');
+    await typeLine(session, '/goal pause');
+    await typeLine(session, '/loop list');
+    await typeLine(session, '/loop stop loop-1');
+
+    expect(requests).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        method: 'POST',
+        path: '/api/v2/chats/chat-1/goal',
+        body: { action: 'edit', objective: 'Ship better' },
+      }),
+      expect.objectContaining({
+        method: 'POST',
+        path: '/api/v2/chats/chat-1/goal',
+        body: { action: 'pause' },
+      }),
+      expect.objectContaining({
+        method: 'DELETE',
+        path: '/api/v2/chats/chat-1/loops/loop-1',
+      }),
+    ]));
+    expect(session.snapshot().loops).toHaveLength(1);
+  });
+
+  it('warns once before exiting while a monitored loop is active', async () => {
+    const onExit = vi.fn();
+    const session = new AgentTui(fakeClient({
+      request: async (_method, requestPath) => {
+        if (requestPath === '/api/v2/chats') {
+          return { status: 200, data: { chats: [{ id: 'chat-1', title: 'Demo' }] } };
+        }
+        if (requestPath.endsWith('/loops')) {
+          return {
+            status: 200,
+            data: {
+              loops: [{
+                id: 'loop-1',
+                prompt: 'check CI',
+                intervalSeconds: 60,
+                terminalSessionId: 'terminal-1',
+              }],
+            },
+          };
+        }
+        return { status: 200, data: {} };
+      },
+    }), { product: 'Demo', onExit });
+    await session.open();
+    session.handleInput('\x03');
+    expect(onExit).not.toHaveBeenCalled();
+    expect(session.snapshot().status).toContain('活动 Loop 会随本进程停止');
+    session.handleInput('\x03');
+    expect(onExit).toHaveBeenCalledOnce();
   });
 });
 
@@ -490,6 +665,109 @@ describe('follow-up queue', () => {
     } finally {
       release();
     }
+  });
+});
+
+describe('backend-initiated turns', () => {
+  it('attaches to a goal wake and reloads its persisted internal turn', async () => {
+    const events: Array<{ channel: string; payload: unknown }> = [];
+    let releaseEvent: (() => void) | null = null;
+    let liveActive = false;
+    let finished = false;
+    const sent: string[] = [];
+    const client = fakeClient({
+      request: async (method, requestPath) => {
+        if (requestPath === '/api/v2/chats') {
+          return { status: 200, data: { chats: [{ id: 'chat-1', title: 'Demo' }] } };
+        }
+        if (requestPath.endsWith('/live-stream')) {
+          return {
+            status: 200,
+            data: liveActive
+              ? { active: true, content: '后台正在继续' }
+              : { active: false },
+          };
+        }
+        if (requestPath.endsWith('/messages')) {
+          return {
+            status: 200,
+            data: {
+              messages: finished
+                ? [
+                    {
+                      role: 'user',
+                      content: '<objective>hidden</objective>',
+                      messageMetadata: JSON.stringify({
+                        internal: true,
+                        trigger: 'goal',
+                        sourceId: 'goal-1',
+                      }),
+                    },
+                    { role: 'assistant', content: '目标继续完成' },
+                  ]
+                : [],
+            },
+          };
+        }
+        if (requestPath.endsWith('/goal')) {
+          return {
+            status: 200,
+            data: { goal: { objective: 'Ship', phase: 'active', turns: finished ? 2 : 1 } },
+          };
+        }
+        if (requestPath.endsWith('/loops')) return { status: 200, data: { loops: [] } };
+        if (method === 'GET' && requestPath === '/api/v2/local-settings/llm') {
+          return { status: 200, data: { model: 'demo-model' } };
+        }
+        return { status: 200, data: { title: 'Demo' } };
+      },
+      stream: async function* (_path, body) {
+        sent.push(String((body as { message?: string }).message ?? ''));
+        yield { type: 'content', content: '排队消息已发送' } as SSEEvent;
+      },
+      events: async function* () {
+        while (true) {
+          if (events.length === 0) {
+            await new Promise<void>((resolve) => {
+              releaseEvent = resolve;
+            });
+            releaseEvent = null;
+          }
+          const event = events.shift();
+          if (event) yield event;
+        }
+      },
+    });
+    const session = new AgentTui(client, {
+      product: 'Demo',
+      onExit() {},
+      liveIntervalMs: 5,
+    });
+    await session.open();
+
+    liveActive = true;
+    events.push({
+      channel: 'chat-turn-started',
+      payload: { chatId: 'chat-1', trigger: 'goal', sourceId: 'goal-1' },
+    });
+    releaseEvent?.();
+    await waitFor(() => visibleText(session.render(72)).includes('后台正在继续'));
+    await typeLine(session, '后台结束后发送');
+    expect(visibleText(session.render(72))).toContain('排队 后台结束后发送');
+    expect(sent).toEqual([]);
+
+    liveActive = false;
+    finished = true;
+    events.push({
+      channel: 'chat-turn-finished',
+      payload: { chatId: 'chat-1', trigger: 'goal', status: 'completed' },
+    });
+    releaseEvent?.();
+    await waitFor(() => visibleText(session.render(72)).includes('目标继续完成'));
+    await waitFor(() => sent.includes('后台结束后发送'));
+    const rendered = visibleText(session.render(72));
+    expect(rendered).toContain('目标续跑');
+    expect(rendered).not.toContain('<objective>hidden</objective>');
   });
 });
 
