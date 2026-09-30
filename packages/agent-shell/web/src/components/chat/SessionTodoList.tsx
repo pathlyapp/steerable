@@ -46,12 +46,12 @@ export function todoProgressCopy(todos: SessionTodo[]): string {
   const summary = summarizeTodos(todos);
   if (summary.total === 0) return '';
   if (summary.completed === summary.total) {
-    return t('{completed}/{total} done', { completed: summary.completed, total: summary.total });
+    return `${summary.completed}/${summary.total}`;
   }
   const currentIndex = todos.findIndex((todo) => todo.status === 'in_progress');
   const step =
     currentIndex >= 0 ? currentIndex + 1 : Math.min(summary.completed + 1, summary.total);
-  return t('On step {step}/{total}', { step, total: summary.total });
+  return `${step}/${summary.total}`;
 }
 
 export function TodoItems({
@@ -211,17 +211,6 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
               <span>{t('Task list')}</span>
             </div>
             <div className="flex items-center gap-1.5">
-              {progressLabel && (
-                <span
-                  className={`rounded-full px-1.5 py-0.2 text-[10px] font-medium ${
-                    isAllCompleted
-                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                      : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                  }`}
-                >
-                  {progressLabel}
-                </span>
-              )}
               <button
                 type="button"
                 onClick={() => setUserToggled(false)}
