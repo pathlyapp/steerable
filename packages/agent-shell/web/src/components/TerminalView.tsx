@@ -139,8 +139,11 @@ export function TerminalView({
     containerRef.current.addEventListener('contextmenu', onContextMenu);
 
     let cancelled = false;
+    const pendingChunks: Array<{ sessionId: string; chunk: string }> = [];
     const offData = terminal.onData(({ sessionId, chunk }) => {
-      if (sessionIdRef.current && sessionId === sessionIdRef.current) {
+      if (sessionIdRef.current === null) {
+        pendingChunks.push({ sessionId, chunk });
+      } else if (sessionId === sessionIdRef.current) {
         term.write(chunk);
       }
     });
@@ -159,6 +162,12 @@ export function TerminalView({
         });
         if (cancelled) return;
         sessionIdRef.current = session.id;
+        for (const pending of pendingChunks) {
+          if (pending.sessionId === session.id) {
+            term.write(pending.chunk);
+          }
+        }
+        pendingChunks.length = 0;
         setStatus('ready');
         term.writeln(
           `\x1b[90m[agent-shell] ${session.shell} pid=${session.pid} cwd=${session.cwd}\x1b[0m`,

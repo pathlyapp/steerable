@@ -26,6 +26,7 @@ import {
   resetRouterTestkit,
 } from './router-testkit.js';
 import { LocalBackendRouter } from '../../src/local-backend/router.js';
+import { acquireChatWriteLock } from '../../src/storage/process-locks.js';
 import type { ToolRouter } from '../../src/tool-router.js';
 import { setProductConfig } from '../../src/product-config.js';
 
@@ -443,11 +444,20 @@ describe('流式回合失败与取消', () => {
       throw new DOMException('aborted', 'AbortError');
     });
     const cap = makeEmitCapture();
+    let lockWasAvailableAtDone = false;
     await makeRouter().handleStream(
       { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
-      cap.emit,
+      (chunk) => {
+        if (chunk === 'data: [DONE]\n\n') {
+          const lease = acquireChatWriteLock(h.userDataDir, chat.id);
+          lockWasAvailableAtDone = true;
+          lease.release();
+        }
+        cap.emit(chunk);
+      },
     );
     expect(cap.events().filter((c) => c.event === 'error')).toHaveLength(0);
+    expect(lockWasAvailableAtDone).toBe(true);
     const assistant = (await h.store.listMessages(chat.id, 10))[0];
     expect(JSON.parse(assistant.messageMetadata!)).toMatchObject({
       completionStatus: 'cancelled',

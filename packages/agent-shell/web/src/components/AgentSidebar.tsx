@@ -1326,6 +1326,7 @@ export function AgentSidebar({
               })
             : ""
         }
+        error={pendingDeleteChat ? error : null}
         pending={
           pendingDeleteChat !== null && deletingChatId === pendingDeleteChat.id
         }

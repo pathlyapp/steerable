@@ -2488,7 +2488,7 @@ export class LocalBackendRouter {
       return { status: 404 };
     }
 
-    return this.withChatWriteLock(chatId, emit, async () => {
+    return this.withChatWriteLock(chatId, emit, async (emit) => {
     // W7-1: resume=true（仅 send 路由）续跑 durable record 里被中断的 turn，
     // 不追加新用户消息；与 regenerate 互斥（regenerate 有自己的路径参数语义）。
     const isResume = !regenerateMatch && payload.resume === true;
@@ -3665,18 +3665,28 @@ export class LocalBackendRouter {
   private async withChatWriteLock(
     chatId: string,
     emit: StreamEmit,
-    body: () => Promise<StreamResult>,
+    body: (emit: StreamEmit) => Promise<StreamResult>,
   ): Promise<StreamResult> {
     const lease = this.tryChatLock(chatId);
     if (!lease) {
       emit(this.sse('error', { code: 'chat_busy', message: '该会话正在另一个进程中运行' }));
       return { status: 409 };
     }
+    let doneChunk: string | undefined;
+    let result: StreamResult;
     try {
-      return await body();
+      result = await body((chunk) => {
+        if (chunk === 'data: [DONE]\n\n') {
+          doneChunk = chunk;
+          return;
+        }
+        emit(chunk);
+      });
     } finally {
       lease.release();
     }
+    if (doneChunk) emit(doneChunk);
+    return result;
   }
 
   private sse(event: string, data: unknown): string {

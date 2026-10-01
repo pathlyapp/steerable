@@ -1254,11 +1254,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       setIsDragging(false);
     };
 
-    // 把新文件并入列表：按 path（有路径时）或 name（浏览器模式无路径）去重。
+    // 桌面壳的真实 path 可去重；浏览器 File 没有 path，同名文件可能来自
+    // 不同目录，必须全部保留，提交落盘时由宿主生成唯一文件名。
     const addFiles = (incoming: AttachmentFile[]) => {
-      const keyOf = (f: AttachmentFile) => f.path || f.name;
-      const existingKeys = new Set(actualFiles.map(keyOf));
-      const filteredNewFiles = incoming.filter((f) => !existingKeys.has(keyOf(f)));
+      const existingPaths = new Set(actualFiles.map((file) => file.path).filter(Boolean));
+      const filteredNewFiles = incoming.filter(
+        (file) => !file.path || !existingPaths.has(file.path),
+      );
       if (filteredNewFiles.length > 0) {
         actualOnFilesChange([...actualFiles, ...filteredNewFiles]);
       }
@@ -1349,9 +1351,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       if (value[removeEnd] === ' ') removeEnd += 1;
       replaceRange(start, removeEnd, '');
       if (ref) {
-        setMentionReferences((prev) =>
-          prev.filter((item) => !(item.type === ref.type && item.id === ref.id)),
+        const nextReferences = mentionReferences.filter(
+          (item) => !(item.type === ref.type && item.id === ref.id),
         );
+        setMentionReferences(nextReferences);
+        onMentionReferencesChange?.(nextReferences);
       }
     };
 
@@ -1686,12 +1690,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         event.key === 'Enter' && !event.shiftKey;
       if (isSendCombo) {
         event.preventDefault();
+        const submittedText = getEditableText(event.currentTarget).trim();
         // streaming 期间：Enter = follow-up 排队（本轮结束后自动作为下一轮
         // 发出）；⌘/Ctrl+Enter = 轮中插队（注入运行中的回合；注入不了时
         // hook 兜底为 W6-2 排队或新回合直发，消息不会丢）。
         if (isStreaming) {
-          if ((event.metaKey || event.ctrlKey) && onSteer && trimmed) {
-            void onSteer(trimmed).then((outcome) => {
+          if ((event.metaKey || event.ctrlKey) && onSteer && submittedText) {
+            void onSteer(submittedText).then((outcome) => {
               // steered / queued / sent 三种结果消息都已落地（注入当前回合 /
               // 进入待发队列 / 作为新回合发出），草稿都可以清；queued 额外
               // 提示用户"不是追加进当前回合"。
@@ -1706,8 +1711,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             });
             return;
           }
-          if (onFollowUp && trimmed) {
-            onFollowUp(trimmed);
+          if (onFollowUp && submittedText) {
+            onFollowUp(submittedText);
             onChange('');
           }
           return;

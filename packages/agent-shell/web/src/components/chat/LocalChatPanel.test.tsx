@@ -96,6 +96,35 @@ describe('LocalChatPanel 附件提交', () => {
     ]);
   });
 
+  it('浏览器依次选择两个同名文件时全部保留并交给宿主唯一命名', async () => {
+    saveMock.mockResolvedValue({
+      files: [
+        { name: 'image.png', path: '/data/attachments/chat-1/image.png', size: 5 },
+        { name: 'image-2.png', path: '/data/attachments/chat-1/image-2.png', size: 5 },
+      ],
+    });
+    const onSubmit = renderPanel();
+
+    pickFile('image.png', 'image/png');
+    await waitFor(() => expect(screen.getAllByText('image.png')).toHaveLength(1));
+    pickFile('image.png', 'image/png');
+    await waitFor(() => expect(screen.getAllByText('image.png')).toHaveLength(2));
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(saveMock.mock.calls[0][0].files).toHaveLength(2);
+    const input = onSubmit.mock.calls[0][0] as {
+      content: string;
+      metadata?: { images?: Array<{ name: string }> };
+    };
+    expect(input.content).toContain('/data/attachments/chat-1/image.png');
+    expect(input.content).toContain('/data/attachments/chat-1/image-2.png');
+    expect(input.metadata?.images?.map((image) => image.name)).toEqual([
+      'image.png',
+      'image-2.png',
+    ]);
+  });
+
   it('落盘失败：不写空引用、显示错误、无正文时不发送', async () => {
     saveMock.mockResolvedValue({
       files: [{ name: 'big.bin', path: '', size: 0, error: 'file too large' }],
@@ -143,5 +172,13 @@ describe('LocalChatPanel 停止生成', () => {
 
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('textbox').textContent).toBe('第一条\n\n第二条');
+  });
+});
+
+describe('LocalChatPanel 输入焦点', () => {
+  it('打开会话时聚焦输入框', () => {
+    renderPanel();
+
+    expect(document.activeElement).toBe(screen.getByRole('textbox'));
   });
 });

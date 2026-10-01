@@ -610,11 +610,11 @@ describe('AgentPage 发送流程', () => {
     expect(await screen.findByText('部分回复')).toBeTruthy();
     fireEvent.click(stop);
     expect(cancelActiveMock).toHaveBeenCalled();
-    // 前端状态复位：停止按钮回到发送按钮
-    await screen.findByRole('button', { name: 'Send message' });
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeTruthy();
     await act(async () => {
       finishStream();
     });
+    await screen.findByRole('button', { name: 'Send message' });
   });
 
   it('流式传输出错时错误落进助手消息', async () => {
@@ -847,11 +847,16 @@ describe('AgentPage 远端回合恢复', () => {
     renderPage('/agent/chat-1', makeCtx());
     await screen.findByRole('textbox');
 
-    getChatLiveStream.mockResolvedValue({ active: true, status: 'running' });
+    const liveStreamCallsBeforeStart = getChatLiveStream.mock.calls.length;
+    getChatLiveStream.mockResolvedValue({ active: false });
     act(() => {
       packEventHandlers.get('chat-turn-started')?.({ chatId: 'chat-1' });
     });
     expect(await screen.findByRole('button', { name: 'Stop generating' })).toBeTruthy();
+    await waitFor(() => {
+      expect(getChatLiveStream.mock.calls.length).toBeGreaterThan(liveStreamCallsBeforeStart);
+    });
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeTruthy();
 
     finished = true;
     getChatLiveStream.mockResolvedValue({ active: false });

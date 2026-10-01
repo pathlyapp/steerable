@@ -225,6 +225,10 @@ export function LocalChatPanel({
   const [mentionReferences, setMentionReferences] = useState<MentionReference[]>([]);
   const inputRef = useRef<ChatInputHandle>(null);
 
+  useEffect(() => {
+    inputRef.current?.focusAtEnd();
+  }, [chatId]);
+
   const handleSelectPrompt = useCallback((prompt: string) => {
     setInputValue(prompt);
     // Wait for the textarea to receive the new value before pulling focus,

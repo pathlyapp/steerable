@@ -108,6 +108,22 @@ describe('ChatInput streaming 期排队与插队（W6-2）', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
+  it('uses the browser text when the deferred controlled value trails the final keystroke', () => {
+    const onSteer = vi.fn<(text: string) => Promise<SteerOutcome>>().mockResolvedValue('steered');
+    renderInput({
+      value: 'change directio',
+      onChange: vi.fn(),
+      isStreaming: true,
+      onSteer,
+    });
+    const editor = screen.getByTestId('chat-composer');
+    editor.textContent = 'change direction';
+
+    fireEvent.keyDown(editor, { key: 'Enter', metaKey: true });
+
+    expect(onSteer).toHaveBeenCalledWith('change direction');
+  });
+
   it('⌘/Ctrl+Enter 遇到已结束回合时兜底为直发（sent）', async () => {
     const onSteer = vi.fn<(text: string) => Promise<SteerOutcome>>().mockResolvedValue('sent');
     const onChange = vi.fn();

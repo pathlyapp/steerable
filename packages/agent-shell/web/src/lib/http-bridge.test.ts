@@ -208,43 +208,52 @@ describe('startStream / cancelStream', () => {
     expect(events).toEqual([{ type: 'error', error: 'start stream failed (503)' }]);
   });
 
-  it('取消进行中的流按正常结束（end 200）上报', async () => {
+  it('取消聊天流调用 cancel 端点，等待原流结束后才上报 end', async () => {
     const encoder = new TextEncoder();
-    let rejectRead: ((err: Error) => void) | null = null;
+    let finishRead: (() => void) | null = null;
     let readCount = 0;
-    stubFetch(() => ({
-      ok: true,
-      status: 200,
-      body: {
-        getReader: () => ({
-          read: () => {
-            readCount += 1;
-            if (readCount === 1) {
-              return Promise.resolve({ done: false, value: encoder.encode('chunk-1') });
-            }
-            return new Promise((_, reject) => {
-              rejectRead = reject;
-            });
-          },
-        }),
-      },
-    }));
+    const fetchMock = stubFetch((path) => {
+      if (path.endsWith('/cancel')) {
+        finishRead?.();
+        return jsonResponse({ success: true });
+      }
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: () => {
+              readCount += 1;
+              if (readCount === 1) {
+                return Promise.resolve({ done: false, value: encoder.encode('chunk-1') });
+              }
+              return new Promise<{ done: true; value: undefined }>((resolve) => {
+                finishRead = () => resolve({ done: true, value: undefined });
+              });
+            },
+          }),
+        },
+      };
+    });
     const bridge = createHttpBridge();
     const events: LocalBackendStreamEvent[] = [];
     const streamId = await bridge.localBackend.startStream(
-      { method: 'POST', path: '/x' },
+      { method: 'POST', path: '/api/v2/chats/c1/run' },
       (e) => events.push(e),
     );
     expect(streamId).not.toBeNull();
     await vi.waitFor(() => expect(events).toHaveLength(1));
     bridge.localBackend.cancelStream(streamId!);
-    rejectRead!(new Error('The operation was aborted'));
     await vi.waitFor(() => {
       expect(events).toEqual([
         { type: 'data', chunk: 'chunk-1' },
         { type: 'end', status: 200 },
       ]);
     });
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/chats/c1/cancel',
+      expect.objectContaining({ method: 'POST', body: '{}' }),
+    );
     // 重复取消是 no-op，不抛错。
     expect(() => bridge.localBackend.cancelStream(streamId!)).not.toThrow();
   });

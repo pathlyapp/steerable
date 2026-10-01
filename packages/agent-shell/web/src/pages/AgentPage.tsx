@@ -692,7 +692,6 @@ function AgentChatView({
     followUpUserMessage,
     pendingFollowUps,
     removeFollowUp,
-    cancel,
     setMessages,
     appendMessage,
   } = useChatStream({
@@ -701,6 +700,10 @@ function AgentChatView({
     onUnknownEvent: handleUnknownEvent,
     onStreamError: handleStreamError,
   });
+  const awaitingRemoteActiveSnapshotRef = useRef(false);
+  useEffect(() => {
+    awaitingRemoteActiveSnapshotRef.current = false;
+  }, [chatId]);
 
   useEffect(() => {
     const bridge = getHostBridge();
@@ -708,6 +711,7 @@ function AgentChatView({
     const offStarted = bridge.onPackEvent('chat-turn-started', (value) => {
       const payload = value as { chatId?: string };
       if (payload.chatId === chatId) {
+        awaitingRemoteActiveSnapshotRef.current = true;
         liveStreamEpochRef.current += 1;
         setLiveStream((current) => ({ ...current, active: true }));
       }
@@ -715,6 +719,7 @@ function AgentChatView({
     const offFinished = bridge.onPackEvent('chat-turn-finished', (value) => {
       const payload = value as { chatId?: string };
       if (payload.chatId !== chatId) return;
+      awaitingRemoteActiveSnapshotRef.current = false;
       liveStreamEpochRef.current += 1;
       setLiveStream({ active: false });
       void bridge.localBackend.request<{
@@ -779,6 +784,11 @@ function AgentChatView({
       try {
         const next = await getChatLiveStream(chatId);
         if (!cancelled && liveStreamEpochRef.current === epoch) {
+          if (next?.active) {
+            awaitingRemoteActiveSnapshotRef.current = false;
+          } else if (awaitingRemoteActiveSnapshotRef.current) {
+            return;
+          }
           setLiveStream(next ?? { active: false });
         }
       } catch {
@@ -849,14 +859,12 @@ function AgentChatView({
     wasStreamingRef.current = isStreaming;
   }, [isStreaming, messages]);
 
-  // 真正能中断后端 agent 循环的取消：框架 hook 的 cancel 只重置前端状态
-  // （cancel 句柄在流结束后才被保存，是已知的上游缺陷），这里补上
-  // transport.cancelActive() 让主进程 abort LLM / 工具循环。
+  // 真正中断后端 agent 循环；流保持运行态直到后端发回 cancelled done，
+  // 避免界面提前恢复发送后，新回合被仍在清理的旧回合以 409 拒绝。
   const handleCancel = useCallback(() => {
     transport.cancelActive();
-    cancel();
     updateRemoteFollowUps(() => []);
-  }, [transport, cancel, updateRemoteFollowUps]);
+  }, [transport, updateRemoteFollowUps]);
 
   // Reset the in-flight queue on every new user submit. We do this in a
   // wrapper rather than directly in `handleUnknownEvent`, because there's no
