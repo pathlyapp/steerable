@@ -123,6 +123,46 @@ describe('OpenTUI cell renderer', () => {
     await setup.renderOnce();
     expect(setup.captureCharFrame()).toContain('answer row 61');
   });
+
+  it('TUI-050 keeps the selected chat on screen', async () => {
+    const setup = await createTestRenderer({ width: 80, height: 16 });
+    renderers.push(setup);
+    registerTuiArtifact('TUI-050', setup.captureCharFrame);
+    const view = new OpenTuiView(setup.renderer);
+    const transcript = Array.from({ length: 40 }, (_, index) => ({
+      kind: 'assistant' as const,
+      text: `transcript ${index}`,
+    }));
+    view.apply(screen({ lines: transcript }));
+    await setup.flush();
+    expect(setup.captureCharFrame()).toContain('transcript 39');
+
+    const chats = Array.from({ length: 30 }, (_, index) => ({
+      id: `id-${String(index).padStart(2, '0')}`,
+      title: `S${String(index).padStart(2, '0')}`,
+      busy: false,
+      selected: index === 0,
+    }));
+    view.apply(screen({ chats, lines: transcript }));
+    await setup.flush();
+    const opened = setup.captureCharFrame();
+    expect(opened).toContain('S00');
+    expect(opened).not.toContain('S29');
+
+    view.apply(screen({
+      chats: chats.map((chat, index) => ({ ...chat, selected: index === 20 })),
+      lines: transcript,
+    }));
+    await setup.flush();
+    const moved = setup.captureCharFrame();
+    expect(moved).toContain('S20');
+    expect(moved).not.toContain('S00');
+    expect(moved).not.toContain('S29');
+
+    view.apply(screen({ chats: null, lines: transcript }));
+    await setup.flush();
+    expect(setup.captureCharFrame()).toContain('transcript 39');
+  });
 });
 
 function screen(overrides: Partial<TuiScreen> = {}): TuiScreen {

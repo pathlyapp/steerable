@@ -66,9 +66,31 @@ export class OpenTuiView {
   private bodyKey = '';
   private overlayKey = '';
   private picksKey = '';
+  private chatListOpen = false;
+  private transcriptPinned = true;
+  private transcriptScroll = 0;
+  private revealId: string | null = null;
+  private restoreTranscript = false;
+  private readonly onFrame = (): void => {
+    if (this.restoreTranscript) {
+      this.restoreTranscript = false;
+      this.body.stickyScroll = true;
+      const max = this.maxScrollTop();
+      this.body.scrollTop = this.transcriptPinned ? max : Math.min(this.transcriptScroll, max);
+      return;
+    }
+    if (!this.revealId) return;
+    const id = this.revealId;
+    this.revealId = null;
+    this.body.scrollChildIntoView(id);
+  };
 
   constructor(renderer: CliRenderer) {
     this.renderer = renderer;
+    renderer.on('frame', this.onFrame);
+    renderer.once('destroy', () => {
+      renderer.off('frame', this.onFrame);
+    });
     const shell = new BoxRenderable(renderer, {
       width: '100%',
       height: '100%',
@@ -211,11 +233,45 @@ export class OpenTuiView {
     if (typeof screen.searchFocus === 'number') this.body.scrollChildIntoView(`line-${screen.searchFocus}`);
     this.paintOverlay(screen);
     this.paintPicks(screen);
+    this.followChats(screen);
 
     const key = bodyKey(screen);
     if (key === this.bodyKey) return;
     this.bodyKey = key;
     this.replaceBody(screen);
+  }
+
+  /** Transcript stays pinned to the bottom. The chat list follows the selected row instead. */
+  private followChats(screen: TuiScreen): void {
+    const chats = screen.chats;
+    if (chats && !this.chatListOpen) {
+      this.transcriptPinned = this.atBottom();
+      this.transcriptScroll = this.body.scrollTop;
+      this.body.stickyScroll = false;
+      this.body.scrollTop = 0;
+      this.chatListOpen = true;
+    } else if (!chats && this.chatListOpen) {
+      this.chatListOpen = false;
+      this.revealId = null;
+      this.restoreTranscript = true;
+      this.body.stickyScroll = false;
+    }
+    if (!chats) return;
+    const index = chats.findIndex((chat) => chat.selected);
+    this.revealId = index < 0 ? null : index === 0 ? 'chat-heading' : `chat-${index}`;
+  }
+
+  private atBottom(): boolean {
+    return this.body.scrollTop >= this.maxScrollTop() - 1;
+  }
+
+  private maxScrollTop(): number {
+    return Math.max(0, this.body.scrollHeight - this.viewportRows());
+  }
+
+  private viewportRows(): number {
+    const height = this.body.viewport.height;
+    return typeof height === 'number' ? height : 0;
   }
 
   private paintOverlay(screen: TuiScreen): void {
@@ -275,9 +331,10 @@ export class OpenTuiView {
       return;
     }
     if (screen.chats) {
-      this.body.add(text(renderer, dim, '会话'));
-      for (const chat of screen.chats) {
+      this.body.add(text(renderer, dim, '会话', 'chat-heading'));
+      screen.chats.forEach((chat, index) => {
         const row = new BoxRenderable(renderer, {
+          id: `chat-${index}`,
           width: '100%',
           height: 1,
           backgroundColor: chat.selected ? selected : canvas,
@@ -285,7 +342,7 @@ export class OpenTuiView {
         });
         row.add(text(renderer, chat.selected ? ink : dim, chatText(chat)));
         this.body.add(row);
-      }
+      });
       return;
     }
     screen.lines.forEach((line, index) => {
