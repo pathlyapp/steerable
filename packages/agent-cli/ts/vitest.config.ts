@@ -7,6 +7,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
+    setupFiles: ['./tests/tui-failure-setup.ts'],
   },
   resolve: {
     alias: [

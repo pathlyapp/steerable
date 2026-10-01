@@ -1,23 +1,31 @@
 import { ProcessTerminal, TuiAltScreen, type Terminal } from '@earendil-works/pi-tui';
+import type { CliRenderer } from '@opentui/core';
 import type { AgentClient } from '@steerable/agent-client';
 
 import { installAgentKeybindings } from './keys.js';
 import { transcriptPage } from './scroll.js';
 import { AgentTui } from './session.js';
 
-export async function runTui(options: {
+export interface RunTuiOptions {
   client: AgentClient;
   product: string;
   dataDir?: string;
   terminal?: Terminal;
-}): Promise<number> {
+  fallbackTerminal?: Terminal;
+  openRenderer?: CliRenderer;
+}
+
+export async function runTui(options: RunTuiOptions): Promise<number> {
   installAgentKeybindings();
   if (options.terminal) return runPlainTui(options);
   try {
     return await runOpenTui(options);
   } catch (error) {
     if (!openTuiUnavailable(error)) throw error;
-    return runPlainTui(options);
+    return runPlainTui({
+      ...options,
+      ...(options.fallbackTerminal ? { terminal: options.fallbackTerminal } : {}),
+    });
   }
 }
 
@@ -25,10 +33,13 @@ async function runOpenTui(options: {
   client: AgentClient;
   product: string;
   dataDir?: string;
+  openRenderer?: CliRenderer;
 }): Promise<number> {
-  const { createCliRenderer } = await import('@opentui/core');
+  const createCliRenderer = options.openRenderer
+    ? null
+    : (await import('@opentui/core')).createCliRenderer;
   const { OpenTuiView } = await import('./view.js');
-  const renderer = await createCliRenderer({
+  const renderer = options.openRenderer ?? await createCliRenderer!({
     exitOnCtrlC: false,
     useMouse: false,
     consoleMode: 'disabled',
@@ -37,7 +48,7 @@ async function runOpenTui(options: {
     backgroundColor: '#16161e',
     targetFps: 30,
   });
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const session = new AgentTui(options.client, {
       product: options.product,
       ...(options.dataDir ? { dataDir: options.dataDir } : {}),
@@ -60,7 +71,13 @@ async function runOpenTui(options: {
       session.handleInput(sequence);
       return true;
     });
-    void session.open().then(() => view.apply(session.snapshot()));
+    void session.open().then(
+      () => view.apply(session.snapshot()),
+      (error: unknown) => {
+        renderer.destroy();
+        reject(error);
+      },
+    );
   });
 }
 
@@ -72,7 +89,7 @@ function runPlainTui(options: {
 }): Promise<number> {
   const terminal = options.terminal ?? new ProcessTerminal();
   const tui = new TuiAltScreen(terminal);
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const session = new AgentTui(options.client, {
       product: options.product,
       ...(options.dataDir ? { dataDir: options.dataDir } : {}),
@@ -86,7 +103,13 @@ function runPlainTui(options: {
     });
     tui.addChild(session);
     tui.setFocus(session);
-    void session.open().then(() => tui.requestRender());
+    void session.open().then(
+      () => tui.requestRender(),
+      (error: unknown) => {
+        tui.stop();
+        reject(error);
+      },
+    );
     tui.start();
   });
 }

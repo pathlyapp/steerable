@@ -1,6 +1,7 @@
 import type { AgentClient } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
 
+import { createCli } from '../cli.js';
 import { runTui } from './run.js';
 
 const queue: Array<{ channel: string; payload: unknown }> = [];
@@ -174,6 +175,13 @@ function scheduleFiniteLoopWake(id: string, attempt: number): void {
   }, 150);
 }
 
-await runTui({ client, product: 'Demo' });
-await client.close();
-process.exit(0);
+const defaultCli = process.argv.includes('--default-cli');
+const code = defaultCli
+  ? await createCli({
+    argv: [],
+    createClient: async () => client,
+    installSignals: false,
+  })
+  : await runTui({ client, product: 'Demo' });
+if (!defaultCli) await client.close();
+process.exit(code);

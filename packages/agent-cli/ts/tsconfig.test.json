@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "tests/test-terminal.ts",
+    "tests/tmux-driver.ts",
+    "tests/tui-artifacts.ts",
+    "tests/tui-case-coverage.test.ts",
+    "tests/tui-edge-cases.test.ts",
+    "tests/tui-failure-setup.ts",
+    "tests/tui-framework.test.ts",
+    "tests/tui-harness.ts",
+    "tests/tui-open-renderer.test.ts",
+    "tests/tui-platform.test.ts",
+    "tests/tui-tmux.test.ts"
+  ]
+}

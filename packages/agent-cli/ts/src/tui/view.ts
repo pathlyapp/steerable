@@ -1,12 +1,14 @@
 import {
   BoxRenderable,
-  MarkdownRenderable,
   ScrollBoxRenderable,
-  SyntaxStyle,
   TextRenderable,
+  bold,
   dim as dimText,
+  italic,
   reverse,
+  strikethrough,
   t,
+  underline,
   type CliRenderer,
   type Renderable,
   type StyledText,
@@ -64,16 +66,9 @@ export class OpenTuiView {
   private bodyKey = '';
   private overlayKey = '';
   private picksKey = '';
-  private readonly syntax: SyntaxStyle | null;
 
   constructor(renderer: CliRenderer) {
     this.renderer = renderer;
-    try {
-      this.syntax = SyntaxStyle.create();
-    } catch (error) {
-      void error;
-      this.syntax = null;
-    }
     const shell = new BoxRenderable(renderer, {
       width: '100%',
       height: '100%',
@@ -294,7 +289,7 @@ export class OpenTuiView {
       return;
     }
     screen.lines.forEach((line, index) => {
-      this.body.add(transcriptRow(renderer, line, this.syntax, `line-${index}`));
+      this.body.add(transcriptRow(renderer, line, `line-${index}`));
     });
     for (const line of childLines(screen.children ?? [])) this.body.add(text(renderer, tool, line));
   }
@@ -317,7 +312,7 @@ function bodyKey(screen: TuiScreen): string {
   });
 }
 
-function transcriptRow(renderer: CliRenderer, line: TranscriptLine, syntax: SyntaxStyle | null, id: string): Renderable {
+function transcriptRow(renderer: CliRenderer, line: TranscriptLine, id: string): Renderable {
   if (line.kind === 'reasoning') {
     const card = new BoxRenderable(renderer, {
       id,
@@ -347,21 +342,41 @@ function transcriptRow(renderer: CliRenderer, line: TranscriptLine, syntax: Synt
   if (line.kind === 'user') {
     return text(renderer, user, `user ${line.text ?? ''}`, id);
   }
-  if (line.kind === 'assistant' && syntax) {
-    return new MarkdownRenderable(renderer, {
-      id,
-      content: line.text && line.text.length > 0 ? line.text : ' ',
-      syntaxStyle: syntax,
-      fg: ink,
-      conceal: true,
-      streaming: line.streaming === true,
-      width: '100%',
-    });
+  if (line.kind === 'assistant') {
+    return markdown(renderer, line.text ?? '', id);
   }
   const plain = plainMarkdown(line.text ?? '');
   return text(renderer, ink, plain.length > 0 ? plain : ' ', id);
 }
 
-function text(renderer: CliRenderer, fg: string, content = '', id?: string): TextRenderable {
+function markdown(renderer: CliRenderer, source: string, id: string): Renderable {
+  const box = new BoxRenderable(renderer, {
+    id,
+    width: '100%',
+    flexDirection: 'column',
+  });
+  let fenced = false;
+  for (const raw of source.replace(/\r\n/g, '\n').split('\n')) {
+    if (raw.trim().startsWith('```')) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) {
+      box.add(text(renderer, tool, raw.length > 0 ? raw : ' '));
+      continue;
+    }
+    const content = plainMarkdown(raw);
+    if (/^#{1,6}\s+/.test(raw)) box.add(text(renderer, user, t`${bold(content)}`));
+    else if (/^\s*>/.test(raw)) box.add(text(renderer, dim, t`${italic(content.replace(/^\s*>\s?/, ''))}`));
+    else if (/\*\*[^*\n]+\*\*/.test(raw)) box.add(text(renderer, ink, t`${bold(content)}`));
+    else if (/~~[^~\n]+~~/.test(raw)) box.add(text(renderer, ink, t`${strikethrough(content)}`));
+    else if (/\[[^\]\n]+\]\([^)]+\)/.test(raw)) box.add(text(renderer, user, t`${underline(content)}`));
+    else if (/`[^`\n]+`/.test(raw)) box.add(text(renderer, tool, content));
+    else box.add(text(renderer, ink, content.length > 0 ? content : ' '));
+  }
+  return box;
+}
+
+function text(renderer: CliRenderer, fg: string, content: string | StyledText = '', id?: string): TextRenderable {
   return new TextRenderable(renderer, { ...(id ? { id } : {}), content, fg, wrapMode: 'word' });
 }

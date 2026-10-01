@@ -79,6 +79,7 @@ export class AgentTui implements Component {
   private chats: ChatRow[] | null = null;
   private selected = 0;
   private approval: { requestId: string; toolName: string; summary: string } | null = null;
+  private approvalSubmitting = false;
   private ask: { requestId: string; prompt: string } | null = null;
   private readOnly = false;
   private help = false;
@@ -184,6 +185,7 @@ export class AgentTui implements Component {
       return;
     }
     if (this.approval) {
+      if (this.approvalSubmitting) return;
       const kind = approvalKind(data);
       if (kind) void this.decide(kind);
       return;
@@ -578,7 +580,12 @@ export class AgentTui implements Component {
     if (text) rememberPrompt(this.prompts, text);
     if (!text && this.attachments.length === 0) return;
     if (text.startsWith('/') && !isSkillFacadeCommand(text)) {
-      await this.slash(text);
+      try {
+        await this.slash(text);
+      } catch (error) {
+        this.status = `命令失败：${error instanceof Error ? error.message : String(error)}`;
+        this.touch();
+      }
       return;
     }
     if (this.readOnly) {
@@ -615,6 +622,7 @@ export class AgentTui implements Component {
   }
 
   private async sendPrepared(text: string, files: Array<{ name: string; path: string }>): Promise<void> {
+    this.status = '';
     const prepared = await this.prepareOwned(text, files);
     this.lines.push({ kind: 'user', text: prepared.message });
     this.touch();
@@ -686,11 +694,11 @@ export class AgentTui implements Component {
       return;
     }
     if (command === 'skills') {
-      await this.showList('GET', '/api/v2/chat-agents/skills', 'skills', (row) => `技能 ${textField(row, 'name')}${textField(row, 'description') ? `  ${textField(row, 'description')}` : ''}`, '没有技能');
+      await this.showList('GET', '/api/v2/chat-agents/skills', 'skills', (row) => `技能 ${textField(row, 'name')}${textField(row, 'description') ? `  ${textField(row, 'description')}` : ''}`, '没有技能', '技能不可用');
       return;
     }
     if (command === 'mcp') {
-      await this.showList('GET', '/api/v2/mcp/servers', 'servers', (row) => `MCP ${textField(row, 'name') || textField(row, 'id')}  ${numberField(row, 'toolCount')} 个工具`, '没有 MCP');
+      await this.showList('GET', '/api/v2/mcp/servers', 'servers', (row) => `MCP ${textField(row, 'name') || textField(row, 'id')}  ${numberField(row, 'toolCount')} 个工具`, '没有 MCP', 'MCP 不可用');
       return;
     }
     if (command === 'export') {
@@ -874,7 +882,6 @@ export class AgentTui implements Component {
     const controller = new AbortController();
     this.turnAbort = controller;
     this.children = [];
-    this.status = '';
     try {
       const payload: { message: string; images?: Array<{ path: string; name: string }>; mode?: 'plan' } = { message: text };
       if (images.length > 0) payload.images = images;
@@ -885,6 +892,11 @@ export class AgentTui implements Component {
         controller.signal,
       )) {
         this.observe(event, controller.signal);
+        this.touch();
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        this.status = error instanceof Error ? error.message : String(error);
         this.touch();
       }
     } finally {
@@ -1120,8 +1132,14 @@ export class AgentTui implements Component {
     key: string,
     format: (row: Record<string, unknown>) => string,
     empty: string,
+    unavailable: string,
   ): Promise<void> {
     const listed = await this.client.request(method, requestPath, undefined);
+    if (listed.status !== 200) {
+      this.panel = [`${unavailable} (${listed.status})`];
+      this.touch();
+      return;
+    }
     const rows = listed.status === 200 && listed.data && typeof listed.data === 'object'
       ? (listed.data as Record<string, unknown>)[key]
       : [];
@@ -1139,6 +1157,11 @@ export class AgentTui implements Component {
       return;
     }
     const listed = await this.client.request('GET', `/api/v2/chats/${encodeURIComponent(this.chatId)}/tasks`, undefined);
+    if (listed.status !== 200) {
+      this.panel = [`后台任务不可用 (${listed.status})`];
+      this.touch();
+      return;
+    }
     const rows = listed.status === 200 && listed.data && typeof listed.data === 'object'
       ? (listed.data as { tasks?: Array<{ task?: string; status?: string }> }).tasks ?? []
       : [];
@@ -1240,10 +1263,19 @@ export class AgentTui implements Component {
 
   private async decide(kind: ApprovalDecisionKind): Promise<void> {
     const request = this.approval;
-    if (!request) return;
-    this.approval = null;
+    if (!request || this.approvalSubmitting) return;
+    this.approvalSubmitting = true;
     this.touch();
-    await this.client.decideApproval(request.requestId, kind);
+    try {
+      const accepted = await this.client.decideApproval(request.requestId, kind);
+      if (!accepted) throw new Error('approval unavailable');
+      if (this.approval?.requestId === request.requestId) this.approval = null;
+    } catch (error) {
+      this.status = `审批失败：${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      this.approvalSubmitting = false;
+      this.touch();
+    }
   }
 
   private touch(): void {

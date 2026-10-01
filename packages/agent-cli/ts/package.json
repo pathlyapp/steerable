@@ -39,7 +39,9 @@
     "gen": "echo agent-cli",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:tui": "vitest run tests/tui.test.ts tests/tui-framework.test.ts tests/tui-edge-cases.test.ts tests/tui-open-renderer.test.ts tests/tui-platform.test.ts tests/tui-case-coverage.test.ts",
+    "test:tui:pty": "vitest run tests/tui-tmux.test.ts",
+    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "check:drift": "echo ok"
   },
   "dependencies": {

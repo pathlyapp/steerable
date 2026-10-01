@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 describe('tui screen', () => {
-  it('renders native goal state without a turn cap', () => {
+  it('TUI-091 TUI-095 renders native goal state without a turn cap', () => {
     const active = visibleText(renderScreen({
       product: 'Demo',
       title: 'Goal',
@@ -70,7 +70,7 @@ describe('tui screen', () => {
     expect(blocked).toContain('目标 · 阻塞 · 完整实现目标 · 需要用户凭据');
   });
 
-  it('renders a tool card, the seven approval decisions, and a read-only occupied chat', () => {
+  it('TUI-030 TUI-040 TUI-051 renders a tool card, seven approval decisions, and a read-only chat', () => {
     const tool = visibleText(renderScreen({
       product: 'Demo',
       title: 'Notes',
@@ -135,7 +135,7 @@ describe('tui screen', () => {
     expect(busy).toContain('只读 · 另一个进程正在运行');
   });
 
-  it('lets the renderer see capability replies and treats shifted return as a newline', () => {
+  it('TUI-011 TUI-080 lets the renderer see capability replies and treats shifted return as a newline', () => {
     expect(transcriptPage('\x1b[5~')).toBe(-1);
     expect(transcriptPage('\x1b[6~')).toBe(1);
     expect(transcriptPage('\r')).toBe(0);
@@ -157,7 +157,7 @@ describe('tui screen', () => {
     expect(yieldsToRenderer('\r')).toBe(false);
   });
 
-  it('uses mac key names on darwin and pc names on other platforms', () => {
+  it('TUI-120 TUI-121 TUI-122 uses platform-specific key names', () => {
     expect(formatKey('ctrl+c', 'darwin')).toBe('Control+C');
     expect(formatKey('enter', 'darwin')).toBe('Return');
     expect(formatKey('shift+enter', 'darwin')).toBe('Shift+Return');
@@ -170,7 +170,7 @@ describe('tui screen', () => {
     expect(formatKey('escape', 'win32')).toBe('Esc');
   });
 
-  it('restores tool cards from a newest-first history', () => {
+  it('TUI-033 TUI-053 restores tool cards from a newest-first history', () => {
     const rows = historyRows([
       {
         role: 'assistant',
@@ -221,7 +221,7 @@ describe('tui screen', () => {
     ]);
   });
 
-  it('renders internal wake messages as notices instead of user text', () => {
+  it('TUI-093 renders internal wake messages as notices instead of user text', () => {
     expect(historyRows([
       {
         role: 'user',
@@ -239,7 +239,7 @@ describe('tui screen', () => {
     ]);
   });
 
-  it('strips markdown markers and formats a finished tool as one line', () => {
+  it('TUI-022 TUI-031 TUI-123 strips markdown markers and formats a finished tool as one line', () => {
     expect(formatDuration(300)).toBe('0.3s');
     expect(toolStatus({})).toBe('…');
     expect(toolStatus({ success: true, durationMs: 300 })).toBe('✓ 0.3s');
@@ -248,7 +248,7 @@ describe('tui screen', () => {
 });
 
 describe('tui session', () => {
-  it('answers an approval and aborts the next turn from the key table', async () => {
+  it('TUI-004 TUI-041 answers an approval and aborts the next turn from the key table', async () => {
     const decisions: string[] = [];
     let releaseApproval: (kind: string) => void = () => {};
     const approvalDone = new Promise<string>((resolve) => {
@@ -301,7 +301,7 @@ describe('tui session', () => {
     await waitFor(() => visibleText(session.render(72)).includes('已中断'));
   });
 
-  it('uses a rebound interrupt key and leaves ctrl+c alone', async () => {
+  it('TUI-016 uses a rebound interrupt key and leaves ctrl+c alone', async () => {
     installAgentKeybindings({ 'agent.interrupt': 'ctrl+x' });
     let exited = 0;
     const session = new AgentTui(fakeClient(), { product: 'Demo', onExit() { exited += 1; } });
@@ -312,7 +312,7 @@ describe('tui session', () => {
     expect(exited).toBe(1);
   });
 
-  it('runs slash commands for a new chat, the model, clearing, and help', async () => {
+  it('TUI-061A TUI-061B TUI-061C runs new, model, clear, and help commands', async () => {
     const calls: string[] = [];
     const session = new AgentTui(fakeClient({
       stream: async function* () {
@@ -344,7 +344,7 @@ describe('tui session', () => {
     expect(visibleText(session.render(72))).toContain('New');
   });
 
-  it('opens a busy chat as read-only', async () => {
+  it('TUI-050 TUI-051 opens a busy chat as read-only', async () => {
     const session = new AgentTui(fakeClient({
       request: async (method, requestPath) => {
         if (method === 'GET' && requestPath === '/api/v2/chats') {
@@ -367,7 +367,7 @@ describe('tui session', () => {
     expect(visibleText(session.render(72))).not.toContain('user hello');
   });
 
-  it('paints each keystroke before enter', async () => {
+  it('TUI-010 TUI-020 TUI-021 paints each keystroke before enter', async () => {
     const painted: string[] = [];
     const session = new AgentTui(fakeClient(), {
       product: 'Demo',
@@ -401,7 +401,7 @@ describe('tui session', () => {
 });
 
 describe('prompt history', () => {
-  it('recalls sent lines with up and restores the draft with down', async () => {
+  it('TUI-072A recalls sent lines with up and restores the draft with down', async () => {
     const session = new AgentTui(fakeClient(), { product: 'Demo', onExit() {} });
     await session.open();
     await typeLine(session, '先看目录');
@@ -418,7 +418,7 @@ describe('prompt history', () => {
     expect(session.snapshot().draft).toBe('再看文件!');
   });
 
-  it('moves inside a multiline draft before recalling', async () => {
+  it('TUI-072B moves inside a multiline draft before recalling', async () => {
     const session = new AgentTui(fakeClient(), { product: 'Demo', onExit() {} });
     await session.open();
     await typeLine(session, '已发送');
@@ -431,7 +431,7 @@ describe('prompt history', () => {
     expect(session.snapshot().draft).toBe('已发送');
   });
 
-  it('recalls with historyPrevious when the caret is not on the first line', async () => {
+  it('TUI-016 TUI-072B recalls with a rebound history key inside a multiline draft', async () => {
     installAgentKeybindings({
       'tui.editor.historyPrevious': 'ctrl+p',
       'tui.editor.historyNext': 'ctrl+n',
@@ -450,7 +450,7 @@ describe('prompt history', () => {
 });
 
 describe('slash commands', () => {
-  it('lists the commands that already exist and completes one with tab', async () => {
+  it('TUI-060 lists registered commands and completes one with tab', async () => {
     expect(slashAt('/mo', 3)).toEqual({ start: 0, query: 'mo' });
     expect(slashAt('看 /mo', 5)).toBeNull();
     expect(completeSlash('a').map((pick) => pick.label)).toEqual(['/attach 附加文件']);
@@ -486,7 +486,7 @@ describe('slash commands', () => {
     expect(session.snapshot().draft).toBe('');
   });
 
-  it('passes /goal and /loop through to their skills', async () => {
+  it('TUI-090 passes /goal and /loop through to their skills', async () => {
     const bodies: unknown[] = [];
     const session = new AgentTui(fakeClient({
       async *stream(_path, body) {
@@ -504,7 +504,7 @@ describe('slash commands', () => {
     ]);
   });
 
-  it('routes deterministic goal and loop management commands to native endpoints', async () => {
+  it('TUI-091 TUI-095 routes goal and loop management commands to native endpoints', async () => {
     const requests: Array<{ method: string; path: string; body: unknown }> = [];
     const client = fakeClient({
       request: async (method, requestPath, body) => {
@@ -567,7 +567,7 @@ describe('slash commands', () => {
     expect(session.snapshot().loops).toHaveLength(1);
   });
 
-  it('warns once before exiting while a monitored loop is active', async () => {
+  it('TUI-095 warns once before exiting while a monitored loop is active', async () => {
     const onExit = vi.fn();
     const session = new AgentTui(fakeClient({
       request: async (_method, requestPath) => {
@@ -600,7 +600,7 @@ describe('slash commands', () => {
 });
 
 describe('follow-up queue', () => {
-  it('sends the next line only after the current turn finishes', async () => {
+  it('TUI-073 sends the next line only after the current turn finishes', async () => {
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -635,7 +635,7 @@ describe('follow-up queue', () => {
     expect(calls).toBe(2);
   });
 
-  it('drops a queued line when the turn is interrupted', async () => {
+  it('TUI-074 drops a queued line when the turn is interrupted', async () => {
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -669,7 +669,7 @@ describe('follow-up queue', () => {
 });
 
 describe('backend-initiated turns', () => {
-  it('attaches to a goal wake and reloads its persisted internal turn', async () => {
+  it('TUI-092 TUI-094 attaches to a goal wake and reloads its persisted internal turn', async () => {
     const events: Array<{ channel: string; payload: unknown }> = [];
     let releaseEvent: (() => void) | null = null;
     let liveActive = false;
@@ -774,7 +774,7 @@ describe('backend-initiated turns', () => {
 describe('clipboard paste', () => {
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-  it('attaches a pasted image and inserts clipboard text when there is no image', async () => {
+  it('TUI-067 attaches a pasted image and inserts clipboard text when there is no image', async () => {
     expect(imageExtension(png)).toBe('png');
     expect(imageExtension(new Uint8Array([1, 2, 3]))).toBeNull();
     const imageSession = new AgentTui(fakeClient(), {
@@ -802,7 +802,7 @@ describe('clipboard paste', () => {
 });
 
 describe('composer', () => {
-  it('edits by grapheme and by word from the key table', () => {
+  it('TUI-012 edits by grapheme and by word from the key table', () => {
     const draft = createDraft();
     editDraft(draft, '👍');
     editDraft(draft, '\x7f');
@@ -832,7 +832,7 @@ describe('composer', () => {
 });
 
 describe('files and sub-agents', () => {
-  it('completes an @ path, attaches a file, and shows the child tree', async () => {
+  it('TUI-035 TUI-065 TUI-066A completes a path, attaches a file, and shows the child tree', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tui-files-'));
     try {
       await fs.mkdir(path.join(root, 'src'));
@@ -905,7 +905,7 @@ describe('files and sub-agents', () => {
     }
   });
 
-  it('shows saved tool cards when a chat opens', async () => {
+  it('TUI-033 TUI-037 shows saved legacy and rich tool cards when a chat opens', async () => {
     const client = fakeClient({
       request: async (_method, requestPath) => {
         if (requestPath === '/api/v2/chats') {
@@ -965,7 +965,7 @@ describe('files and sub-agents', () => {
     expect(visibleText(session.render(72))).toContain('SECRET-LINE');
   });
 
-  it('keeps reasoning on one line until it is expanded', async () => {
+  it('TUI-023 keeps reasoning on one line until it is expanded', async () => {
     const client = fakeClient({
       async *stream() {
         yield { type: 'reasoning', content: '先想' } as SSEEvent;
@@ -986,7 +986,7 @@ describe('files and sub-agents', () => {
     expect(visibleText(session.render(72))).not.toContain('先想清楚');
   });
 
-  it('keeps a finished tool on one line until it is expanded', async () => {
+  it('TUI-032 TUI-034 keeps bounded tool output folded until expanded', async () => {
     const client = fakeClient({
       async *stream() {
         yield { type: 'content', content: '# 结果\n\n**完成**' } as SSEEvent;
@@ -1022,7 +1022,7 @@ describe('files and sub-agents', () => {
 });
 
 describe('transcript tools', () => {
-  it('searches the transcript, steps matches, and leaves the draft alone', async () => {
+  it('TUI-070 TUI-071 searches, steps matches, and leaves the draft alone', async () => {
     const session = new AgentTui(fakeClient({
       async *stream(_path, body) {
         yield { type: 'content', content: `回声 ${String((body as { message?: string }).message ?? '')}` } as SSEEvent;
@@ -1047,7 +1047,7 @@ describe('transcript tools', () => {
     expect(visibleText(session.render(72))).toContain('搜索记录');
   });
 
-  it('jumps home and end through the snapshot the picture reads', async () => {
+  it('TUI-025 jumps home and end through the rendered snapshot', async () => {
     const seen: Array<'top' | 'bottom' | null> = [];
     const session = new AgentTui(fakeClient(), {
       product: 'Demo',
@@ -1063,7 +1063,7 @@ describe('transcript tools', () => {
     expect(seen).toEqual(['top', 'bottom']);
   });
 
-  it('pulls the queued line back into an empty composer', async () => {
+  it('TUI-075 pulls a queued line back into an empty composer', async () => {
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -1087,7 +1087,7 @@ describe('transcript tools', () => {
     await session.settled();
   });
 
-  it('copies the latest reply, edits the draft outside, and shows a file diff', async () => {
+  it('TUI-032 TUI-069 TUI-076 copies a reply, uses an editor, and shows a diff', async () => {
     const copied: string[] = [];
     const session = new AgentTui(fakeClient({
       async *stream() {
@@ -1127,7 +1127,7 @@ describe('transcript tools', () => {
     await waitFor(() => session.snapshot().draft === '改过的草稿');
   });
 
-  it('lists usage, skills, mcp, tasks, and exports the chat', async () => {
+  it('TUI-062A TUI-062B TUI-062C TUI-062D TUI-062E TUI-068 lists panels and exports the chat', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tui-export-'));
     const session = new AgentTui(chatClient({
       '/usage/summary': { totals: { turns: 3, totalTokens: 1200, costUsd: 0.02 } },
@@ -1152,7 +1152,7 @@ describe('transcript tools', () => {
     expect(written).toContain('hello');
   });
 
-  it('follows an in-process live turn, then compacts, forks, and rewinds', async () => {
+  it('TUI-055 TUI-063A TUI-063B follows a live turn, compacts, forks, and rewinds', async () => {
     let liveCalls = 0;
     const session = new AgentTui(fakeClient({
       request: async (method, requestPath) => {
@@ -1191,7 +1191,7 @@ describe('transcript tools', () => {
     await waitFor(() => visibleText(session.render(72)).includes('已回退'));
   });
 
-  it('sends plan mode, lists todos, and cycles session permission', async () => {
+  it('TUI-036 TUI-044 TUI-064A sends plan mode, lists todos, and cycles permission', async () => {
     const bodies: unknown[] = [];
     const decisions: string[] = [];
     let pushEvent: (event: { channel: string; payload: unknown }) => void = () => {};
@@ -1241,7 +1241,7 @@ describe('transcript tools', () => {
 });
 
 describe('tui command', () => {
-  it('refuses to start when stdin is not a terminal', async () => {
+  it('TUI-002 refuses to start when stdin is not a terminal', async () => {
     const stderr = capture();
     const code = await createCli({
       argv: ['tui'],
@@ -1254,7 +1254,7 @@ describe('tui command', () => {
     expect(stderr.text()).toContain('run');
   });
 
-  it('loads the clipboard helper without throwing when the native module is missing', () => {
+  it('TUI-067 reports an unavailable native clipboard helper without throwing', () => {
     expect(() => getNativeClipboard()).not.toThrow();
   });
 });

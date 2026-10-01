@@ -84,10 +84,7 @@ async function runCli(options: CliOptions): Promise<number> {
     stdout.write(`${rootHelp(packCommands)}\n`);
     return 0;
   }
-  if (!command) {
-    stderr.write(`${rootHelp(packCommands)}\n`);
-    return 2;
-  }
+  if (!command) return tuiCommand(parsed, options, stdout, stderr);
   if (command === 'run') return runCommand(parsed, options, stdout, stderr);
   if (command === 'chat') return dispatch(parsed, options, stdout, stderr, chatHelp(), chatCommand);
   if (command === 'skills') return dispatch(parsed, options, stdout, stderr, skillsHelp(), skillsCommand);
