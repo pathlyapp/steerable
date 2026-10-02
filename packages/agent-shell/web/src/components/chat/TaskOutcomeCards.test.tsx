@@ -2,7 +2,7 @@
  * TaskOutcomeCards 契约：后台任务的终态要出现在用户正在看的对话里。
  *   - 完成显示 answer、失败显示 error，任务名都在；
  *   - 「查看过程」把任务交给右侧推理面板，「忽略」只发出 taskId；
- *   - worktree 待合并的任务提示去任务按钮处理（卡片不重复那套操作）；
+ *   - worktree 待合并的任务提示去标题栏的对话资源处理（卡片不重复那套操作）；
  *   - 一次结束太多任务时只留前几张，其余折成一行汇总。
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -72,7 +72,7 @@ describe('TaskOutcomeCards', () => {
     expect(onDismiss).toHaveBeenCalledWith('task-1');
   });
 
-  it('worktree 待合并时指回任务按钮，卡片自己不放合并操作', () => {
+  it('worktree 待合并时指回对话资源，卡片自己不放合并操作', () => {
     renderCards([
       makeTask({
         worktreeState: 'pending',
@@ -82,7 +82,7 @@ describe('TaskOutcomeCards', () => {
     ]);
 
     expect(screen.getByText('steerable/fix')).toBeTruthy();
-    expect(screen.getByText(/Awaiting merge. Handle it from the tasks button in the title bar/)).toBeTruthy();
+    expect(screen.getByText(/Awaiting merge. Handle it from Chat resources in the title bar/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /merge/i })).toBeNull();
   });
 

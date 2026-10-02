@@ -1,17 +1,17 @@
 /**
- * ChatHeader 任务角标契约：后台任务在面板关着的时候也要能被看见，
- * 且只有一件事等着处理时点角标要能跳过任务列表这一层。
- *   - 无任务 → 按钮保持素净，不显示计数；
- *   - 有任务 → 按钮上色 + 计数，配色按「该不该现在看一眼」取最高优先级
+ * ChatHeader 右侧三个入口：菜单（对话操作）、summary（项目、产出、后台任务）、tab（右侧栏位）。
+ * 后台任务角标在资源按钮关着的时候看得见：
+ *   - 无任务 → 资源按钮不显示计数，资源列表里也没有任务段；
+ *   - 有任务 → 资源按钮带计数，状态按「该不该现在看一眼」取最高优先级
  *     （运行中 > 待合并 > 失败 > 全部跑完）；
- *   - 唯一失败任务 → 点角标直接开推理过程，不经弹层；
- *   - 唯一待合并任务 → 点角标开弹层并展开该行（合并/丢弃按钮在那儿）；
- *   - 有任务在跑或多件待处理 → 仍然先给列表，用户得先挑。
+ *   - 点任务名 → 在右侧打开该任务的推理过程，不经居中弹层；
+ *   - 待合并的 worktree 行上直接给出合并/丢弃。
  * 列表本身的订阅与刷新归 useChatTasks，见 chat/useChatTasks.test.ts。
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { LocalChat, LocalTask } from '@/lib/local-api';
+import type { LocalChat, LocalProject, LocalTask } from '@/lib/local-api';
+import type { TurnFile } from './chat/turn-files';
 import { ChatHeader } from './ChatHeader';
 import type { PackChatSlotContribution } from '@/packs/registry';
 
@@ -50,31 +50,30 @@ function makeTask(overrides: Partial<LocalTask> = {}): LocalTask {
   };
 }
 
-/** 弹层自带订阅：展开它的用例需要一个能应答 GET /tasks 的 bridge。 */
-function installBridge(tasks: LocalTask[]) {
-  (window as { steerableHost?: unknown }).steerableHost = {
-    localBackend: {
-      request: vi.fn((input: { method: string; path: string }) => {
-        if (input.method === 'GET' && input.path.endsWith('/tasks')) {
-          return Promise.resolve({ tasks });
-        }
-        return Promise.reject(new Error(`unexpected request: ${input.path}`));
-      }),
-    },
-    onTaskUpdated: () => () => {},
-  };
+function resourcesButton() {
+  return screen.getByTestId('header-chat-summary');
 }
 
-function taskButton() {
-  return screen.getByRole('button', { name: /Background tasks/ });
+function openResources() {
+  fireEvent.click(resourcesButton());
+}
+
+function taskItem(name: string) {
+  return screen.getByRole('button', { name });
+}
+
+function openPanels() {
+  fireEvent.click(screen.getByTestId('header-chat-panels'));
 }
 
 describe('ChatHeader 后台任务角标', () => {
   it('没有任务时不显示计数', () => {
     render(<ChatHeader chat={CHAT} tasks={[]} />);
 
-    expect(taskButton().getAttribute('data-task-state')).toBeNull();
-    expect(taskButton().textContent).toBe('');
+    expect(resourcesButton().getAttribute('data-task-state')).toBeNull();
+    expect(resourcesButton().textContent).toBe('');
+    openResources();
+    expect(screen.queryByText('Background tasks')).toBeNull();
   });
 
   it('有运行中的任务时显示运行中计数并标成 running', () => {
@@ -89,9 +88,9 @@ describe('ChatHeader 后台任务角标', () => {
       />,
     );
 
-    expect(taskButton().getAttribute('data-task-state')).toBe('running');
-    expect(taskButton().textContent).toBe('2');
-    expect(taskButton().getAttribute('title')).toBe('Background tasks: 3 (2 in progress)');
+    expect(resourcesButton().getAttribute('data-task-state')).toBe('running');
+    expect(resourcesButton().textContent).toBe('2');
+    expect(resourcesButton().getAttribute('title')).toBe('Background tasks: 3 (2 in progress)');
   });
 
   it('等依赖的任务也算在推进中', () => {
@@ -99,8 +98,8 @@ describe('ChatHeader 后台任务角标', () => {
       <ChatHeader chat={CHAT} tasks={[makeTask({ id: 'a', status: 'blocked' })]} />,
     );
 
-    expect(taskButton().getAttribute('data-task-state')).toBe('running');
-    expect(taskButton().getAttribute('title')).toBe('Background tasks: 1 (1 waiting on dependencies)');
+    expect(resourcesButton().getAttribute('data-task-state')).toBe('running');
+    expect(resourcesButton().getAttribute('title')).toBe('Background tasks: 1 (1 waiting on dependencies)');
   });
 
   it('待合并的 worktree 任务优先于失败任务上色', () => {
@@ -114,9 +113,9 @@ describe('ChatHeader 后台任务角标', () => {
       />,
     );
 
-    expect(taskButton().getAttribute('data-task-state')).toBe('review');
-    expect(taskButton().textContent).toBe('1');
-    expect(taskButton().getAttribute('title')).toBe('Background tasks: 2 (1 awaiting merge, 1 failed)');
+    expect(resourcesButton().getAttribute('data-task-state')).toBe('review');
+    expect(resourcesButton().textContent).toBe('1');
+    expect(resourcesButton().getAttribute('title')).toBe('Background tasks: 2 (1 awaiting merge, 1 failed)');
   });
 
   it('只有失败任务时标成 failed', () => {
@@ -127,7 +126,7 @@ describe('ChatHeader 后台任务角标', () => {
       />,
     );
 
-    expect(taskButton().getAttribute('data-task-state')).toBe('failed');
+    expect(resourcesButton().getAttribute('data-task-state')).toBe('failed');
   });
 
   it('全部跑完时显示总数，不再抢注意力', () => {
@@ -135,13 +134,13 @@ describe('ChatHeader 后台任务角标', () => {
       <ChatHeader chat={CHAT} tasks={[makeTask({ id: 'a' }), makeTask({ id: 'b' })]} />,
     );
 
-    expect(taskButton().getAttribute('data-task-state')).toBe('idle');
-    expect(taskButton().textContent).toBe('2');
+    expect(resourcesButton().getAttribute('data-task-state')).toBe('idle');
+    expect(resourcesButton().textContent).toBe('2');
   });
 });
 
-describe('ChatHeader 角标直达', () => {
-  it('唯一失败任务：点角标直接开推理过程，不开弹层', () => {
+describe('ChatHeader 资源里的后台任务', () => {
+  it('点任务名在右侧打开推理过程，不经居中弹层', () => {
     const onInspectTask = vi.fn();
     render(
       <ChatHeader
@@ -151,10 +150,8 @@ describe('ChatHeader 角标直达', () => {
       />,
     );
 
-    expect(taskButton().getAttribute('data-task-shortcut')).toBe('process');
-    expect(taskButton().getAttribute('title')).toContain('Click to view the reasoning');
-
-    fireEvent.click(taskButton());
+    openResources();
+    fireEvent.click(taskItem('跑测试'));
 
     expect(onInspectTask).toHaveBeenCalledWith({
       id: 'a',
@@ -162,65 +159,69 @@ describe('ChatHeader 角标直达', () => {
       title: '跑测试',
     });
     expect(document.querySelector('[data-task-panel-modal]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Background tasks' })).toBeNull();
   });
 
-  it('唯一待合并任务：点角标开弹层并展开该行', async () => {
+  it('运行中的任务带上 live，好让右侧继续跟过程', () => {
+    const onInspectTask = vi.fn();
+    render(
+      <ChatHeader
+        chat={CHAT}
+        onInspectTask={onInspectTask}
+        tasks={[makeTask({ id: 'b', status: 'running', task: '正在跑' })]}
+      />,
+    );
+
+    openResources();
+    fireEvent.click(taskItem('正在跑'));
+
+    expect(onInspectTask).toHaveBeenCalledWith({
+      id: 'b',
+      chatId: 'chat_1',
+      title: '正在跑',
+      live: true,
+    });
+  });
+
+  it('待合并任务在资源行上直接给出合并和丢弃', () => {
     const task = makeTask({
       id: 'a',
+      task: '改样式',
       status: 'completed',
       worktreeState: 'pending',
       worktreePath: '/tmp/wt',
       worktreeBranch: 'steerable/a',
     });
-    installBridge([task]);
     render(<ChatHeader chat={CHAT} onInspectTask={vi.fn()} tasks={[task]} />);
 
-    expect(taskButton().getAttribute('data-task-shortcut')).toBe('expand');
-    expect(taskButton().getAttribute('title')).toContain('Click to handle the worktree');
-
-    fireEvent.click(taskButton());
-
-    // 展开态的标志：worktree 的「合并到主仓」按钮直接可见，不用再点一次。
-    await waitFor(() => expect(document.querySelector('[data-task-merge]')).not.toBeNull());
+    openResources();
+    expect(document.querySelector('[data-task-merge]')).not.toBeNull();
+    expect(document.querySelector('[data-task-discard]')).not.toBeNull();
+    expect(document.querySelector('[data-task-panel-modal]')).toBeNull();
   });
 
-  it('有任务在跑时不直达——先给列表', () => {
+  it('多件任务都列在资源里，点哪条就打开哪条', () => {
     const onInspectTask = vi.fn();
     render(
       <ChatHeader
         chat={CHAT}
         onInspectTask={onInspectTask}
         tasks={[
-          makeTask({ id: 'a', status: 'failed', error: '炸了' }),
-          makeTask({ id: 'b', status: 'running' }),
+          makeTask({ id: 'a', status: 'failed', task: '跑测试', error: '炸了' }),
+          makeTask({ id: 'b', status: 'failed', task: '再跑一次', error: '也炸了' }),
         ]}
       />,
     );
 
-    expect(taskButton().getAttribute('data-task-shortcut')).toBeNull();
-    expect(taskButton().getAttribute('title')).not.toContain('Click');
-  });
+    openResources();
+    fireEvent.click(taskItem('再跑一次'));
 
-  it('多件待处理时不直达——用户得先挑', () => {
-    const onInspectTask = vi.fn();
-    installBridge([]);
-    render(
-      <ChatHeader
-        chat={CHAT}
-        onInspectTask={onInspectTask}
-        tasks={[
-          makeTask({ id: 'a', status: 'failed', error: '炸了' }),
-          makeTask({ id: 'b', status: 'failed', error: '也炸了' }),
-        ]}
-      />,
-    );
-
-    expect(taskButton().getAttribute('data-task-shortcut')).toBeNull();
-
-    fireEvent.click(taskButton());
-
-    expect(onInspectTask).not.toHaveBeenCalled();
-    expect(document.querySelector('[data-task-panel-modal]')).not.toBeNull();
+    expect(onInspectTask).toHaveBeenCalledWith({
+      id: 'b',
+      chatId: 'chat_1',
+      title: '再跑一次',
+    });
+    expect(document.querySelector('[data-task-panel-modal]')).toBeNull();
   });
 });
 
@@ -232,7 +233,7 @@ describe('ChatHeader 包槽位入口', () => {
     Component: () => null,
   };
 
-  it('入口渲染在后台任务按钮右侧，点击切换并高亮', () => {
+  it('入口在面板菜单里，打开时高亮，点击切换', () => {
     const onToggleChatSlot = vi.fn();
     render(
       <ChatHeader
@@ -244,14 +245,13 @@ describe('ChatHeader 包槽位入口', () => {
       />,
     );
 
+    expect(screen.getByTestId('header-chat-panels').getAttribute('aria-pressed')).toBe('true');
+    openPanels();
     const slotButton = screen.getByTestId('header-slot-ppt');
     expect(slotButton.textContent).toContain('文档预览');
     expect(slotButton.getAttribute('aria-pressed')).toBe('true');
     expect(slotButton.className).toContain('bg-agent-foreground/10');
-    // 紧跟「后台任务」按钮（右侧）
-    expect(slotButton.previousElementSibling).toBe(
-      screen.getByRole('button', { name: /Background tasks/ }),
-    );
+    expect(document.querySelector('[data-header-popover="panels"]')).toContain(slotButton);
 
     fireEvent.click(slotButton);
     expect(onToggleChatSlot).toHaveBeenCalledWith('ppt');
@@ -267,6 +267,7 @@ describe('ChatHeader 包槽位入口', () => {
         onToggleChatSlot={vi.fn()}
       />,
     );
+    openPanels();
     expect(screen.getByTestId('header-slot-ppt').getAttribute('aria-pressed')).toBe('false');
   });
 });
@@ -276,7 +277,7 @@ function setPlatform(platform: string) {
 }
 
 describe('ChatHeader 终端入口', () => {
-  it('Mac 上终端按钮为纯图标且 title 提示 ⌘T，点击切换终端面板', () => {
+  it('Mac 上面板菜单里的终端项 title 提示 ⌘T，点击切换终端面板', () => {
     setPlatform('MacIntel');
     const onToggleRightPanel = vi.fn();
     render(
@@ -287,8 +288,9 @@ describe('ChatHeader 终端入口', () => {
       />,
     );
 
+    openPanels();
     const btn = screen.getByTestId('header-terminal');
-    expect(btn.textContent).toBe('');
+    expect(btn.textContent).toContain('Terminal');
     expect(btn.getAttribute('title')).toBe('Open terminal panel (⌘T)');
     expect(btn.getAttribute('aria-label')).toBe('Terminal');
     fireEvent.click(btn);
@@ -307,8 +309,9 @@ describe('ChatHeader 终端入口', () => {
       />,
     );
 
+    expect(screen.getByTestId('header-chat-panels').className).toContain('bg-agent-foreground/10');
+    openPanels();
     const btn = screen.getByTestId('header-terminal');
-    expect(btn.textContent).toBe('');
     expect(btn.getAttribute('title')).toBe('Close terminal panel (Ctrl+T)');
     expect(btn.getAttribute('aria-pressed')).toBe('true');
     expect(btn.className).toContain('bg-agent-foreground/10');
@@ -326,5 +329,98 @@ describe('ChatHeader 终端入口', () => {
     );
 
     expect(screen.queryByTestId('header-terminal')).toBeNull();
+    expect(screen.queryByTestId('header-chat-panels')).toBeNull();
+  });
+});
+
+describe('ChatHeader summary', () => {
+  const project: LocalProject = {
+    id: 'proj-1',
+    name: 'cloudide',
+    folderPath: '/work/cloudide',
+    createdAt: '2026-09-13T01:00:00.000Z',
+    updatedAt: '2026-09-13T01:00:00.000Z',
+  };
+  const report: TurnFile = {
+    path: '/work/cloudide/docs/report.md',
+    kind: 'created',
+    category: 'deliverable',
+  };
+  const scratch: TurnFile = {
+    path: '/work/cloudide/tmp/notes.txt',
+    kind: 'modified',
+    category: 'intermediate',
+  };
+
+  it('列出关联目录和去重后的产出，交付物排在前面', () => {
+    render(
+      <ChatHeader
+        chat={CHAT}
+        tasks={[]}
+        showProject
+        project={project}
+        outputs={[scratch, report, report]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('header-chat-summary'));
+    const popover = document.querySelector('[data-header-popover="summary"]');
+    expect(popover?.textContent).toContain('Linked directory');
+    expect(popover?.querySelector('[data-linked-directory]')?.getAttribute('data-linked-directory')).toBe(
+      '/work/cloudide',
+    );
+    const paths = [...(popover?.querySelectorAll('[data-output-path]') ?? [])].map((node) =>
+      node.getAttribute('data-output-path'),
+    );
+    expect(paths).toEqual(['/work/cloudide/docs/report.md', '/work/cloudide/tmp/notes.txt']);
+    expect(popover?.querySelector('[data-output-view-all]')).toBeNull();
+  });
+
+  it('产出超过三份时只先露出三份，查看全部再展开', () => {
+    const extra = ['a.py', 'b.py', 'c.py'].map(
+      (name): TurnFile => ({
+        path: `/work/cloudide/${name}`,
+        kind: 'created',
+        category: 'intermediate',
+      }),
+    );
+    render(
+      <ChatHeader
+        chat={CHAT}
+        tasks={[]}
+        showProject
+        project={project}
+        outputs={[scratch, report, ...extra]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('header-chat-summary'));
+    const listed = () =>
+      [...document.querySelectorAll('[data-output-path]')].map((node) =>
+        node.getAttribute('data-output-path'),
+      );
+    expect(listed()).toEqual([
+      '/work/cloudide/docs/report.md',
+      '/work/cloudide/a.py',
+      '/work/cloudide/b.py',
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'View all' }));
+    expect(listed()).toEqual([
+      '/work/cloudide/docs/report.md',
+      '/work/cloudide/a.py',
+      '/work/cloudide/b.py',
+      '/work/cloudide/c.py',
+      '/work/cloudide/tmp/notes.txt',
+    ]);
+  });
+
+  it('没有项目、没有产出时给出空态', () => {
+    render(<ChatHeader chat={CHAT} tasks={[]} showProject project={null} outputs={[]} />);
+
+    fireEvent.click(screen.getByTestId('header-chat-summary'));
+    const popover = document.querySelector('[data-header-popover="summary"]');
+    expect(popover?.textContent).toContain('No directory linked');
+    expect(popover?.textContent).toContain('No files from this chat yet');
   });
 });

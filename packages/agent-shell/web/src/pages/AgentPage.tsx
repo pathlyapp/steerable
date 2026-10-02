@@ -1190,6 +1190,12 @@ function AgentChatView({
     ...pendingFollowUps.map((message) => message.content),
     ...remoteFollowUps,
   ];
+  const chatOutputs = useMemo(() => {
+    const merged: TurnFile[] = [];
+    for (const files of Object.values(turnFilesByMessageId)) merged.push(...files);
+    merged.push(...currentTurnFiles);
+    return merged;
+  }, [turnFilesByMessageId, currentTurnFiles]);
   const handleRemovePendingFollowUp = (index: number) => {
     if (index < pendingFollowUps.length) {
       removeFollowUp(index);
@@ -1230,6 +1236,11 @@ function AgentChatView({
             rightPanel={ctx.rightPanel}
             onToggleChatSlot={ctx.onToggleChatSlot}
             onToggleRightPanel={ctx.onToggleChatSlot}
+            showProject={showProjectsChrome}
+            project={chatProject}
+            outputs={chatOutputs}
+            onShare={hasHostBridge() ? handleShare : undefined}
+            onChatChanged={ctx.refreshChats}
           />
         }
         onRegenerate={

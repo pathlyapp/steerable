@@ -1,15 +1,45 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ButtonHTMLAttributes,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
-import { LuCheck, LuDownload, LuGitBranch, LuListTodo, LuListTree, LuLoaderCircle, LuTerminal } from 'react-icons/lu';
-import type { LocalChat, LocalTask } from '@/lib/local-api';
+import {
+  LuCheck,
+  LuChevronLeft,
+  LuDownload,
+  LuCopy,
+  LuEllipsis,
+  LuFile,
+  LuFolder,
+  LuGitBranch,
+  LuGitMerge,
+  LuList,
+  LuListTodo,
+  LuListTree,
+  LuLoaderCircle,
+  LuPin,
+  LuPinOff,
+  LuShare2,
+  LuTerminal,
+  LuTrash2,
+} from 'react-icons/lu';
+import type { LocalChat, LocalProject, LocalTask } from '@/lib/local-api';
 import {
   activateChatBranch,
+  discardTaskWorktree,
   getChatBranches,
+  mergeTaskWorktree,
+  openLocalPath,
+  setChatPinned,
   type ChatBranchesResponse,
 } from '@/lib/local-api';
 import { SessionTreeModal } from './chat/SessionTreeModal';
-import { TaskPanelModal } from './chat/TaskPanelModal';
-import { actionableTasks, summarizeTasks, type ChatTaskSummary } from './chat/useChatTasks';
+import { summarizeTasks, type ChatTaskSummary } from './chat/useChatTasks';
 import type { PackChatSlotContribution } from '@/packs/registry';
 import {
   fetchChatDocument,
@@ -20,20 +50,31 @@ import {
 } from '@/lib/portable';
 import { hostToolChrome } from '@/lib/host-tools';
 import { t } from '@/i18n';
+import {
+  getTurnFileCategory,
+  isIgnoredTurnFile,
+  splitTurnFilePath,
+  type TurnFile,
+} from './chat/turn-files';
 
 interface ChatHeaderProps {
   chat: LocalChat | null;
   /**
    * W1.2.1: called after the active branch switches — the page re-hydrates
    * the message list from the re-projected store. When provided (and the
-   * chat has branches), a branch picker appears in the header.
+   * chat has branches), a branch picker appears in the chat menu.
    */
   onBranchSwitched?: () => void;
   /** 点击后台任务行：在右侧栏打开该任务的推理过程。 */
-  onInspectTask?: (task: { id: string; chatId: string; title: string }) => void;
+  onInspectTask?: (task: {
+    id: string;
+    chatId: string;
+    title: string;
+    live?: boolean;
+  }) => void;
   /** 本对话的后台任务（AgentPage 的 `useChatTasks` 单一订阅源）。 */
   tasks?: LocalTask[];
-  /** 包注册的聊天页槽位（如「文档预览」）：入口放在本标题栏，按会话独立开关。 */
+  /** 包注册的聊天页槽位（如「文档预览」）：入口放在面板菜单里，按会话独立开关。 */
   chatSlots?: readonly PackChatSlotContribution[];
   /** 当前会话打开的右侧栏位（null = 都关着）。 */
   rightPanel?: string | null;
@@ -41,16 +82,27 @@ interface ChatHeaderProps {
   onToggleChatSlot?: (slotId: string) => void;
   /** 切换右侧面板（终端、包槽位等）。 */
   onToggleRightPanel?: (kind: string) => void;
+  /** 产品打开项目入口时，summary 展示当前对话关联的目录。 */
+  showProject?: boolean;
+  project?: LocalProject | null;
+  /** 本对话各回合写过的文件。summary 按路径去重后列出。 */
+  outputs?: readonly TurnFile[];
+  /** 把对话截图写入剪贴板。缺省时菜单不显示分享。 */
+  onShare?: () => Promise<boolean> | void;
+  /** 置顶写完后刷新会话列表。 */
+  onChatChanged?: () => void | Promise<void>;
 }
 
+type HeaderPopover = 'menu' | 'summary' | 'panels';
+
 /**
- * ChatHeader — slim title bar above ChatPanel. Shows:
- *   - chat title (完整显示，长标题换行不截断)
- *   - shortened chat id (for support / debugging)
- *   - 导出 / 分支 / 后台任务 / 包槽位 / 终端 入口
+ * ChatHeader — slim title bar above ChatPanel.
+ * 右侧三个入口，对齐 Codex 的菜单 / summary / tab：
+ *   - 菜单：操作当前对话（置顶、导出、分享、分支）
+ *   - summary：当前对话的资源（关联目录、产出文件；有后台任务时也列在这里，点开后在右侧显示过程）
+ *   - tab：右侧栏位（包槽位、终端）
  *
- * 刷新按钮已下线（消息流有 SSE 自动同步）。分享在最后一条
- * 助手消息的时间戳行，不占标题栏。
+ * 刷新按钮已下线（消息流有 SSE 自动同步）。
  */
 export function ChatHeader({
   chat,
@@ -61,19 +113,29 @@ export function ChatHeader({
   rightPanel = null,
   onToggleChatSlot,
   onToggleRightPanel,
+  showProject = false,
+  project = null,
+  outputs = [],
+  onShare,
+  onChatChanged,
 }: ChatHeaderProps) {
-  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  const [popover, setPopover] = useState<HeaderPopover | null>(null);
+  const [menuPage, setMenuPage] = useState<'root' | 'branches'>('root');
   const [treeModalOpen, setTreeModalOpen] = useState(false);
-  const [taskPanelOpen, setTaskPanelOpen] = useState(false);
   const [branches, setBranches] = useState<ChatBranchesResponse | null>(null);
   const [switching, setSwitching] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
+  const [pinning, setPinning] = useState(false);
+  const [openingPath, setOpeningPath] = useState<string | null>(null);
   const [menuBox, setMenuBox] = useState<{ top: number; left: number; width: number } | null>(
     null,
   );
-  const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const summaryButtonRef = useRef<HTMLButtonElement | null>(null);
+  const panelsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
 
   const [isMac, setIsMac] = useState(() => {
     if (typeof navigator !== 'undefined') {
@@ -89,26 +151,55 @@ export function ChatHeader({
   }, []);
 
   const showTerminalChrome = hostToolChrome('terminal');
+  const allowOpenPath = hostToolChrome('local-fs');
   const togglePanel = onToggleRightPanel ?? onToggleChatSlot;
+  const panelEntries = useMemo(() => {
+    const entries: PanelEntry[] = chatSlots.map((slot) => ({
+      id: slot.slotId,
+      title: slot.title,
+      testId: `header-slot-${slot.slotId}`,
+      action: `chat-slot-${slot.slotId}`,
+      icon: <slot.Icon className="h-3.5 w-3.5 shrink-0" />,
+    }));
+    if (showTerminalChrome) {
+      const shortcut = isMac ? '⌘T' : 'Ctrl+T';
+      entries.push({
+        id: 'terminal',
+        title: t('Terminal'),
+        testId: 'header-terminal',
+        action: 'terminal',
+        icon: <LuTerminal className="h-3.5 w-3.5 shrink-0" />,
+        detail:
+          rightPanel === 'terminal'
+            ? t('Close terminal panel ({shortcut})', { shortcut })
+            : t('Open terminal panel ({shortcut})', { shortcut }),
+      });
+    }
+    return entries;
+  }, [chatSlots, isMac, rightPanel, showTerminalChrome]);
 
   const branchCount = branches ? branches.lineage.length + branches.children.length : 0;
+  const files = useMemo(() => uniqueOutputs(outputs), [outputs]);
 
   const taskSummary = useMemo(() => summarizeTasks(tasks), [tasks]);
   const taskBadge = describeTaskBadge(taskSummary);
-  const taskShortcut = useMemo(
-    () => describeTaskShortcut(tasks, taskSummary),
-    [tasks, taskSummary],
-  );
 
-  const openBranchMenu = async () => {
-    if (!chat || branchMenuOpen) {
-      setBranchMenuOpen(false);
-      return;
-    }
+  const closePopover = () => {
+    setPopover(null);
+    setMenuPage('root');
+  };
+
+  const togglePopover = (next: HeaderPopover) => {
+    setMenuPage('root');
+    setPopover((current) => (current === next ? null : next));
+  };
+
+  const openBranchPage = async () => {
+    if (!chat) return;
+    setMenuPage('branches');
     try {
       const data = await getChatBranches(chat.id);
       setBranches(data);
-      setBranchMenuOpen(true);
     } catch {
       setBranches(null);
     }
@@ -119,7 +210,7 @@ export function ChatHeader({
     setSwitching(true);
     try {
       await activateChatBranch(chat.id, recordId);
-      setBranchMenuOpen(false);
+      closePopover();
       onBranchSwitched?.();
     } catch {
       // 切换失败（分支族外记录 / sidecar 离线）——菜单保持打开，用户可重试。
@@ -128,14 +219,71 @@ export function ChatHeader({
     }
   };
 
+  const exportChat = () => {
+    if (!chat || exporting) return;
+    setExporting(true);
+    setExportError(null);
+    void fetchChatDocument(chat.id)
+      .then((doc) => saveJsonFile(safeDownloadName(chat.title, t('Chat')), doc))
+      .then((saved) => {
+        if (saved) closePopover();
+      })
+      .catch((err: unknown) => setExportError(portableErrorMessage(err)))
+      .finally(() => setExporting(false));
+  };
+
+  const shareChat = () => {
+    if (!onShare || sharing) return;
+    setSharing(true);
+    void Promise.resolve(onShare())
+      .then((ok) => {
+        if (ok !== false) closePopover();
+      })
+      .finally(() => setSharing(false));
+  };
+
+  const togglePin = () => {
+    if (!chat || pinning) return;
+    setPinning(true);
+    void setChatPinned(chat.id, !chat.isPinned)
+      .then(() => onChatChanged?.())
+      .catch(() => {
+        // 宿主不在或写入失败时保持菜单，方便再点一次。
+      })
+      .finally(() => setPinning(false));
+  };
+
+  const openListedTask = (task: LocalTask) => {
+    onInspectTask?.({
+      id: task.id,
+      chatId: task.chatId,
+      title: task.task,
+      ...(task.status === 'running' || task.status === 'blocked' ? { live: true } : {}),
+    });
+    closePopover();
+  };
+
+  const openOutput = (filePath: string) => {
+    if (!allowOpenPath || openingPath) return;
+    setOpeningPath(filePath);
+    void openLocalPath(filePath).finally(() => setOpeningPath(null));
+  };
+
+  const anchor =
+    popover === 'menu'
+      ? menuButtonRef.current
+      : popover === 'summary'
+        ? summaryButtonRef.current
+        : popover === 'panels'
+          ? panelsButtonRef.current
+          : null;
+
   useLayoutEffect(() => {
-    if (!branchMenuOpen) {
+    if (!popover || !anchor) {
       setMenuBox(null);
       return;
     }
-    const button = buttonRef.current;
-    if (!button) return;
-    const update = () => setMenuBox(placeBranchMenu(button));
+    const update = () => setMenuBox(placeHeaderPopover(anchor, sheetWidth(popover, menuPage)));
     update();
     window.addEventListener('resize', update);
     window.addEventListener('scroll', update, true);
@@ -143,74 +291,93 @@ export function ChatHeader({
       window.removeEventListener('resize', update);
       window.removeEventListener('scroll', update, true);
     };
-  }, [branchMenuOpen]);
+  }, [popover, anchor, menuPage]);
 
   useEffect(() => {
-    if (!branchMenuOpen) return;
+    if (!popover) return;
     const onPointerDown = (e: MouseEvent) => {
       const target = e.target as Node;
-      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
-      setBranchMenuOpen(false);
+      if (
+        menuButtonRef.current?.contains(target) ||
+        summaryButtonRef.current?.contains(target) ||
+        panelsButtonRef.current?.contains(target) ||
+        popoverRef.current?.contains(target)
+      ) {
+        return;
+      }
+      closePopover();
     };
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [branchMenuOpen]);
+  }, [popover]);
 
-  const branchMenu =
-    branchMenuOpen && menuBox
+  const popoverNode =
+    popover && menuBox
       ? createPortal(
           <div
-            ref={menuRef}
-            className="fixed z-[80] rounded-lg border border-agent-border bg-agent-canvas p-1 shadow-lg"
+            ref={popoverRef}
+            className="fixed z-[80] max-h-[min(24rem,70vh)] overflow-y-auto rounded-lg border border-agent-border bg-agent-canvas p-1 shadow-lg"
             style={{ top: menuBox.top, left: menuBox.left, width: menuBox.width }}
-            data-branch-menu
+            data-header-popover={popover}
           >
-            {!branches || branchCount === 0 ? (
-              <div className="px-2.5 py-1.5 text-xs text-agent-muted-foreground">
-                {t('No branches yet. After you regenerate a reply, the old version stays here.')}
-              </div>
-            ) : (
-              <>
-                {branches.lineage.map((point) => (
-                  <BranchRow
-                    key={point.recordId}
-                    label={point.label}
-                    active={point.recordId === branches.activeRecordId}
-                    disabled={switching}
-                    onSelect={() => void switchBranch(point.recordId)}
-                  />
-                ))}
-                {branches.children.map((point) => (
-                  <BranchRow
-                    key={point.recordId}
-                    label={point.label}
-                    active={point.recordId === branches.activeRecordId}
-                    disabled={switching}
-                    onSelect={() => void switchBranch(point.recordId)}
-                  />
-                ))}
-                {/* 全树入口：下拉只有 lineage + 直接子节点，堂兄弟等更远的
-                    家族成员在树视图里切换。 */}
-                <div className="mt-1 border-t border-agent-border pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBranchMenuOpen(false);
-                      setTreeModalOpen(true);
-                    }}
-                    className="flex w-full items-center gap-2 rounded px-2.5 py-1 text-left text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
-                    data-action="branch-tree"
-                  >
-                    <LuListTree className="h-3 w-3 shrink-0" />
-                    {t('View full branch tree')}
-                  </button>
-                </div>
-              </>
+            {popover === 'menu' &&
+              (menuPage === 'branches' ? (
+                <BranchPage
+                  branches={branches}
+                  branchCount={branchCount}
+                  switching={switching}
+                  onBack={() => setMenuPage('root')}
+                  onSelect={(recordId) => void switchBranch(recordId)}
+                  onOpenTree={() => {
+                    closePopover();
+                    setTreeModalOpen(true);
+                  }}
+                />
+              ) : (
+                <ChatActionsMenu
+                  pinned={Boolean(chat?.isPinned)}
+                  pinning={pinning}
+                  onTogglePin={togglePin}
+                  showExport={Boolean(chat && isPortableEnabled())}
+                  exporting={exporting}
+                  exportError={exportError}
+                  onExport={exportChat}
+                  showShare={Boolean(onShare)}
+                  sharing={sharing}
+                  onShare={shareChat}
+                  showBranches={Boolean(onBranchSwitched)}
+                  onOpenBranches={() => void openBranchPage()}
+                />
+              ))}
+            {popover === 'summary' && (
+              <ChatSummary
+                showProject={showProject}
+                project={project}
+                files={files}
+                allowOpenPath={allowOpenPath}
+                openingPath={openingPath}
+                onOpen={openOutput}
+                tasks={tasks}
+                onOpenTask={openListedTask}
+              />
+            )}
+            {popover === 'panels' && (
+              <PanelMenu
+                entries={panelEntries}
+                rightPanel={rightPanel}
+                onToggle={(id) => {
+                  togglePanel?.(id);
+                  closePopover();
+                }}
+              />
             )}
           </div>,
           document.body,
         )
       : null;
+
+  const iconButton =
+    'flex h-7 shrink-0 items-center justify-center gap-1 rounded-full text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground';
 
   return (
     <header className="flex w-full min-w-0 items-center gap-2 bg-agent-canvas px-2.5 py-1.5">
@@ -222,155 +389,64 @@ export function ChatHeader({
           {chat?.title ?? t('No chat selected')}
         </span>
       </div>
-      {chat && isPortableEnabled() && (
+      {chat && (
         <button
+          ref={menuButtonRef}
           type="button"
-          disabled={exporting}
-          onClick={() => {
-            setExporting(true);
-            setExportError(null);
-            void fetchChatDocument(chat.id)
-              .then((doc) => saveJsonFile(safeDownloadName(chat.title, t('Chat')), doc))
-              .then((saved) => {
-                if (!saved) return;
-              })
-              .catch((err: unknown) => setExportError(portableErrorMessage(err)))
-              .finally(() => setExporting(false));
-          }}
-          className="flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground disabled:opacity-60"
-          title={exportError ?? t('Export this chat')}
-          aria-label={t('Export this chat')}
-          data-testid="header-export-chat"
+          onClick={() => togglePopover('menu')}
+          className={`${iconButton} w-7 ${
+            popover === 'menu' ? 'bg-agent-foreground/10 text-agent-foreground' : ''
+          }`}
+          title={t('Chat menu')}
+          aria-label={t('Chat menu')}
+          aria-expanded={popover === 'menu'}
+          data-testid="header-chat-menu"
         >
-          <LuDownload className="h-3.5 w-3.5" />
-          {exportError ? t('Export failed') : exporting ? t('Exporting') : t('Export')}
+          <LuEllipsis className="h-4 w-4" />
         </button>
-      )}
-      {chat && onBranchSwitched && (
-        <div className="shrink-0">
-          <button
-            ref={buttonRef}
-            type="button"
-            onClick={() => void openBranchMenu()}
-            className="flex h-7 items-center gap-1 rounded-full px-2 text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
-            title={t('Chat branches (forks created by regenerating)')}
-            aria-label={t('Chat branches')}
-            data-action="branches"
-          >
-            <LuGitBranch className="h-3.5 w-3.5" />
-            {branchCount > 0 && <span>{branchCount}</span>}
-          </button>
-          {branchMenu}
-        </div>
       )}
       {chat && (
         <button
+          ref={summaryButtonRef}
           type="button"
-          onClick={() => {
-            if (taskShortcut?.kind === 'process' && onInspectTask) {
-              onInspectTask({
-                id: taskShortcut.task.id,
-                chatId: taskShortcut.task.chatId,
-                title: taskShortcut.task.task,
-              });
-              return;
-            }
-            setTaskPanelOpen(true);
-          }}
-          className={`flex h-7 shrink-0 items-center gap-1 rounded-full transition-colors ${
-            taskBadge
-              ? `px-2 ${taskBadge.className}`
-              : 'w-7 justify-center text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground'
+          onClick={() => togglePopover('summary')}
+          className={`${iconButton} ${taskBadge ? 'px-2' : 'w-7'} ${
+            popover === 'summary' ? 'bg-agent-foreground/10 text-agent-foreground' : ''
           }`}
-          title={taskButtonTitle(taskBadge, taskShortcut)}
-          aria-label={
-            taskBadge
-              ? t('Background tasks: {title}', { title: taskBadge.title })
-              : t('Background tasks')
-          }
-          data-action="tasks"
+          title={taskBadge?.title ?? t('Chat resources')}
+          aria-label={t('Chat resources')}
+          aria-expanded={popover === 'summary'}
+          data-testid="header-chat-summary"
           data-task-state={taskBadge?.state}
-          data-task-shortcut={taskShortcut?.kind}
         >
-          {taskSummary.running > 0 ? (
-            <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <LuListTodo className="h-3.5 w-3.5" />
+          <LuList className="h-4 w-4" />
+          {taskBadge && (
+            <span className={`rounded-full px-1 text-xs ${taskBadge.className}`}>
+              {taskBadge.count}
+            </span>
           )}
-          {taskBadge && <span className="text-xs">{taskBadge.count}</span>}
         </button>
       )}
-      {chat &&
-        chatSlots.map((slot) => {
-          const open = rightPanel === slot.slotId;
-          return (
-            <button
-              key={slot.slotId}
-              type="button"
-              onClick={() => onToggleChatSlot?.(slot.slotId)}
-              className={`flex h-7 shrink-0 items-center gap-1 rounded-full px-2 text-xs font-medium transition-colors ${
-                open
-                  ? 'bg-agent-foreground/10 text-agent-foreground'
-                  : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground'
-              }`}
-              title={
-                open
-                  ? t('Close {name}', { name: slot.title })
-                  : t('Open {name}', { name: slot.title })
-              }
-              aria-label={slot.title}
-              aria-pressed={open}
-              data-action={`chat-slot-${slot.slotId}`}
-              data-testid={`header-slot-${slot.slotId}`}
-            >
-              <slot.Icon className="h-3.5 w-3.5" />
-              {slot.title}
-            </button>
-          );
-        })}
-      {chat && showTerminalChrome && (
+      {chat && panelEntries.length > 0 && (
         <button
+          ref={panelsButtonRef}
           type="button"
-          onClick={() => togglePanel?.('terminal')}
-          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs transition-colors ${
-            rightPanel === 'terminal'
+          onClick={() => togglePopover('panels')}
+          className={`${iconButton} w-7 ${
+            popover === 'panels' || rightPanel !== null
               ? 'bg-agent-foreground/10 text-agent-foreground'
-              : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground'
+              : ''
           }`}
-          title={
-            rightPanel === 'terminal'
-              ? t('Close terminal panel ({shortcut})', { shortcut: isMac ? '⌘T' : 'Ctrl+T' })
-              : t('Open terminal panel ({shortcut})', { shortcut: isMac ? '⌘T' : 'Ctrl+T' })
-          }
-          aria-label={t('Terminal')}
-          aria-pressed={rightPanel === 'terminal'}
-          data-action="terminal"
-          data-testid="header-terminal"
+          title={t('Panels')}
+          aria-label={t('Panels')}
+          aria-expanded={popover === 'panels'}
+          aria-pressed={rightPanel !== null}
+          data-testid="header-chat-panels"
         >
-          <LuTerminal className="h-3.5 w-3.5" />
+          <LuCopy className="h-4 w-4" />
         </button>
       )}
-      {chat && taskPanelOpen && (
-        <TaskPanelModal
-          chatId={chat.id}
-          onClose={() => setTaskPanelOpen(false)}
-          initialExpandedId={
-            taskShortcut?.kind === 'expand' ? taskShortcut.taskId : undefined
-          }
-          onInspect={
-            onInspectTask
-              ? (task) => {
-                  onInspectTask({
-                    id: task.id,
-                    chatId: task.chatId,
-                    title: task.task,
-                  });
-                  setTaskPanelOpen(false);
-                }
-              : undefined
-          }
-        />
-      )}
+      {popoverNode}
       {chat && treeModalOpen && (
         <SessionTreeModal
           chatId={chat.id}
@@ -382,6 +458,467 @@ export function ChatHeader({
   );
 }
 
+function ChatActionsMenu({
+  pinned,
+  pinning,
+  onTogglePin,
+  showExport,
+  exporting,
+  exportError,
+  onExport,
+  showShare,
+  sharing,
+  onShare,
+  showBranches,
+  onOpenBranches,
+}: {
+  pinned: boolean;
+  pinning: boolean;
+  onTogglePin: () => void;
+  showExport: boolean;
+  exporting: boolean;
+  exportError: string | null;
+  onExport: () => void;
+  showShare: boolean;
+  sharing: boolean;
+  onShare: () => void;
+  showBranches: boolean;
+  onOpenBranches: () => void;
+}) {
+  return (
+    <>
+      <MenuRow
+        icon={
+          pinning ? (
+            <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
+          ) : pinned ? (
+            <LuPinOff className="h-3.5 w-3.5" />
+          ) : (
+            <LuPin className="h-3.5 w-3.5" />
+          )
+        }
+        label={pinned ? t('Unpin') : t('Pin chat')}
+        disabled={pinning}
+        onClick={onTogglePin}
+        data-action="pin"
+      />
+      {showExport && (
+        <MenuRow
+          icon={
+            exporting ? (
+              <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <LuDownload className="h-3.5 w-3.5" />
+            )
+          }
+          label={exportError ? t('Export failed') : exporting ? t('Exporting') : t('Export')}
+          disabled={exporting}
+          title={exportError ?? t('Export this chat')}
+          onClick={onExport}
+          data-testid="header-export-chat"
+        />
+      )}
+      {showShare && (
+        <MenuRow
+          icon={
+            sharing ? (
+              <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <LuShare2 className="h-3.5 w-3.5" />
+            )
+          }
+          label={t('Share chat screenshot')}
+          disabled={sharing}
+          onClick={onShare}
+          data-action="share"
+        />
+      )}
+      {showBranches && (
+        <MenuRow
+          icon={<LuGitBranch className="h-3.5 w-3.5" />}
+          label={t('Chat branches')}
+          title={t('Chat branches (forks created by regenerating)')}
+          onClick={onOpenBranches}
+          data-action="branches"
+        />
+      )}
+    </>
+  );
+}
+
+function BranchPage({
+  branches,
+  branchCount,
+  switching,
+  onBack,
+  onSelect,
+  onOpenTree,
+}: {
+  branches: ChatBranchesResponse | null;
+  branchCount: number;
+  switching: boolean;
+  onBack: () => void;
+  onSelect: (recordId: string) => void;
+  onOpenTree: () => void;
+}) {
+  return (
+    <>
+      <MenuRow
+        icon={<LuChevronLeft className="h-3.5 w-3.5" />}
+        label={t('Chat branches')}
+        onClick={onBack}
+        data-action="branches-back"
+      />
+      <div className="mx-1 my-1 border-t border-agent-border" />
+      {!branches || branchCount === 0 ? (
+        <div className="px-2.5 py-1.5 text-xs text-agent-muted-foreground">
+          {t('No branches yet. After you regenerate a reply, the old version stays here.')}
+        </div>
+      ) : (
+        <>
+          {branches.lineage.map((point) => (
+            <BranchRow
+              key={point.recordId}
+              label={point.label}
+              active={point.recordId === branches.activeRecordId}
+              disabled={switching}
+              onSelect={() => onSelect(point.recordId)}
+            />
+          ))}
+          {branches.children.map((point) => (
+            <BranchRow
+              key={point.recordId}
+              label={point.label}
+              active={point.recordId === branches.activeRecordId}
+              disabled={switching}
+              onSelect={() => onSelect(point.recordId)}
+            />
+          ))}
+          <div className="mt-1 border-t border-agent-border pt-1">
+            <button
+              type="button"
+              onClick={onOpenTree}
+              className="flex w-full items-center gap-2 rounded px-2.5 py-1 text-left text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
+              data-action="branch-tree"
+            >
+              <LuListTree className="h-3 w-3 shrink-0" />
+              {t('View full branch tree')}
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function ChatSummary({
+  showProject,
+  project,
+  files,
+  allowOpenPath,
+  openingPath,
+  onOpen,
+  tasks,
+  onOpenTask,
+}: {
+  showProject: boolean;
+  project: LocalProject | null;
+  files: TurnFile[];
+  allowOpenPath: boolean;
+  openingPath: string | null;
+  onOpen: (path: string) => void;
+  tasks: readonly LocalTask[];
+  onOpenTask: (task: LocalTask) => void;
+}) {
+  const [actingId, setActingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<Record<string, string>>({});
+  const [showAllOutputs, setShowAllOutputs] = useState(false);
+
+  const runWorktreeAction = async (task: LocalTask, action: 'merge' | 'discard') => {
+    if (actingId) return;
+    setActingId(task.id);
+    setActionError((prev) => {
+      const next = { ...prev };
+      delete next[task.id];
+      return next;
+    });
+    try {
+      if (action === 'merge') {
+        await mergeTaskWorktree(task.id);
+      } else {
+        await discardTaskWorktree(task.id);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setActionError((prev) => ({ ...prev, [task.id]: message }));
+    } finally {
+      setActingId(null);
+    }
+  };
+
+  const directories = linkedDirectories(project);
+  const visibleFiles = showAllOutputs ? files : files.slice(0, OUTPUT_PREVIEW_LIMIT);
+  const hiddenOutputCount = files.length - visibleFiles.length;
+
+  return (
+    <div className="px-1 py-0.5">
+      {showProject && (
+        <section className="mb-1">
+          <SectionLabel>{t('Linked directory')}</SectionLabel>
+          {directories.length === 0 ? (
+            <div className="px-2 py-1.5 text-xs text-agent-muted-foreground">{t('No directory linked')}</div>
+          ) : (
+            directories.map((dir) => (
+              <button
+                key={dir}
+                type="button"
+                disabled={!allowOpenPath || openingPath === dir}
+                onClick={() => onOpen(dir)}
+                title={dir}
+                className="flex w-full items-start gap-2 rounded px-2 py-1 text-left text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-default disabled:hover:bg-transparent"
+                data-linked-directory={dir}
+              >
+                {openingPath === dir ? (
+                  <LuLoaderCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+                ) : (
+                  <LuFolder className="mt-0.5 h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
+                )}
+                <span className="min-w-0 flex-1 break-all font-mono text-[10px] leading-4">{dir}</span>
+              </button>
+            ))
+          )}
+        </section>
+      )}
+      {tasks.length > 0 && (
+        <section className="mb-1">
+          <SectionLabel>{t('Background tasks')}</SectionLabel>
+          {tasks.map((task) => {
+            const pending = task.worktreeState === 'pending' && task.status === 'completed';
+            const acting = actingId === task.id;
+            return (
+              <div key={task.id} className="rounded" data-task-id={task.id}>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onOpenTask(task)}
+                    title={task.task}
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1 text-left text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5"
+                    data-action="tasks"
+                  >
+                    {task.status === 'running' || task.status === 'blocked' ? (
+                      <LuLoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                    ) : (
+                      <LuListTodo className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate">{task.task}</span>
+                  </button>
+                  {pending && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={actingId !== null}
+                        onClick={() => void runWorktreeAction(task, 'merge')}
+                        className="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] text-amber-700 transition-colors hover:bg-amber-500/10 disabled:opacity-50 dark:text-amber-400"
+                        title={t('Merge into main repo')}
+                        aria-label={t('Merge into main repo')}
+                        data-task-merge
+                      >
+                        {acting ? (
+                          <LuLoaderCircle className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <LuGitMerge className="h-3 w-3" />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={actingId !== null}
+                        onClick={() => void runWorktreeAction(task, 'discard')}
+                        className="flex h-6 shrink-0 items-center rounded px-1.5 text-agent-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600 disabled:opacity-50 dark:hover:text-red-400"
+                        title={t('Discard')}
+                        aria-label={t('Discard')}
+                        data-task-discard
+                      >
+                        <LuTrash2 className="h-3 w-3" />
+                      </button>
+                    </>
+                  )}
+                </div>
+                {actionError[task.id] && (
+                  <div className="px-2 pb-1 text-[10px] text-red-600 dark:text-red-400">
+                    {actionError[task.id]}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      )}
+      <section>
+        <SectionLabel>{t('Outputs')}</SectionLabel>
+        {files.length === 0 ? (
+          <div className="px-2 py-1.5 text-xs text-agent-muted-foreground">
+            {t('No files from this chat yet')}
+          </div>
+        ) : (
+          visibleFiles.map((file) => {
+            const { name } = splitTurnFilePath(file.path);
+            const deliverable = getTurnFileCategory(file) === 'deliverable';
+            return (
+              <button
+                key={file.path}
+                type="button"
+                disabled={!allowOpenPath || openingPath === file.path}
+                onClick={() => onOpen(file.path)}
+                title={file.path}
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:cursor-default disabled:hover:bg-transparent"
+                data-output-path={file.path}
+              >
+                {openingPath === file.path ? (
+                  <LuLoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                ) : (
+                  <LuFile className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
+                )}
+                <span className="min-w-0 flex-1 truncate">{name}</span>
+                {deliverable && (
+                  <span className="shrink-0 text-[10px] text-agent-muted-foreground">{t('Output')}</span>
+                )}
+              </button>
+            );
+          })
+        )}
+        {hiddenOutputCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowAllOutputs(true)}
+            className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
+            data-output-view-all
+          >
+            {t('View all')}
+          </button>
+        )}
+      </section>
+    </div>
+  );
+}
+
+interface PanelEntry {
+  id: string;
+  title: string;
+  testId: string;
+  action: string;
+  icon: ReactNode;
+  detail?: string;
+}
+
+function PanelMenu({
+  entries,
+  rightPanel,
+  onToggle,
+}: {
+  entries: PanelEntry[];
+  rightPanel: string | null;
+  onToggle: (id: string) => void;
+}) {
+  if (entries.length === 0) {
+    return (
+      <div className="px-2.5 py-1.5 text-xs text-agent-muted-foreground">{t('Panels')}</div>
+    );
+  }
+  return (
+    <>
+      {entries.map((entry) => {
+        const open = rightPanel === entry.id;
+        return (
+          <button
+            key={entry.id}
+            type="button"
+            onClick={() => onToggle(entry.id)}
+            className={`flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-xs transition-colors ${
+              open
+                ? 'bg-agent-foreground/10 font-medium text-agent-foreground'
+                : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground'
+            }`}
+            title={
+              entry.detail ??
+              (open ? t('Close {name}', { name: entry.title }) : t('Open {name}', { name: entry.title }))
+            }
+            aria-label={entry.id === 'terminal' ? t('Terminal') : entry.title}
+            aria-pressed={open}
+            data-action={entry.action}
+            data-testid={entry.testId}
+          >
+            {entry.icon}
+            <span className="min-w-0 flex-1 truncate">{entry.title}</span>
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <div className="px-2 pb-0.5 pt-1 text-[10px] font-medium uppercase tracking-wide text-agent-muted-foreground/70">
+      {children}
+    </div>
+  );
+}
+
+function MenuRow({
+  icon,
+  label,
+  detail,
+  title,
+  disabled,
+  onClick,
+  ...rest
+}: {
+  icon: ReactNode;
+  label: string;
+  detail?: string;
+  title?: string;
+  disabled?: boolean;
+  onClick: () => void;
+} & Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick' | 'disabled' | 'title'>) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className="flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-xs text-agent-foreground transition-colors hover:bg-agent-foreground/5 disabled:opacity-60"
+      {...rest}
+    >
+      <span className="text-agent-muted-foreground">{icon}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {detail && <span className="shrink-0 text-agent-muted-foreground">{detail}</span>}
+    </button>
+  );
+}
+
+/** 资源浮层里先露出的产出条数。其余用「查看全部」展开，不把回合文件一次摊开。 */
+const OUTPUT_PREVIEW_LIMIT = 3;
+
+function linkedDirectories(project: LocalProject | null): string[] {
+  if (!project) return [];
+  const dirs = [project.folderPath, ...(project.sourceFolders ?? [])];
+  return [...new Set(dirs.filter((dir) => dir.length > 0))];
+}
+
+function uniqueOutputs(files: readonly TurnFile[]): TurnFile[] {
+  const byPath = new Map<string, TurnFile>();
+  for (const file of files) {
+    if (isIgnoredTurnFile(file.path)) continue;
+    byPath.set(file.path, file);
+  }
+  return [...byPath.values()].sort((a, b) => {
+    const rank = (file: TurnFile) => (getTurnFileCategory(file) === 'deliverable' ? 0 : 1);
+    const byKind = rank(a) - rank(b);
+    if (byKind !== 0) return byKind;
+    return splitTurnFilePath(a.path).name.localeCompare(splitTurnFilePath(b.path).name);
+  });
+}
+
 interface TaskBadge {
   /** 驱动角标配色的那一类任务，也写进 `data-task-state` 供测试断言。 */
   state: 'running' | 'review' | 'failed' | 'idle';
@@ -391,7 +928,7 @@ interface TaskBadge {
 }
 
 /**
- * 任务按钮的角标。只有一个状态能上色，按「用户该不该现在看一眼」排序：
+ * 资源按钮上的任务角标。只有一个状态能上色，按「用户该不该现在看一眼」排序：
  * 运行中（正在发生）> 待合并（等用户动手）> 失败（需要知道）> 全部跑完。
  * 计数跟着状态走——显示 3 个任务里那 1 个待合并的，比显示总数 3 更有用。
  */
@@ -447,49 +984,24 @@ function describeTaskBadge(summary: ChatTaskSummary): TaskBadge | null {
   };
 }
 
-/**
- * 角标的直达目标——只有一件事等着处理时跳过任务列表这一层。失败任务直接
- * 开推理过程（要看的是为什么挂的），待合并的 worktree 任务直接展开它在弹层
- * 里的行（合并/丢弃按钮在那儿）。有多件事等着、或还有任务在跑时仍然先给
- * 列表：那时候用户得先挑一个。
- */
-type TaskShortcut =
-  | { kind: 'process'; task: LocalTask }
-  | { kind: 'expand'; taskId: string };
-
-function describeTaskShortcut(
-  tasks: LocalTask[],
-  summary: ChatTaskSummary,
-): TaskShortcut | null {
-  if (summary.running + summary.blocked > 0) return null;
-  const pending = actionableTasks(tasks);
-  if (pending.length !== 1) return null;
-  const [task] = pending;
-  return task.worktreeState === 'pending'
-    ? { kind: 'expand', taskId: task.id }
-    : { kind: 'process', task };
+/** 浮层按内容给宽度，右缘对齐触发按钮，再夹进对话面板里。 */
+function sheetWidth(kind: HeaderPopover, page: 'root' | 'branches'): number {
+  if (kind === 'summary' || page === 'branches') return 304;
+  if (kind === 'panels') return 168;
+  return 176;
 }
 
-function taskButtonTitle(
-  badge: TaskBadge | null,
-  shortcut: TaskShortcut | null,
-): string {
-  const base =
-    badge?.title ?? t('Background tasks (run across turns; view results and merge worktrees)');
-  if (!shortcut) return base;
-  return shortcut.kind === 'process'
-    ? t('{base} · Click to view the reasoning', { base })
-    : t('{base} · Click to handle the worktree', { base });
-}
-
-/** Pin the branch menu to the trigger, clamped inside the chat panel so
- *  `overflow-hidden` ancestors cannot clip the left side of a `w-72` sheet. */
-function placeBranchMenu(button: HTMLElement): { top: number; left: number; width: number } {
+/** Pin the popover to the trigger, clamped inside the chat panel so
+ *  `overflow-hidden` ancestors cannot clip the left side. */
+function placeHeaderPopover(
+  button: HTMLElement,
+  preferredWidth: number,
+): { top: number; left: number; width: number } {
   const pad = 8;
   const panel = button.closest('.chat-panel-container');
   const bounds = (panel ?? document.documentElement).getBoundingClientRect();
   const btn = button.getBoundingClientRect();
-  const width = Math.min(288, Math.max(160, bounds.width - pad * 2));
+  const width = Math.min(preferredWidth, Math.max(160, bounds.width - pad * 2));
   const minLeft = bounds.left + pad;
   const maxLeft = bounds.right - width - pad;
   const left = Math.min(Math.max(btn.right - width, minLeft), Math.max(minLeft, maxLeft));

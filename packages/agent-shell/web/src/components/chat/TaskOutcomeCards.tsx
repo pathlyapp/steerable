@@ -42,7 +42,7 @@ export function TaskOutcomeCards({ tasks, onInspect, onDismiss }: TaskOutcomeCar
       ))}
       {overflow > 0 && (
         <div className="px-1 text-[11px] text-agent-muted-foreground">
-          {t('{count} more background tasks finished. See the tasks button in the title bar.', {
+          {t('{count} more background tasks finished. See Chat resources in the title bar.', {
             count: overflow,
           })}
         </div>
@@ -103,7 +103,7 @@ function TaskOutcomeCard({
             <span className="min-w-0 truncate font-mono text-[10px]">
               {task.worktreeBranch}
             </span>
-            <span>{t('Awaiting merge. Handle it from the tasks button in the title bar.')}</span>
+            <span>{t('Awaiting merge. Handle it from Chat resources in the title bar.')}</span>
           </div>
         )}
       </div>
