@@ -3,6 +3,7 @@ import { Outlet, useParams } from 'react-router-dom';
 import { LuPanelLeftOpen } from 'react-icons/lu';
 import { AgentSidebar } from '@/components/AgentSidebar';
 import { TerminalPanel } from '@/components/TerminalPanel';
+import { RightPanelTabBar } from '@/layouts/RightPanelTabBar';
 import { TaskProcessPanel, type InspectedTask } from '@/components/chat/TaskProcessPanel';
 import { AskUserPromptProvider } from '@/components/chat/AskUserPromptProvider';
 import { ApprovalPromptProvider } from '@/components/chat/ApprovalPromptProvider';
@@ -18,6 +19,19 @@ import {
 } from '@/hooks/useChatsAndAgents';
 import { hostToolChrome, sanitizeRightPanelKind, settingsChrome } from '@/lib/host-tools';
 import { t } from '@/i18n';
+import {
+  closeRightPanelTab,
+  openRightPanelTab,
+  parseRightPanelMap,
+  revealRightPanelTab,
+  toggleRightPanelEntry,
+  type RightPanelMap,
+  type RightPanelTabs,
+} from '@/layouts/right-panel-tabs';
+import { subscribeChatSlotRequests } from '@/layouts/request-chat-slot';
+
+export { parseRightPanelMap };
+export type { RightPanelMap, RightPanelTabs };
 
 /**
  * AgentLayout wraps `/agent`, `/agent/:chatId`, and `/` (default) with a
@@ -70,52 +84,8 @@ const DEFAULT_TERMINAL_WIDTH = 520;
 const MIN_TERMINAL_WIDTH = 360;
 const MAX_TERMINAL_WIDTH = 960;
 
-/**
- * 右侧栏位状态：null = 都不打开，'terminal' = 终端，其余字符串 = 包注册的
- * 聊天页槽位（chatSlots，如文档包的预览栏位）。栏位同一时刻只开一个
- * （互斥规则在本布局，不在包）。
- */
+/** 当前看见的标签。null = 这一侧没有打开的标签。 */
 export type RightPanelState = string | null;
-
-/** 每个会话各自的右侧栏位状态：chatId → RightPanelState（null 不落盘）。 */
-export type RightPanelMap = Record<string, string>;
-
-/**
- * 解析持久化的「会话 → 右侧栏位」映射。
- *
- * 兼容三种历史格式：
- *   - 新格式：{"<chatId>": "terminal" | "<slotId>"}；
- *   - 旧格式：整个值就是单个字符串（'' / 'terminal' / slotId）→ 迁到当前会话；
- *   - 更老：只记录终端是否打开过的布尔 key。
- * 无效的会话 / 栏位值会被丢弃，避免脏数据把某个会话卡在打不开的面板上。
- */
-export function parseRightPanelMap(options: {
-  raw: string | null;
-  legacyTerminalOpen: string | null;
-  chatId: string | null;
-  isValidValue: (value: string) => boolean;
-}): RightPanelMap {
-  const { raw, legacyTerminalOpen, chatId, isValidValue } = options;
-  if (raw !== null) {
-    if (raw === '') return {};
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        const map: RightPanelMap = {};
-        for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-          if (typeof value === 'string' && isValidValue(value)) map[key] = value;
-        }
-        return map;
-      }
-    } catch {
-      // 旧格式：整个 key 就是单个值。
-      if (isValidValue(raw) && chatId) return { [chatId]: raw };
-    }
-    return {};
-  }
-  if (legacyTerminalOpen === '1' && chatId) return { [chatId]: 'terminal' };
-  return {};
-}
 
 /** 从聊天页外把一段内容作为普通用户消息发进当前会话（包槽位的 fallback 通道）。 */
 export type ChatMessageSender = (input: {
@@ -131,9 +101,11 @@ export type AgentOutletContext = UseChatsAndAgentsResult & {
   inspectTask: (task: InspectedTask) => void;
   /** 包槽位（如文档预览）：入口渲染在 chat 标题栏，状态按会话隔离。 */
   chatSlots: readonly PackChatSlotContribution[];
-  /** 当前会话打开的右侧栏位（null = 都关着）。 */
+  /** 当前会话正在看的右侧标签（null = 都关着）。 */
   rightPanel: RightPanelState;
-  /** 顶栏入口：点已打开的关闭，点另一个直接切换。 */
+  /** 当前会话已经打开的标签，顺序与标签条一致。 */
+  openPanelIds: readonly string[];
+  /** 顶栏入口：没开就追加，已开但不是当前就切过去，当前这个就关掉。 */
   onToggleChatSlot: (slotId: string) => void;
 };
 
@@ -328,17 +300,13 @@ function AgentLayoutContent() {
   }, []);
 
   // ───── Right-side panel (embedded column beside the chat content) ─────
-  // 终端与包槽位面板（如 PPT 预览）合并为同一栏位的互斥切换：
-  // null | 'terminal' | <slotId>。持久化到新 key；老版本只持久化终端打开
-  // 状态，首次读取时迁移。
+  // 终端与包槽位（PPT、Word、Markdown）共用一条标签。可以同时打开多个，
+  // 标签条切换当前看见的那一个。持久化按会话存标签列表；老的单值会迁成一个标签。
   const packChatSlots = getPackChatSlots();
 
   /**
-   * 右侧栏位状态按会话隔离：chatId → null | 'terminal' | <slotId>。
-   *
-   * 以前是单个全局值（localStorage 里存一个字符串），会话 1 打开预览会连带
-   * 影响会话 2。现在存成映射，每个会话独立；老的单值 key 读取时自动迁移到
-   * 当前会话。
+   * 右侧标签按会话隔离。以前是单个全局值，会话 1 打开预览会连带影响会话 2。
+   * 现在存成映射，每个会话独立；老的单值 key 读取时自动迁移到当前会话。
    */
   const readRightPanelMap = useCallback((): RightPanelMap => {
     const isValidValue = (value: string): boolean =>
@@ -351,9 +319,15 @@ function AgentLayoutContent() {
         isValidValue,
       });
       const sanitized: RightPanelMap = {};
-      for (const [id, value] of Object.entries(map)) {
-        const next = sanitizeRightPanelKind(value);
-        if (next) sanitized[id] = next;
+      for (const [id, entry] of Object.entries(map)) {
+        const tabs: string[] = [];
+        for (const tab of entry.tabs) {
+          const next = sanitizeRightPanelKind(tab);
+          if (next && !tabs.includes(next)) tabs.push(next);
+        }
+        if (tabs.length === 0) continue;
+        const active = tabs.includes(entry.active) ? entry.active : tabs[0]!;
+        sanitized[id] = { tabs, active };
       }
       return sanitized;
     } catch {
@@ -370,7 +344,11 @@ function AgentLayoutContent() {
     setRightPanelMap(readRightPanelMap());
   }, [readRightPanelMap]);
 
-  const rightPanel: RightPanelState = chatId ? rightPanelMap[chatId] ?? null : null;
+  const panelEntry: RightPanelTabs | null = chatId ? rightPanelMap[chatId] ?? null : null;
+  const rightPanel: RightPanelState = panelEntry?.active ?? null;
+  const openPanelIds = panelEntry?.tabs ?? [];
+  // 自动展开 / 手动切换回调是挂载时注册的，直接读 state 会拿到过期闭包。
+  const panelEntryRef = useRef<RightPanelTabs | null>(panelEntry);
 
   const persistRightPanelMap = useCallback((map: RightPanelMap) => {
     try {
@@ -380,9 +358,10 @@ function AgentLayoutContent() {
     }
   }, []);
 
-  const setRightPanel = useCallback(
-    (next: RightPanelState) => {
+  const applyPanelEntry = useCallback(
+    (next: RightPanelTabs | null) => {
       if (!chatId) return;
+      panelEntryRef.current = next;
       setRightPanelMap((prev) => {
         const map = { ...prev };
         if (next === null) delete map[chatId];
@@ -394,29 +373,40 @@ function AgentLayoutContent() {
     [chatId, persistRightPanelMap],
   );
 
-  // 自动展开 / 手动切换回调是挂载时注册的，直接读 state 会拿到过期闭包，
-  // 所以用 ref 跟踪当前栏位状态（见下方同步 effect）。
-  const rightPanelRef = useRef<RightPanelState>(rightPanel);
-
   useEffect(() => {
-    rightPanelRef.current = rightPanel;
-  }, [rightPanel]);
+    panelEntryRef.current = panelEntry;
+  }, [panelEntry]);
 
-  const closeRightPanel = useCallback(() => {
-    setRightPanel(null);
-  }, [setRightPanel]);
+  const closePanelTab = useCallback(
+    (kind: string) => {
+      const current = panelEntryRef.current;
+      if (!current) return;
+      applyPanelEntry(closeRightPanelTab(current, kind));
+    },
+    [applyPanelEntry],
+  );
 
-  /** 顶栏 / 快捷键入口：点已打开的按钮关闭；点另一个按钮直接切换。
-      打开任一面板即离开任务 dock（栏位同一时刻只呈现一个内容）。 */
+  const activatePanelTab = useCallback(
+    (kind: string) => {
+      const current = panelEntryRef.current;
+      if (!current || !current.tabs.includes(kind)) return;
+      setInspectedTask(null);
+      if (current.active === kind) return;
+      applyPanelEntry({ tabs: current.tabs, active: kind });
+    },
+    [applyPanelEntry],
+  );
+
+  /** 顶栏 / 快捷键：没开就追加并显示，已开但不是当前就切过去，当前这个就关掉。 */
   const toggleRightPanel = useCallback(
     (kind: string) => {
-      const raw: RightPanelState = rightPanelRef.current === kind ? null : kind;
-      const next = sanitizeRightPanelKind(raw);
-      rightPanelRef.current = next;
+      const id = sanitizeRightPanelKind(kind);
+      if (!id) return;
+      const next = toggleRightPanelEntry(panelEntryRef.current, id);
       if (next !== null) setInspectedTask(null);
-      setRightPanel(next);
+      applyPanelEntry(next);
     },
-    [setRightPanel],
+    [applyPanelEntry],
   );
 
   // Cmd+T from the app menu — wired in src/main.ts:createMenu (sends
@@ -480,20 +470,22 @@ function AgentLayoutContent() {
   const showTerminalFromTask = useCallback(() => {
     if (!hostToolChrome('terminal')) return;
     setInspectedTask(null);
-    setRightPanel('terminal');
-  }, [setRightPanel]);
+    applyPanelEntry(openRightPanelTab(panelEntryRef.current, 'terminal'));
+  }, [applyPanelEntry]);
 
-  // 包槽位的自动展开（如文档包：后端在本轮产出新设计稿时广播包事件）。
-  // 互斥规则：仅当栏位空闲（null）时 reveal 才生效；
-  // 已打开任一面板时，自动展开请求被忽略。订阅逻辑由包自己实现。
+  // 包槽位的自动展开（如文档包：后端在本轮产出新稿时广播）。
+  // 栏位空着时打开并显示；已经有别的标签时只追加，不抢走当前标签。
   useEffect(() => {
     const cleanups: Array<() => void> = [];
     for (const slot of packChatSlots) {
       const cleanup = slot.setupAutoReveal?.({
         reveal: () => {
-          if (rightPanelRef.current !== null) return;
-          rightPanelRef.current = slot.slotId;
-          setRightPanel(slot.slotId);
+          const id = sanitizeRightPanelKind(slot.slotId);
+          if (!id) return;
+          const next = revealRightPanelTab(panelEntryRef.current, id);
+          if (next === panelEntryRef.current) return;
+          if (panelEntryRef.current === null) setInspectedTask(null);
+          applyPanelEntry(next);
         },
         getCurrentChatId: () => chatId ?? null,
       });
@@ -504,7 +496,18 @@ function AgentLayoutContent() {
     };
     // packChatSlots 在 bootstrap 后稳定；chatId 经 getCurrentChatId 闭包读取。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId, setRightPanel]);
+  }, [chatId, applyPanelEntry]);
+
+  // 交付文件点击要打开对应栏位。菜单按钮不在文档里时也能切过去。
+  useEffect(() => {
+    return subscribeChatSlotRequests((slotId) => {
+      const id = sanitizeRightPanelKind(slotId);
+      if (!id) return;
+      if (id !== 'terminal' && !packChatSlots.some((slot) => slot.slotId === id)) return;
+      setInspectedTask(null);
+      applyPanelEntry(openRightPanelTab(panelEntryRef.current, id));
+    });
+  }, [applyPanelEntry, packChatSlots]);
 
   // Same drag ergonomics as the sidebar handle, mirrored: the terminal's
   // right edge is pinned to the window's right padding (p-1.5 = 6px), so the
@@ -610,6 +613,7 @@ function AgentLayoutContent() {
                   inspectTask,
                   chatSlots: packChatSlots,
                   rightPanel,
+                  openPanelIds,
                   onToggleChatSlot: toggleRightPanel,
                 } satisfies AgentOutletContext}
               />
@@ -628,40 +632,58 @@ function AgentLayoutContent() {
                 title={t('Drag to resize the right panel (double-click to reset)')}
               />
               <div
-                className={`h-full flex-shrink-0 overflow-hidden rounded-agent-lg shadow-sm ${
-                  rightPanel === 'terminal' && !inspectedTask ? 'bg-[#0b0b0c]' : 'bg-agent-canvas'
-                }`}
+                className="flex h-full flex-shrink-0 flex-col overflow-hidden rounded-agent-lg bg-agent-canvas shadow-sm"
                 style={{ width: terminalWidth }}
                 data-testid={inspectedTask ? 'task-process-dock' : 'terminal-panel'}
               >
-                {inspectedTask ? (
-                  <TaskProcessPanel
-                    inspected={inspectedTask}
-                    onClose={closeTaskProcess}
-                    onShowTerminal={
-                      hostToolChrome('terminal') ? showTerminalFromTask : undefined
-                    }
+                {panelEntry && (
+                  <RightPanelTabBar
+                    tabs={panelEntry.tabs}
+                    active={panelEntry.active}
+                    slots={packChatSlots}
+                    onActivate={activatePanelTab}
+                    onClose={closePanelTab}
                   />
-                ) : rightPanel === 'terminal' ? (
-                  <TerminalPanel
-                    onClose={closeRightPanel}
-                    onShowTaskProcess={recentTask ? showRecentTask : undefined}
-                    taskProcessTitle={recentTask?.title}
-                  />
-                ) : (
-                  (() => {
-                    const slot = packChatSlots.find((s) => s.slotId === rightPanel);
-                    if (!slot) return null;
-                    const SlotPanel = slot.Component;
-                    return (
-                      <SlotPanel
-                        chatId={chatId ?? ''}
-                        onClose={closeRightPanel}
-                        onSubmitToChat={sendChatMessage}
-                      />
-                    );
-                  })()
                 )}
+                <div className="relative min-h-0 flex-1">
+                  {inspectedTask ? (
+                    <TaskProcessPanel
+                      inspected={inspectedTask}
+                      onClose={closeTaskProcess}
+                      onShowTerminal={
+                        hostToolChrome('terminal') ? showTerminalFromTask : undefined
+                      }
+                    />
+                  ) : (
+                    panelEntry?.tabs.map((id) => {
+                      const visible = id === panelEntry.active;
+                      return (
+                        <div key={id} className={visible ? 'h-full' : 'hidden'}>
+                          {id === 'terminal' ? (
+                            <TerminalPanel
+                              onClose={() => closePanelTab('terminal')}
+                              onShowTaskProcess={recentTask ? showRecentTask : undefined}
+                              taskProcessTitle={recentTask?.title}
+                            />
+                          ) : (
+                            (() => {
+                              const slot = packChatSlots.find((s) => s.slotId === id);
+                              if (!slot) return null;
+                              const SlotPanel = slot.Component;
+                              return (
+                                <SlotPanel
+                                  chatId={chatId ?? ''}
+                                  onClose={() => closePanelTab(id)}
+                                  onSubmitToChat={sendChatMessage}
+                                />
+                              );
+                            })()
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </div>
             </>
           )}

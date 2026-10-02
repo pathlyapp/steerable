@@ -76,9 +76,11 @@ interface ChatHeaderProps {
   tasks?: LocalTask[];
   /** 包注册的聊天页槽位（如「文档预览」）：入口放在面板菜单里，按会话独立开关。 */
   chatSlots?: readonly PackChatSlotContribution[];
-  /** 当前会话打开的右侧栏位（null = 都关着）。 */
+  /** 当前会话正在看的右侧标签（null = 都关着）。 */
   rightPanel?: string | null;
-  /** 点击槽位入口：点已打开的关闭，点另一个直接切换。 */
+  /** 已经打开的标签。缺省时只把 rightPanel 当作唯一打开项。 */
+  openPanelIds?: readonly string[];
+  /** 点击槽位入口：没开就追加，已开但不是当前就切过去，当前这个就关掉。 */
   onToggleChatSlot?: (slotId: string) => void;
   /** 切换右侧面板（终端、包槽位等）。 */
   onToggleRightPanel?: (kind: string) => void;
@@ -111,6 +113,7 @@ export function ChatHeader({
   tasks = [],
   chatSlots = [],
   rightPanel = null,
+  openPanelIds,
   onToggleChatSlot,
   onToggleRightPanel,
   showProject = false,
@@ -153,6 +156,7 @@ export function ChatHeader({
   const showTerminalChrome = hostToolChrome('terminal');
   const allowOpenPath = hostToolChrome('local-fs');
   const togglePanel = onToggleRightPanel ?? onToggleChatSlot;
+  const openIds = openPanelIds ?? (rightPanel ? [rightPanel] : []);
   const panelEntries = useMemo(() => {
     const entries: PanelEntry[] = chatSlots.map((slot) => ({
       id: slot.slotId,
@@ -170,13 +174,13 @@ export function ChatHeader({
         action: 'terminal',
         icon: <LuTerminal className="h-3.5 w-3.5 shrink-0" />,
         detail:
-          rightPanel === 'terminal'
+          openIds.includes('terminal') && rightPanel === 'terminal'
             ? t('Close terminal panel ({shortcut})', { shortcut })
             : t('Open terminal panel ({shortcut})', { shortcut }),
       });
     }
     return entries;
-  }, [chatSlots, isMac, rightPanel, showTerminalChrome]);
+  }, [chatSlots, isMac, openIds, rightPanel, showTerminalChrome]);
 
   const branchCount = branches ? branches.lineage.length + branches.children.length : 0;
   const files = useMemo(() => uniqueOutputs(outputs), [outputs]);
@@ -365,6 +369,7 @@ export function ChatHeader({
               <PanelMenu
                 entries={panelEntries}
                 rightPanel={rightPanel}
+                openPanelIds={openIds}
                 onToggle={(id) => {
                   togglePanel?.(id);
                   closePopover();
@@ -433,14 +438,14 @@ export function ChatHeader({
           type="button"
           onClick={() => togglePopover('panels')}
           className={`${iconButton} w-7 ${
-            popover === 'panels' || rightPanel !== null
+            popover === 'panels' || openIds.length > 0
               ? 'bg-agent-foreground/10 text-agent-foreground'
               : ''
           }`}
           title={t('Panels')}
           aria-label={t('Panels')}
           aria-expanded={popover === 'panels'}
-          aria-pressed={rightPanel !== null}
+          aria-pressed={openIds.length > 0}
           data-testid="header-chat-panels"
         >
           <LuCopy className="h-4 w-4" />
@@ -813,10 +818,12 @@ interface PanelEntry {
 function PanelMenu({
   entries,
   rightPanel,
+  openPanelIds,
   onToggle,
 }: {
   entries: PanelEntry[];
   rightPanel: string | null;
+  openPanelIds: readonly string[];
   onToggle: (id: string) => void;
 }) {
   if (entries.length === 0) {
@@ -827,7 +834,8 @@ function PanelMenu({
   return (
     <>
       {entries.map((entry) => {
-        const open = rightPanel === entry.id;
+        const open = openPanelIds.includes(entry.id);
+        const active = rightPanel === entry.id;
         return (
           <button
             key={entry.id}
@@ -840,7 +848,9 @@ function PanelMenu({
             }`}
             title={
               entry.detail ??
-              (open ? t('Close {name}', { name: entry.title }) : t('Open {name}', { name: entry.title }))
+              (active
+                ? t('Close {name}', { name: entry.title })
+                : t('Open {name}', { name: entry.title }))
             }
             aria-label={entry.id === 'terminal' ? t('Terminal') : entry.title}
             aria-pressed={open}

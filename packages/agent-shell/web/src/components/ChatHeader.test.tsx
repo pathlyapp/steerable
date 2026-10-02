@@ -257,6 +257,30 @@ describe('ChatHeader 包槽位入口', () => {
     expect(onToggleChatSlot).toHaveBeenCalledWith('ppt');
   });
 
+  it('已经打开的多个栏位同时高亮，当前这个才提示关闭', () => {
+    const word: PackChatSlotContribution = {
+      slotId: 'word',
+      title: 'Word',
+      Icon: ({ className }: { className?: string }) => <svg className={className} />,
+      Component: () => null,
+    };
+    render(
+      <ChatHeader
+        chat={CHAT}
+        tasks={[]}
+        chatSlots={[slot, word]}
+        rightPanel="word"
+        openPanelIds={['ppt', 'word']}
+        onToggleChatSlot={vi.fn()}
+      />,
+    );
+    openPanels();
+    expect(screen.getByTestId('header-slot-ppt').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('header-slot-word').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('header-slot-ppt').getAttribute('title')).toBe('Open 文档预览');
+    expect(screen.getByTestId('header-slot-word').getAttribute('title')).toBe('Close Word');
+  });
+
   it('栏位关闭时不显示高亮', () => {
     render(
       <ChatHeader

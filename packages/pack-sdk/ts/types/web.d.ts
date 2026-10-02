@@ -39,7 +39,7 @@ export interface PackChatSlotProps {
 
 /** 自动展开钩子拿到的布局 API。 */
 export interface PackChatSlotAutoRevealApi {
-  /** 请求把右侧栏位切到本槽位（栏位被占用时布局忽略——互斥规则在布局）。 */
+  /** 请求把本槽位加进右侧标签。栏位空着时显示它；已有别的标签时只追加，不抢走当前标签。 */
   reveal: () => void;
   /** 当前会话 id（事件载荷据此过滤）。 */
   getCurrentChatId: () => string | null;
