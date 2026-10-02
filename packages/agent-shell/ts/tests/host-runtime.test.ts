@@ -260,6 +260,23 @@ describe('start · 生命周期', () => {
     expect(await bootDeps.resolveAdditionalWriteRoots('chat-1')).toEqual([]);
   });
 
+  it('包声明的可写根跟着每次工具调用走', async () => {
+    const { registerPackTurnHooks, resetPackTurnHooks } = await import('../src/local-backend/pack-turn-hooks.js');
+    registerPackTurnHooks('test-pack-roots', {
+      execWritableRoots: () => ['/tmp/pack-root'],
+    });
+    try {
+      const rt = await createHostRuntime(makeOptions());
+      await rt.start();
+      const bootDeps = mocks.startHostSidecar.mock.calls.at(-1)?.[0] as {
+        resolveAdditionalWriteRoots: (chatId: string) => Promise<string[]>;
+      };
+      expect(await bootDeps.resolveAdditionalWriteRoots('chat-1')).toEqual(['/tmp/pack-root']);
+    } finally {
+      resetPackTurnHooks();
+    }
+  });
+
   it('read_state.seed 处理器：合法 state 透传并回 seeded；畸形入参按空表处理', async () => {
     mocks.seedReadState.mockReturnValue(5);
     const rt = await createHostRuntime(makeOptions());

@@ -55,6 +55,7 @@ import { startHostSidecar, shutdownHostSidecar } from '../sidecar/boot.js';
 import { createVisibleTerminalExec } from './visible-terminal-exec.js';
 import { createJsonStore } from '../json-store.js';
 import { bindWorkspaceSkillRoots } from '../local-backend/skill-loader.js';
+import { collectPackExecWritableRoots } from '../local-backend/pack-turn-hooks.js';
 import { getChatAttachmentsDir } from '../attachments.js';
 import { ensureChatWorkspace } from '../project-home.js';
 import { recordInsightTurn } from '../insights/record.js';
@@ -336,8 +337,7 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
         toolRouter,
         resolveProjectRoot: async (chatId) =>
           localBackendRouter.resolveChatWorkspaceRoot(chatId),
-        // 读：项目家目录之外，附件目录和源文件夹（含各自子目录）也可读。
-        // 写：源文件夹及其子目录与家目录同一档；附件目录保持只读。
+        // 写：源文件夹、包声明的可写根，以及各自的子目录。附件目录保持只读。
         resolveAdditionalReadRoots: async (chatId) => {
           const project = await localBackendRouter.resolveChatProject(chatId);
           return [
@@ -347,7 +347,10 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
         },
         resolveAdditionalWriteRoots: async (chatId) => {
           const project = await localBackendRouter.resolveChatProject(chatId);
-          return project?.sourceFolders ?? [];
+          return [
+            ...(project?.sourceFolders ?? []),
+            ...collectPackExecWritableRoots(chatId),
+          ];
         },
         approvalHandler: approvalBridge.handler,
         askUserHandler: askUserBridge.handler,
