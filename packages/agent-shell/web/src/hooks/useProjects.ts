@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { hasHostBridge } from '@/lib/host-bridge';
 import { hostToolChrome } from '@/lib/host-tools';
-import { listProjects, type LocalProject } from '@/lib/local-api';
+import { listProjects, reorderProjects, type LocalProject } from '@/lib/local-api';
+import { applyProjectIdOrder } from '@/lib/project-order';
 
 type ProjectsSnapshot = {
   projects: LocalProject[];
@@ -54,6 +55,34 @@ export async function refreshProjects(): Promise<void> {
     console.error('Failed to load projects:', err);
     snapshot = { projects: snapshot.projects, error: message };
     emit();
+  }
+}
+
+/**
+ * 立刻按 orderedIds 重排共享列表，再写到服务端。
+ * 保存失败时把列表滚回拖拽前的顺序，并抛出原来的错误。
+ */
+export async function persistProjectOrder(orderedIds: string[]): Promise<void> {
+  const previous = snapshot;
+  const seq = ++requestSeq;
+  snapshot = {
+    projects: applyProjectIdOrder(previous.projects, orderedIds),
+    error: previous.error,
+  };
+  emit();
+  try {
+    const res = await reorderProjects(orderedIds);
+    if (seq !== requestSeq) return;
+    snapshot = {
+      projects: Array.isArray(res.projects) ? res.projects : snapshot.projects,
+      error: null,
+    };
+    emit();
+  } catch (err) {
+    if (seq !== requestSeq) return;
+    snapshot = previous;
+    emit();
+    throw err instanceof Error ? err : new Error(String(err));
   }
 }
 

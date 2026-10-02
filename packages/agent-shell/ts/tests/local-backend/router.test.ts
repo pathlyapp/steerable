@@ -27,12 +27,23 @@ import {
   resetRouterTestkit,
 } from './router-testkit.js';
 import { LocalBackendRouter, userFacingCoreLoopFailure } from '../../src/local-backend/router.js';
+import { ProjectRegistry, type ProjectRecord } from '../../src/project-registry.js';
 import { SidecarSupervisor } from '../../src/sidecar/index.js';
 import type { ToolRouter } from '../../src/tool-router.js';
 import type { TaskService } from '../../src/local-backend/task-service.js';
 import { registerAuthProvider, type Principal } from '../../src/auth/index.js';
 import type { ScopedStore } from '../../src/storage/scoped-store.js';
 import { setProductConfig } from '../../src/product-config.js';
+
+function memoryProjectStore() {
+  let data: ProjectRecord[] = [];
+  return {
+    get: (key: 'projects') => (key === 'projects' ? data : undefined),
+    set: (key: 'projects', value: ProjectRecord[]) => {
+      if (key === 'projects') data = value;
+    },
+  };
+}
 
 function makeRouter(options: {
   toolRouter?: Record<string, unknown>;
@@ -674,6 +685,49 @@ describe('项目路由', () => {
       body: { name: '演示', folderPath: '/tmp/demo' },
     });
     expect(created.status).toBe(403);
+    const order = await router.handle({
+      method: 'PUT',
+      path: '/api/v2/projects/order',
+      body: { orderedIds: [] },
+    });
+    expect(order.status).toBe(403);
+  });
+
+  it('PUT /api/v2/projects/order 按 id 重排；非法名单 400；无注册表 503', async () => {
+    const missing = await makeRouter().handle({
+      method: 'PUT',
+      path: '/api/v2/projects/order',
+      body: { orderedIds: [] },
+    });
+    expect(missing.status).toBe(503);
+
+    const store = memoryProjectStore();
+    const registry = new ProjectRegistry(store);
+    const first = registry.create({ name: '甲', folderPath: '/tmp/a' });
+    const second = registry.create({ name: '乙', folderPath: '/tmp/b' });
+    const router = makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) });
+
+    const bad = await router.handle({
+      method: 'PUT',
+      path: '/api/v2/projects/order',
+      body: { orderedIds: [first.id, 2] },
+    });
+    expect(bad.status).toBe(400);
+
+    const moved = await router.handle({
+      method: 'PUT',
+      path: '/api/v2/projects/order',
+      body: { orderedIds: [second.id, first.id] },
+    });
+    expect(moved.status).toBe(200);
+    expect(
+      ((moved.data as { projects: Array<{ name: string }> }).projects).map((project) => project.name),
+    ).toEqual(['乙', '甲']);
+
+    const list = await router.handle({ method: 'GET', path: '/api/v2/projects' });
+    expect(
+      ((list.data as { projects: Array<{ id: string }> }).projects).map((project) => project.id),
+    ).toEqual([second.id, first.id]);
   });
 
   it('POST 不带 folderPath 时分配默认家目录并创建', async () => {

@@ -9,7 +9,8 @@
  *   - 右侧面板：终端按钮快捷键提示随平台变化，包槽位渲染分段控件；
  *   - 副作用：进入会话路由同步 selectedAgentId、菜单 Cmd+N / Cmd+T 订阅与
  *     退订、滚动接近底部自动加载下一页；
- *   - 项目模式（Electron）：项目分组与折叠、孤儿会话回落日期分组、
+ *   - 项目模式（Electron）：项目分组与折叠、拖拽组头排序、孤儿会话回落日期分组、
+ *     项目内超过 5 条先收起，每次再展开 5 条；
  *     新建（弹窗填名称 + 可选源文件夹）；组头 hover 为 ✎ 新建对话 / ·· 菜单
  *     （重命名 / 编辑项目多源文件夹 / 访达或文件管理器 / 弹窗确认删除）。
  * 智能体挑选列表已迁到 ChatInput（见组件头注释），侧栏只剩同步副作用可测。
@@ -35,6 +36,7 @@ vi.mock('@/lib/host-bridge', () => ({
 const listProjects = vi.fn();
 const createProject = vi.fn();
 const updateProject = vi.fn();
+const reorderProjects = vi.fn();
 const deleteProject = vi.fn();
 const openLocalPath = vi.fn();
 const setChatPinned = vi.fn();
@@ -45,6 +47,7 @@ vi.mock('@/lib/local-api', () => ({
   listProjects: (...args: unknown[]) => listProjects(...args),
   createProject: (...args: unknown[]) => createProject(...args),
   updateProject: (...args: unknown[]) => updateProject(...args),
+  reorderProjects: (...args: unknown[]) => reorderProjects(...args),
   deleteProject: (...args: unknown[]) => deleteProject(...args),
   openLocalPath: (...args: unknown[]) => openLocalPath(...args),
   setChatPinned: (...args: unknown[]) => setChatPinned(...args),
@@ -80,6 +83,7 @@ beforeEach(() => {
   listProjects.mockReset();
   createProject.mockReset();
   updateProject.mockReset();
+  reorderProjects.mockReset();
   deleteProject.mockReset();
   openLocalPath.mockReset();
   setChatPinned.mockReset();
@@ -272,6 +276,71 @@ function renderSidebar(
 function openProjectMenu() {
   fireEvent.click(screen.getByLabelText('Project menu'));
   expect(screen.getByTestId('project-overflow-menu')).toBeTruthy();
+}
+
+function projectIds(): string[] {
+  return screen.getAllByTestId('sidebar-project').map((el) => el.getAttribute('data-project-id') ?? '');
+}
+
+function projectHandle(projectId: string): HTMLElement {
+  const handle = document.querySelector(
+    `[data-testid="sidebar-project-handle"][data-project-id="${projectId}"]`,
+  );
+  if (!(handle instanceof HTMLElement)) throw new Error(`项目拖拽把手不存在: ${projectId}`);
+  return handle;
+}
+
+/**
+ * happy-dom 的 DragEvent 不带 clientY，fireEvent.drop({ clientY }) 到不了
+ * 处理函数。补一个可取消的原生事件，让上下半区的落点能测。
+ */
+function dispatchProjectPointer(
+  element: HTMLElement,
+  type: 'dragover' | 'drop',
+  clientY: number,
+) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'clientY', { value: clientY });
+  act(() => {
+    element.dispatchEvent(event);
+  });
+}
+
+function projectBlock(projectId: string): HTMLElement {
+  const block = document.querySelector(
+    `[data-testid="sidebar-project"][data-project-id="${projectId}"]`,
+  );
+  if (!(block instanceof HTMLElement)) throw new Error(`项目块不存在: ${projectId}`);
+  return block;
+}
+
+/** happy-dom 的 getBoundingClientRect 恒为 0。按 data-project-id 给项目块一个高度，落点才能分出上下半。 */
+function installProjectRects(
+  rects: Record<string, { top: number; height: number }>,
+): () => void {
+  const original = HTMLElement.prototype.getBoundingClientRect;
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    const id = this.getAttribute('data-project-id');
+    const spec = id ? rects[id] : undefined;
+    if (!spec) return original.call(this);
+    const { top, height } = spec;
+    return {
+      top,
+      bottom: top + height,
+      left: 0,
+      right: 160,
+      width: 160,
+      height,
+      x: 0,
+      y: top,
+      toJSON() {
+        return {};
+      },
+    } as DOMRect;
+  };
+  return () => {
+    HTMLElement.prototype.getBoundingClientRect = original;
+  };
 }
 
 /** 按 data-chat-id 取会话行容器。 */
@@ -882,6 +951,98 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     expect(screen.getByText('Today')).toBeTruthy();
   });
 
+  it('项目内超过 5 条先收起，每次再展开 5 条，收起项目后回到最初 5 条', async () => {
+    enterElectron([makeProject({ id: 'proj-1', name: '项目甲' })]);
+    const chats = Array.from({ length: 12 }, (_, index) =>
+      makeChat({
+        id: `c-${index + 1}`,
+        title: `会话 ${index + 1}`,
+        projectId: 'proj-1',
+        updatedAt: new Date(Date.UTC(2026, 0, 1, 12, 0, 12 - index)).toISOString(),
+      }),
+    );
+    renderSidebar('/agent', vi.fn(), { data: { chats } });
+
+    await screen.findByText('项目甲');
+    for (let index = 1; index <= 5; index += 1) {
+      expect(screen.getByText(`会话 ${index}`)).toBeTruthy();
+    }
+    expect(screen.queryByText('会话 6')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show 7 more' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 7 more' }));
+    expect(screen.getByText('会话 10')).toBeTruthy();
+    expect(screen.queryByText('会话 11')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show 2 more' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 2 more' }));
+    expect(screen.getByText('会话 12')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Show \d+ more/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
+    expect(screen.queryByText('会话 6')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show 7 more' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 7 more' }));
+    fireEvent.click(screen.getByText('项目甲').closest('button')!);
+    fireEvent.click(screen.getByText('项目甲').closest('button')!);
+    expect(screen.queryByText('会话 6')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show 7 more' })).toBeTruthy();
+  });
+
+  it('正好 5 条不显示更多；进行中的会话和当前会话不占这 5 条名额', async () => {
+    enterElectron([
+      makeProject({ id: 'proj-1', name: '项目甲' }),
+      makeProject({ id: 'proj-2', name: '项目乙' }),
+      makeProject({ id: 'proj-3', name: '项目丙' }),
+    ]);
+    const streamingTail = Array.from({ length: 7 }, (_, index) =>
+      makeChat({
+        id: `c-${index + 1}`,
+        title: `甲 ${index + 1}`,
+        projectId: 'proj-1',
+        updatedAt: new Date(Date.UTC(2026, 0, 1, 12, 0, 7 - index)).toISOString(),
+        isStreaming: index === 6,
+      }),
+    );
+    const currentTail = Array.from({ length: 7 }, (_, index) =>
+      makeChat({
+        id: `b-${index + 1}`,
+        title: `乙 ${index + 1}`,
+        projectId: 'proj-2',
+        updatedAt: new Date(Date.UTC(2026, 0, 2, 12, 0, 7 - index)).toISOString(),
+      }),
+    );
+    const exactFive = Array.from({ length: 5 }, (_, index) =>
+      makeChat({
+        id: `fit-${index + 1}`,
+        title: `丙 ${index + 1}`,
+        projectId: 'proj-3',
+        updatedAt: new Date(Date.UTC(2026, 0, 3, 12, 0, 5 - index)).toISOString(),
+      }),
+    );
+    renderSidebar('/agent/b-7', vi.fn(), {
+      data: { chats: [...streamingTail, ...currentTail, ...exactFive] },
+    });
+
+    await screen.findByText('项目甲');
+    expect(screen.getByText('甲 7')).toBeTruthy();
+    expect(screen.queryByText('甲 6')).toBeNull();
+    expect(screen.getByText('甲 5')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Show 1 more' })).toHaveLength(2);
+
+    expect(screen.getByText('乙 7')).toBeTruthy();
+    expect(screen.queryByText('乙 6')).toBeNull();
+    expect(screen.getByText('乙 5')).toBeTruthy();
+
+    for (let index = 1; index <= 5; index += 1) {
+      expect(screen.getByText(`丙 ${index}`)).toBeTruthy();
+    }
+    expect(
+      document.querySelector('[data-testid="sidebar-project-show-more"][data-project-id="proj-3"]'),
+    ).toBeNull();
+  });
+
   it('项目组头可折叠再展开', async () => {
     enterElectron([makeProject({ id: 'proj-1', name: '项目甲' })]);
     renderSidebar('/agent', vi.fn(), {
@@ -1053,6 +1214,85 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     fireEvent.click(screen.getByTestId('sidebar-delete-project-dialog-confirm'));
     await waitFor(() => expect(deleteProject).toHaveBeenCalledWith('proj-1'));
     await waitFor(() => expect(data.refreshChats).toHaveBeenCalled());
+  });
+
+  it('拖拽项目组头到另一项目上半段时按新顺序保存', async () => {
+    const first = makeProject({ id: 'proj-1', name: '项目甲' });
+    const second = makeProject({ id: 'proj-2', name: '项目乙' });
+    enterElectron([first, second]);
+    reorderProjects.mockImplementation(async (ids: string[]) => ({
+      success: true,
+      projects: ids.map((id) => (id === first.id ? first : second)),
+    }));
+    renderSidebar('/agent');
+
+    await screen.findByText('项目乙');
+    expect(projectIds()).toEqual(['proj-1', 'proj-2']);
+
+    const restoreRects = installProjectRects({
+      'proj-1': { top: 0, height: 80 },
+      'proj-2': { top: 100, height: 80 },
+    });
+    try {
+      const target = projectBlock('proj-1');
+      fireEvent.dragStart(projectHandle('proj-2'));
+      dispatchProjectPointer(target, 'dragover', 10);
+      expect(screen.getByTestId('sidebar-project-drop-indicator')).toBeTruthy();
+      dispatchProjectPointer(target, 'drop', 10);
+    } finally {
+      restoreRects();
+    }
+
+    await waitFor(() => expect(reorderProjects).toHaveBeenCalledWith(['proj-2', 'proj-1']));
+    expect(projectIds()).toEqual(['proj-2', 'proj-1']);
+  });
+
+  it('落点没有改变顺序时不请求保存', async () => {
+    enterElectron([
+      makeProject({ id: 'proj-1', name: '项目甲' }),
+      makeProject({ id: 'proj-2', name: '项目乙' }),
+    ]);
+    renderSidebar('/agent');
+    await screen.findByText('项目乙');
+
+    const restoreRects = installProjectRects({
+      'proj-1': { top: 0, height: 80 },
+      'proj-2': { top: 100, height: 80 },
+    });
+    try {
+      fireEvent.dragStart(projectHandle('proj-1'));
+      dispatchProjectPointer(projectBlock('proj-2'), 'drop', 110);
+      fireEvent.dragEnd(projectHandle('proj-1'));
+    } finally {
+      restoreRects();
+    }
+
+    expect(reorderProjects).not.toHaveBeenCalled();
+    expect(projectIds()).toEqual(['proj-1', 'proj-2']);
+  });
+
+  it('排序保存失败时列表回到原来的顺序并显示错误', async () => {
+    enterElectron([
+      makeProject({ id: 'proj-1', name: '项目甲' }),
+      makeProject({ id: 'proj-2', name: '项目乙' }),
+    ]);
+    reorderProjects.mockRejectedValue(new Error('排序失败'));
+    renderSidebar('/agent');
+    await screen.findByText('项目乙');
+
+    const restoreRects = installProjectRects({
+      'proj-1': { top: 0, height: 80 },
+      'proj-2': { top: 100, height: 80 },
+    });
+    try {
+      fireEvent.dragStart(projectHandle('proj-2'));
+      dispatchProjectPointer(projectBlock('proj-1'), 'drop', 10);
+    } finally {
+      restoreRects();
+    }
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('排序失败'));
+    expect(projectIds()).toEqual(['proj-1', 'proj-2']);
   });
 
   it('项目列表拉取失败时错误进 alert 横幅', async () => {

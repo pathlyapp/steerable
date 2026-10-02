@@ -167,6 +167,17 @@ function parseSourceFolders(value: unknown): string[] {
     .map(expandUserPath);
 }
 
+/** 拖拽排序的 id 列表。不是字符串数组时返回 null，由路由回 400。 */
+function readProjectOrderIds(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const ids: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || item.trim() === '') return null;
+    ids.push(item.trim());
+  }
+  return ids;
+}
+
 /**
  * 流式响应中每条 SSE chunk 的 emit 回调。
  * router 在生成过程中每收到一个新片段就立刻调用一次，
@@ -788,6 +799,21 @@ export class LocalBackendRouter {
           };
         }
       }
+    }
+
+    if (pathname === '/api/v2/projects/order' && method === 'PUT') {
+      const registry = this.toolRouter.projectRegistry;
+      if (!registry) {
+        return { status: 503, data: { error: '项目注册表不可用' } };
+      }
+      const orderedIds = readProjectOrderIds(this.toRecord(request.body).orderedIds);
+      if (!orderedIds) {
+        return { status: 400, data: { error: 'orderedIds 必须是项目 id 列表' } };
+      }
+      return {
+        status: 200,
+        data: { success: true, projects: registry.reorder(orderedIds) },
+      };
     }
 
     const projectMatch = pathname.match(/^\/api\/v2\/projects\/([^/]+)$/);

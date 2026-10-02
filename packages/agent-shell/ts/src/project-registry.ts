@@ -33,6 +33,11 @@ export interface ProjectRecord {
    * 旧记录没有此字段，读取时按 `false` 处理（见 {@link ProjectRegistry.isTrusted}）。
    */
   trusted?: boolean;
+  /**
+   * 侧边栏显示顺序，越小越靠前。旧记录没有此字段时按 createdAt 升序。
+   * 用户拖拽排序后每个项目都会写上序号；之后新建的项目没有序号，排在已编号项目之后。
+   */
+  sortOrder?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -55,10 +60,9 @@ export class ProjectRegistry {
   constructor(private readonly store: ProjectKvStore) {}
 
   list(): ProjectRecord[] {
-    // 按创建时间升序：侧边栏项目组顺序稳定，早建的在前。
-    return [...(this.store.get(STORE_KEY) ?? [])].sort((a, b) =>
-      a.createdAt.localeCompare(b.createdAt),
-    );
+    // 拖过序的记录按 sortOrder；没有序号的旧记录仍按创建时间升序，
+    // 并且排在已编号项目之后（新建项目因此出现在列表末尾）。
+    return [...(this.store.get(STORE_KEY) ?? [])].sort(compareProjects);
   }
 
   get(idOrName: string): ProjectRecord | null {
@@ -136,6 +140,32 @@ export class ProjectRegistry {
   }
 
   /**
+   * 按 orderedIds 重排侧边栏。未出现的 id 忽略；名单里没提到的项目
+   * 保持相对顺序接在后面。写入连续的 sortOrder，list() 随后按该序号返回。
+   */
+  reorder(orderedIds: readonly string[]): ProjectRecord[] {
+    const current = this.list();
+    const byId = new Map(current.map((project) => [project.id, project]));
+    const next: ProjectRecord[] = [];
+    const seen = new Set<string>();
+    for (const id of orderedIds) {
+      const project = byId.get(id);
+      if (!project || seen.has(id)) continue;
+      seen.add(id);
+      next.push(project);
+    }
+    for (const project of current) {
+      if (!seen.has(project.id)) next.push(project);
+    }
+    const stamped = next.map((project, index) => ({
+      ...project,
+      sortOrder: index,
+    }));
+    this.store.set(STORE_KEY, stamped);
+    return stamped;
+  }
+
+  /**
    * W6-5: read the trust flag, defaulting absent (legacy) records to
    * `false` — fail-closed, so a project is never trusted unless the user
    * explicitly said so.
@@ -158,6 +188,20 @@ export class ProjectRegistry {
     this.store.set(STORE_KEY, projects);
     return next;
   }
+}
+
+function compareProjects(a: ProjectRecord, b: ProjectRecord): number {
+  const aOrder = finiteSortOrder(a.sortOrder);
+  const bOrder = finiteSortOrder(b.sortOrder);
+  if (aOrder !== null && bOrder !== null && aOrder !== bOrder) return aOrder - bOrder;
+  if ((aOrder !== null) !== (bOrder !== null)) return aOrder !== null ? -1 : 1;
+  const byCreated = a.createdAt.localeCompare(b.createdAt);
+  if (byCreated !== 0) return byCreated;
+  return a.id.localeCompare(b.id);
+}
+
+function finiteSortOrder(value: number | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function normalizeSourceFolders(

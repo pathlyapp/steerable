@@ -64,6 +64,62 @@ describe('project-registry / 信任门控（W6-5）', () => {
   });
 });
 
+describe('project-registry / 侧边栏顺序', () => {
+  it('没有 sortOrder 的旧记录按创建时间升序', () => {
+    const store = makeMemoryStore();
+    store.set('projects', [
+      record('b', '2026-02-01T00:00:00.000Z'),
+      record('a', '2026-01-01T00:00:00.000Z'),
+    ]);
+    const registry = new ProjectRegistry(store);
+    expect(registry.list().map((project) => project.id)).toEqual(['a', 'b']);
+  });
+
+  it('reorder 写入序号，重启后顺序还在；没提到的项目接在后面', () => {
+    const store = makeMemoryStore();
+    const registry = new ProjectRegistry(store);
+    const first = registry.create({ name: '甲', folderPath: '/tmp/a' });
+    const second = registry.create({ name: '乙', folderPath: '/tmp/b' });
+    const third = registry.create({ name: '丙', folderPath: '/tmp/c' });
+
+    const ordered = registry.reorder([third.id, 'missing', first.id]);
+    expect(ordered.map((project) => project.id)).toEqual([third.id, first.id, second.id]);
+    expect(ordered.map((project) => project.sortOrder)).toEqual([0, 1, 2]);
+
+    const reopened = new ProjectRegistry(store);
+    expect(reopened.list().map((project) => project.id)).toEqual([
+      third.id,
+      first.id,
+      second.id,
+    ]);
+    reopened.update(first.id, { name: '甲2' });
+    expect(reopened.list().map((project) => project.name)).toEqual(['丙', '甲2', '乙']);
+  });
+
+  it('排过序之后新建的项目出现在末尾', () => {
+    const registry = new ProjectRegistry(makeMemoryStore());
+    const first = registry.create({ name: '甲', folderPath: '/tmp/a' });
+    const second = registry.create({ name: '乙', folderPath: '/tmp/b' });
+    registry.reorder([second.id, first.id]);
+    const third = registry.create({ name: '丙', folderPath: '/tmp/c' });
+    expect(registry.list().map((project) => project.id)).toEqual([
+      second.id,
+      first.id,
+      third.id,
+    ]);
+  });
+});
+
+function record(id: string, createdAt: string): ProjectRecord {
+  return {
+    id,
+    name: id,
+    folderPath: `/tmp/${id}`,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
 describe('project-rules / 规则文件加载（W6-7a）', () => {
   it('发现项目目录里的 AGENTS.md 并注入内容', () => {
     const dir = mkdtempSync(join(tmpdir(), 'proj-rules-'));

@@ -196,7 +196,7 @@ describe('local-api 运行中回合', () => {
 });
 
 describe('local-api 项目', () => {
-  it('listProjects / createProject / updateProject / deleteProject 各走 REST 语义', async () => {
+  it('listProjects / createProject / updateProject / deleteProject / reorderProjects 各走 REST 语义', async () => {
     const request = installBridge();
     request.mockResolvedValue({});
     await api.listProjects();
@@ -215,6 +215,12 @@ describe('local-api 项目', () => {
     });
     await api.deleteProject('proj-1');
     expect(request).toHaveBeenLastCalledWith({ method: 'DELETE', path: '/api/v2/projects/proj-1' });
+    await api.reorderProjects(['proj-2', 'proj-1']);
+    expect(request).toHaveBeenLastCalledWith({
+      method: 'PUT',
+      path: '/api/v2/projects/order',
+      body: { orderedIds: ['proj-2', 'proj-1'] },
+    });
   });
 
   it('getChatProjectContext 拉取会话的项目上下文', async () => {

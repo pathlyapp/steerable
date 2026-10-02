@@ -56,8 +56,8 @@
  *   │ ✎ 新对话                        │  ← 只打开落地页，有内容才落库
  *   │ 🧩 插件                         │ ← /settings?section=plugins（智能体 / Skills / MCP / 网络搜索）
  *   │  会话 v                     📁+ │ ← 📁+ 打开新建项目弹窗
- *   │  v 📁 项目A          (hover: ✎··)│ ← ✎ 新建对话；·· 菜单：重命名/换目录/访达/删
- *   │   ...（项目内对话）              │
+ *   │  v 📁 项目A          (hover: ✎··)│ ← 拖拽组头排序；✎ 新建对话；·· 菜单：重命名/换目录/访达/删
+ *   │   ...（项目内对话，超过 5 条再展开）│
  *   │   今天                          │
  *   │   ...（无项目对话，按日期分组）  │ ← 无项目排在项目分组之后
  *   ├─────────────────────────────────┤
@@ -109,7 +109,11 @@ import {
 import { usePendingAskUserChatIds } from "@/components/chat/AskUserPromptProvider";
 import { usePendingApprovalChatIds } from "@/components/chat/ApprovalPromptProvider";
 import type { UseChatsAndAgentsResult } from "@/hooks/useChatsAndAgents";
-import { useProjects } from "@/hooks/useProjects";
+import { persistProjectOrder, useProjects } from "@/hooks/useProjects";
+import {
+  nextProjectOrder,
+  type ProjectDropPlace,
+} from "@/lib/project-order";
 import type { RightPanelState } from "@/layouts/AgentLayout";
 import { BrandLockup } from "@/components/BrandLockup";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -120,6 +124,48 @@ import {
 import { SidebarAccount } from "@/components/SidebarAccount";
 import { CreateProjectModal } from "@/components/CreateProjectModal";
 import { t } from "@/i18n";
+
+function projectDropPlace(element: HTMLElement, clientY: number): ProjectDropPlace {
+  const rect = element.getBoundingClientRect();
+  return clientY < rect.top + rect.height / 2 ? "before" : "after";
+}
+
+/** 项目里先露出的普通会话条数。每一次「显示更多」再露出同样多条。 */
+const PROJECT_CHAT_PAGE = 5;
+
+/**
+ * 进行中、等待输入的会话保持原位，不占用这 5 条名额。
+ * 当前打开的会话如果落在名额之外，仍单独留在列表里。
+ */
+function visibleProjectChats<T extends { id: string }>(
+  items: readonly T[],
+  limit: number,
+  options: {
+    currentId?: string;
+    isAlwaysVisible: (chat: T) => boolean;
+  },
+): { rows: T[]; hiddenCount: number } {
+  let ordinary = 0;
+  const kept = new Set<string>();
+  for (const chat of items) {
+    if (options.isAlwaysVisible(chat)) {
+      kept.add(chat.id);
+      continue;
+    }
+    if (ordinary < limit) {
+      kept.add(chat.id);
+      ordinary += 1;
+    }
+  }
+  if (
+    options.currentId &&
+    items.some((chat) => chat.id === options.currentId)
+  ) {
+    kept.add(options.currentId);
+  }
+  const rows = items.filter((chat) => kept.has(chat.id));
+  return { rows, hiddenCount: items.length - rows.length };
+}
 
 function placeProjectMenu(anchor: HTMLElement): { top: number; left: number } {
   const box = anchor.getBoundingClientRect();
@@ -481,6 +527,10 @@ export function AgentSidebar({
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
     () => new Set(),
   );
+  // 每个项目已展开的普通会话名额。缺省是 PROJECT_CHAT_PAGE；Infinity 表示已全部展开。
+  const [projectChatLimits, setProjectChatLimits] = useState<
+    Record<string, number>
+  >({});
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(
     null,
   );
@@ -497,6 +547,37 @@ export function AgentSidebar({
     id: string;
     anchor: HTMLElement;
   } | null>(null);
+  const draggingProjectIdRef = useRef<string | null>(null);
+  const projectDragMovedRef = useRef(false);
+  const [draggingProjectId, setDraggingProjectId] = useState<string | null>(
+    null,
+  );
+  const [dropTarget, setDropTarget] = useState<{
+    id: string;
+    place: ProjectDropPlace;
+  } | null>(null);
+
+  const endProjectDrag = useCallback(() => {
+    draggingProjectIdRef.current = null;
+    setDraggingProjectId(null);
+    setDropTarget(null);
+    // dragend 之后浏览器有时还会补一次 click。等这次 click 过去再清标记，
+    // 避免松手把项目折叠掉；下一次真正的点击仍能折叠。
+    window.setTimeout(() => {
+      projectDragMovedRef.current = false;
+    }, 0);
+  }, []);
+
+  useEffect(() => {
+    if (!draggingProjectId) return;
+    const { cursor, userSelect } = document.body.style;
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
+    return () => {
+      document.body.style.cursor = cursor;
+      document.body.style.userSelect = userSelect;
+    };
+  }, [draggingProjectId]);
 
   const showProjectsChrome = hostToolChrome("projects");
 
@@ -592,14 +673,49 @@ export function AgentSidebar({
     }
   }, []);
 
-  const toggleProjectCollapsed = useCallback((projectId: string) => {
-    setCollapsedProjectIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(projectId)) next.delete(projectId);
-      else next.add(projectId);
-      return next;
-    });
-  }, []);
+  const toggleProjectCollapsed = useCallback(
+    (projectId: string) => {
+      const collapsing = !collapsedProjectIds.has(projectId);
+      setCollapsedProjectIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(projectId)) next.delete(projectId);
+        else next.add(projectId);
+        return next;
+      });
+      // 收起项目后再打开，回到最初的 5 条，不记住上次展开到第几页。
+      if (collapsing) {
+        setProjectChatLimits((limits) => {
+          if (limits[projectId] === undefined) return limits;
+          const next = { ...limits };
+          delete next[projectId];
+          return next;
+        });
+      }
+    },
+    [collapsedProjectIds],
+  );
+
+  const revealMoreProjectChats = useCallback(
+    (projectId: string, hiddenCount: number) => {
+      setProjectChatLimits((limits) => {
+        if (hiddenCount === 0) {
+          if (limits[projectId] === undefined) return limits;
+          const next = { ...limits };
+          delete next[projectId];
+          return next;
+        }
+        const current = limits[projectId] ?? PROJECT_CHAT_PAGE;
+        return {
+          ...limits,
+          [projectId]:
+            hiddenCount <= PROJECT_CHAT_PAGE
+              ? Number.POSITIVE_INFINITY
+              : current + PROJECT_CHAT_PAGE,
+        };
+      });
+    },
+    [],
+  );
 
   // Keep the shared "next new chat" agent aligned with the current chat. The
   // actual picker now lives in ChatInput, so the sidebar no longer renders the
@@ -918,6 +1034,22 @@ export function AgentSidebar({
 
   const hasElectron = hasHostBridge();
 
+  const projectChatWindow = (
+    items: typeof normalizedChats,
+    limit: number,
+  ) =>
+    visibleProjectChats(items, limit, {
+      currentId: currentChatId,
+      isAlwaysVisible: (chat) =>
+        Boolean(
+          chat.isStreaming ||
+            streamingChatIds.has(chat.id) ||
+            chat.needsUserInput ||
+            pendingAskUserChatIds.has(chat.id) ||
+            pendingApprovalChatIds.has(chat.id),
+        ),
+    });
+
   return (
     <div className="flex h-full w-full flex-col border-r border-agent-border/60 bg-agent-muted/70 backdrop-blur-md">
       {/* ───── Brand + actions ───── */}
@@ -1059,8 +1191,75 @@ export function AgentSidebar({
                         </div>
                       ) : (
                         projectGroups.map(({ project, items }) => (
-                          <div key={project.id} className="mb-1">
-                            <div className="group/proj relative">
+                          <div
+                            key={project.id}
+                            data-testid="sidebar-project"
+                            data-project-id={project.id}
+                            className="relative pb-1"
+                            onDragOver={(event) => {
+                              if (!draggingProjectIdRef.current) return;
+                              event.preventDefault();
+                              if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+                              const place = projectDropPlace(
+                                event.currentTarget,
+                                event.clientY,
+                              );
+                              setDropTarget((current) =>
+                                current?.id === project.id && current.place === place
+                                  ? current
+                                  : { id: project.id, place },
+                              );
+                            }}
+                            onDragLeave={(event) => {
+                              const next = event.relatedTarget;
+                              if (
+                                next instanceof Node &&
+                                event.currentTarget.contains(next)
+                              ) {
+                                return;
+                              }
+                              setDropTarget((current) =>
+                                current?.id === project.id ? null : current,
+                              );
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              const fromId = draggingProjectIdRef.current;
+                              const place = projectDropPlace(
+                                event.currentTarget,
+                                event.clientY,
+                              );
+                              endProjectDrag();
+                              if (!fromId) return;
+                              const next = nextProjectOrder(
+                                projectGroups.map((group) => group.project.id),
+                                fromId,
+                                project.id,
+                                place,
+                              );
+                              if (!next) return;
+                              void persistProjectOrder(next).catch((err) => {
+                                setProjectError(
+                                  err instanceof Error ? err.message : String(err),
+                                );
+                              });
+                            }}
+                          >
+                            {dropTarget?.id === project.id && draggingProjectId ? (
+                              <div
+                                className={[
+                                  "pointer-events-none absolute inset-x-2 z-10 h-0.5 rounded-full bg-agent-foreground",
+                                  dropTarget.place === "before" ? "top-0" : "bottom-1",
+                                ].join(" ")}
+                                data-testid="sidebar-project-drop-indicator"
+                              />
+                            ) : null}
+                            <div
+                              className={[
+                                "group/proj relative",
+                                draggingProjectId === project.id ? "opacity-40" : "",
+                              ].join(" ")}
+                            >
                               {renamingProjectId === project.id ? (
                                 <form
                                   className="flex items-center px-2.5 pb-1 pt-1.5"
@@ -1087,8 +1286,31 @@ export function AgentSidebar({
                                 <>
                                   <button
                                     type="button"
-                                    onClick={() => toggleProjectCollapsed(project.id)}
-                                    className="flex w-full min-w-0 items-center px-2 pb-0.5 pt-1 text-[11px] font-medium text-agent-muted-foreground/90 transition-colors hover:text-agent-foreground"
+                                    draggable
+                                    data-testid="sidebar-project-handle"
+                                    data-project-id={project.id}
+                                    onDragStart={(event) => {
+                                      projectDragMovedRef.current = true;
+                                      draggingProjectIdRef.current = project.id;
+                                      setDraggingProjectId(project.id);
+                                      const transfer = event.dataTransfer;
+                                      if (!transfer) return;
+                                      transfer.effectAllowed = "move";
+                                      try {
+                                        transfer.setData("text/plain", project.name);
+                                      } catch (error) {
+                                        // 排序状态记在 ref 里。个别环境拒绝写入 DataTransfer。
+                                        void error;
+                                      }
+                                    }}
+                                    onDragEnd={() => {
+                                      endProjectDrag();
+                                    }}
+                                    onClick={() => {
+                                      if (projectDragMovedRef.current) return;
+                                      toggleProjectCollapsed(project.id);
+                                    }}
+                                    className="flex w-full min-w-0 cursor-grab items-center px-2 pb-0.5 pt-1 text-[11px] font-medium text-agent-muted-foreground/90 transition-colors hover:text-agent-foreground active:cursor-grabbing"
                                     title={`${project.name}\n${project.folderPath}`}
                                   >
                                     <LuFolder className="mr-1 h-3.5 w-3.5 shrink-0" />
@@ -1106,8 +1328,8 @@ export function AgentSidebar({
                                   <div
                                     className={`absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 transition-opacity ${
                                       projectMenu?.id === project.id
-                                        ? "opacity-100"
-                                        : "opacity-0 group-hover/proj:opacity-100"
+                                        ? "pointer-events-auto opacity-100"
+                                        : "pointer-events-none opacity-0 group-hover/proj:pointer-events-auto group-hover/proj:opacity-100"
                                     }`}
                                   >
                                     <button
@@ -1146,7 +1368,45 @@ export function AgentSidebar({
                                     {t("No chats yet. Hover the project name and click + to start one.")}
                                   </div>
                                 ) : (
-                                  items.map((chat) => renderChatRow(chat))
+                                  (() => {
+                                    const limit =
+                                      projectChatLimits[project.id] ??
+                                      PROJECT_CHAT_PAGE;
+                                    const folded = projectChatWindow(
+                                      items,
+                                      PROJECT_CHAT_PAGE,
+                                    );
+                                    const shown = projectChatWindow(items, limit);
+                                    const fullyShown = shown.hiddenCount === 0;
+                                    return (
+                                      <>
+                                        {shown.rows.map((chat) =>
+                                          renderChatRow(chat),
+                                        )}
+                                        {folded.hiddenCount > 0 && (
+                                          <button
+                                            type="button"
+                                            data-testid="sidebar-project-show-more"
+                                            data-project-id={project.id}
+                                            aria-expanded={fullyShown}
+                                            onClick={() =>
+                                              revealMoreProjectChats(
+                                                project.id,
+                                                shown.hiddenCount,
+                                              )
+                                            }
+                                            className="flex h-7 w-full items-center rounded-full px-2.5 text-left text-[11px] text-agent-muted-foreground/80 transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
+                                          >
+                                            {fullyShown
+                                              ? t("Show less")
+                                              : t("Show {count} more", {
+                                                  count: shown.hiddenCount,
+                                                })}
+                                          </button>
+                                        )}
+                                      </>
+                                    );
+                                  })()
                                 )}
                               </div>
                             )}

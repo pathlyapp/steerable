@@ -445,6 +445,8 @@ export interface LocalProject {
   sourceFolders?: string[];
   /** W6-5: 信任后该项目目录里的规则文件才会注入模型上下文。缺省 false。 */
   trusted?: boolean;
+  /** 侧边栏顺序，越小越靠前。缺省时列表顺序由服务端决定。 */
+  sortOrder?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -567,6 +569,15 @@ export async function updateProject(
     method: 'PUT',
     path: `/api/v2/projects/${encodeURIComponent(projectId)}`,
     body: updates,
+  });
+}
+
+/** 按 id 顺序保存侧栏项目排序。服务端忽略未知 id，没提到的项目接在后面。 */
+export async function reorderProjects(orderedIds: string[]) {
+  return bridge().localBackend.request<{ success: boolean; projects: LocalProject[] }>({
+    method: 'PUT',
+    path: '/api/v2/projects/order',
+    body: { orderedIds },
   });
 }
 
