@@ -1,6 +1,10 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { ChatMessage } from '@steerable/agent-protocol';
+import {
+  peekConversationPreview,
+  resetConversationPreviewForTests,
+} from '@/layouts/conversation-preview';
 import { MessageList } from './MessageList';
 
 describe('MessageList 回合吸顶结构 (Turn-based Sticky Grouping)', () => {
@@ -127,5 +131,44 @@ describe('MessageList 回合吸顶结构 (Turn-based Sticky Grouping)', () => {
     expect(queryByTestId('internal-turn-goal')).toBeNull();
     expect(queryByText(/do not show/)).toBeNull();
     expect(queryByText('继续执行')).not.toBeNull();
+  });
+
+  it('停在底部时把最近一份可预览产物交给右侧', () => {
+    resetConversationPreviewForTests();
+    const messages: ChatMessage[] = [
+      {
+        id: 'u1',
+        role: 'user',
+        content: '做一份介绍',
+        createdAt: '2026-09-29T06:00:00.000Z',
+      },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '好了',
+        createdAt: '2026-09-29T06:00:05.000Z',
+      },
+    ];
+    render(
+      <MessageList
+        chatId="chat-1"
+        messages={messages}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+        turnFilesByMessageId={{
+          a1: [
+            { path: '/work/build.py', kind: 'created' },
+            { path: '/work/deck.pptx', kind: 'created', category: 'deliverable' },
+          ],
+        }}
+      />,
+    );
+    expect(peekConversationPreview('chat-1')).toEqual({
+      chatId: 'chat-1',
+      messageId: 'a1',
+      path: '/work/deck.pptx',
+    });
+    resetConversationPreviewForTests();
   });
 });

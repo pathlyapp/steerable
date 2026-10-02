@@ -10,6 +10,7 @@ import {
   collapseRightPanel,
   expandRightPanel,
   parseRightPanelMap,
+  followRightPanelTab,
   revealRightPanelTab,
   toggleRightPanelEntry,
 } from './right-panel-tabs';
@@ -170,6 +171,25 @@ describe('右侧标签开关', () => {
       tabs: ['terminal', 'ppt'],
       active: 'ppt',
     });
+  });
+
+  it('对话跟随只在文档栏之间切换，不打开已关闭的栏，也不抢走终端', () => {
+    expect(followRightPanelTab(null, 'ppt')).toBeNull();
+    expect(followRightPanelTab({ tabs: ['markdown'], active: 'markdown' }, 'ppt')).toEqual({
+      tabs: ['markdown', 'ppt'],
+      active: 'ppt',
+    });
+    expect(
+      followRightPanelTab({ tabs: ['terminal'], active: 'terminal' }, 'ppt'),
+    ).toEqual({ tabs: ['terminal', 'ppt'], active: 'terminal' });
+    const hidden = collapseRightPanel({ tabs: ['markdown'], active: 'markdown' });
+    expect(followRightPanelTab(hidden, 'ppt')).toEqual({
+      tabs: ['markdown', 'ppt'],
+      active: 'ppt',
+      collapsed: true,
+    });
+    const open = { tabs: ['ppt'], active: 'ppt' };
+    expect(followRightPanelTab(open, 'ppt')).toBe(open);
   });
 
   it('自动展开在已有标签时只追加，不抢走当前标签', () => {

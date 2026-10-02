@@ -23,6 +23,7 @@ import {
   closeRightPanelTab,
   collapseRightPanel,
   expandRightPanel,
+  followRightPanelTab,
   openRightPanelTab,
   parseRightPanelMap,
   revealRightPanelTab,
@@ -30,7 +31,7 @@ import {
   type RightPanelMap,
   type RightPanelTabs,
 } from '@/layouts/right-panel-tabs';
-import { subscribeChatSlotRequests } from '@/layouts/request-chat-slot';
+import { subscribeChatSlotFollows, subscribeChatSlotRequests } from '@/layouts/request-chat-slot';
 
 export { parseRightPanelMap };
 export type { RightPanelMap, RightPanelTabs };
@@ -539,6 +540,16 @@ function AgentLayoutContent() {
 
   // 交付文件点击要打开对应栏位。菜单按钮不在文档里时也能切过去。
   useEffect(() => subscribeChatSlotRequests(openPanelTab), [openPanelTab]);
+
+  // 对话滚动或新产物换右侧正在看的文件。关着的栏不弹出，终端不被抢走。
+  useEffect(() => subscribeChatSlotFollows((kind) => {
+    const id = sanitizeRightPanelKind(kind);
+    if (!id || id === 'terminal') return;
+    if (!packChatSlots.some((slot) => slot.slotId === id)) return;
+    const next = followRightPanelTab(panelEntryRef.current, id);
+    if (!next || next === panelEntryRef.current) return;
+    applyPanelEntry(next);
+  }), [applyPanelEntry, packChatSlots]);
 
   // Same drag ergonomics as the sidebar handle, mirrored: the terminal's
   // right edge is pinned to the window's right padding (p-1.5 = 6px), so the

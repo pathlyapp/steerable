@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  followedPreviewPath,
   formatFileSize,
   formatIntermediateDisplayPath,
   getDeliverableMeta,
@@ -13,6 +14,7 @@ import {
   groupTurnFiles,
   isIgnoredTurnFile,
   parseTurnFiles,
+  previewPathForTurn,
   splitTurnFilePath,
   type TurnFile,
 } from './turn-files';
@@ -255,5 +257,45 @@ describe('groupTurnFiles', () => {
 
     expect(grouped.deliverables.map((file) => file.path)).toEqual([deck]);
     expect(grouped.intermediates.map((file) => file.path)).toEqual([preview]);
+  });
+});
+
+describe('previewPathForTurn', () => {
+  it('交付的幻灯片优先于同轮的脚本和 Markdown', () => {
+    expect(previewPathForTurn([
+      { path: '/work/build.py', kind: 'created' },
+      { path: '/work/notes.md', kind: 'created' },
+      { path: '/work/deck.pptx', kind: 'created', category: 'deliverable' },
+    ])).toBe('/work/deck.pptx');
+  });
+
+  it('没有可预览文件时返回空', () => {
+    expect(previewPathForTurn([
+      { path: '/work/build.py', kind: 'modified' },
+    ])).toBeNull();
+    expect(previewPathForTurn(undefined)).toBeNull();
+  });
+});
+
+describe('followedPreviewPath', () => {
+  const older = { id: 'a1', files: [{ path: '/work/old.md', kind: 'created' as const }] };
+  const latest = { id: 'a2', files: [{ path: '/work/deck.pptx', kind: 'created' as const, category: 'deliverable' as const }] };
+
+  it('停在底部时用最近一轮能预览的文件', () => {
+    expect(followedPreviewPath([older, { id: 'a-empty' }, latest], {
+      atBottom: true,
+      focusedId: 'a1',
+    })).toEqual({ messageId: 'a2', path: '/work/deck.pptx' });
+  });
+
+  it('往上翻时只看当前这条，没有文件就不改', () => {
+    expect(followedPreviewPath([older, latest], {
+      atBottom: false,
+      focusedId: 'a1',
+    })).toEqual({ messageId: 'a1', path: '/work/old.md' });
+    expect(followedPreviewPath([older, { id: 'a-empty' }], {
+      atBottom: false,
+      focusedId: 'a-empty',
+    })).toBeNull();
   });
 });

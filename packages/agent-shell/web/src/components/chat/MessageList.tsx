@@ -21,7 +21,8 @@ import type { InspectTaskInput } from './executed-actions-model';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { ChatMode } from './ChatInput';
 import type { TurnBlock } from './turn-timeline';
-import type { TurnFile } from './turn-files';
+import { followedPreviewPath, type TurnFile } from './turn-files';
+import { publishConversationPreview } from '@/layouts/conversation-preview';
 import { inferDurationMs, readPersistedDurationMs } from './elapsed';
 import type { LlmSpeedSnapshot } from './process-status';
 
@@ -53,6 +54,27 @@ import type { LlmSpeedSnapshot } from './process-status';
  */
 
 const NEAR_BOTTOM_THRESHOLD_PX = 100;
+
+/** 视口上三分之一附近的助手消息，当作当前正在看的回合。 */
+function assistantIdInView(container: HTMLElement): string | null {
+  const bounds = container.getBoundingClientRect();
+  const anchor = bounds.top + container.clientHeight * 0.35;
+  const nodes = container.querySelectorAll<HTMLElement>(
+    '[data-message-role="assistant"][data-message-id]',
+  );
+  let bestId: string | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const node of nodes) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom < bounds.top || rect.top > bounds.bottom) continue;
+    const distance = Math.abs(rect.top - anchor);
+    const messageId = node.getAttribute('data-message-id');
+    if (!messageId || distance >= bestDistance) continue;
+    bestId = messageId;
+    bestDistance = distance;
+  }
+  return bestId;
+}
 
 function internalTrigger(message: ChatMessage): 'goal' | 'loop' | null {
   if (!message.messageMetadata) return null;
@@ -239,6 +261,41 @@ export function MessageList({
       el.removeEventListener('scroll', checkAtBottom);
     };
   }, [checkAtBottom]);
+
+  // 右侧预览跟着这一屏在看的回合。停在底部时用最近一份能打开的产物。
+  useEffect(() => {
+    if (!chatId) return;
+    const publish = () => {
+      const el = containerRef.current;
+      if (!el) return;
+      const atBottom =
+        el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD_PX;
+      const ordered = visibleMessages
+        .filter((message) => message.role === 'assistant')
+        .map((message) => ({
+          id: message.id,
+          files: message.id === lastAssistantId
+            ? (turnFilesByMessageId?.[message.id] ?? currentTurnFiles)
+            : turnFilesByMessageId?.[message.id],
+        }));
+      const selected = followedPreviewPath(ordered, {
+        atBottom,
+        focusedId: atBottom ? null : assistantIdInView(el),
+      });
+      if (!selected) return;
+      publishConversationPreview({
+        chatId,
+        messageId: selected.messageId,
+        path: selected.path,
+      });
+    };
+    publish();
+    const el = containerRef.current;
+    el?.addEventListener('scroll', publish, { passive: true });
+    return () => {
+      el?.removeEventListener('scroll', publish);
+    };
+  }, [chatId, currentTurnFiles, lastAssistantId, messages, turnFilesByMessageId]);
 
   // Snap to bottom on first paint, regardless of whether the user "was" at
   // the bottom — there's no "before" on mount.

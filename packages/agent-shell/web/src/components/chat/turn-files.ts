@@ -388,3 +388,60 @@ export function groupTurnFiles(
 
   return { deliverables, intermediates, totalAdditions, totalDeletions };
 }
+
+/** 右侧栏能直接打开的扩展名。交付物优先，同层里靠前的类型优先。 */
+const RIGHT_PREVIEW_EXTENSIONS = [
+  '.pptx', // shell-neutral:allow — Office 幻灯片扩展名，不是产品品牌
+  '.ppt', // shell-neutral:allow — Office 幻灯片扩展名，不是产品品牌
+  '.docx',
+  '.doc',
+  '.md',
+  '.markdown',
+];
+
+/**
+ * 这一轮在右侧栏里该显示的文件。
+ * 交付物压过脚本和中间产物；同一层里幻灯片、文档、Markdown 依次优先。
+ */
+export function previewPathForTurn(files: readonly TurnFile[] | undefined): string | null {
+  if (!files || files.length === 0) return null;
+  let best: { path: string; rank: number; deliverable: boolean } | null = null;
+  for (const file of files) {
+    if (isIgnoredTurnFile(file.path)) continue;
+    const rank = RIGHT_PREVIEW_EXTENSIONS.indexOf(getFileExtension(file.path));
+    if (rank < 0) continue;
+    const deliverable = getTurnFileCategory(file) === 'deliverable';
+    if (
+      !best
+      || (deliverable && !best.deliverable)
+      || (deliverable === best.deliverable && rank < best.rank)
+    ) {
+      best = { path: file.path, rank, deliverable };
+    }
+  }
+  return best?.path ?? null;
+}
+
+/**
+ * 右侧预览跟着对话走。
+ * 停在底部时用最近一轮有预览的产物；往上翻时只用当前看着的那条助手消息。
+ */
+export function followedPreviewPath(
+  ordered: readonly { id: string; files?: readonly TurnFile[] }[],
+  options: { atBottom: boolean; focusedId: string | null },
+): { messageId: string; path: string } | null {
+  const pick = (entry: { id: string; files?: readonly TurnFile[] } | undefined) => {
+    if (!entry) return null;
+    const path = previewPathForTurn(entry.files);
+    return path ? { messageId: entry.id, path } : null;
+  };
+  if (options.atBottom) {
+    for (let index = ordered.length - 1; index >= 0; index -= 1) {
+      const found = pick(ordered[index]);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (!options.focusedId) return null;
+  return pick(ordered.find((entry) => entry.id === options.focusedId));
+}

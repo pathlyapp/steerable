@@ -138,6 +138,35 @@ export function revealRightPanelTab(
   return { tabs: [...current.tabs, kind], active: current.active };
 }
 
+function sameRightPanelTabs(tabs: readonly string[], next: readonly string[]): boolean {
+  return tabs.length === next.length && tabs.every((id, index) => id === next[index]);
+}
+
+/**
+ * 对话里的预览跟着当前回合换文件。
+ * 栏位关着时不重新打开。正在看终端时只把文档标签留在后面，不抢走终端。
+ * 已经开着文档时，切到这一轮对应的标签。
+ */
+export function followRightPanelTab(
+  current: RightPanelTabs | null,
+  kind: string,
+): RightPanelTabs | null {
+  if (!current) return null;
+  const tabs = current.tabs.includes(kind) ? current.tabs : [...current.tabs, kind];
+  const active = current.active === 'terminal' ? 'terminal' : kind;
+  const next: RightPanelTabs = current.collapsed
+    ? { tabs, active, collapsed: true }
+    : { tabs, active };
+  if (
+    current.active === next.active
+    && current.collapsed === next.collapsed
+    && sameRightPanelTabs(current.tabs, next.tabs)
+  ) {
+    return current;
+  }
+  return next;
+}
+
 /** 打开并显示。已经开着时只切换当前标签。 */
 export function openRightPanelTab(
   current: RightPanelTabs | null,
