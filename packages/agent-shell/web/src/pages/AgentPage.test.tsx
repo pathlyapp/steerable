@@ -173,7 +173,7 @@ function makeCtx(overrides: Partial<AgentOutletContext> = {}): AgentOutletContex
     chatSlots: [],
     rightPanel: null,
     openPanelIds: [],
-    onToggleChatSlot: vi.fn(),
+    onOpenRightPanel: vi.fn(),
     ...overrides,
   };
 }

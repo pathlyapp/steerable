@@ -1235,8 +1235,7 @@ function AgentChatView({
             chatSlots={ctx.chatSlots}
             rightPanel={ctx.rightPanel}
             openPanelIds={ctx.openPanelIds}
-            onToggleChatSlot={ctx.onToggleChatSlot}
-            onToggleRightPanel={ctx.onToggleChatSlot}
+            onOpenRightPanel={ctx.onOpenRightPanel}
             showProject={showProjectsChrome}
             project={chatProject}
             outputs={chatOutputs}

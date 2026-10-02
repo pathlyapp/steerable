@@ -2,12 +2,14 @@
  * 右侧栏位的多标签状态。
  *
  * 同一会话可以同时打开终端和若干包槽位。`active` 是当前看见的那一个。
+ * `collapsed` 表示整栏收起：标签还留着，右侧不显示，再打开时恢复。
  * 持久化兼容以前每个会话只存一个字符串的格式。
  */
 
 export type RightPanelTabs = {
   tabs: string[];
   active: string;
+  collapsed?: boolean;
 };
 
 /** 每个会话各自的标签：chatId → 打开的标签（没有标签时不落盘）。 */
@@ -21,7 +23,7 @@ export function normalizeRightPanelEntry(
     return isValidValue(value) ? { tabs: [value], active: value } : null;
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as { tabs?: unknown; active?: unknown };
+  const record = value as { tabs?: unknown; active?: unknown; collapsed?: unknown };
   const seen = new Set<string>();
   const tabs: string[] = [];
   if (Array.isArray(record.tabs)) {
@@ -36,7 +38,7 @@ export function normalizeRightPanelEntry(
     typeof record.active === 'string' && tabs.includes(record.active)
       ? record.active
       : tabs[0]!;
-  return { tabs, active };
+  return record.collapsed === true ? { tabs, active, collapsed: true } : { tabs, active };
 }
 
 /**
@@ -80,16 +82,30 @@ export function parseRightPanelMap(options: {
   return {};
 }
 
-/** 菜单点击：没开就追加并显示；已开但不是当前就切过去；当前这个就关掉。 */
+/** 快捷键：整栏收着时打开并显示这一项；没开就追加并显示；已开但不是当前就切过去；当前这个就关掉。 */
 export function toggleRightPanelEntry(
   current: RightPanelTabs | null,
   kind: string,
 ): RightPanelTabs | null {
+  if (current?.collapsed) {
+    const tabs = current.tabs.includes(kind) ? current.tabs : [...current.tabs, kind];
+    return { tabs, active: kind };
+  }
   if (!current || !current.tabs.includes(kind)) {
     return { tabs: current ? [...current.tabs, kind] : [kind], active: kind };
   }
   if (current.active !== kind) return { tabs: current.tabs, active: kind };
   return closeRightPanelTab(current, kind);
+}
+
+/** 收起整栏。标签保留，下次展开还是这些。 */
+export function collapseRightPanel(current: RightPanelTabs): RightPanelTabs {
+  return { tabs: current.tabs, active: current.active, collapsed: true };
+}
+
+/** 展开整栏，回到收起前正在看的标签。 */
+export function expandRightPanel(current: RightPanelTabs): RightPanelTabs {
+  return { tabs: current.tabs, active: current.active };
 }
 
 /** 关掉一个标签。关掉的是当前标签时，改看相邻的那一个。 */
@@ -114,6 +130,10 @@ export function revealRightPanelTab(
   kind: string,
 ): RightPanelTabs {
   if (!current) return { tabs: [kind], active: kind };
+  if (current.collapsed) {
+    const tabs = current.tabs.includes(kind) ? current.tabs : [...current.tabs, kind];
+    return { tabs, active: kind };
+  }
   if (current.tabs.includes(kind)) return current;
   return { tabs: [...current.tabs, kind], active: current.active };
 }

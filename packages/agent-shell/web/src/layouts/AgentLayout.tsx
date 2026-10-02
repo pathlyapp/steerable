@@ -21,6 +21,8 @@ import { hostToolChrome, sanitizeRightPanelKind, settingsChrome } from '@/lib/ho
 import { t } from '@/i18n';
 import {
   closeRightPanelTab,
+  collapseRightPanel,
+  expandRightPanel,
   openRightPanelTab,
   parseRightPanelMap,
   revealRightPanelTab,
@@ -101,12 +103,12 @@ export type AgentOutletContext = UseChatsAndAgentsResult & {
   inspectTask: (task: InspectedTask) => void;
   /** 包槽位（如文档预览）：入口渲染在 chat 标题栏，状态按会话隔离。 */
   chatSlots: readonly PackChatSlotContribution[];
-  /** 当前会话正在看的右侧标签（null = 都关着）。 */
+  /** 当前会话正在看的右侧标签（null = 整栏关着或收起）。 */
   rightPanel: RightPanelState;
-  /** 当前会话已经打开的标签，顺序与标签条一致。 */
+  /** 当前会话已经打开且正在显示的标签，顺序与标签条一致。 */
   openPanelIds: readonly string[];
-  /** 顶栏入口：没开就追加，已开但不是当前就切过去，当前这个就关掉。 */
-  onToggleChatSlot: (slotId: string) => void;
+  /** 标题栏开关：整栏收着或空着时打开。 */
+  onOpenRightPanel: () => void;
 };
 
 function AgentLayoutContent() {
@@ -327,7 +329,9 @@ function AgentLayoutContent() {
         }
         if (tabs.length === 0) continue;
         const active = tabs.includes(entry.active) ? entry.active : tabs[0]!;
-        sanitized[id] = { tabs, active };
+        sanitized[id] = entry.collapsed
+          ? { tabs, active, collapsed: true }
+          : { tabs, active };
       }
       return sanitized;
     } catch {
@@ -345,8 +349,9 @@ function AgentLayoutContent() {
   }, [readRightPanelMap]);
 
   const panelEntry: RightPanelTabs | null = chatId ? rightPanelMap[chatId] ?? null : null;
-  const rightPanel: RightPanelState = panelEntry?.active ?? null;
-  const openPanelIds = panelEntry?.tabs ?? [];
+  const panelOpen = panelEntry !== null && panelEntry.collapsed !== true;
+  const rightPanel: RightPanelState = panelOpen ? panelEntry.active : null;
+  const openPanelIds = panelOpen ? panelEntry.tabs : [];
   // 自动展开 / 手动切换回调是挂载时注册的，直接读 state 会拿到过期闭包。
   const panelEntryRef = useRef<RightPanelTabs | null>(panelEntry);
 
@@ -397,7 +402,41 @@ function AgentLayoutContent() {
     [applyPanelEntry],
   );
 
-  /** 顶栏 / 快捷键：没开就追加并显示，已开但不是当前就切过去，当前这个就关掉。 */
+  const openPanelTab = useCallback(
+    (kind: string) => {
+      const id = sanitizeRightPanelKind(kind);
+      if (!id) return;
+      if (id !== 'terminal' && !packChatSlots.some((slot) => slot.slotId === id)) return;
+      setInspectedTask(null);
+      applyPanelEntry(openRightPanelTab(panelEntryRef.current, id));
+    },
+    [applyPanelEntry, packChatSlots],
+  );
+
+  const expandRightSide = useCallback(() => {
+    const current = panelEntryRef.current;
+    if (current && current.tabs.length > 0) {
+      setInspectedTask(null);
+      applyPanelEntry(expandRightPanel(current));
+      return;
+    }
+    const firstSlot = packChatSlots
+      .map((slot) => sanitizeRightPanelKind(slot.slotId))
+      .find((id): id is string => id !== null);
+    const first = firstSlot ?? sanitizeRightPanelKind('terminal');
+    if (!first) return;
+    setInspectedTask(null);
+    applyPanelEntry({ tabs: [first], active: first });
+  }, [applyPanelEntry, packChatSlots]);
+
+  const collapseRightSide = useCallback(() => {
+    const current = panelEntryRef.current;
+    if (!current || current.tabs.length === 0) return;
+    setInspectedTask(null);
+    applyPanelEntry(collapseRightPanel(current));
+  }, [applyPanelEntry]);
+
+  /** 快捷键：没开就追加并显示，已开但不是当前就切过去，当前这个就关掉。整栏收着时改为打开。 */
   const toggleRightPanel = useCallback(
     (kind: string) => {
       const id = sanitizeRightPanelKind(kind);
@@ -499,15 +538,7 @@ function AgentLayoutContent() {
   }, [chatId, applyPanelEntry]);
 
   // 交付文件点击要打开对应栏位。菜单按钮不在文档里时也能切过去。
-  useEffect(() => {
-    return subscribeChatSlotRequests((slotId) => {
-      const id = sanitizeRightPanelKind(slotId);
-      if (!id) return;
-      if (id !== 'terminal' && !packChatSlots.some((slot) => slot.slotId === id)) return;
-      setInspectedTask(null);
-      applyPanelEntry(openRightPanelTab(panelEntryRef.current, id));
-    });
-  }, [applyPanelEntry, packChatSlots]);
+  useEffect(() => subscribeChatSlotRequests(openPanelTab), [openPanelTab]);
 
   // Same drag ergonomics as the sidebar handle, mirrored: the terminal's
   // right edge is pinned to the window's right padding (p-1.5 = 6px), so the
@@ -614,13 +645,13 @@ function AgentLayoutContent() {
                   chatSlots: packChatSlots,
                   rightPanel,
                   openPanelIds,
-                  onToggleChatSlot: toggleRightPanel,
+                  onOpenRightPanel: expandRightSide,
                 } satisfies AgentOutletContext}
               />
             </div>
             {settingsChrome('insights') && <InsightsConsentBanner />}
           </div>
-          {(rightPanel !== null || inspectedTask !== null) && (
+          {(panelOpen || inspectedTask !== null) && (
             <>
               <div
                 role="separator"
@@ -636,13 +667,16 @@ function AgentLayoutContent() {
                 style={{ width: terminalWidth }}
                 data-testid={inspectedTask ? 'task-process-dock' : 'terminal-panel'}
               >
-                {panelEntry && (
+                {panelOpen && panelEntry && (
                   <RightPanelTabBar
                     tabs={panelEntry.tabs}
                     active={panelEntry.active}
                     slots={packChatSlots}
+                    showTerminal={hostToolChrome('terminal')}
                     onActivate={activatePanelTab}
                     onClose={closePanelTab}
+                    onOpen={openPanelTab}
+                    onCollapse={collapseRightSide}
                   />
                 )}
                 <div className="relative min-h-0 flex-1">

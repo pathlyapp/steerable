@@ -7,6 +7,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   closeRightPanelTab,
+  collapseRightPanel,
+  expandRightPanel,
   parseRightPanelMap,
   revealRightPanelTab,
   toggleRightPanelEntry,
@@ -101,6 +103,22 @@ describe('parseRightPanelMap', () => {
     ).toEqual({});
   });
 
+  it('收起标记会留下来', () => {
+    const map = parseRightPanelMap({
+      raw: JSON.stringify({
+        'chat-1': { tabs: ['ppt', 'terminal'], active: 'ppt', collapsed: true },
+      }),
+      legacyTerminalOpen: null,
+      chatId: 'chat-1',
+      isValidValue,
+    });
+    expect(map['chat-1']).toEqual({
+      tabs: ['ppt', 'terminal'],
+      active: 'ppt',
+      collapsed: true,
+    });
+  });
+
   it('新会话不在映射里 → 查不到即视为关闭', () => {
     const map = parseRightPanelMap({
       raw: JSON.stringify({ 'chat-1': 'word' }),
@@ -128,6 +146,30 @@ describe('右侧标签开关', () => {
     expect(
       closeRightPanelTab({ tabs: ['ppt', 'word', 'terminal'], active: 'word' }, 'word'),
     ).toEqual({ tabs: ['ppt', 'terminal'], active: 'terminal' });
+  });
+
+  it('收起后再打开，标签还是原来那些', () => {
+    const open = { tabs: ['ppt', 'terminal'], active: 'terminal' };
+    const hidden = collapseRightPanel(open);
+    expect(hidden.collapsed).toBe(true);
+    expect(expandRightPanel(hidden)).toEqual(open);
+  });
+
+  it('整栏收着时快捷键改为打开并显示那一项，不把标签关掉', () => {
+    const hidden = collapseRightPanel({ tabs: ['ppt'], active: 'ppt' });
+    expect(toggleRightPanelEntry(hidden, 'terminal')).toEqual({
+      tabs: ['ppt', 'terminal'],
+      active: 'terminal',
+    });
+    expect(toggleRightPanelEntry(hidden, 'ppt')).toEqual({ tabs: ['ppt'], active: 'ppt' });
+  });
+
+  it('整栏收着时自动展开会打开并显示新标签', () => {
+    const hidden = collapseRightPanel({ tabs: ['terminal'], active: 'terminal' });
+    expect(revealRightPanelTab(hidden, 'ppt')).toEqual({
+      tabs: ['terminal', 'ppt'],
+      active: 'ppt',
+    });
   });
 
   it('自动展开在已有标签时只追加，不抢走当前标签', () => {

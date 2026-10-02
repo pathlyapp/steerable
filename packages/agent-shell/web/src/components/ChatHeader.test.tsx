@@ -1,5 +1,6 @@
 /**
- * ChatHeader 右侧三个入口：菜单（对话操作）、summary（项目、产出、后台任务）、tab（右侧栏位）。
+ * ChatHeader 右侧入口：菜单（对话操作）、summary（项目、产出、后台任务）、面板开关。
+ * 右侧栏开着时开关不在标题栏，它挪到右侧标签条。
  * 后台任务角标在资源按钮关着的时候看得见：
  *   - 无任务 → 资源按钮不显示计数，资源列表里也没有任务段；
  *   - 有任务 → 资源按钮带计数，状态按「该不该现在看一眼」取最高优先级
@@ -60,10 +61,6 @@ function openResources() {
 
 function taskItem(name: string) {
   return screen.getByRole('button', { name });
-}
-
-function openPanels() {
-  fireEvent.click(screen.getByTestId('header-chat-panels'));
 }
 
 describe('ChatHeader 后台任务角标', () => {
@@ -225,7 +222,7 @@ describe('ChatHeader 资源里的后台任务', () => {
   });
 });
 
-describe('ChatHeader 包槽位入口', () => {
+describe('ChatHeader 右侧开关', () => {
   const slot: PackChatSlotContribution = {
     slotId: 'ppt',
     title: '文档预览',
@@ -233,126 +230,44 @@ describe('ChatHeader 包槽位入口', () => {
     Component: () => null,
   };
 
-  it('入口在面板菜单里，打开时高亮，点击切换', () => {
-    const onToggleChatSlot = vi.fn();
-    render(
-      <ChatHeader
-        chat={CHAT}
-        tasks={[]}
-        chatSlots={[slot]}
-        rightPanel="ppt"
-        onToggleChatSlot={onToggleChatSlot}
-      />,
-    );
-
-    expect(screen.getByTestId('header-chat-panels').getAttribute('aria-pressed')).toBe('true');
-    openPanels();
-    const slotButton = screen.getByTestId('header-slot-ppt');
-    expect(slotButton.textContent).toContain('文档预览');
-    expect(slotButton.getAttribute('aria-pressed')).toBe('true');
-    expect(slotButton.className).toContain('bg-agent-foreground/10');
-    expect(document.querySelector('[data-header-popover="panels"]')).toContain(slotButton);
-
-    fireEvent.click(slotButton);
-    expect(onToggleChatSlot).toHaveBeenCalledWith('ppt');
-  });
-
-  it('已经打开的多个栏位同时高亮，当前这个才提示关闭', () => {
-    const word: PackChatSlotContribution = {
-      slotId: 'word',
-      title: 'Word',
-      Icon: ({ className }: { className?: string }) => <svg className={className} />,
-      Component: () => null,
-    };
-    render(
-      <ChatHeader
-        chat={CHAT}
-        tasks={[]}
-        chatSlots={[slot, word]}
-        rightPanel="word"
-        openPanelIds={['ppt', 'word']}
-        onToggleChatSlot={vi.fn()}
-      />,
-    );
-    openPanels();
-    expect(screen.getByTestId('header-slot-ppt').getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByTestId('header-slot-word').getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByTestId('header-slot-ppt').getAttribute('title')).toBe('Open 文档预览');
-    expect(screen.getByTestId('header-slot-word').getAttribute('title')).toBe('Close Word');
-  });
-
-  it('栏位关闭时不显示高亮', () => {
+  it('栏关着时按钮在标题栏，点一下打开，不弹出菜单', () => {
+    const onOpenRightPanel = vi.fn();
     render(
       <ChatHeader
         chat={CHAT}
         tasks={[]}
         chatSlots={[slot]}
         rightPanel={null}
-        onToggleChatSlot={vi.fn()}
+        onOpenRightPanel={onOpenRightPanel}
       />,
     );
-    openPanels();
-    expect(screen.getByTestId('header-slot-ppt').getAttribute('aria-pressed')).toBe('false');
+
+    const button = screen.getByTestId('header-chat-panels');
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(button.getAttribute('title')).toBe('Open Panels');
+    fireEvent.click(button);
+    expect(onOpenRightPanel).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-header-popover="panels"]')).toBeNull();
   });
-});
 
-function setPlatform(platform: string) {
-  Object.defineProperty(window.navigator, 'platform', { value: platform, configurable: true });
-}
-
-describe('ChatHeader 终端入口', () => {
-  it('Mac 上面板菜单里的终端项 title 提示 ⌘T，点击切换终端面板', () => {
-    setPlatform('MacIntel');
-    const onToggleRightPanel = vi.fn();
+  it('栏开着时标题栏不再放这个按钮', () => {
     render(
       <ChatHeader
         chat={CHAT}
         tasks={[]}
-        onToggleRightPanel={onToggleRightPanel}
+        chatSlots={[slot]}
+        rightPanel="ppt"
+        openPanelIds={['ppt']}
+        onOpenRightPanel={vi.fn()}
       />,
     );
 
-    openPanels();
-    const btn = screen.getByTestId('header-terminal');
-    expect(btn.textContent).toContain('Terminal');
-    expect(btn.getAttribute('title')).toBe('Open terminal panel (⌘T)');
-    expect(btn.getAttribute('aria-label')).toBe('Terminal');
-    fireEvent.click(btn);
-    expect(onToggleRightPanel).toHaveBeenCalledWith('terminal');
+    expect(screen.queryByTestId('header-chat-panels')).toBeNull();
   });
 
-  it('非 Mac title 提示 Ctrl+T；面板已打开时 title 变为关闭且高亮', () => {
-    setPlatform('Linux');
-    const onToggleChatSlot = vi.fn();
-    render(
-      <ChatHeader
-        chat={CHAT}
-        tasks={[]}
-        rightPanel="terminal"
-        onToggleChatSlot={onToggleChatSlot}
-      />,
-    );
+  it('没有选择对话时不渲染开关', () => {
+    render(<ChatHeader chat={null} tasks={[]} chatSlots={[slot]} />);
 
-    expect(screen.getByTestId('header-chat-panels').className).toContain('bg-agent-foreground/10');
-    openPanels();
-    const btn = screen.getByTestId('header-terminal');
-    expect(btn.getAttribute('title')).toBe('Close terminal panel (Ctrl+T)');
-    expect(btn.getAttribute('aria-pressed')).toBe('true');
-    expect(btn.className).toContain('bg-agent-foreground/10');
-
-    fireEvent.click(btn);
-    expect(onToggleChatSlot).toHaveBeenCalledWith('terminal');
-  });
-
-  it('没有选择对话时不渲染终端按钮', () => {
-    render(
-      <ChatHeader
-        chat={null}
-        tasks={[]}
-      />,
-    );
-
-    expect(screen.queryByTestId('header-terminal')).toBeNull();
     expect(screen.queryByTestId('header-chat-panels')).toBeNull();
   });
 });

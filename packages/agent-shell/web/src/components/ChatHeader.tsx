@@ -12,7 +12,6 @@ import {
   LuCheck,
   LuChevronLeft,
   LuDownload,
-  LuCopy,
   LuEllipsis,
   LuFile,
   LuFolder,
@@ -25,7 +24,6 @@ import {
   LuPin,
   LuPinOff,
   LuShare2,
-  LuTerminal,
   LuTrash2,
 } from 'react-icons/lu';
 import type { LocalChat, LocalProject, LocalTask } from '@/lib/local-api';
@@ -49,6 +47,7 @@ import {
   saveJsonFile,
 } from '@/lib/portable';
 import { hostToolChrome } from '@/lib/host-tools';
+import { PanelToggleButton } from '@/layouts/PanelToggleButton';
 import { t } from '@/i18n';
 import {
   getTurnFileCategory,
@@ -74,16 +73,14 @@ interface ChatHeaderProps {
   }) => void;
   /** 本对话的后台任务（AgentPage 的 `useChatTasks` 单一订阅源）。 */
   tasks?: LocalTask[];
-  /** 包注册的聊天页槽位（如「文档预览」）：入口放在面板菜单里，按会话独立开关。 */
+  /** 包注册的聊天页槽位（如文档预览）。有槽位或终端时，标题栏才放右侧开关。 */
   chatSlots?: readonly PackChatSlotContribution[];
   /** 当前会话正在看的右侧标签（null = 都关着）。 */
   rightPanel?: string | null;
-  /** 已经打开的标签。缺省时只把 rightPanel 当作唯一打开项。 */
+  /** 已经打开且正在显示的标签。缺省时只把 rightPanel 当作唯一打开项。 */
   openPanelIds?: readonly string[];
-  /** 点击槽位入口：没开就追加，已开但不是当前就切过去，当前这个就关掉。 */
-  onToggleChatSlot?: (slotId: string) => void;
-  /** 切换右侧面板（终端、包槽位等）。 */
-  onToggleRightPanel?: (kind: string) => void;
+  /** 右侧整栏关着时，点标题栏开关把它打开。 */
+  onOpenRightPanel?: () => void;
   /** 产品打开项目入口时，summary 展示当前对话关联的目录。 */
   showProject?: boolean;
   project?: LocalProject | null;
@@ -95,14 +92,14 @@ interface ChatHeaderProps {
   onChatChanged?: () => void | Promise<void>;
 }
 
-type HeaderPopover = 'menu' | 'summary' | 'panels';
+type HeaderPopover = 'menu' | 'summary';
 
 /**
  * ChatHeader — slim title bar above ChatPanel.
- * 右侧三个入口，对齐 Codex 的菜单 / summary / tab：
+ * 右侧入口：
  *   - 菜单：操作当前对话（置顶、导出、分享、分支）
  *   - summary：当前对话的资源（关联目录、产出文件；有后台任务时也列在这里，点开后在右侧显示过程）
- *   - tab：右侧栏位（包槽位、终端）
+ *   - 面板开关：右侧整栏关着时出现在这里，点一下打开。栏开着时按钮挪到右侧标签条，点一下收起。
  *
  * 刷新按钮已下线（消息流有 SSE 自动同步）。
  */
@@ -114,8 +111,7 @@ export function ChatHeader({
   chatSlots = [],
   rightPanel = null,
   openPanelIds,
-  onToggleChatSlot,
-  onToggleRightPanel,
+  onOpenRightPanel,
   showProject = false,
   project = null,
   outputs = [],
@@ -137,50 +133,12 @@ export function ChatHeader({
   );
   const menuButtonRef = useRef<HTMLButtonElement | null>(null);
   const summaryButtonRef = useRef<HTMLButtonElement | null>(null);
-  const panelsButtonRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
-
-  const [isMac, setIsMac] = useState(() => {
-    if (typeof navigator !== 'undefined') {
-      return /Mac|iPod|iPhone|iPad/.test(navigator.platform);
-    }
-    return false;
-  });
-
-  useEffect(() => {
-    if (typeof navigator !== 'undefined') {
-      setIsMac(/Mac|iPod|iPhone|iPad/.test(navigator.platform));
-    }
-  }, []);
 
   const showTerminalChrome = hostToolChrome('terminal');
   const allowOpenPath = hostToolChrome('local-fs');
-  const togglePanel = onToggleRightPanel ?? onToggleChatSlot;
   const openIds = openPanelIds ?? (rightPanel ? [rightPanel] : []);
-  const panelEntries = useMemo(() => {
-    const entries: PanelEntry[] = chatSlots.map((slot) => ({
-      id: slot.slotId,
-      title: slot.title,
-      testId: `header-slot-${slot.slotId}`,
-      action: `chat-slot-${slot.slotId}`,
-      icon: <slot.Icon className="h-3.5 w-3.5 shrink-0" />,
-    }));
-    if (showTerminalChrome) {
-      const shortcut = isMac ? '⌘T' : 'Ctrl+T';
-      entries.push({
-        id: 'terminal',
-        title: t('Terminal'),
-        testId: 'header-terminal',
-        action: 'terminal',
-        icon: <LuTerminal className="h-3.5 w-3.5 shrink-0" />,
-        detail:
-          openIds.includes('terminal') && rightPanel === 'terminal'
-            ? t('Close terminal panel ({shortcut})', { shortcut })
-            : t('Open terminal panel ({shortcut})', { shortcut }),
-      });
-    }
-    return entries;
-  }, [chatSlots, isMac, openIds, rightPanel, showTerminalChrome]);
+  const canTogglePanel = chatSlots.length > 0 || showTerminalChrome;
 
   const branchCount = branches ? branches.lineage.length + branches.children.length : 0;
   const files = useMemo(() => uniqueOutputs(outputs), [outputs]);
@@ -278,9 +236,7 @@ export function ChatHeader({
       ? menuButtonRef.current
       : popover === 'summary'
         ? summaryButtonRef.current
-        : popover === 'panels'
-          ? panelsButtonRef.current
-          : null;
+        : null;
 
   useLayoutEffect(() => {
     if (!popover || !anchor) {
@@ -304,7 +260,6 @@ export function ChatHeader({
       if (
         menuButtonRef.current?.contains(target) ||
         summaryButtonRef.current?.contains(target) ||
-        panelsButtonRef.current?.contains(target) ||
         popoverRef.current?.contains(target)
       ) {
         return;
@@ -365,17 +320,6 @@ export function ChatHeader({
                 onOpenTask={openListedTask}
               />
             )}
-            {popover === 'panels' && (
-              <PanelMenu
-                entries={panelEntries}
-                rightPanel={rightPanel}
-                openPanelIds={openIds}
-                onToggle={(id) => {
-                  togglePanel?.(id);
-                  closePopover();
-                }}
-              />
-            )}
           </div>,
           document.body,
         )
@@ -432,24 +376,8 @@ export function ChatHeader({
           )}
         </button>
       )}
-      {chat && panelEntries.length > 0 && (
-        <button
-          ref={panelsButtonRef}
-          type="button"
-          onClick={() => togglePopover('panels')}
-          className={`${iconButton} w-7 ${
-            popover === 'panels' || openIds.length > 0
-              ? 'bg-agent-foreground/10 text-agent-foreground'
-              : ''
-          }`}
-          title={t('Panels')}
-          aria-label={t('Panels')}
-          aria-expanded={popover === 'panels'}
-          aria-pressed={openIds.length > 0}
-          data-testid="header-chat-panels"
-        >
-          <LuCopy className="h-4 w-4" />
-        </button>
+      {chat && canTogglePanel && openIds.length === 0 && (
+        <PanelToggleButton pressed={false} onClick={() => onOpenRightPanel?.()} />
       )}
       {popoverNode}
       {chat && treeModalOpen && (
@@ -806,66 +734,6 @@ function ChatSummary({
   );
 }
 
-interface PanelEntry {
-  id: string;
-  title: string;
-  testId: string;
-  action: string;
-  icon: ReactNode;
-  detail?: string;
-}
-
-function PanelMenu({
-  entries,
-  rightPanel,
-  openPanelIds,
-  onToggle,
-}: {
-  entries: PanelEntry[];
-  rightPanel: string | null;
-  openPanelIds: readonly string[];
-  onToggle: (id: string) => void;
-}) {
-  if (entries.length === 0) {
-    return (
-      <div className="px-2.5 py-1.5 text-xs text-agent-muted-foreground">{t('Panels')}</div>
-    );
-  }
-  return (
-    <>
-      {entries.map((entry) => {
-        const open = openPanelIds.includes(entry.id);
-        const active = rightPanel === entry.id;
-        return (
-          <button
-            key={entry.id}
-            type="button"
-            onClick={() => onToggle(entry.id)}
-            className={`flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-xs transition-colors ${
-              open
-                ? 'bg-agent-foreground/10 font-medium text-agent-foreground'
-                : 'text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground'
-            }`}
-            title={
-              entry.detail ??
-              (active
-                ? t('Close {name}', { name: entry.title })
-                : t('Open {name}', { name: entry.title }))
-            }
-            aria-label={entry.id === 'terminal' ? t('Terminal') : entry.title}
-            aria-pressed={open}
-            data-action={entry.action}
-            data-testid={entry.testId}
-          >
-            {entry.icon}
-            <span className="min-w-0 flex-1 truncate">{entry.title}</span>
-          </button>
-        );
-      })}
-    </>
-  );
-}
-
 function SectionLabel({ children }: { children: ReactNode }) {
   return (
     <div className="px-2 pb-0.5 pt-1 text-[10px] font-medium uppercase tracking-wide text-agent-muted-foreground/70">
@@ -997,7 +865,6 @@ function describeTaskBadge(summary: ChatTaskSummary): TaskBadge | null {
 /** 浮层按内容给宽度，右缘对齐触发按钮，再夹进对话面板里。 */
 function sheetWidth(kind: HeaderPopover, page: 'root' | 'branches'): number {
   if (kind === 'summary' || page === 'branches') return 304;
-  if (kind === 'panels') return 168;
   return 176;
 }
 
