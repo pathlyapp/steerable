@@ -10,6 +10,7 @@ import {
   type LocalExecRequest,
   type LocalExecResult,
 } from './local-executor.js';
+import { writeShellStdin } from './shell-session.js';
 import { LocalScriptRegistry } from './local-script-registry.js';
 import { mcpExecutor, type McpServerConfig } from './mcp-executor.js';
 import type { McpServerRegistry } from './mcp-server-registry.js';
@@ -339,6 +340,8 @@ export class ToolRouter {
         name: 'local_exec_shell',
         description:
           'Execute a shell command in a pseudo-terminal. Set pty to false for a plain pipe. ' +
+          'Set yieldMs to return while the command is still running; the result includes sessionId. ' +
+          'Continue that same session with write_stdin (write input, or pass empty chars to poll new output). ' +
           'When this host is configured with a remote endpoint, the command runs on that host instead of this machine.',
         mode: 'destructive',
         inputSchema: {
@@ -348,8 +351,33 @@ export class ToolRouter {
             cwd: { type: 'string' },
             timeout: { type: 'number', description: 'Timeout in milliseconds (e.g. 30000). If a small number like 15 or 30 is provided, it is assumed to be in seconds and automatically multiplied by 1000.' },
             pty: { type: 'boolean', description: 'Run in a pseudo-terminal. Defaults to true.' },
+            yieldMs: {
+              type: 'number',
+              description:
+                'Return after this many milliseconds if the command is still running, and include sessionId for write_stdin. Omit to wait until exit or timeout.',
+            },
           },
           required: ['command'],
+        },
+      },
+      {
+        name: 'write_stdin',
+        description:
+          'Write more input to a running local_exec_shell session, or poll its new output. ' +
+          'Pass the sessionId from that command. chars is sent to the terminal; omit it or pass an empty string to only collect output that arrived since the last call. ' +
+          'Does not start a new command and does not ask for approval again.',
+        mode: 'local',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            sessionId: { type: 'string', description: 'sessionId returned by local_exec_shell.' },
+            chars: { type: 'string', description: 'Input to write. Empty string polls new output only.' },
+            yieldMs: {
+              type: 'number',
+              description: 'How long to wait for new output, in milliseconds. Defaults to 1000.',
+            },
+          },
+          required: ['sessionId'],
         },
       },
       {
@@ -1156,10 +1184,17 @@ export class ToolRouter {
             cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
             timeout: typeof args.timeout === 'number' ? args.timeout : undefined,
             pty: args.pty !== false,
+            yieldMs: typeof args.yieldMs === 'number' ? args.yieldMs : undefined,
           },
           projectRoot,
           context?.additionalWriteRoots ?? null,
         );
+      case 'write_stdin':
+        return await writeShellStdin({
+          sessionId: typeof args.sessionId === 'string' ? args.sessionId : '',
+          chars: typeof args.chars === 'string' ? args.chars : '',
+          yieldMs: typeof args.yieldMs === 'number' ? args.yieldMs : 1000,
+        });
       case 'local_read_file':
         return await this.localExecutor.readLocalFile(
           {

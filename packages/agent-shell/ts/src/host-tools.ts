@@ -120,6 +120,7 @@ export function hasGeneralSettingsChrome(
 
 export const LOCAL_FS_TOOL_NAMES = [
   'local_exec_shell',
+  'write_stdin',
   'local_read_file',
   'view_image',
   'local_write_file',

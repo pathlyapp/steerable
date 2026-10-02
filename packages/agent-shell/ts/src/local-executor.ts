@@ -17,6 +17,12 @@ import {
   type ShellRunSpec,
 } from './shell-exec.js';
 import { nodeShellBackend } from './shell-process.js';
+import {
+  closeShellSession,
+  readShellSession,
+  shellSessionStatus,
+  startPtySession,
+} from './shell-session.js';
 import { applyEdits, EditError, type ApplyEditsResult, type EditOp } from './local-edit.js';
 // `he` ships as CommonJS and does not expose ESM named exports, so we have to
 // take the default import and destructure at runtime in this ESM module.
@@ -71,6 +77,11 @@ export interface LocalExecRequest {
   shell?: ShellType;
   /** 在伪终端里跑。缺省走管道，调用方要终端语义时显式打开。 */
   pty?: boolean;
+  /**
+   * 设了就在这么多毫秒后返回，进程还在就留下 sessionId。
+   * 不设则跟原来一样，等到退出或超时。
+   */
+  yieldMs?: number;
   /** 用户已经批准一次 prompt 决定。不能放过 forbidden。 */
   execApproval?: 'allow';
 }
@@ -99,6 +110,8 @@ export interface LocalExecResult {
   transport?: 'local' | 'ssh';
   /** 这次启动是否分配了伪终端。 */
   pty?: boolean;
+  /** yieldMs 留下的还在运行的伪终端。下一步用 write_stdin 写入或只取新输出。 */
+  sessionId?: string;
 }
 
 export interface LocalFileReadRequest {
@@ -788,6 +801,16 @@ export class LocalExecutor {
       spec.cwd = os.homedir();
       spec.env = stringEnv();
     }
+    const yieldMs = input.request.yieldMs;
+    if (
+      pty &&
+      !input.useSsh &&
+      !this.shellBackend &&
+      typeof yieldMs === 'number' &&
+      Number.isFinite(yieldMs)
+    ) {
+      return await this.runYieldedPty(spec, input.resolvedShell.type, yieldMs);
+    }
     const backend = this.shellBackend ?? nodeShellBackend;
     const outcome = await backend.run(spec, {
       timeoutMs: input.timeout,
@@ -818,6 +841,36 @@ export class LocalExecutor {
       transport: spec.transport,
       pty: spec.pty,
     };
+  }
+
+  private async runYieldedPty(
+    spec: ShellRunSpec,
+    shell: ShellType,
+    yieldMs: number,
+  ): Promise<LocalExecResult> {
+    const sessionId = startPtySession({
+      file: spec.file,
+      args: spec.args,
+      cwd: spec.cwd,
+      env: spec.env,
+      maxOutputBytes: this.maxOutputBytes,
+    });
+    const stdout = (await readShellSession(sessionId, yieldMs)) ?? '';
+    const status = shellSessionStatus(sessionId);
+    const base = {
+      stdout,
+      stderr: '',
+      shell,
+      platform: process.platform,
+      transport: 'local' as const,
+      pty: true,
+    };
+    if (!status?.running) {
+      const exitCode = status?.exitCode ?? -1;
+      closeShellSession(sessionId);
+      return { ...base, success: exitCode === 0, exitCode };
+    }
+    return { ...base, success: true, stillRunning: true, sessionId };
   }
 
   async readLocalFile(
