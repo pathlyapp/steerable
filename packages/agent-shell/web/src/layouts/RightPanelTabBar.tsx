@@ -4,6 +4,7 @@ import { LuPlus, LuTerminal, LuX } from 'react-icons/lu';
 import type { PackChatSlotContribution } from '@/packs/registry';
 import { t } from '@/i18n';
 import { PanelToggleButton } from '@/layouts/PanelToggleButton';
+import type { RightPanelTabRecord } from '@/layouts/right-panel-tabs';
 
 /**
  * 右侧栏位的标签条。打开的文档、终端都留在这一行，点标签切换，点 × 关掉那一个。
@@ -11,7 +12,7 @@ import { PanelToggleButton } from '@/layouts/PanelToggleButton';
  */
 export function RightPanelTabBar({
   tabs,
-  active,
+  activeTabId,
   slots,
   showTerminal,
   onActivate,
@@ -19,13 +20,13 @@ export function RightPanelTabBar({
   onOpen,
   onCollapse,
 }: {
-  tabs: readonly string[];
-  active: string;
+  tabs: readonly RightPanelTabRecord[];
+  activeTabId: string;
   slots: readonly PackChatSlotContribution[];
   showTerminal: boolean;
-  onActivate: (id: string) => void;
-  onClose: (id: string) => void;
-  onOpen: (id: string) => void;
+  onActivate: (tabId: string) => void;
+  onClose: (tabId: string) => void;
+  onOpen: (kind: string) => void;
   onCollapse: () => void;
 }) {
   const addable = unopenedPanels(tabs, slots, showTerminal);
@@ -37,17 +38,16 @@ export function RightPanelTabBar({
         data-testid="right-panel-tabs"
         className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
       >
-        {tabs.map((id) => {
-          const slot = slots.find((item) => item.slotId === id);
-          const title = slot?.title ?? (id === 'terminal' ? t('Terminal') : id);
-          const Icon = slot?.Icon ?? (id === 'terminal' ? LuTerminal : null);
-          const selected = id === active;
+        {tabs.map((tab) => {
+          const slot = slots.find((item) => item.slotId === tab.kind);
+          const Icon = slot?.Icon ?? (tab.kind === 'terminal' ? LuTerminal : null);
+          const selected = tab.id === activeTabId;
           return (
             <div
-              key={id}
+              key={tab.id}
               role="tab"
               aria-selected={selected}
-              data-testid={`right-panel-tab-${id}`}
+              data-testid={`right-panel-tab-${tab.id}`}
               className={`flex h-7 max-w-[11rem] shrink-0 items-center rounded-md pl-1.5 text-xs ${
                 selected
                   ? 'bg-agent-foreground/10 font-medium text-agent-foreground'
@@ -56,19 +56,19 @@ export function RightPanelTabBar({
             >
               <button
                 type="button"
-                onClick={() => onActivate(id)}
+                onClick={() => onActivate(tab.id)}
                 className="flex min-w-0 items-center gap-1 px-0.5"
-                title={title}
+                title={tab.title}
               >
                 {Icon ? <Icon className="h-3.5 w-3.5 shrink-0" /> : null}
-                <span className="truncate">{title}</span>
+                <span className="truncate">{tab.title}</span>
               </button>
               <button
                 type="button"
-                onClick={() => onClose(id)}
+                onClick={() => onClose(tab.id)}
                 className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-agent-muted-foreground hover:bg-agent-foreground/10 hover:text-agent-foreground"
-                aria-label={t('Close {name}', { name: title })}
-                title={t('Close {name}', { name: title })}
+                aria-label={t('Close {name}', { name: tab.title })}
+                title={t('Close {name}', { name: tab.title })}
               >
                 <LuX className="h-3 w-3" />
               </button>
@@ -182,13 +182,13 @@ interface AddPanelEntry {
 }
 
 function unopenedPanels(
-  tabs: readonly string[],
+  tabs: readonly RightPanelTabRecord[],
   slots: readonly PackChatSlotContribution[],
   showTerminal: boolean,
 ): AddPanelEntry[] {
   const entries: AddPanelEntry[] = [];
   for (const slot of slots) {
-    if (tabs.includes(slot.slotId)) continue;
+    if (!slot.multiple && tabs.some((tab) => tab.kind === slot.slotId)) continue;
     const Icon = slot.Icon;
     entries.push({
       id: slot.slotId,
@@ -197,7 +197,7 @@ function unopenedPanels(
       icon: <Icon className="h-3.5 w-3.5 shrink-0" />,
     });
   }
-  if (showTerminal && !tabs.includes('terminal')) {
+  if (showTerminal && !tabs.some((tab) => tab.kind === 'terminal')) {
     const shortcut =
       typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)
         ? '⌘T'
