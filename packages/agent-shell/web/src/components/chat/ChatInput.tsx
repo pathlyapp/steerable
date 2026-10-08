@@ -32,7 +32,13 @@ import {
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
 import type { ExecPolicy } from '@/lib/exec-policy';
 import { getWebChatModes, hostToolCapability, settingsChrome } from '@/lib/host-tools';
-import { hostClipboardAvailable, requestHostPaste, type HostClipboardFile } from '@/lib/host-paste';
+import {
+  hostClipboardAvailable,
+  releaseComposerPasteTarget,
+  requestHostPaste,
+  setComposerPasteTarget,
+  type HostClipboardFile,
+} from '@/lib/host-paste';
 import { attachmentFromPath, type AttachmentFile } from '@/lib/attachments';
 import { dropPointHitsRect, hostFileDropAvailable, listenHostFileDrop } from '@/lib/host-file-drop';
 import type { SteerOutcome } from '@steerable/agent-ui';
@@ -510,10 +516,17 @@ function getSelectionOffsets(root: HTMLDivElement): { start: number; end: number
     return measureRange.toString().length;
   };
 
-  return {
-    start: getOffset(range.startContainer, range.startOffset),
-    end: getOffset(range.endContainer, range.endOffset),
-  };
+  try {
+    return {
+      start: getOffset(range.startContainer, range.startOffset),
+      end: getOffset(range.endContainer, range.endOffset),
+    };
+  } catch {
+    // The caret can sit on the empty scaffold's <br> with an offset the
+    // range rejects. Paste still belongs at the end of the draft.
+    const end = getEditableText(root).length;
+    return { start: end, end };
+  }
 }
 
 function setCaretOffset(root: HTMLDivElement, offset: number) {
@@ -1149,6 +1162,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         return;
       }
 
+      const wrote =
+        editorText !== value ||
+        pendingCaretOffset !== null ||
+        (!value && !hasEmptyImeScaffold(editor));
       if (editorText !== value || pendingCaretOffset !== null) {
         writeEditorValue(
           editor,
@@ -1167,8 +1184,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       lastPushedValueRef.current = value;
       updateEditorHeight(editor);
 
-      if (pendingCaretOffset !== null && focused) {
-        setCaretOffset(editor, Math.min(pendingCaretOffset, value.length));
+      // replaceChildren drops the DOM selection. Without a caret inside the
+      // field, WKWebView ignores Ctrl/Cmd+V after a send.
+      if (focused && wrote) {
+        setCaretOffset(editor, Math.min(pendingCaretOffset ?? value.length, value.length));
         pendingCaretOffsetRef.current = null;
       }
     }, [value, mentionReferences, agents, chats, disabled, skills, mcpTools]);
@@ -1494,6 +1513,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     useLayoutEffect(() => {
       const editor = editorRef.current;
       if (!editor) return;
+      setComposerPasteTarget(editor);
       const onCompositionStart = () => {
         isComposingRef.current = true;
         inputSyncGenRef.current += 1;
@@ -1519,6 +1539,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       editor.addEventListener('hostpaste', onHostPaste);
       editor.addEventListener('hostpastefiles', onHostPasteFiles);
       return () => {
+        releaseComposerPasteTarget(editor);
         editor.removeEventListener('compositionstart', onCompositionStart, true);
         editor.removeEventListener('hostpaste', onHostPaste);
         editor.removeEventListener('hostpastefiles', onHostPasteFiles);

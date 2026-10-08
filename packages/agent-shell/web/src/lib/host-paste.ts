@@ -19,7 +19,21 @@ import { getHostBridge } from './host-bridge';
 
 let pending = false;
 let lastEditable: HTMLElement | null = null;
+let composerPasteTarget: HTMLElement | null = null;
 let installed = false;
+
+/**
+ * Remember the live chat composer. A menu paste uses it when no other field
+ * is focused, including right after the empty-hero composer unmounts.
+ */
+export function setComposerPasteTarget(element: HTMLElement): void {
+  composerPasteTarget = element;
+}
+
+/** Drop the composer target when that element unmounts. */
+export function releaseComposerPasteTarget(element: HTMLElement): void {
+  if (composerPasteTarget === element) composerPasteTarget = null;
+}
 
 /** Remember the field that should receive a menu paste after focus moves. */
 export function installHostPaste(): void {
@@ -87,12 +101,9 @@ export function hostClipboardAvailable(): boolean {
 }
 
 function isEditable(target: EventTarget | null): target is HTMLElement {
-  return (
-    !isTerminalInput(target) &&
-    (target instanceof HTMLInputElement ||
-      target instanceof HTMLTextAreaElement ||
-      (target instanceof HTMLElement && target.isContentEditable))
-  );
+  if (isTerminalInput(target) || !(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
+  return target.isContentEditable || target.getAttribute('contenteditable') === 'true';
 }
 
 /**
@@ -105,8 +116,12 @@ function isTerminalInput(target: EventTarget | null): boolean {
 
 function focusedEditable(): HTMLElement | null {
   if (isTerminalInput(document.activeElement)) return null;
-  if (isEditable(document.activeElement)) return document.activeElement;
-  if (lastEditable?.isConnected) return lastEditable;
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active.isConnected && isEditable(active)) return active;
+  if (lastEditable?.isConnected && isEditable(lastEditable)) return lastEditable;
+  if (composerPasteTarget?.isConnected && isEditable(composerPasteTarget)) {
+    return composerPasteTarget;
+  }
   return null;
 }
 

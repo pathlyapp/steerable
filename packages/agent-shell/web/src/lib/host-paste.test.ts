@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as hostBridge from './host-bridge';
-import { installHostPaste, requestHostPaste } from './host-paste';
+import {
+  installHostPaste,
+  releaseComposerPasteTarget,
+  requestHostPaste,
+  setComposerPasteTarget,
+} from './host-paste';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -68,5 +73,33 @@ describe('requestHostPaste', () => {
     await Promise.resolve();
     expect(pasted).toEqual([]);
     expect(helper.value).toBe('');
+  });
+
+  it('pastes into the live composer after the focused field unmounts', async () => {
+    const readClipboardText = vi.fn().mockResolvedValue('下一条');
+    vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
+      readClipboardText,
+    } as Partial<hostBridge.HostBridge> as hostBridge.HostBridge);
+    installHostPaste();
+    const gone = editable();
+    gone.focus();
+    gone.remove();
+    const composer = editable();
+    const pasted: string[] = [];
+    composer.addEventListener('hostpaste', (event) => {
+      pasted.push((event as CustomEvent<string>).detail);
+    });
+    setComposerPasteTarget(composer);
+    const sink = document.createElement('button');
+    document.body.appendChild(sink);
+    sink.focus();
+    try {
+      requestHostPaste();
+      await vi.waitFor(() => {
+        expect(pasted).toEqual(['下一条']);
+      });
+    } finally {
+      releaseComposerPasteTarget(composer);
+    }
   });
 });
