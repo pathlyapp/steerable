@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 import pytest
 from steerable_agent_protocol.generated import ToolCall, ToolResult
@@ -162,7 +163,7 @@ async def test_exec_sandbox_rewrites_shell_command() -> None:
 
 
 @pytest.mark.asyncio
-async def test_steer_full_policy_stops_sandboxing_later_commands() -> None:
+async def test_steer_full_policy_stops_sandboxing_later_commands(tmp_path: Path) -> None:
     """插进当前回合的消息带上完整权限后，后面的命令不再包进沙箱。"""
     received: list[str] = []
     started = asyncio.Event()
@@ -190,7 +191,7 @@ async def test_steer_full_policy_stops_sandboxing_later_commands() -> None:
     response = await sidecar.server.handle_frame(
         _frame(
             "agent.chat.stream",
-            _base_params(execSandbox={"enabled": True, "writableRoots": ["/work"]}),
+            _base_params(execSandbox={"enabled": True, "writableRoots": [str(tmp_path)]}),
         )
     )
     assert "error" not in response, response
