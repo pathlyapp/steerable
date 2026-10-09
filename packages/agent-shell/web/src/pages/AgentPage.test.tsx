@@ -164,6 +164,7 @@ function makeCtx(overrides: Partial<AgentOutletContext> = {}): AgentOutletContex
     createChat: vi.fn(async () => 'chat-new'),
     deleteChat: vi.fn(async () => true),
     patchChatTitle: vi.fn(),
+    patchChatUpdatedAt: vi.fn(),
     isLoadingMoreChats: false,
     hasMoreChats: false,
     loadMoreChats: vi.fn(async () => {}),

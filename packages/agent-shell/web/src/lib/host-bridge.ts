@@ -240,6 +240,13 @@ export interface HostBridge {
     callback: (payload: { chatId: string; agentId?: string | null }) => void,
   ) => () => void;
   /**
+   * 会话有了新的活动时间（写入消息或改会话）。载荷是 `{chatId, updatedAt}`。
+   * 侧边栏据此改内存里的时间并重排，不整表刷新。
+   */
+  onChatActivity?: (
+    callback: (payload: { chatId: string; updatedAt: string }) => void,
+  ) => () => void;
+  /**
    * 另一个进程提交了宿主库。侧栏据此重新拉会话列表。
    * 载荷为空；渲染端不依赖里面的字段。
    */

@@ -162,4 +162,20 @@ describe('Electron 环境', () => {
     });
     expect(result.current.chats).toHaveLength(2);
   });
+
+  it('patchChatUpdatedAt 只改内存，更旧的时间不覆盖', async () => {
+    const { calls } = installBridge();
+    const { result } = renderHook(() => useChatsAndAgents());
+    await waitFor(() => expect(result.current.chats).toHaveLength(2));
+    const before = calls.length;
+    act(() => {
+      result.current.patchChatUpdatedAt('c1', '2026-10-09T03:00:00.000Z');
+    });
+    expect(result.current.chats[0].updatedAt).toBe('2026-10-09T03:00:00.000Z');
+    act(() => {
+      result.current.patchChatUpdatedAt('c1', '2020-01-01T00:00:00.000Z');
+    });
+    expect(result.current.chats[0].updatedAt).toBe('2026-10-09T03:00:00.000Z');
+    expect(calls.length).toBe(before);
+  });
 });

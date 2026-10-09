@@ -1,7 +1,7 @@
 /**
  * AgentSidebar 交互契约：
  *   - 新对话只开落地页不落库（既有用例，见第一个 describe）；
- *   - 会话列表：置顶优先 + 时间倒序、[自动化] 标题解析、
+ *   - 会话列表：按最后更新时间倒序（置顶单独成组）、[自动化] 标题解析、
  *     日期分组、空态 / 加载态 / 错误横幅、底部分页提示；
  *   - 会话行：点击导航、删除弹窗确认（取消不删，确认才删）、
  *     删除当前会话回落地页、删除失败不导航；
@@ -9,7 +9,7 @@
  *   - 右侧面板：终端按钮快捷键提示随平台变化，包槽位渲染分段控件；
  *   - 副作用：进入会话路由同步 selectedAgentId、菜单 Cmd+N / Cmd+T 订阅与
  *     退订、滚动接近底部自动加载下一页；
- *   - 项目模式（Electron）：项目分组与折叠、拖拽组头排序、孤儿会话回落日期分组、
+ *   - 项目模式（Electron）：项目按组内最近对话时间排序、折叠、拖拽组头、孤儿会话回落日期分组、
  *     项目内超过 5 条先收起，每次再展开 5 条；
  *     新建（弹窗填名称 + 可选源文件夹）；组头 hover 为 ✎ 新建对话 / ·· 菜单
  *     （重命名 / 编辑项目多源文件夹 / 访达或文件管理器 / 弹窗确认删除）。
@@ -221,6 +221,7 @@ function makeData(overrides: Partial<UseChatsAndAgentsResult> = {}): UseChatsAnd
     createChat: vi.fn(),
     deleteChat: vi.fn(async () => true),
     patchChatTitle: vi.fn(),
+    patchChatUpdatedAt: vi.fn(),
     isLoadingMoreChats: false,
     hasMoreChats: false,
     loadMoreChats: vi.fn(async () => {}),
@@ -445,6 +446,36 @@ describe('AgentSidebar 会话列表渲染', () => {
     expect(screen.getByText('Yesterday')).toBeTruthy();
     const ids = screen.getAllByTestId('sidebar-chat-row').map((r) => r.getAttribute('data-chat-id'));
     expect(ids).toEqual(['c-today', 'c-yesterday']);
+  });
+
+  it('同一天内按最后更新时间排列，较新的在前', () => {
+    const older = makeChat({ id: 'c-old', title: '较早的会话', updatedAt: todayAt(1) });
+    const newer = makeChat({ id: 'c-new', title: '较晚的会话', updatedAt: todayAt(23) });
+    renderSidebar('/agent', vi.fn(), { data: { chats: [older, newer] } });
+
+    const ids = screen.getAllByTestId('sidebar-chat-row').map((r) => r.getAttribute('data-chat-id'));
+    expect(ids).toEqual(['c-new', 'c-old']);
+  });
+
+  it('对话一开始生成就排到最近更新的位置', () => {
+    const fresh = makeChat({ id: 'c-fresh', title: '昨天的会话', updatedAt: daysAgo(1) });
+    const stale = makeChat({ id: 'c-stale', title: '较早的会话', updatedAt: daysAgo(5) });
+    renderSidebar('/agent', vi.fn(), { data: { chats: [fresh, stale] } });
+    expect(
+      screen.getAllByTestId('sidebar-chat-row').map((r) => r.getAttribute('data-chat-id')),
+    ).toEqual(['c-fresh', 'c-stale']);
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('chat:streaming-change', {
+          detail: { chatId: 'c-stale', isStreaming: true },
+        }),
+      );
+    });
+
+    expect(
+      screen.getAllByTestId('sidebar-chat-row').map((r) => r.getAttribute('data-chat-id')),
+    ).toEqual(['c-stale', 'c-fresh']);
   });
 
   it('空列表展示空态，加载中展示 spinner，错误走 alert 横幅', () => {
@@ -949,6 +980,102 @@ describe('AgentSidebar 项目模式（Electron）', () => {
     // 孤儿会话按无项目处理，进入日期分组。
     expect(chatRow('c-orphan')).toBeTruthy();
     expect(screen.getByText('Today')).toBeTruthy();
+  });
+
+  it('项目按组内最近一次对话时间排序，没有对话的项目留在后面', async () => {
+    enterElectron([
+      makeProject({ id: 'proj-empty', name: '空项目' }),
+      makeProject({ id: 'proj-old', name: '旧项目' }),
+      makeProject({ id: 'proj-new', name: '新项目' }),
+    ]);
+    renderSidebar('/agent', vi.fn(), {
+      data: {
+        chats: [
+          makeChat({
+            id: 'c-old',
+            title: '旧对话',
+            projectId: 'proj-old',
+            updatedAt: daysAgo(3),
+          }),
+          makeChat({
+            id: 'c-new',
+            title: '新对话',
+            projectId: 'proj-new',
+            updatedAt: daysAgo(0),
+          }),
+        ],
+      },
+    });
+
+    await screen.findByText('空项目');
+    expect(projectIds()).toEqual(['proj-new', 'proj-old', 'proj-empty']);
+  });
+
+  it('同一项目内按最后更新时间排列', async () => {
+    enterElectron([makeProject({ id: 'proj-1', name: '项目甲' })]);
+    renderSidebar('/agent', vi.fn(), {
+      data: {
+        chats: [
+          makeChat({
+            id: 'c-old',
+            title: '较早',
+            projectId: 'proj-1',
+            updatedAt: daysAgo(2),
+            isPinned: true,
+          }),
+          makeChat({
+            id: 'c-new',
+            title: '较晚',
+            projectId: 'proj-1',
+            updatedAt: daysAgo(0),
+          }),
+        ],
+      },
+    });
+
+    await screen.findByText('项目甲');
+    const ids = [
+      ...projectBlock('proj-1').querySelectorAll('[data-testid="sidebar-chat-row"]'),
+    ].map((el) => el.getAttribute('data-chat-id'));
+    expect(ids).toEqual(['c-new', 'c-old']);
+  });
+
+  it('项目里的对话一开始生成，项目就排到前面', async () => {
+    enterElectron([
+      makeProject({ id: 'proj-quiet', name: '安静项目' }),
+      makeProject({ id: 'proj-live', name: '进行中项目' }),
+    ]);
+    renderSidebar('/agent', vi.fn(), {
+      data: {
+        chats: [
+          makeChat({
+            id: 'c-quiet',
+            title: '刚才的对话',
+            projectId: 'proj-quiet',
+            updatedAt: daysAgo(0),
+          }),
+          makeChat({
+            id: 'c-live',
+            title: '较早的对话',
+            projectId: 'proj-live',
+            updatedAt: daysAgo(4),
+          }),
+        ],
+      },
+    });
+
+    await screen.findByText('进行中项目');
+    expect(projectIds()).toEqual(['proj-quiet', 'proj-live']);
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('chat:streaming-change', {
+          detail: { chatId: 'c-live', isStreaming: true },
+        }),
+      );
+    });
+
+    expect(projectIds()).toEqual(['proj-live', 'proj-quiet']);
   });
 
   it('项目内超过 5 条先收起，每次再展开 5 条，收起项目后回到最初 5 条', async () => {

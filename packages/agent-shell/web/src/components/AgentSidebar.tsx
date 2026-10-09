@@ -114,6 +114,7 @@ import {
   nextProjectOrder,
   type ProjectDropPlace,
 } from "@/lib/project-order";
+import { chatActivityTime, latestActivityTime } from "@/lib/sidebar-order";
 import type { RightPanelState } from "@/layouts/AgentLayout";
 import { BrandLockup } from "@/components/BrandLockup";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -389,6 +390,10 @@ export function AgentSidebar({
   const [streamingChatIds, setStreamingChatIds] = useState<Set<string>>(
     () => new Set(),
   );
+  // 回合已经开始、列表里的 updatedAt 还没刷新时，用这个时间把会话抬到前面。
+  const [liveActivityAt, setLiveActivityAt] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
   const pendingAskUserChatIds = usePendingAskUserChatIds();
   const pendingApprovalChatIds = usePendingApprovalChatIds();
 
@@ -409,6 +414,14 @@ export function AgentSidebar({
         }
         return next;
       });
+      if (isStreaming) {
+        setLiveActivityAt((prev) => {
+          if (prev.has(chatId)) return prev;
+          const next = new Map(prev);
+          next.set(chatId, Date.now());
+          return next;
+        });
+      }
     };
     window.addEventListener("chat:streaming-change", handleStreamingChange);
     return () => {
@@ -418,6 +431,25 @@ export function AgentSidebar({
       );
     };
   }, []);
+
+  // 列表里的 updatedAt 追上本地时间后丢掉抬升，避免旧回合一直占在最前。
+  useEffect(() => {
+    setLiveActivityAt((prev) => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Map(prev);
+      for (const [id, stamp] of prev) {
+        if (streamingChatIds.has(id)) continue;
+        const chat = chats.find((item) => item.id === id);
+        const updated = chat?.updatedAt ? Date.parse(chat.updatedAt) : Number.NaN;
+        if (!chat || (Number.isFinite(updated) && updated >= stamp)) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [chats, streamingChatIds]);
 
   // 当前打开的会话由 AgentChatView 自己报开始/结束。切走后的会话回合还在
   // 后端跑，卸载时不会再报结束，这里用 live-stream 对账，结束后摘掉指示。
@@ -752,35 +784,31 @@ export function AgentSidebar({
   const normalizedChats = useMemo(() => {
     return chats
       .map((chat) => {
-        const updated = chat.updatedAt ? new Date(chat.updatedAt) : null;
-        const created = new Date(chat.createdAt);
-        const sortDate =
-          updated && !Number.isNaN(updated.getTime())
-            ? updated
-            : !Number.isNaN(created.getTime())
-              ? created
-              : new Date();
         const { displayTitle, isAutomation } = parseChatTitle(chat.title);
         return {
           id: chat.id,
           title: displayTitle || t("New conversation"),
           isAutomation,
           isPinned: chat.isPinned,
-          sortDate,
+          sortDate: new Date(
+            chatActivityTime(
+              chat.updatedAt,
+              chat.createdAt,
+              liveActivityAt.get(chat.id),
+            ),
+          ),
           agentId: chat.agentId ?? null,
           projectId: chat.projectId ?? null,
           isStreaming: chat.isStreaming,
           needsUserInput: chat.needsUserInput,
         };
       })
-      .sort((a, b) => {
-        if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
-        return b.sortDate.getTime() - a.sortDate.getTime();
-      });
-  }, [chats]);
+      .sort((a, b) => b.sortDate.getTime() - a.sortDate.getTime());
+  }, [chats, liveActivityAt]);
 
   // 顶层按项目分组：无项目对话（含项目已被删但列表还没刷新的孤儿会话）
-  // 保持原有的日期分组；每个项目一个分组，组内按 pin + 时间排序。
+  // 保持日期分组。会话按最后活动时间新到旧。项目按组内最近一次会话排序，
+  // 没有会话的项目留在后面，并保持它们原来的相对顺序。
   const knownProjectIds = useMemo(
     () =>
       showProjectsChrome
@@ -797,16 +825,23 @@ export function AgentSidebar({
     [normalizedChats, knownProjectIds],
   );
 
-  const projectGroups = useMemo(
-    () =>
-      showProjectsChrome
-        ? projects.map((project) => ({
-            project,
-            items: normalizedChats.filter((c) => c.projectId === project.id),
-          }))
-        : [],
-    [projects, normalizedChats, showProjectsChrome],
-  );
+  const projectGroups = useMemo(() => {
+    if (!showProjectsChrome) return [];
+    return projects
+      .map((project, index) => ({
+        project,
+        index,
+        items: normalizedChats.filter((c) => c.projectId === project.id),
+      }))
+      .sort((a, b) => {
+        const byActivity =
+          latestActivityTime(b.items.map((item) => item.sortDate.getTime())) -
+          latestActivityTime(a.items.map((item) => item.sortDate.getTime()));
+        if (byActivity !== 0) return byActivity;
+        return a.index - b.index;
+      })
+      .map(({ project, items }) => ({ project, items }));
+  }, [projects, normalizedChats, showProjectsChrome]);
 
   const pinnedChats = useMemo(
     () => normalizedChats.filter((c) => c.isPinned),

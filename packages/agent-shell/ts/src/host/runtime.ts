@@ -43,6 +43,7 @@ import {
   type PackDbRunResult,
   type TenantScope,
 } from '../storage/driver.js';
+import { subscribeChatActivity } from '../storage/chat-activity.js';
 import { getUserDataDir } from '../runtime.js';
 import {
   acquireInstanceLease,
@@ -121,6 +122,10 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
   const broadcastMain = options.broadcastMain ?? broadcast;
   await initializeStorage();
   watchStorageChanges(() => broadcast('store:changed', {}));
+  // 本连接写入会话不会推动 data_version。活动时间单独广播，侧边栏据此重排。
+  const unsubscribeChatActivity = subscribeChatActivity((activity) => {
+    broadcast('chat-activity', activity);
+  });
   const scope = options.scope ?? LOCAL_SCOPE;
   const defaultStore = getScopedStore(scope);
   let localBackendRouter: LocalBackendRouter | undefined;
@@ -381,6 +386,7 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
     },
 
     async shutdown(): Promise<void> {
+      unsubscribeChatActivity();
       if (warmTimer) {
         clearTimeout(warmTimer);
         warmTimer = null;

@@ -58,6 +58,12 @@ export interface UseChatsAndAgentsResult {
    * 找不到 id 时静默忽略。
    */
   patchChatTitle: (chatId: string, title: string) => void;
+  /**
+   * 就地把某个 chat 的最后更新时间改掉（不打后端、不重新拉已在列表里的会话）。
+   * 用于 `chat-activity`：消息落库后侧边栏按这个时间重排。
+   * 当前已加载的页里没有这条会话时，退回刷新第一页。
+   */
+  patchChatUpdatedAt: (chatId: string, updatedAt: string) => void;
   /** True while a `loadMoreChats` call is in flight. */
   isLoadingMoreChats: boolean;
   /** True iff the last list-chats response reported more pages available. */
@@ -149,6 +155,43 @@ export function useChatsAndAgents(): UseChatsAndAgentsResult {
     [list],
   );
 
+  // 消息落库后的活动时间。叠在已加载列表上，避免整表刷新把分页打回第一页。
+  const [activityAt, setActivityAt] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const chats = useMemo(() => {
+    if (activityAt.size === 0) return list.chats;
+    return list.chats.map((chat) => {
+      const next = activityAt.get(chat.id);
+      if (!next || chat.updatedAt >= next) return chat;
+      return { ...chat, updatedAt: next };
+    });
+  }, [activityAt, list.chats]);
+  useEffect(() => {
+    setActivityAt((prev) => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Map(prev);
+      for (const [id, stamp] of prev) {
+        const chat = list.chats.find((item) => item.id === id);
+        if (chat && chat.updatedAt >= stamp) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [list.chats]);
+  const patchChatUpdatedAt = useCallback((chatId: string, updatedAt: string) => {
+    const known = list.chats.some((chat) => chat.id === chatId);
+    setActivityAt((prev) => {
+      const current = prev.get(chatId);
+      if (current && current >= updatedAt) return prev;
+      const next = new Map(prev);
+      next.set(chatId, updatedAt);
+      return next;
+    });
+    if (!known) void list.refreshChats();
+  }, [list.chats, list.refreshChats]);
+
   const deleteChat = useCallback(
     async (chatId: string) => {
       try {
@@ -164,7 +207,7 @@ export function useChatsAndAgents(): UseChatsAndAgentsResult {
   );
 
   return {
-    chats: list.chats,
+    chats,
     agents: list.agents,
     isLoading: list.isLoading,
     error: mergedError,
@@ -175,6 +218,7 @@ export function useChatsAndAgents(): UseChatsAndAgentsResult {
     createChat,
     deleteChat,
     patchChatTitle: list.patchChatTitle,
+    patchChatUpdatedAt,
     isLoadingMoreChats: list.isLoadingMoreChats,
     hasMoreChats: list.hasMoreChats,
     loadMoreChats: list.loadMoreChats,

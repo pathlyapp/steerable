@@ -14,6 +14,7 @@ import {
   mergeLlmSettings,
   type LlmSettings,
 } from './llm-settings.js';
+import { emitChatActivity } from './chat-activity.js';
 import { MESSAGE_ORDER_DESC } from './message-order.js';
 import {
   currentStorageInstanceId,
@@ -970,6 +971,7 @@ export class SqliteScopedStore implements ScopedStore {
       this.scope.userId,
       chatId
     );
+    emitChatActivity({ chatId, updatedAt: next.updatedAt });
     return await this.getChat(chatId);
   }
 
@@ -1152,10 +1154,11 @@ export class SqliteScopedStore implements ScopedStore {
         (tenant_id, user_id, id, chat_id, role, content, message_metadata, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(this.scope.tenantId, this.scope.userId, id, chatId, role, content, messageMetadata, now);
-    this.db.prepare(
+    const updated = this.db.prepare(
       `UPDATE chat_sessions SET updated_at = ?
        WHERE tenant_id = ? AND user_id = ? AND id = ?`,
     ).run(now, this.scope.tenantId, this.scope.userId, chatId);
+    if (updated.changes > 0) emitChatActivity({ chatId, updatedAt: now });
     const row = this.db.prepare(
       `SELECT * FROM chat_messages WHERE tenant_id = ? AND user_id = ? AND id = ?`,
     ).get(this.scope.tenantId, this.scope.userId, id) as Record<string, unknown>;
@@ -1206,6 +1209,7 @@ export class SqliteScopedStore implements ScopedStore {
     messages: Array<{ role: ChatMessageRecord['role']; content: string }>,
   ): Promise<void> {
     const base = Date.now();
+    let activity: { chatId: string; updatedAt: string } | null = null;
     const insert = this.db.prepare(`
       INSERT INTO chat_messages
         (tenant_id, user_id, id, chat_id, role, content, message_metadata, created_at)
@@ -1226,16 +1230,19 @@ export class SqliteScopedStore implements ScopedStore {
           new Date(base + i).toISOString(),
         );
       });
-      this.db
+      const updatedAt = new Date(base + messages.length).toISOString();
+      const updated = this.db
         .prepare(`UPDATE chat_sessions SET updated_at = ?
                   WHERE tenant_id = ? AND user_id = ? AND id = ?`)
         .run(
-          new Date(base + messages.length).toISOString(),
+          updatedAt,
           this.scope.tenantId,
           this.scope.userId,
           chatId,
         );
+      if (updated.changes > 0) activity = { chatId, updatedAt };
     })();
+    if (activity) emitChatActivity(activity);
   }
 
   async listChatAgents(includeArchived = false): Promise<ChatAgentRecord[]> {

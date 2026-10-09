@@ -193,6 +193,19 @@ describe('createHostRuntime · 装配', () => {
     expect(broadcast).toHaveBeenCalledWith('terminal:spawned', { id: 's2' });
   });
 
+  it('本连接的会话活动广播 chat-activity', async () => {
+    const options = makeOptions();
+    const rt = await createHostRuntime(options);
+    const { emitChatActivity } = await import('../src/storage/chat-activity.js');
+    const broadcast = (options as never as { broadcast: ReturnType<typeof vi.fn> }).broadcast;
+    emitChatActivity({ chatId: 'c1', updatedAt: '2026-10-09T03:00:00.000Z' });
+    expect(broadcast).toHaveBeenCalledWith('chat-activity', {
+      chatId: 'c1',
+      updatedAt: '2026-10-09T03:00:00.000Z',
+    });
+    await rt.shutdown();
+  });
+
   it('持久化的 execTimeoutSeconds 恢复为毫秒；未配置时传 null', async () => {
     mocks.getLlmSettings.mockReturnValue({ execTimeoutSeconds: 45 });
     await createHostRuntime(makeOptions());
