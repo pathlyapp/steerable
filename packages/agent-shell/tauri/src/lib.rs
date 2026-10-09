@@ -97,7 +97,7 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
             let _ = app.emit("menu:open-terminal", ());
         }
         "edit-paste" => {
-            let _ = app.emit("menu:paste", ());
+            let _ = app.emit("menu:paste", clipboard::read_clipboard());
         }
         "app-quit" => app.exit(0),
         _ => {}

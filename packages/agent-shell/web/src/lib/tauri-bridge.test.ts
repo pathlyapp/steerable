@@ -77,12 +77,21 @@ describe('createTauriBridge', () => {
 
   it('forwards native menu events with the existing channel names', () => {
     const bridge = createTauriBridge();
-    const callback = vi.fn();
-    bridge.onMenuNewChat!(callback);
-    bridge.onMenuPaste!(callback);
+    const newChat = vi.fn();
+    const paste = vi.fn();
+    bridge.onMenuNewChat!(newChat);
+    bridge.onMenuPaste!(paste);
 
     expect(mocks.listen).toHaveBeenCalledWith('menu:new-chat', expect.any(Function));
     expect(mocks.listen).toHaveBeenCalledWith('menu:paste', expect.any(Function));
+    const pasteListener = mocks.listen.mock.calls.find(([event]) => event === 'menu:paste')?.[1];
+    pasteListener?.({
+      payload: {
+        text: '粘贴文本',
+        files: [],
+      },
+    });
+    expect(paste).toHaveBeenCalledWith({ text: '粘贴文本', files: [] });
   });
 
   it('reads plain text from the host clipboard', async () => {

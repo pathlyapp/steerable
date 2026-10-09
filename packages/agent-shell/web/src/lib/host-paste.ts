@@ -4,18 +4,13 @@
  * and writes it into the focused field.
  */
 
-export interface HostClipboardFile {
-  name: string;
-  path?: string;
-  dataBase64?: string;
-  mime?: string;
-}
+import {
+  getHostBridge,
+  type HostClipboard,
+  type HostClipboardFile,
+} from './host-bridge';
 
-export interface HostClipboard {
-  text: string;
-  files: HostClipboardFile[];
-}
-import { getHostBridge } from './host-bridge';
+export type { HostClipboardFile } from './host-bridge';
 
 let pending = false;
 let lastEditable: HTMLElement | null = null;
@@ -44,8 +39,8 @@ export function installHostPaste(): void {
     if (isEditable(target)) lastEditable = target;
   });
   const bridge = getHostBridge();
-  bridge?.onMenuPaste?.(() => {
-    requestHostPaste();
+  bridge?.onMenuPaste?.((clipboard) => {
+    insertHostClipboard(clipboard);
   });
 }
 
@@ -58,8 +53,7 @@ export function requestHostPaste(target?: HTMLElement | null): void {
   pending = true;
   void readHostClipboard(readClipboard, readText)
     .then((clip) => {
-      if (clip.files.length > 0) insertHostFiles(clip.files, target ?? null);
-      if (clip.text) insertHostText(clip.text, target ?? null);
+      insertHostClipboard(clip, target ?? null);
     })
     .catch((error: unknown) => {
       console.warn('[host-paste] clipboard read failed', error);
@@ -98,6 +92,11 @@ export function hostClipboardAvailable(): boolean {
   return (
     typeof bridge?.readClipboard === 'function' || typeof bridge?.readClipboardText === 'function'
   );
+}
+
+function insertHostClipboard(clipboard: HostClipboard, target: HTMLElement | null = null): void {
+  if (clipboard.files.length > 0) insertHostFiles(clipboard.files, target);
+  if (clipboard.text) insertHostText(clipboard.text, target);
 }
 
 function isEditable(target: EventTarget | null): target is HTMLElement {

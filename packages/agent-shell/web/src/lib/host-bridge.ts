@@ -129,6 +129,18 @@ export interface PythonRunnerSnapshot {
   restartRequired: boolean;
 }
 
+export interface HostClipboardFile {
+  name: string;
+  path?: string;
+  dataBase64?: string;
+  mime?: string;
+}
+
+export interface HostClipboard {
+  text: string;
+  files: HostClipboardFile[];
+}
+
 export interface HostBridge {
   runtime: 'local';
   platform: NodeJS.Platform;
@@ -197,25 +209,17 @@ export interface HostBridge {
   offMenuOpenTerminal?: () => void;
   /**
    * App menu IPC — `Cmd+V` / 编辑 → 粘贴 fires `menu:paste`.
-   * WKWebView does not expose that pasteboard to the page, so the renderer
-   * reads it through `readClipboard`.
+   * WKWebView does not expose that pasteboard to the page, so the host reads
+   * it before emitting the event.
    */
-  onMenuPaste?: (callback: () => void) => void;
+  onMenuPaste?: (callback: (clipboard: HostClipboard) => void) => void;
   offMenuPaste?: () => void;
   /**
    * OS pasteboard. `files` are copied paths or a screenshot PNG.
    * Text is empty when the pasteboard holds files, so the path is not
    * inserted into the composer as well.
    */
-  readClipboard?: () => Promise<{
-    text: string;
-    files: Array<{
-      name: string;
-      path?: string;
-      dataBase64?: string;
-      mime?: string;
-    }>;
-  }>;
+  readClipboard?: () => Promise<HostClipboard>;
   /** Plain text from the OS pasteboard. Empty when the clipboard has no text. */
   readClipboardText?: () => Promise<string>;
   /**
