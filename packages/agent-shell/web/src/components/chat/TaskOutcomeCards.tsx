@@ -83,17 +83,21 @@ function TaskOutcomeCard({
 
       <div className="min-w-0 flex-1">
         <div
-          className={
+          data-task-outcome-title=""
+          className={`line-clamp-2 break-words ${
             failed
               ? 'text-red-700 dark:text-red-300'
               : 'text-emerald-700 dark:text-emerald-300'
-          }
+          }`}
         >
           {failed ? t('Background task failed: ') : t('Background task completed: ')}
           <span className="font-medium">{task.task}</span>
         </div>
         {detail && (
-          <div className="mt-1 line-clamp-3 whitespace-pre-wrap text-agent-muted-foreground">
+          <div
+            data-task-outcome-detail=""
+            className="mt-1 line-clamp-2 break-words text-agent-muted-foreground"
+          >
             {detail}
           </div>
         )}
