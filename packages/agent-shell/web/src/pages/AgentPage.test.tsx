@@ -114,7 +114,7 @@ vi.mock('@/lib/chat-transport', () => ({
       input: { content: string; metadata?: Record<string, unknown> },
       onEvent: (event: SSEEvent) => void,
     ) => streamMock(input, onEvent),
-    steer: (content: string) => steerMock(content),
+    steer: (content: string, options?: { execPolicy?: string }) => steerMock(content, options),
     cancelActive: () => cancelActiveMock(),
   }),
   regenerateChatMessage: (chatId: string, messageId: string) =>
@@ -617,6 +617,58 @@ describe('AgentPage 发送流程', () => {
       finishStream();
     });
     await screen.findByRole('button', { name: 'Send message' });
+  });
+
+  it('排队和插队读取当前命令沙箱档', async () => {
+    let finishStream: () => void = () => {};
+    streamMock.mockImplementation((_input: unknown, onEvent: (event: SSEEvent) => void) => {
+      if (streamMock.mock.calls.length === 1) {
+        onEvent({ type: 'content', content: '部分回复' });
+        onEvent({
+          type: 'agent',
+          event: 'turn_timeline',
+          payload: { blocks: [{ type: 'text', content: '部分回复' }] },
+        });
+        return new Promise<void>((resolve) => {
+          finishStream = resolve;
+        });
+      }
+      emitTextReply(onEvent, '下一条');
+    });
+    renderPage('/agent/chat-1', makeCtx());
+    await screen.findByRole('textbox');
+    await typeComposer('先说');
+    pressEnter();
+    await screen.findByText('部分回复');
+
+    fireEvent.click(screen.getByTestId('exec-policy-picker'));
+    fireEvent.click(screen.getByTestId('exec-policy-full'));
+
+    await typeComposer('排队这条');
+    await waitFor(() => expect(screen.getByRole('textbox').textContent).toBe('排队这条'));
+    pressEnter();
+    await waitFor(() => expect(screen.getByRole('textbox').textContent).toBe(''));
+
+    await typeComposer('插一句');
+    await waitFor(() => expect(screen.getByRole('textbox').textContent).toBe('插一句'));
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', metaKey: true });
+    await waitFor(() =>
+      expect(steerMock).toHaveBeenCalledWith('插一句', { execPolicy: 'full' }),
+    );
+
+    await act(async () => {
+      finishStream();
+    });
+    await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(2));
+    expect(streamMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ metadata: expect.objectContaining({ execPolicy: 'workspace' }) }),
+    );
+    expect(streamMock.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        content: '排队这条',
+        metadata: expect.objectContaining({ execPolicy: 'full' }),
+      }),
+    );
   });
 
   it('流式传输出错时错误落进助手消息', async () => {

@@ -159,8 +159,15 @@ export interface HostBridge {
       onEvent: (payload: LocalBackendStreamEvent) => void,
     ) => Promise<string | null>;
     cancelStream: (streamId: string) => void;
-    /** 轮中转向：注入一条用户消息到运行中的 CoreLoop 回合；false = 无可转向回合。 */
-    steerChat?: (chatId: string, content: string) => Promise<boolean>;
+    /**
+     * 轮中转向：注入一条用户消息到运行中的 CoreLoop 回合；false = 无可转向回合。
+     * `execPolicy` 改这一回合后面的命令沙箱（工作区 / 完整权限）。
+     */
+    steerChat?: (
+      chatId: string,
+      content: string,
+      options?: { execPolicy?: 'workspace' | 'full' },
+    ) => Promise<boolean>;
   };
   /** 会话附件：把源文件路径 / base64 字节拷贝进会话空间（`attachments:save`）。 */
   attachments?: {

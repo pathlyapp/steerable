@@ -254,10 +254,14 @@ export function createHostChatTransport(chatId: string): HostChatTransport {
     },
     // 轮中转向：仅在 CoreLoop 路径（STEERABLE_USE_CORELOOP=1）且回合仍
     // 运行时生效；否则主进程软失败，useChatStream 保留草稿。
-    steer: async (content: string) => {
+    steer: async (content: string, options?: { execPolicy?: 'workspace' | 'full' }) => {
       const bridge = getHostBridge();
       if (!bridge?.localBackend.steerChat) return false;
-      return await bridge.localBackend.steerChat(chatId, content);
+      return await bridge.localBackend.steerChat(
+        chatId,
+        content,
+        options?.execPolicy ? { execPolicy: options.execPolicy } : undefined,
+      );
     },
     stream: async (input: ChatStreamSendInput, onEvent) => {
       const bridge = getHostBridge();

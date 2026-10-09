@@ -257,8 +257,12 @@ export function createHttpBridge(): HostBridge {
         http<T>(input.method, input.path, input.body),
       startStream,
       cancelStream,
-      steerChat: async (chatId, content) => {
-        const result = await http<{ ok?: boolean }>('POST', '/host/steer', { chatId, content });
+      steerChat: async (chatId, content, options) => {
+        const result = await http<{ ok?: boolean }>('POST', '/host/steer', {
+          chatId,
+          content,
+          ...(options?.execPolicy ? { execPolicy: options.execPolicy } : {}),
+        });
         return result.ok === true;
       },
     },

@@ -186,3 +186,22 @@ async def test_non_command_shaped_call_passes_through() -> None:
     await executor.execute(_call("bash"), LoopContext())
     assert backend.wrapped == []
     assert len(inner.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_set_active_false_runs_the_raw_command() -> None:
+    inner = _RecordingExecutor()
+    backend = _FakeBackend()
+    executor = SandboxedToolExecutor(inner, backend)
+    executor.set_active(False)
+
+    result = await executor.execute(_call("bash", command="echo hi"), LoopContext())
+
+    assert result.success
+    assert inner.calls[0].arguments["command"] == "echo hi"
+    assert backend.wrapped == []
+    assert "_sandbox" not in (result.data or {})
+
+    executor.set_active(True)
+    await executor.execute(_call("bash", command="echo ho"), LoopContext())
+    assert backend.wrapped == ["echo ho"]

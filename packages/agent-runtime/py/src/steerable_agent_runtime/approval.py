@@ -238,6 +238,15 @@ class WorkspaceAutoApprover:
         self._sandbox_enforced = sandbox_enforced
         self._auto_allow_tools = frozenset(auto_allow_tools)
 
+    def set_sandbox_enforced(self, enforced: bool) -> None:
+        """Match a mid-turn sandbox toggle.
+
+        Shell auto-approval is only valid while the OS sandbox is actually
+        confining the command. Full access turns that off, so the next shell
+        call has to ask again.
+        """
+        self._sandbox_enforced = enforced
+
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
         if request.tool_name in self._auto_allow_tools:
             return ApprovalDecision("allow_once", "trusted host control tool")

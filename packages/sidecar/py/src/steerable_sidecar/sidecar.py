@@ -173,6 +173,29 @@ _APPROVAL_SESSION_CACHE_CAP = 64
 _CANCEL_GRACE_S = 5.0
 
 
+class _TurnExecControl:
+    """Live command-sandbox switch for one running turn.
+
+    The composer can change workspace / full access after the stream has
+    started. Steer applies that choice here so the next shell call follows
+    it. The sandbox wrapper and the workspace auto-approver are optional:
+    a turn that never installed a wrapper cannot grow one mid-flight.
+    """
+
+    def __init__(self) -> None:
+        self.sandbox: Any = None
+        self.approver: Any = None
+
+    def apply(self, policy: str) -> None:
+        active = policy != "full"
+        sandbox = self.sandbox
+        if sandbox is not None:
+            sandbox.set_active(active)
+        approver = self.approver
+        if approver is not None:
+            approver.set_sandbox_enforced(active)
+
+
 @dataclass
 class SidecarConfig:
     """Sidecar runtime configuration."""
@@ -227,6 +250,8 @@ class Sidecar:
         #: Active CoreLoop instances by stream id — the steer RPC targets
         #: these to inject user messages into a running turn.
         self._coreloops: dict[str, CoreLoop] = {}
+        #: Per-stream command sandbox, toggled by agent.chat.steer execPolicy.
+        self._exec_controls: dict[str, _TurnExecControl] = {}
         #: Hard-cancel watchdogs armed by agent.chat.cancel on CoreLoop
         #: streams; tracked so the tasks are not garbage-collected early.
         self._cancel_watchdogs: set[asyncio.Task[None]] = set()
@@ -1573,6 +1598,14 @@ class Sidecar:
         loop = self._coreloops.get(stream_id)
         if loop is None:
             return {"ok": False, "reason": "stream_not_active"}
+        # Composer sandbox (workspace / full) rides with the interjection so
+        # the next shell call in this turn matches the picker. Unknown values
+        # leave the turn's original sandbox alone.
+        policy = params.get("execPolicy")
+        if policy in ("full", "workspace"):
+            control = self._exec_controls.get(stream_id)
+            if control is not None:
+                control.apply(str(policy))
         loop.steer(content)
         return {"ok": True}
 
@@ -1833,6 +1866,9 @@ class Sidecar:
         # (requireFull refuses anything short of full; requireBackend
         # refuses only enforcement "none" — the desktop uses the latter so
         # honest-partial Seatbelt/bwrap still runs).
+        # Kept on the turn so a later steer can switch workspace / full
+        # access without rebuilding the executor chain.
+        exec_control = _TurnExecControl()
         exec_sandbox = params.get("execSandbox")
         if isinstance(exec_sandbox, dict) and exec_sandbox.get("enabled"):
             backend = select_exec_backend(
@@ -1868,6 +1904,7 @@ class Sidecar:
                     ),
                     command_arg=str(exec_sandbox.get("commandArg") or "command"),
                 )
+                exec_control.sandbox = executor
             else:
                 executor = SandboxedToolExecutor(
                     executor,
@@ -1881,6 +1918,7 @@ class Sidecar:
                     require_full=bool(exec_sandbox.get("requireFull")),
                     require_backend=bool(exec_sandbox.get("requireBackend")),
                 )
+                exec_control.sandbox = executor
         # approval: opt-in approval algebra (Wave 3). ``{"mode": "auto"}`` is
         # the headless policy (safe modes auto-approve, the rest auto-deny —
         # a run never hangs on a prompt nobody answers); ``{"mode": "host"}``
@@ -1929,7 +1967,7 @@ class Sidecar:
                 )
                 from steerable_agent_runtime.approval import WorkspaceAutoApprover
 
-                return WorkspaceAutoApprover(
+                approver = WorkspaceAutoApprover(
                     host,
                     writable_roots,
                     sandbox_enforced=bool(
@@ -1937,6 +1975,8 @@ class Sidecar:
                     ),
                     auto_allow_tools=_AUTO_APPROVED_HOST_CONTROL_TOOLS,
                 )
+                exec_control.approver = approver
+                return approver
 
             if policy_path:
                 from steerable_agent_runtime import (
@@ -2330,6 +2370,7 @@ class Sidecar:
         # via trace.fetch (and so a future resume projection has the events).
         recorder = TraceRecorder(self.storage, chat_id=params.get("chatId"))
         self._coreloops[stream_id] = loop
+        self._exec_controls[stream_id] = exec_control
         final_content_only = params.get("contentMode") == "final"
         pending_content: list[str] = []
         try:
@@ -2394,6 +2435,7 @@ class Sidecar:
             )
         finally:
             self._coreloops.pop(stream_id, None)
+            self._exec_controls.pop(stream_id, None)
             for client in mcp_clients:
                 # Close every per-turn MCP client (completion, error, or
                 # cancel) so no transport outlives its stream.

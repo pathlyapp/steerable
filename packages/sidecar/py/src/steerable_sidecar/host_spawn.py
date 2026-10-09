@@ -65,11 +65,18 @@ class HostSpawnExecutor:
         self._shell_tools = frozenset(shell_tools)
         self._command_arg = command_arg
         self._timeout = timeout
+        self._active = True
+
+    def set_active(self, active: bool) -> None:
+        """Turn host confined-spawn on or off for later calls in this turn."""
+        self._active = active
 
     def concurrency_safe(self, call: ToolCall) -> bool:
         return self._inner.concurrency_safe(call)
 
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
+        if not self._active:
+            return await self._inner.execute(call, ctx)
         if call.name not in self._shell_tools:
             return await self._inner.execute(call, ctx)
         command = (call.arguments or {}).get(self._command_arg)

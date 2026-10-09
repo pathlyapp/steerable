@@ -275,7 +275,9 @@ describe('createHostChatTransport', () => {
     (window as { steerableHost?: unknown }).steerableHost = { localBackend: { steerChat } };
     const transport = createHostChatTransport('chat-1');
     await expect(transport.steer!('换个方向')).resolves.toBe(true);
-    expect(steerChat).toHaveBeenCalledWith('chat-1', '换个方向');
+    expect(steerChat).toHaveBeenCalledWith('chat-1', '换个方向', undefined);
+    await expect(transport.steer!('放开', { execPolicy: 'full' })).resolves.toBe(true);
+    expect(steerChat).toHaveBeenLastCalledWith('chat-1', '放开', { execPolicy: 'full' });
   });
 });
 
