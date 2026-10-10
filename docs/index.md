@@ -6,7 +6,7 @@ hide:
 
 <div class="sf-hero" markdown>
 
-<img class="sf-hero-logo" src="assets/logo.svg" alt="Steerable logo" />
+<img class="sf-hero-logo" src="assets/logo.png" alt="Steerable logo" />
 
 # Steerable
 

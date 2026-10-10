@@ -8,7 +8,7 @@ vi.mock('@/brand', () => ({
   get BRAND_TITLE() {
     return brandTitle.value;
   },
-  getBrandLogoUrl: () => 'logo://mark',
+  getBrandMarkUrl: () => 'logo://mark',
 }));
 
 import { BrandLockup } from './BrandLockup';

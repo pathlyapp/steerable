@@ -53,7 +53,7 @@ vi.mock('@/lib/local-api', () => ({
 vi.mock('@/brand', () => ({
   BRAND_NAME: '测试助手',
   BRAND_TITLE: '测试助手',
-  getBrandLogoUrl: () => '',
+  getBrandMarkUrl: () => '',
   DEFAULT_AGENT_ID: 'local-assistant',
 }));
 

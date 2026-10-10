@@ -3,10 +3,11 @@
  * （VITE_BRAND_* define：product.json brand 优先，其次激活包 pack.json
  * brand，3.1）；logo 资产由激活包的 web 模块在注册时经
  * setBrandLogoUrl() 注入（资产静态 import 在包内，只进本产品 bundle）。
- * 未注入时一律回落到 shell 默认（Steerable Shell / 舵轮标）。
+ * 未注入时一律回落到 shell 默认（Steerable Shell：方形标 + 横版字标）。
  * 主进程侧对应物见 src/brand.ts。
  */
-import shellLogoUrl from '@/assets/logo-steerable.svg';
+import shellMarkUrl from '@/assets/logo-steerable-mark.png';
+import shellWordmarkUrl from '@/assets/logo-steerable-wordmark.png';
 
 /** 当前构建的 flavor（开放字符串，0.3g 起不再是二值联合）。 */
 export const APP_FLAVOR: string = import.meta.env.VITE_APP_FLAVOR ?? 'generic';
@@ -30,23 +31,33 @@ export const BRAND_TITLE: string =
 export const BRAND_HOME_HINT: string =
   import.meta.env.VITE_BRAND_HOME_HINT ?? 'Type a message to start a new chat.';
 
-/** shell 默认 logo（Steerable 舵轮标）；包品牌 logo 由包 web 模块注册覆盖。 */
-let brandLogoUrl: string = shellLogoUrl;
+/** shell 默认方形标，用于侧栏和 favicon。包只注册一枚 logo 时与字标相同。 */
+let brandMarkUrl: string = shellMarkUrl;
+
+/** shell 默认横版字标，用于空对话首屏。包品牌 logo 由包 web 模块注册覆盖。 */
+let brandLogoUrl: string = shellWordmarkUrl;
 
 /**
  * 注册产品品牌 logo（包的 register*Renderer() 在 bootstrap 前调用）。
  * 重复注册抛错（组装期笔误，fail fast——与 node 侧 setProductBrand 同语义）。
+ * 包只提供一枚图，方形标和字标都用它。
  */
 export function setBrandLogoUrl(url: string): void {
-  if (brandLogoUrl !== shellLogoUrl && brandLogoUrl !== url) {
+  if (brandLogoUrl !== shellWordmarkUrl && brandLogoUrl !== url) {
     throw new Error('[brand] logo already set');
   }
   brandLogoUrl = url;
+  brandMarkUrl = url;
 }
 
-/** 当前产品品牌 logo（bootstrap 之后读取——包的注册已完成）。 */
+/** 当前产品品牌字标（bootstrap 之后读取——包的注册已完成）。 */
 export function getBrandLogoUrl(): string {
   return brandLogoUrl;
+}
+
+/** 当前产品方形标。shell 默认是彩色 S；包覆盖后与字标相同。 */
+export function getBrandMarkUrl(): string {
+  return brandMarkUrl;
 }
 
 /** 首页 / 新对话未选手动专家时绑定的内置智能体（包品牌可覆盖）。 */

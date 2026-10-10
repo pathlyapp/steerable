@@ -1,4 +1,4 @@
-import { BRAND_NAME, BRAND_TITLE, getBrandLogoUrl } from '@/brand';
+import { BRAND_NAME, BRAND_TITLE, getBrandMarkUrl } from '@/brand';
 
 export interface BrandLockupProps {
   className?: string;
@@ -24,7 +24,7 @@ export function BrandLockup({ className, onClick }: BrandLockupProps = {}) {
         .join(' ')}
     >
       <img
-        src={getBrandLogoUrl()}
+        src={getBrandMarkUrl()}
         alt={title || BRAND_NAME}
         className={`${title ? 'h-5' : 'h-6'} w-auto max-w-[10rem] flex-shrink-0 select-none object-contain object-left`}
         draggable={false}
