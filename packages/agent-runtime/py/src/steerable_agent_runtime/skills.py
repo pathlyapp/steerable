@@ -22,9 +22,9 @@ Three roles (capability seam):
 - **Consumer** — ``skill_tool_descriptor()`` (OpenAI schema to append to
   the tools list), ``SkillExecutor`` (``ToolExecutor`` decorator answering
   ``skill`` calls with the body wrapped in ``<skill_content>`` markers),
-  and ``SkillHooks`` (``pre_step`` injects the catalog into the system
-  message on the first round — a transcript rewrite, so the injection is
-  recorded as a ``hook_action`` event: model-visible ⟺ logged).
+  and ``SkillHooks`` (``pre_step`` injects the catalog as a user message on
+  the first round — a transcript rewrite, so the injection is recorded as a
+  ``hook_action`` event: model-visible ⟺ logged).
 
 Opt-in: hosts that don't want skills pass no provider and nothing changes.
 """
@@ -258,7 +258,7 @@ def render_skill_catalog(
     tool_name: str = "skill",
     max_skills: int = DEFAULT_MAX_CATALOG_SKILLS,
 ) -> str:
-    """System-prompt section listing the catalog layer, one line per skill.
+    """Catalog section listing the skills, one line per skill.
 
     Bounded at ``max_skills`` entries (highest priority first); an overflow
     line names the cut so the model knows the list is partial and can ask.
@@ -298,7 +298,12 @@ class SkillCatalogFragment(ContextFragment):
     go first — instead of cutting mid-line.
     """
 
-    role = "system"
+    # Strict chat templates (the yizhuang Qwen deployment behind the LiteLLM
+    # proxy) accept exactly one system message, at index 0. The catalog is
+    # injected on every turn, so a second system message anywhere made the
+    # upstream return HTTP 400 ("System message must be at the beginning").
+    # Ride as a user message instead; the transcript keeps a single system.
+    role = "user"
     content_kind = "skills.catalog"
     max_tokens = 4096
     review_note = (
@@ -662,14 +667,12 @@ class SkillExecutor:
 
 
 class SkillHooks(NoopHooks):
-    """LoopHooks: inject the skill catalog as a system message, once.
+    """LoopHooks: inject the skill catalog as a user message, once.
 
     The injection is a first-round ``pre_step`` append (Wave 1: hooks never
     rewrite in place), so the loop records it as a ``hook_action`` event
     (``action: skill_catalog``) and the catalog is reconstructable from the
-    trace. The appended message lands right after the first user message,
-    where compaction's head rule (leading system messages + first user)
-    preserves it across later rewrites.
+    trace. The appended message lands right after the first user message.
     """
 
     def __init__(

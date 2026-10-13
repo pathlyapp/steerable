@@ -806,3 +806,81 @@ async def test_executing_completion_forwards_round_end_notice() -> None:
             },
         )
     ]
+
+
+class _WallHooks:
+    """Minimal stand-in for AntiHallucinationHooks.wall_status."""
+
+    def __init__(self, status: str | None) -> None:
+        self._status = status
+
+    def wall_status(self) -> str | None:
+        return self._status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wall", ["budget_exhausted", "failed"])
+async def test_terminal_keeps_wall_status_when_narration_swallowed_it(wall: str) -> None:
+    """撞墙后由 narration 兜底轮收尾时，终态必须还原成墙本身。
+
+    兜底轮会产出一段自然语言总结，loop 因此报 completed；但任务并没有做完。
+    若把 completed 透给 host，`shouldAutoContinue` 就不再接力（它只认
+    budget_exhausted），于是半成品任务静默停止——这正是实测事故的成因。
+    """
+    from steerable_agent_runtime.loop import LoopEvent
+    from steerable_sidecar.sidecar import Sidecar as SidecarCls
+
+    class Capture:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit_notification(self, method: str, params: dict | None = None) -> None:
+            self.events.append((method, params or {}))
+
+    transport = Capture()
+    await SidecarCls._emit_loop_event(
+        transport,  # type: ignore[arg-type]
+        "s1",
+        LoopEvent(
+            "completion",
+            {
+                "status": "completed",
+                "reason": "assistant produced final response with no pending tools",
+            },
+        ),
+        hooks=_WallHooks(wall),
+    )
+
+    method, done = transport.events[-1]
+    assert method == "stream.done"
+    assert done["status"] == wall
+    assert done["ok"] is False
+    assert f"wall={wall}" in done["reason"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_completed_untouched_without_wrap_up() -> None:
+    """没有兜底轮时 completed 必须原样透传（不误伤正常完成）。"""
+    from steerable_agent_runtime.loop import LoopEvent
+    from steerable_sidecar.sidecar import Sidecar as SidecarCls
+
+    class Capture:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit_notification(self, method: str, params: dict | None = None) -> None:
+            self.events.append((method, params or {}))
+
+    for hooks in (None, _WallHooks(None)):
+        transport = Capture()
+        await SidecarCls._emit_loop_event(
+            transport,  # type: ignore[arg-type]
+            "s1",
+            LoopEvent("completion", {"status": "completed", "reason": "done"}),
+            hooks=hooks,
+        )
+        method, done = transport.events[-1]
+        assert method == "stream.done"
+        assert done["status"] == "completed"
+        assert done["ok"] is True
+        assert done["reason"] == "done"

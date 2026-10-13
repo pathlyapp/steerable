@@ -631,11 +631,29 @@ class Sidecar:
             )
         spans = await self.storage.list_spans(trace_id)
         events = await self.storage.list_events(trace_id)
-        return {
+        # Bound the payload. A long agentic turn logs events at roughly
+        # 200-800/round; the 259-round incident produced 161k events ≈ 39 MB of
+        # JSON, which the host's single-RPC fetch (5 s) could never pull — the
+        # trace was silently dropped, and the biggest runs are exactly the ones
+        # worth inspecting. Head + tail keeps the setup and (more importantly)
+        # *how the run ended*; the dropped middle is the thrash. The markers
+        # below tell the host — and the trace viewer — that the slice is
+        # partial, so a truncated trace is never mistaken for a whole one.
+        total_events = len(events)
+        max_events = _trace_fetch_max_events(params)
+        truncated = max_events is not None and total_events > max_events
+        if truncated and max_events is not None:
+            head = max(0, max_events // 4)
+            events = [*events[:head], *events[-(max_events - head) :]]
+        payload: dict[str, Any] = {
             "trace": trace.model_dump(exclude_none=True),
             "spans": [s.model_dump(exclude_none=True) for s in spans],
             "events": [e.model_dump(exclude_none=True) for e in events],
         }
+        if truncated:
+            payload["eventsTotal"] = total_events
+            payload["eventsTruncated"] = True
+        return payload
 
     async def _handle_trace_export(
         self, params: dict[str, Any] | None
@@ -2391,6 +2409,7 @@ class Sidecar:
                     event,
                     recorder.trace_id,
                     model=params.get("model"),
+                    hooks=hooks,
                 )
         except asyncio.CancelledError:
             await transport.emit_notification(
@@ -2467,6 +2486,7 @@ class Sidecar:
         event: Any,
         trace_id: str | None = None,
         model: str | None = None,
+        hooks: Any | None = None,
     ) -> None:
         kind = event.kind
         data = event.data
@@ -2560,14 +2580,30 @@ class Sidecar:
             # W6-9: forward the run's accumulated billable usage, plus a cost
             # estimate when the model is priced (None → key omitted, never a
             # fabricated $0.00 for unpriced/local models).
+            #
+            # Wrap-up laundering: when a narration round was granted after the
+            # turn already hit a wall, this round's natural-language summary
+            # makes the loop report `completed` — but the task did not finish.
+            # Reporting the wall keeps the host honest: it surfaces failed
+            # turns to the user and lets auto-continue resume a
+            # `budget_exhausted` pass instead of silently stopping.
+            status = data["status"]
+            reason = data["reason"]
+            wall_status = _hook_wall_status(hooks)
+            if status == "completed" and wall_status is not None:
+                status = wall_status
+                reason = (
+                    f"{reason or 'wrapped up'} [wall={wall_status}; "
+                    "narration round answered, task not finished]"
+                )
             done: dict[str, Any] = {
                 "streamId": stream_id,
-                "ok": data["status"] == "completed",
-                "status": data["status"],
-                "reason": data["reason"],
+                "ok": status == "completed",
+                "status": status,
+                "reason": reason,
                 **({"traceId": trace_id} if trace_id else {}),
             }
-            if data["status"] == "cancelled":
+            if status == "cancelled":
                 # Same terminal signal the hard-cancel path emits, so hosts
                 # handle cooperative and forced cancellation uniformly.
                 done["cancelled"] = True
@@ -2934,6 +2970,48 @@ def _last_message_content(
             content = message.content_text
             return content[-tail:] if tail else content
     return ""
+
+
+def _hook_wall_status(hooks: Any | None) -> str | None:
+    """Pre-wrap-up terminal status a ``before_completion`` hook swallowed.
+
+    Optional capability, probed with ``getattr`` so any hooks assembly —
+    a bare ``NoopHooks``, a product chain, an embedder factory — answers
+    None without implementing it. See ``LoopHooks.wall_status``.
+    """
+
+    probe = getattr(hooks, "wall_status", None)
+    if not callable(probe):
+        return None
+    try:
+        status = probe()
+    except Exception:  # noqa: BLE001 — reporting must never break the stream
+        logger.exception("hook_wall_status_failed")
+        return None
+    return status if isinstance(status, str) and status else None
+
+
+#: ``trace.fetch`` event cap. ~50k events ≈ 12 MB of JSON — comfortably inside
+#: the host's fetch deadline and MySQL's default ``max_allowed_packet`` (64 MB),
+#: while still covering all but the longest runs whole. Override per call with
+#: ``maxEvents`` or globally with ``STEERABLE_TRACE_FETCH_MAX_EVENTS`` (``0``
+#: disables the cap and restores the old unbounded fetch).
+_DEFAULT_TRACE_FETCH_MAX_EVENTS = 50_000
+
+
+def _trace_fetch_max_events(params: dict[str, Any]) -> int | None:
+    """Resolve the ``trace.fetch`` event cap; None means unbounded."""
+
+    raw: Any = params.get("maxEvents")
+    if raw is None:
+        raw = os.environ.get("STEERABLE_TRACE_FETCH_MAX_EVENTS")
+    if raw is None:
+        return _DEFAULT_TRACE_FETCH_MAX_EVENTS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_TRACE_FETCH_MAX_EVENTS
+    return None if value <= 0 else value
 
 
 def _summarizer_for(provider: Any) -> Any | None:

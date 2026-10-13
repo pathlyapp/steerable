@@ -134,6 +134,7 @@ vi.mock('../src/host/visible-terminal-exec.js', () => ({
 vi.mock('../src/json-store.js', () => ({ createJsonStore: () => ({}) }));
 vi.mock('../src/local-backend/skill-loader.js', () => ({
   bindWorkspaceSkillRoots: mocks.bindWorkspaceSkillRoots,
+  listSkillRoots: () => ['/tmp/skills-builtin'],
 }));
 vi.mock('../src/attachments.js', () => ({
   getChatAttachmentsDir: (chatId: string) => `/tmp/attachments/${chatId}`,
@@ -254,13 +255,36 @@ describe('start · 生命周期', () => {
     const bootDeps = mocks.startHostSidecar.mock.calls[0][0];
     expect(bootDeps.approvalHandler).toBe('approval-handler');
     expect(bootDeps.askUserHandler).toBe('ask-user-handler');
+    // 附件目录 + 技能根（只读参考面）。spill 未设 env → 不出现。
     expect(await bootDeps.resolveAdditionalReadRoots('chat-1')).toEqual([
       '/tmp/attachments/chat-1',
+      '/tmp/skills-builtin',
     ]);
     expect(await bootDeps.resolveAdditionalWriteRoots('chat-1')).toEqual([]);
   });
 
-  it('包声明的可写根跟着每次工具调用走', async () => {
+  it('技能根与 spill 根都进文件工具读根，且不进写根', async () => {
+    process.env.STEERABLE_SPILL_DIR = '/tmp/spill-dir';
+    try {
+      const rt = await createHostRuntime(makeOptions());
+      await rt.start();
+      const bootDeps = mocks.startHostSidecar.mock.calls.at(-1)?.[0] as {
+        resolveAdditionalReadRoots: (chatId: string) => Promise<string[]>;
+        resolveAdditionalWriteRoots: (chatId: string) => Promise<string[]>;
+      };
+      const read = await bootDeps.resolveAdditionalReadRoots('chat-1');
+      // 技能文档（含 spec_lock_reference.md）与 sidecar 溢出的工具输出
+      // 都必须能被 local_read_file 读回，否则只能 shell cat 绕行。
+      expect(read).toContain('/tmp/skills-builtin');
+      expect(read).toContain('/tmp/spill-dir');
+      // 只读：两者都不授予写入。
+      expect(await bootDeps.resolveAdditionalWriteRoots('chat-1')).toEqual([]);
+    } finally {
+      delete process.env.STEERABLE_SPILL_DIR;
+    }
+  });
+
+  it('包声明的可写根跟着每次工具调用走，且同时成为可读根', async () => {
     const { registerPackTurnHooks, resetPackTurnHooks } = await import('../src/local-backend/pack-turn-hooks.js');
     registerPackTurnHooks('test-pack-roots', {
       execWritableRoots: () => ['/tmp/pack-root'],
@@ -269,9 +293,13 @@ describe('start · 生命周期', () => {
       const rt = await createHostRuntime(makeOptions());
       await rt.start();
       const bootDeps = mocks.startHostSidecar.mock.calls.at(-1)?.[0] as {
+        resolveAdditionalReadRoots: (chatId: string) => Promise<string[]>;
         resolveAdditionalWriteRoots: (chatId: string) => Promise<string[]>;
       };
       expect(await bootDeps.resolveAdditionalWriteRoots('chat-1')).toEqual(['/tmp/pack-root']);
+      // 回归：包在项目根之外落盘的产物必须能被文件工具读回，否则模型只能退回
+      // shell cat 绕行（ppt-master 的 ppt-projects 工作区就是这个症状）。
+      expect(await bootDeps.resolveAdditionalReadRoots('chat-1')).toContain('/tmp/pack-root');
     } finally {
       resetPackTurnHooks();
     }

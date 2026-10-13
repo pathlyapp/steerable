@@ -407,18 +407,17 @@ async def test_catalog_injected_first_round_only(skills_root: Path) -> None:
         )
     )
 
-    # Wave 1: the catalog is an appended standalone system message (hooks
+    # Wave 1: the catalog is an appended standalone user message (hooks
     # never rewrite in place) — the base prompt stays byte-identical and the
     # catalog lands right after the first user message.
     first_request = provider.calls[0]
     assert first_request[0].role == "system"
     assert first_request[0].content_text == "BASE PROMPT"
     catalog_msgs = [
-        m
-        for m in first_request
-        if m.role == "system" and "# Available skills" in m.content_text
+        m for m in first_request if "# Available skills" in m.content_text
     ]
     assert len(catalog_msgs) == 1
+    assert catalog_msgs[0].role == "user"
     assert "- local-exec:" in catalog_msgs[0].content_text
     # Injection is a declared append → hook_action with the skill label.
     actions = [e for e in events if e.kind == "hook_action"]
@@ -428,9 +427,7 @@ async def test_catalog_injected_first_round_only(skills_root: Path) -> None:
     ), [e.data for e in actions]
     # Second round: not re-appended (single catalog copy, identical prompt).
     second_catalog = [
-        m
-        for m in provider.calls[1]
-        if m.role == "system" and "# Available skills" in m.content_text
+        m for m in provider.calls[1] if "# Available skills" in m.content_text
     ]
     assert len(second_catalog) == 1
     assert second_catalog[0].content_text == catalog_msgs[0].content_text
@@ -452,7 +449,7 @@ async def test_catalog_injected_without_system_message(skills_root: Path) -> Non
     first_request = provider.calls[0]
     assert first_request[0].role == "user"
     catalog = first_request[1]
-    assert catalog.role == "system"
+    assert catalog.role == "user"
     assert "# Available skills" in catalog.content_text
 
 

@@ -547,6 +547,64 @@ async def test_narration_round_on_empty_terminal() -> None:
 
 
 @pytest.mark.asyncio
+async def test_narration_records_the_wall_it_swallowed() -> None:
+    """兜底轮必须记下被它盖掉的墙，供 host 还原终态。
+
+    兜底轮产出自然语言后 loop 报 completed；如果 host 拿不到原始墙状态，
+    auto-continue 就不会接力（它只认 budget_exhausted），半成品任务静默停止。
+    """
+    provider = make_provider(
+        [
+            {"content": "", "tool_calls": [tc("get_data", call_id="c1")]},
+            {"content": "", "tool_calls": [tc("get_data", {"source": "a"}, "c2")]},
+            {"content": "", "tool_calls": [tc("get_data", {"source": "b"}, "c3")]},
+            {"content": "工具连续失败，未能获取数据。"},
+        ]
+    )
+
+    router = ToolRouter()
+
+    @tool(router=router, name="get_data", description="fetch", mode="read")
+    async def get_data(source: str = "default") -> dict[str, Any]:
+        raise RuntimeError("db down")
+
+    from steerable_agent_runtime import LoopConfig
+
+    hooks = AntiHallucinationHooks(provider, AntiHallucinationConfig())
+    # 兜底轮发生前没有墙可记。
+    assert hooks.wall_status() is None
+
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(max_tool_errors=3),
+        hooks=hooks,
+    )
+    events = await collect(loop.run([LLMMessage.text_of("user", "取数")], tools=TOOLS))
+
+    # loop 自己的终态仍是 completed（兜底轮的文本），但 hook 记住了墙。
+    assert final_completion(events)["status"] == "completed"
+    assert hooks.wall_status() == "failed"
+
+
+@pytest.mark.asyncio
+async def test_wall_status_absent_without_narration() -> None:
+    """正常完成不记墙——host 侧不能被误判成撞墙。"""
+    provider = make_provider([{"content": "已完成。"}])
+    hooks = AntiHallucinationHooks(provider, AntiHallucinationConfig())
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(make_router_with_tool()),
+        LoopConfig(),
+        hooks=hooks,
+    )
+    events = await collect(loop.run([LLMMessage.text_of("user", "你好")], tools=TOOLS))
+
+    assert final_completion(events)["status"] == "completed"
+    assert hooks.wall_status() is None
+
+
+@pytest.mark.asyncio
 async def test_narration_at_max_rounds_wall_stays_budget_exhausted() -> None:
     """The maxRounds wall interrupts work; the narration summary it triggers
     is an interim report, not task completion. The terminal must keep

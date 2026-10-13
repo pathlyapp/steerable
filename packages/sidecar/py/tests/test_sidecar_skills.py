@@ -138,16 +138,15 @@ async def test_skills_param_injects_catalog_and_advertises_tool(
     events = await _run_stream(sidecar, _params(skills_root))
 
     # Wave 1: the base system prompt is untouched; the catalog is a separate
-    # appended system message later in the same request.
+    # appended user message later in the same request (one system only).
     first_request = provider.seen_messages[0]
     assert first_request[0].role == "system"
     assert first_request[0].content_text == "BASE"
     catalog_msgs = [
-        m
-        for m in first_request
-        if m.role == "system" and "# Available skills" in m.content_text
+        m for m in first_request if "# Available skills" in m.content_text
     ]
     assert len(catalog_msgs) == 1
+    assert catalog_msgs[0].role == "user"
     assert "- local-exec:" in catalog_msgs[0].content_text
 
     tools = provider.stream_kwargs[0].get("tools") or []

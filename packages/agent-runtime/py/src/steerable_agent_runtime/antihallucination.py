@@ -459,6 +459,14 @@ class AntiHallucinationHooks(NoopHooks):
         self._route: DataNeedRoute | None = None
         self._retries = 0
         self._narrations = 0
+        #: The wall a narration round swallowed (first one wins). The loop
+        #: reports ``completed`` once the narration round answers, which the
+        #: host would otherwise read as "the model decided it was done".
+        self._wall_status: str | None = None
+
+    def wall_status(self) -> str | None:
+        """Pre-wrap-up terminal status, for the host's completion mapping."""
+        return self._wall_status
 
     # -- pre_step: data-need routing → tool_choice on the first round ------
 
@@ -535,6 +543,11 @@ class AntiHallucinationHooks(NoopHooks):
             and draft.tool_calls_used > 0
         ):
             self._narrations += 1
+            # Remember the wall the narration is papering over — the loop
+            # reports ``completed`` after this round, and the host needs the
+            # original status to know the task did not actually finish.
+            if self._wall_status is None:
+                self._wall_status = draft.status
             return CompletionAction(
                 kind="narrate",
                 message=(

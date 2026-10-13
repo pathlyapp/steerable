@@ -256,6 +256,19 @@ function coreLoopBudgetTokensFromEnv(): number | undefined {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : undefined;
 }
 
+/**
+ * ``trace.fetch`` 的单次 RPC 超时。原来硬编码 5s：长跑的 trace 动辄几十 MB
+ * （实测 259 轮 → 161111 条事件 ≈ 39 MB），5s 必然超时，整条 trace 被静默丢弃
+ * ——偏偏最需要排查的长跑一条现场都不留。侧车侧已改成分片返回
+ * （``_handle_trace_fetch``，默认 ≤5 万条事件），这里再给足传输余量。
+ */
+function traceFetchTimeoutMs(): number {
+  const raw = process.env.DEEPPATH_TRACE_FETCH_TIMEOUT_MS;
+  if (!raw) return 60_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 60_000;
+}
+
 const LOCAL_USER_BASE = {
   id: 'local',
   email: 'local@localhost',
@@ -4188,8 +4201,20 @@ export class LocalBackendRouter {
           trace?: Record<string, unknown>;
           spans?: unknown[];
           events?: unknown[];
-        }>('trace.fetch', { traceId }, { timeoutMs: 5_000 });
+          eventsTotal?: number;
+          eventsTruncated?: boolean;
+        }>('trace.fetch', { traceId }, { timeoutMs: traceFetchTimeoutMs() });
         const sidecarTrace = fetched.trace ?? {};
+        if (fetched.eventsTruncated) {
+          // 侧车把超长 trace 截成 头+尾（见 _handle_trace_fetch）。留痕，
+          // 否则被截断的 trace 会被当成完整现场读。
+          console.warn('[local-backend] coreloop trace truncated for storage', {
+            chatId,
+            traceId,
+            eventsReturned: (fetched.events ?? []).length,
+            eventsTotal: fetched.eventsTotal,
+          });
+        }
         const durationMs = typeof sidecarTrace.durationMs === 'number'
           ? sidecarTrace.durationMs
           : null;
@@ -4205,10 +4230,26 @@ export class LocalBackendRouter {
             trace: sidecarTrace,
             spans: fetched.spans ?? [],
             events: fetched.events ?? [],
+            ...(fetched.eventsTruncated
+              ? {
+                  eventsTruncated: true,
+                  eventsTotal: fetched.eventsTotal,
+                }
+              : {}),
           },
         });
       } catch (err) {
-        console.warn('[local-backend] coreloop trace persist failed', err);
+        // 丢了 trace 就没有现场：这条日志必须带够可定位信息，且措辞直白
+        // 到能直接 grep（历史事故里 259 轮/token 量最大的三个 run 全因此
+        // 没有任何 trace 可查）。
+        console.warn('[local-backend] coreloop trace persist failed', {
+          chatId,
+          traceId,
+          passStatus,
+          pass: index + 1,
+          of: passTraceIds.length,
+          err: err instanceof Error ? err.message : String(err),
+        });
       }
 
       // W6-6 遥测合规化:若用户配置了 OTLP collector,把这条 trace 按所选
