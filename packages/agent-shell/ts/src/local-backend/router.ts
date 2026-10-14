@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
 import { getAppRootDir, getUserDataDir, shellOpenPath } from '../runtime.js';
@@ -113,7 +114,7 @@ import { handlePortableRequest } from './portable-service.js';
 import { isPortableProduct } from '../product-config.js';
 import { dropCurrentUserMessage } from './history-helper.js';
 import { parseImageAttachments, processImageAttachments } from '../image-attachment.js';
-import { chatAttachmentsDirPath } from '../attachments.js';
+import { chatAttachmentsDirPath, isValidChatAttachmentsKey } from '../attachments.js';
 import { loadProjectRuleFiles } from '../project-rules.js';
 import {
   allocateProjectHome,
@@ -176,6 +177,72 @@ function readProjectOrderIds(value: unknown): string[] | null {
     ids.push(item.trim());
   }
   return ids;
+}
+
+/** 回合产物下载上限：base64 走 localBackend JSON 通道，过大文件先拒绝。 */
+const MAX_LOCAL_DOWNLOAD_BYTES = 128 * 1024 * 1024;
+
+/** `target` 是否位于 `root` 内部（含 root 本身）。 */
+function isPathInsideRoot(root: string, target: string): boolean {
+  const rel = path.relative(path.resolve(root), path.resolve(target));
+  return rel === '' || (
+    rel !== '..' &&
+    !rel.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(rel)
+  );
+}
+
+/** 从一条消息的 `messageMetadata` 里取出本回合产物的绝对路径。 */
+function turnFilePathsFromMetadata(raw: unknown): string[] {
+  if (typeof raw !== 'string' || !raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+  const files = (parsed as { turnFiles?: unknown }).turnFiles;
+  if (!Array.isArray(files)) return [];
+  const paths: string[] = [];
+  for (const item of files) {
+    if (!item || typeof item !== 'object') continue;
+    const filePath = (item as { path?: unknown }).path;
+    if (typeof filePath === 'string' && filePath) paths.push(filePath);
+  }
+  return paths;
+}
+
+const DOWNLOAD_MIME_BY_EXT: Record<string, string> = {
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint', // shell-neutral:allow — Office 扩展名 / MIME，不是产品品牌
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation', // shell-neutral:allow — Office 扩展名 / MIME，不是产品品牌
+  '.pdf': 'application/pdf',
+  '.csv': 'text/csv',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.json': 'application/json',
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.mp3': 'audio/mpeg',
+  '.mp4': 'video/mp4',
+  '.zip': 'application/zip',
+  '.7z': 'application/x-7z-compressed',
+  '.tar': 'application/x-tar',
+  '.gz': 'application/gzip',
+};
+
+function downloadMimeForPath(filePath: string): string {
+  return DOWNLOAD_MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
 }
 
 /**
@@ -2277,6 +2344,16 @@ export class LocalBackendRouter {
       return { status: 200, data: { success: true } };
     }
 
+    // 回合产物「下载」：浏览器模式（团队版 / BS）没有系统应用可打开，
+    // 由宿主读回文件字节，前端落成 Blob 下载。路径必须来自本会话的回合
+    // 产物元数据或会话工作区，避免变成任意文件读取。
+    if (method === 'GET' && pathname === '/api/v2/local/download') {
+      return this.handleLocalFileDownload(
+        url.searchParams.get('chatId') ?? '',
+        url.searchParams.get('path') ?? '',
+      );
+    }
+
     // 正文里提到的路径能否点击打开：渲染层把行内代码里「像路径」的字面量
     // 批量送来，这里落地成绝对路径并 stat 验证，只有真实存在的才回。相对
     // 路径按对话绑定的项目根解析，无项目时按对话工作区。
@@ -2929,6 +3006,101 @@ export class LocalBackendRouter {
     const project = await this.resolveChatProject(chatId);
     if (project) return project.folderPath;
     return ensureChatWorkspace(chatId);
+  }
+
+  /**
+   * 回合产物下载。只允许本会话 `turnFiles` 元数据里列出的文件，或落在
+   * 本会话工作区内的文件；验证通过后按 base64 返回，前端落 Blob 下载。
+   */
+  private async handleLocalFileDownload(
+    chatIdRaw: string,
+    targetRaw: string,
+  ): Promise<LocalBackendResponse> {
+    if (!getResolvedHostTools()['local-fs'].capability) {
+      return { status: 403, data: { detail: '本地文件能力已关闭' } };
+    }
+    const chatId = chatIdRaw.trim();
+    if (!chatId || !isValidChatAttachmentsKey(chatId)) {
+      return { status: 400, data: { detail: 'chatId 无效' } };
+    }
+    const chat = await this.store.getChat(chatId);
+    if (!chat) {
+      return { status: 404, data: { detail: 'chat not found' } };
+    }
+    const target = targetRaw.trim();
+    if (!target || target.includes('\0') || !path.isAbsolute(target)) {
+      return { status: 400, data: { detail: '需要文件的绝对路径' } };
+    }
+
+    let realPath: string;
+    let fileStat: Awaited<ReturnType<typeof stat>>;
+    try {
+      realPath = await realpath(target);
+      fileStat = await stat(realPath);
+    } catch {
+      return { status: 404, data: { detail: '找不到这个文件' } };
+    }
+    if (!fileStat.isFile()) {
+      return { status: 404, data: { detail: '找不到这个文件' } };
+    }
+    if (fileStat.size > MAX_LOCAL_DOWNLOAD_BYTES) {
+      return {
+        status: 413,
+        data: {
+          detail: `文件太大，无法直接下载（上限 ${Math.round(MAX_LOCAL_DOWNLOAD_BYTES / 1024 / 1024)}MB）`,
+        },
+      };
+    }
+
+    const wanted = new Set([path.resolve(target), path.resolve(realPath)]);
+    let allowed = false;
+    const teamUserRoot = process.env.DEEPPATH_TEAM_USER_DATA_ROOT?.trim();
+    if (teamUserRoot) {
+      // 团队版是同一台机器上的多租户宿主：下载根必须落在当前用户数据目录
+      // 或绑定项目内。只信任 turnFiles 元数据不够——符号链接可以指向别的
+      // 用户目录，realpath 必须在这些根里才放行。
+      const roots = [getUserDataDir()];
+      try {
+        const project = await this.resolveChatProject(chatId);
+        if (project) roots.push(project.folderPath, ...project.sourceFolders);
+      } catch {
+        // 项目注册表未就绪时只认用户数据目录。
+      }
+      allowed = roots.some((root) => isPathInsideRoot(root, realPath));
+    } else {
+      const messages = await this.store.listMessages(chatId, 1000);
+      for (const message of messages) {
+        for (const listed of turnFilePathsFromMetadata(message.messageMetadata)) {
+          if (wanted.has(path.resolve(listed))) {
+            allowed = true;
+            break;
+          }
+        }
+        if (allowed) break;
+      }
+      if (!allowed) {
+        try {
+          const workspaceRoot = await this.resolveChatWorkspaceRoot(chatId);
+          allowed = isPathInsideRoot(workspaceRoot, realPath);
+        } catch {
+          allowed = false;
+        }
+      }
+    }
+    if (!allowed) {
+      return { status: 404, data: { detail: '这个文件不属于当前对话' } };
+    }
+
+    const buffer = await readFile(realPath);
+    return {
+      status: 200,
+      data: {
+        fileName: path.basename(realPath),
+        mime: downloadMimeForPath(realPath),
+        size: buffer.length,
+        base64: buffer.toString('base64'),
+      },
+    };
   }
 
   /**

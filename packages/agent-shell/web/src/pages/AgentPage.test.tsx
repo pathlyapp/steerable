@@ -83,6 +83,13 @@ vi.mock('@/lib/host-bridge', () => ({
 
 vi.mock('@/lib/local-api', () => ({
   getChatLiveStream: (chatId: string) => getChatLiveStream(chatId),
+  openLocalPath: vi.fn(async () => ({ success: true })),
+  getLocalFileDownload: vi.fn(async () => ({
+    fileName: '报告.docx',
+    mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    size: 1024,
+    base64: 'QkFTRTY0',
+  })),
   listProjects: () => listProjects(),
   listChatTasks: (chatId: string) => listChatTasks(chatId),
   getLlmModels: (draft?: unknown) => getLlmModels(draft),

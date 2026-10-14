@@ -12,6 +12,12 @@ import { AssistantMessage } from './AssistantMessage';
 
 vi.mock('@/lib/local-api', () => ({
   openLocalPath: vi.fn(async () => ({ success: true })),
+  getLocalFileDownload: vi.fn(async () => ({
+    fileName: '报告.docx',
+    mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    size: 1024,
+    base64: 'QkFTRTY0',
+  })),
 }));
 
 afterEach(cleanup);
