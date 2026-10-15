@@ -121,6 +121,14 @@ describe('host 端点形状', () => {
       '/host/steer',
       expect.objectContaining({ method: 'POST', body: '{"chatId":"c1","content":"停一下"}' }),
     );
+    await bridge.localBackend.steerChat!('c1', '放开', { execPolicy: 'full' });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/host/steer',
+      expect.objectContaining({
+        method: 'POST',
+        body: '{"chatId":"c1","content":"放开","execPolicy":"full"}',
+      }),
+    );
   });
 
   it('approval.decide 与 askUser 请求打到各自端点', async () => {

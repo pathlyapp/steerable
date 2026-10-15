@@ -3,6 +3,20 @@
    the `default` (light) and `slate` (dark) Material palettes via the
    theme's own CSS variables. */
 
+/* Header bar is indigo in both palettes. Flatten the mark to white. */
+.md-header__button.md-logo {
+  margin-right: 0;
+  padding-right: 0.15rem;
+}
+
+.md-header__button.md-logo img {
+  filter: brightness(0) invert(1);
+}
+
+.md-header__inner > .md-header__title {
+  margin-left: 0.2rem;
+}
+
 /* ---- hero -------------------------------------------------------------- */
 
 .sf-hero {

@@ -10,22 +10,23 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import html2canvas from 'html2canvas';
 import type {
   AppReleaseSnapshot,
+  HostClipboard,
   HostBridge,
   PythonRunnerSnapshot,
 } from './host-bridge';
 import { createHttpBridge } from './http-bridge';
 
-type VoidCallback = () => void;
+type EventCallback<T> = (payload: T) => void;
 
-function createMenuSubscription(event: string): {
-  on(callback: VoidCallback): void;
+function createMenuSubscription<T = void>(event: string): {
+  on(callback: EventCallback<T>): void;
   off(): void;
 } {
-  const subscriptions = new Map<VoidCallback, Promise<UnlistenFn>>();
+  const subscriptions = new Map<EventCallback<T>, Promise<UnlistenFn>>();
   return {
     on(callback) {
       if (subscriptions.has(callback)) return;
-      const subscription = listen(event, () => callback());
+      const subscription = listen<T>(event, ({ payload }) => callback(payload));
       subscriptions.set(callback, subscription);
     },
     off() {
@@ -42,7 +43,7 @@ export function createTauriBridge(): HostBridge {
   const bridge = createHttpBridge();
   const newChatMenu = createMenuSubscription('menu:new-chat');
   const terminalMenu = createMenuSubscription('menu:open-terminal');
-  const pasteMenu = createMenuSubscription('menu:paste');
+  const pasteMenu = createMenuSubscription<HostClipboard>('menu:paste');
 
   return {
     ...bridge,
@@ -92,11 +93,7 @@ export function createTauriBridge(): HostBridge {
     offMenuOpenTerminal: terminalMenu.off,
     onMenuPaste: pasteMenu.on,
     offMenuPaste: pasteMenu.off,
-    readClipboard: () =>
-      invoke<{
-        text: string;
-        files: Array<{ name: string; path?: string; dataBase64?: string; mime?: string }>;
-      }>('host_read_clipboard'),
+    readClipboard: () => invoke<HostClipboard>('host_read_clipboard'),
     readClipboardText: () => invoke<string>('host_read_clipboard_text'),
     app: {
       snapshot: () => invoke<AppReleaseSnapshot>('app_release_snapshot'),

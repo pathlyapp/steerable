@@ -181,4 +181,41 @@ describe('LocalChatPanel 输入焦点', () => {
 
     expect(document.activeElement).toBe(screen.getByRole('textbox'));
   });
+
+  it('空会话发出第一条消息后，新的输入框重新获得焦点', () => {
+    const props = {
+      chatId: 'chat-1',
+      messages: [] as Array<{
+        id: string;
+        role: 'user';
+        content: string;
+        createdAt: string;
+      }>,
+      agents: [],
+      currentAgent: null,
+      emptyHero: true,
+      onSubmit: vi.fn(),
+    };
+    const view = render(<LocalChatPanel {...props} />);
+    const first = screen.getByRole('textbox');
+    expect(document.activeElement).toBe(first);
+
+    view.rerender(
+      <LocalChatPanel
+        {...props}
+        messages={[
+          {
+            id: 'm1',
+            role: 'user',
+            content: '你好',
+            createdAt: '2026-10-08T00:00:00.000Z',
+          },
+        ]}
+      />,
+    );
+
+    const next = screen.getByRole('textbox');
+    expect(next).not.toBe(first);
+    expect(document.activeElement).toBe(next);
+  });
 });

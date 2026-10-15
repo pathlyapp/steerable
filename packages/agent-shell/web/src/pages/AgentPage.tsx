@@ -101,6 +101,31 @@ function readStoredMode(): ChatMode {
   return clampWebChatMode(localStorage.getItem(CHAT_MODE_STORAGE_KEY));
 }
 
+interface ComposerTurnSettings {
+  execPolicy: ExecPolicy;
+  mode: ChatMode;
+  modelOverride: string | null;
+  effortOverride: string | null;
+}
+
+/**
+ * 排队和插队失败后的新回合不经过输入框的正常提交，这里在真正开流时
+ * 补上当前输入框的命令沙箱、模式、模型和编排开关。
+ */
+function applyComposerTurnSettings<T extends { metadata?: Record<string, unknown> }>(
+  input: T,
+  settings: ComposerTurnSettings,
+): T {
+  const metadata: Record<string, unknown> = { ...(input.metadata ?? {}) };
+  metadata.execPolicy = settings.execPolicy;
+  if (settings.mode === "plan") metadata.mode = "plan";
+  else delete metadata.mode;
+  if (settings.modelOverride) metadata.model = settings.modelOverride;
+  if (settings.effortOverride) metadata.reasoningEffort = settings.effortOverride;
+  metadata.orchestration = isOrchestrationSettingEnabled();
+  return { ...input, metadata };
+}
+
 function extractPersistedActions(
   messages: ChatMessageWithMetadata[] | undefined,
 ): Record<string, ExecutedAction[]> {
@@ -388,10 +413,29 @@ function AgentChatView({
   const chatProject = chat?.projectId
     ? (projects.find((p) => p.id === chat.projectId) ?? null)
     : null;
-  const transport = useMemo(
-    () => createHostChatTransport(chatId),
-    [chatId],
-  );
+  // 插队 / 排队在开流或注入时读这里，而不是排队那一刻的闭包。
+  const composerSettingsRef = useRef<ComposerTurnSettings>({
+    execPolicy: readStoredExecPolicy(),
+    mode: readStoredMode(),
+    modelOverride: null,
+    effortOverride: null,
+  });
+  const transport = useMemo(() => {
+    const inner = createHostChatTransport(chatId);
+    return {
+      cancelActive: () => inner.cancelActive(),
+      stream: (
+        input: { content: string; metadata?: Record<string, unknown> },
+        onEvent: (event: SSEEvent) => void,
+      ) => inner.stream(applyComposerTurnSettings(input, composerSettingsRef.current), onEvent),
+      steer: (content: string) => {
+        if (!inner.steer) return Promise.resolve(false);
+        return inner.steer(content, {
+          execPolicy: composerSettingsRef.current.execPolicy,
+        });
+      },
+    };
+  }, [chatId]);
 
   // 4.6a 后台任务：header 角标与消息列尾部的终态卡共用这一份订阅，两处
   // 因此不会各拉一次任务表、也不会显示互相错位的状态。
@@ -874,6 +918,12 @@ function AgentChatView({
   // ModelPicker 自取（GET /api/v2/llm/models → sidecar models.list）。
   const [modelOverride, setModelOverride] = useState<string | null>(null);
   const [effortOverride, setEffortOverride] = useState<string | null>(null);
+  composerSettingsRef.current = {
+    execPolicy,
+    mode,
+    modelOverride,
+    effortOverride,
+  };
 
   const handleSubmit = useCallback(
     (input: { content: string; metadata?: Record<string, unknown> }) => {

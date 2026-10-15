@@ -447,11 +447,19 @@ export class SidecarSupervisor extends EventEmitter {
    * Soft-fails (`{ ok: false }`) when the turn already ended — the caller
    * should then send the message as a normal new turn instead.
    */
-  async steerChat(streamId: string, content: string): Promise<boolean> {
+  async steerChat(
+    streamId: string,
+    content: string,
+    execPolicy?: 'workspace' | 'full',
+  ): Promise<boolean> {
     try {
       const result = await this.call<{ ok: boolean; reason?: string }>(
         'agent.chat.steer',
-        { streamId, content },
+        {
+          streamId,
+          content,
+          ...(execPolicy ? { execPolicy } : {}),
+        },
         { timeoutMs: 2_000 },
       );
       return result.ok === true;

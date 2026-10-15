@@ -788,6 +788,42 @@ describe('ChatInput 粘贴图片', () => {
     expect(canceled).toBe(false);
   });
 
+  it('发出草稿后 Ctrl+V 仍把文字写进输入框', async () => {
+    const readClipboard = vi.fn().mockResolvedValue({ text: '下一条', files: [] });
+    const spy = vi.spyOn(electronBridge, 'getHostBridge').mockReturnValue({
+      readClipboard,
+    } as Partial<electronBridge.HostBridge> as electronBridge.HostBridge);
+    function Harness() {
+      const [value, setValue] = useState('你好');
+      return (
+        <ChatInput
+          value={value}
+          onChange={setValue}
+          onSubmit={() => {
+            setValue('');
+          }}
+        />
+      );
+    }
+    render(<Harness />);
+    const editor = screen.getByTestId('chat-composer');
+    editor.focus();
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    await flushComposerSync();
+    expect(editor.textContent).toBe('');
+    const selection = window.getSelection();
+    expect(selection?.rangeCount ?? 0).toBeGreaterThan(0);
+    expect(selection && editor.contains(selection.anchorNode)).toBe(true);
+    fireEvent.keyDown(editor, { key: 'v', code: 'KeyV', ctrlKey: true });
+    try {
+      await flushComposerSync();
+      expect(readClipboard).toHaveBeenCalled();
+      expect(editor.textContent).toBe('下一条');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('输入过中文后再粘贴，内容立即显示', async () => {
     function Harness() {
       const [value, setValue] = useState('');

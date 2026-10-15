@@ -224,10 +224,13 @@ export function LocalChatPanel({
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [mentionReferences, setMentionReferences] = useState<MentionReference[]>([]);
   const inputRef = useRef<ChatInputHandle>(null);
+  // 空会话首屏和对话底部各有一棵输入框。发出第一条消息会卸掉正在聚焦的那棵；
+  // 不重新聚焦的话，Ctrl/Cmd+V 没有落点。
+  const showEmptyHero = Boolean(emptyHero) && messages.length === 0 && !isStreaming;
 
   useEffect(() => {
     inputRef.current?.focusAtEnd();
-  }, [chatId]);
+  }, [chatId, showEmptyHero]);
 
   const handleSelectPrompt = useCallback((prompt: string) => {
     setInputValue(prompt);
@@ -314,9 +317,6 @@ export function LocalChatPanel({
       setMentionReferences(submittedMentions);
     }
   }, [inputValue, files, mentionReferences, onSubmit, mode, execPolicy, chatId, selectedAgentId]);
-
-  // 空会话 hero：messages 为空且未在流式时整面板切到居中首屏布局。
-  const showEmptyHero = Boolean(emptyHero) && messages.length === 0 && !isStreaming;
 
   const sessionTodos = useMemo(
     () =>

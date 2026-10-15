@@ -651,6 +651,7 @@ export function installBrowserDevHostMock() {
     onMenuOpenTerminal: () => undefined,
     offMenuOpenTerminal: () => undefined,
     onChatTitleUpdated: () => () => undefined,
+    onChatActivity: () => () => undefined,
     onSuggestedReplies: (callback) => {
       suggestedReplyListeners.add(callback);
       return () => {

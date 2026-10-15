@@ -4,22 +4,31 @@
  * and writes it into the focused field.
  */
 
-export interface HostClipboardFile {
-  name: string;
-  path?: string;
-  dataBase64?: string;
-  mime?: string;
-}
+import {
+  getHostBridge,
+  type HostClipboard,
+  type HostClipboardFile,
+} from './host-bridge';
 
-export interface HostClipboard {
-  text: string;
-  files: HostClipboardFile[];
-}
-import { getHostBridge } from './host-bridge';
+export type { HostClipboardFile } from './host-bridge';
 
 let pending = false;
 let lastEditable: HTMLElement | null = null;
+let composerPasteTarget: HTMLElement | null = null;
 let installed = false;
+
+/**
+ * Remember the live chat composer. A menu paste uses it when no other field
+ * is focused, including right after the empty-hero composer unmounts.
+ */
+export function setComposerPasteTarget(element: HTMLElement): void {
+  composerPasteTarget = element;
+}
+
+/** Drop the composer target when that element unmounts. */
+export function releaseComposerPasteTarget(element: HTMLElement): void {
+  if (composerPasteTarget === element) composerPasteTarget = null;
+}
 
 /** Remember the field that should receive a menu paste after focus moves. */
 export function installHostPaste(): void {
@@ -30,8 +39,8 @@ export function installHostPaste(): void {
     if (isEditable(target)) lastEditable = target;
   });
   const bridge = getHostBridge();
-  bridge?.onMenuPaste?.(() => {
-    requestHostPaste();
+  bridge?.onMenuPaste?.((clipboard) => {
+    insertHostClipboard(clipboard);
   });
 }
 
@@ -44,8 +53,7 @@ export function requestHostPaste(target?: HTMLElement | null): void {
   pending = true;
   void readHostClipboard(readClipboard, readText)
     .then((clip) => {
-      if (clip.files.length > 0) insertHostFiles(clip.files, target ?? null);
-      if (clip.text) insertHostText(clip.text, target ?? null);
+      insertHostClipboard(clip, target ?? null);
     })
     .catch((error: unknown) => {
       console.warn('[host-paste] clipboard read failed', error);
@@ -86,13 +94,15 @@ export function hostClipboardAvailable(): boolean {
   );
 }
 
+function insertHostClipboard(clipboard: HostClipboard, target: HTMLElement | null = null): void {
+  if (clipboard.files.length > 0) insertHostFiles(clipboard.files, target);
+  if (clipboard.text) insertHostText(clipboard.text, target);
+}
+
 function isEditable(target: EventTarget | null): target is HTMLElement {
-  return (
-    !isTerminalInput(target) &&
-    (target instanceof HTMLInputElement ||
-      target instanceof HTMLTextAreaElement ||
-      (target instanceof HTMLElement && target.isContentEditable))
-  );
+  if (isTerminalInput(target) || !(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
+  return target.isContentEditable || target.getAttribute('contenteditable') === 'true';
 }
 
 /**
@@ -105,8 +115,12 @@ function isTerminalInput(target: EventTarget | null): boolean {
 
 function focusedEditable(): HTMLElement | null {
   if (isTerminalInput(document.activeElement)) return null;
-  if (isEditable(document.activeElement)) return document.activeElement;
-  if (lastEditable?.isConnected) return lastEditable;
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active.isConnected && isEditable(active)) return active;
+  if (lastEditable?.isConnected && isEditable(lastEditable)) return lastEditable;
+  if (composerPasteTarget?.isConnected && isEditable(composerPasteTarget)) {
+    return composerPasteTarget;
+  }
   return null;
 }
 

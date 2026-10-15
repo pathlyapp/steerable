@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 import pytest
 from steerable_agent_protocol.generated import ToolCall, ToolResult
@@ -159,6 +160,59 @@ async def test_exec_sandbox_rewrites_shell_command() -> None:
         assert received[0] == "ls -la"
         marker = (await _tool_payloads(sidecar))[0]["data"]["_sandbox"]
         assert marker["enforcement"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_steer_full_policy_stops_sandboxing_later_commands(tmp_path: Path) -> None:
+    """插进当前回合的消息带上完整权限后，后面的命令不再包进沙箱。"""
+    received: list[str] = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="bash", arguments={"command": "echo one"})),
+            _tool_round(ToolCall(id="c2", name="bash", arguments={"command": "echo two"})),
+            _text_round("done"),
+        ]
+    )
+    tools = ToolRouter()
+
+    async def bash(command: str = "") -> ToolResult:
+        received.append(command)
+        if len(received) == 1:
+            started.set()
+            await release.wait()
+        return ToolResult(success=True, data={"stdout": "ok"})
+
+    tools.register(bash, name="bash", mode="other", concurrency_safe=True)
+    sidecar = Sidecar(tools=tools, llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()
+
+    response = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.stream",
+            _base_params(execSandbox={"enabled": True, "writableRoots": [str(tmp_path)]}),
+        )
+    )
+    assert "error" not in response, response
+    stream_id = response["result"]["streamId"]
+    task = sidecar._streams.get(stream_id)
+    assert task is not None
+    await asyncio.wait_for(started.wait(), timeout=2)
+    steer = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.steer",
+            {"streamId": stream_id, "content": "改成完整权限", "execPolicy": "full"},
+        )
+    )
+    assert steer["result"] == {"ok": True}
+    release.set()
+    await task
+
+    assert len(received) == 2
+    assert received[1] == "echo two"
+    if seatbelt_available() or bwrap_available() or landlock_available():
+        assert received[0] != "echo one"
 
 
 @pytest.mark.asyncio

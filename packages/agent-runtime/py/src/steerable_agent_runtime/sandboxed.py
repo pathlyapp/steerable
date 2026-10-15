@@ -100,6 +100,7 @@ class SandboxedToolExecutor:
         command_arg: str = "command",
         require_full: bool = False,
         require_backend: bool = False,
+        active: bool = True,
     ) -> None:
         self._inner = inner
         self._backend = backend
@@ -107,12 +108,24 @@ class SandboxedToolExecutor:
         self._command_arg = command_arg
         self._require_full = require_full
         self._require_backend = require_backend
+        self._active = active
+
+    def set_active(self, active: bool) -> None:
+        """Turn command rewriting on or off for later calls in this turn.
+
+        A mid-turn steer can switch the composer sandbox between workspace
+        and full access. Calls already in flight keep the policy they started
+        with; the next ``execute`` reads this flag.
+        """
+        self._active = active
 
     def concurrency_safe(self, call: ToolCall) -> bool:
         check = getattr(self._inner, "concurrency_safe", None)
         return bool(check is not None and check(call))
 
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
+        if not self._active:
+            return await self._inner.execute(call, ctx)
         if call.name not in self._shell_tools:
             return await self._inner.execute(call, ctx)
         arguments = call.arguments or {}

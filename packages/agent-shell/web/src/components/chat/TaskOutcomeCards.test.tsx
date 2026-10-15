@@ -86,6 +86,19 @@ describe('TaskOutcomeCards', () => {
     expect(screen.queryByRole('button', { name: /merge/i })).toBeNull();
   });
 
+  it('长任务说明和结果都只留两行，避免把通知撑满', () => {
+    const longTask = '你是甲方'.repeat(80);
+    const longAnswer = '复核结论'.repeat(80);
+    renderCards([makeTask({ task: longTask, answer: longAnswer })]);
+
+    const title = document.querySelector('[data-task-outcome-title]');
+    const detail = document.querySelector('[data-task-outcome-detail]');
+    expect(title?.className).toContain('line-clamp-2');
+    expect(detail?.className).toContain('line-clamp-2');
+    expect(title?.textContent).toContain(longTask);
+    expect(detail?.textContent).toContain(longAnswer);
+  });
+
   it('超过三个时只留前三张，其余折成一行汇总', () => {
     renderCards(
       Array.from({ length: 5 }, (_, i) => makeTask({ id: `t${i}`, task: `任务 ${i}` })),

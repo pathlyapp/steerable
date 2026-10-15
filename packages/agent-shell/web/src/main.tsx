@@ -7,7 +7,7 @@ import { AgentLayout } from './layouts/AgentLayout';
 import { AgentPage } from './pages/AgentPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { getPackRoutes } from './packs/registry';
-import { getBrandLogoUrl, BRAND_NAME } from './brand';
+import { getBrandMarkUrl, BRAND_NAME } from './brand';
 import { getAppShellGate } from './auth/gate';
 import { installHostPaste } from './lib/host-paste';
 import './styles/index.css';
@@ -107,7 +107,11 @@ export async function bootstrap(): Promise<void> {
   document.documentElement.lang = getLocale() === 'zh' ? 'zh-CN' : getLocale();
   window.steerableHost?.setLocale?.(getLocale());
   document.title = BRAND_NAME;
-  document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute('href', getBrandLogoUrl());
+  const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  if (icon) {
+    icon.type = 'image/png';
+    icon.href = getBrandMarkUrl();
+  }
   installHostPaste();
 
   const rootEl = document.getElementById('root');

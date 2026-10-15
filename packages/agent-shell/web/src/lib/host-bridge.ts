@@ -129,6 +129,18 @@ export interface PythonRunnerSnapshot {
   restartRequired: boolean;
 }
 
+export interface HostClipboardFile {
+  name: string;
+  path?: string;
+  dataBase64?: string;
+  mime?: string;
+}
+
+export interface HostClipboard {
+  text: string;
+  files: HostClipboardFile[];
+}
+
 export interface HostBridge {
   runtime: 'local';
   platform: NodeJS.Platform;
@@ -159,8 +171,15 @@ export interface HostBridge {
       onEvent: (payload: LocalBackendStreamEvent) => void,
     ) => Promise<string | null>;
     cancelStream: (streamId: string) => void;
-    /** 轮中转向：注入一条用户消息到运行中的 CoreLoop 回合；false = 无可转向回合。 */
-    steerChat?: (chatId: string, content: string) => Promise<boolean>;
+    /**
+     * 轮中转向：注入一条用户消息到运行中的 CoreLoop 回合；false = 无可转向回合。
+     * `execPolicy` 改这一回合后面的命令沙箱（工作区 / 完整权限）。
+     */
+    steerChat?: (
+      chatId: string,
+      content: string,
+      options?: { execPolicy?: 'workspace' | 'full' },
+    ) => Promise<boolean>;
   };
   /** 会话附件：把源文件路径 / base64 字节拷贝进会话空间（`attachments:save`）。 */
   attachments?: {
@@ -190,25 +209,17 @@ export interface HostBridge {
   offMenuOpenTerminal?: () => void;
   /**
    * App menu IPC — `Cmd+V` / 编辑 → 粘贴 fires `menu:paste`.
-   * WKWebView does not expose that pasteboard to the page, so the renderer
-   * reads it through `readClipboard`.
+   * WKWebView does not expose that pasteboard to the page, so the host reads
+   * it before emitting the event.
    */
-  onMenuPaste?: (callback: () => void) => void;
+  onMenuPaste?: (callback: (clipboard: HostClipboard) => void) => void;
   offMenuPaste?: () => void;
   /**
    * OS pasteboard. `files` are copied paths or a screenshot PNG.
    * Text is empty when the pasteboard holds files, so the path is not
    * inserted into the composer as well.
    */
-  readClipboard?: () => Promise<{
-    text: string;
-    files: Array<{
-      name: string;
-      path?: string;
-      dataBase64?: string;
-      mime?: string;
-    }>;
-  }>;
+  readClipboard?: () => Promise<HostClipboard>;
   /** Plain text from the OS pasteboard. Empty when the clipboard has no text. */
   readClipboardText?: () => Promise<string>;
   /**
@@ -238,6 +249,13 @@ export interface HostBridge {
    */
   onChatCreated?: (
     callback: (payload: { chatId: string; agentId?: string | null }) => void,
+  ) => () => void;
+  /**
+   * 会话有了新的活动时间（写入消息或改会话）。载荷是 `{chatId, updatedAt}`。
+   * 侧边栏据此改内存里的时间并重排，不整表刷新。
+   */
+  onChatActivity?: (
+    callback: (payload: { chatId: string; updatedAt: string }) => void,
   ) => () => void;
   /**
    * 另一个进程提交了宿主库。侧栏据此重新拉会话列表。

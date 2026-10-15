@@ -164,6 +164,10 @@ function AgentLayoutContent() {
   useEffect(() => {
     patchChatTitleRef.current = data.patchChatTitle;
   }, [data.patchChatTitle]);
+  const patchChatUpdatedAtRef = useRef(data.patchChatUpdatedAt);
+  useEffect(() => {
+    patchChatUpdatedAtRef.current = data.patchChatUpdatedAt;
+  }, [data.patchChatUpdatedAt]);
   const refreshChatsRef = useRef(data.refreshChats);
   useEffect(() => {
     refreshChatsRef.current = data.refreshChats;
@@ -184,6 +188,16 @@ function AgentLayoutContent() {
     if (!bridge?.onChatCreated) return;
     const unsubscribe = bridge.onChatCreated(() => {
       void refreshChatsRef.current();
+    });
+    return unsubscribe;
+  }, []);
+  // 消息落库后的活动时间。只改这条会话在内存里的 updatedAt，侧边栏按它重排。
+  useEffect(() => {
+    const bridge = getHostBridge();
+    if (!bridge?.onChatActivity) return;
+    const unsubscribe = bridge.onChatActivity((payload) => {
+      if (!payload?.chatId || !payload.updatedAt) return;
+      patchChatUpdatedAtRef.current(payload.chatId, payload.updatedAt);
     });
     return unsubscribe;
   }, []);

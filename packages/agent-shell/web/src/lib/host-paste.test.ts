@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as hostBridge from './host-bridge';
-import { installHostPaste, requestHostPaste } from './host-paste';
+import {
+  installHostPaste,
+  releaseComposerPasteTarget,
+  requestHostPaste,
+  setComposerPasteTarget,
+} from './host-paste';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -38,11 +43,11 @@ describe('requestHostPaste', () => {
   });
 
   it('menu paste leaves the composer alone while the terminal has focus', async () => {
-    let menuPaste: (() => void) | undefined;
+    let menuPaste: ((clipboard: hostBridge.HostClipboard) => void) | undefined;
     const readClipboardText = vi.fn().mockResolvedValue('ls');
     vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
       readClipboardText,
-      onMenuPaste: (callback: () => void) => {
+      onMenuPaste: (callback) => {
         menuPaste = callback;
       },
     } as Partial<hostBridge.HostBridge> as hostBridge.HostBridge);
@@ -60,13 +65,44 @@ describe('requestHostPaste', () => {
     document.body.appendChild(terminal);
     helper.focus();
 
-    menuPaste?.();
+    menuPaste?.({ text: 'ls', files: [] });
 
-    await vi.waitFor(() => {
-      expect(readClipboardText).toHaveBeenCalledOnce();
-    });
-    await Promise.resolve();
+    expect(readClipboardText).not.toHaveBeenCalled();
     expect(pasted).toEqual([]);
     expect(helper.value).toBe('');
+    composer.focus();
+
+    menuPaste?.({ text: '原生剪贴板', files: [] });
+
+    expect(pasted).toEqual(['原生剪贴板']);
+    expect(readClipboardText).not.toHaveBeenCalled();
+  });
+
+  it('pastes into the live composer after the focused field unmounts', async () => {
+    const readClipboardText = vi.fn().mockResolvedValue('下一条');
+    vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
+      readClipboardText,
+    } as Partial<hostBridge.HostBridge> as hostBridge.HostBridge);
+    installHostPaste();
+    const gone = editable();
+    gone.focus();
+    gone.remove();
+    const composer = editable();
+    const pasted: string[] = [];
+    composer.addEventListener('hostpaste', (event) => {
+      pasted.push((event as CustomEvent<string>).detail);
+    });
+    setComposerPasteTarget(composer);
+    const sink = document.createElement('button');
+    document.body.appendChild(sink);
+    sink.focus();
+    try {
+      requestHostPaste();
+      await vi.waitFor(() => {
+        expect(pasted).toEqual(['下一条']);
+      });
+    } finally {
+      releaseComposerPasteTarget(composer);
+    }
   });
 });

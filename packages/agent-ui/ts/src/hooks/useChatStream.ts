@@ -45,7 +45,10 @@ export interface ChatStreamTransport {
    * caller should keep the draft — a normal send can follow once the turn
    * ends). When omitted, the UI keeps send-during-streaming disabled.
    */
-  steer?: (content: string) => Promise<boolean>;
+  steer?: (
+    content: string,
+    options?: { execPolicy?: 'workspace' | 'full' },
+  ) => Promise<boolean>;
 }
 
 /**

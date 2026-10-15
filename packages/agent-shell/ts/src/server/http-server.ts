@@ -306,7 +306,11 @@ export function createBsServer(deps: BsServerDeps): Server {
         sendJson(res, 200, { ok: false, reason: 'no_active_coreloop_turn' });
         return;
       }
-      const ok = await supervisor.steerChat(streamId, content);
+      const execPolicy =
+        body.execPolicy === 'full' || body.execPolicy === 'workspace'
+          ? body.execPolicy
+          : undefined;
+      const ok = await supervisor.steerChat(streamId, content, execPolicy);
       // 与 main.ts 同理：接受即落库，重开对话能看到这条注入的用户消息。
       if (ok) await deps.store.addMessage(chatId, 'user', content);
       sendJson(res, 200, { ok, ...(ok ? {} : { reason: 'stream_not_active' }) });

@@ -280,3 +280,28 @@ describe('LocalStore / chat_record 与 turn_active 标记', () => {
     expect(await store.getTurnActive('chat-bad')).toBeNull();
   });
 });
+
+describe('LocalStore / 会话活动通知', () => {
+  it('写入消息或修改会话时发出最后活动时间', async () => {
+    const { store } = await createTestStore();
+    const chat = await store.createChat('活动');
+    const { subscribeChatActivity } = await import('../../src/storage/chat-activity.js');
+    const events: Array<{ chatId: string; updatedAt: string }> = [];
+    const unsubscribe = subscribeChatActivity((event) => {
+      events.push(event);
+    });
+    try {
+      await store.addMessage(chat.id, 'user', '你好');
+      const afterMessage = await store.getChat(chat.id);
+      await store.updateChat(chat.id, { title: '改名' });
+      const afterUpdate = await store.getChat(chat.id);
+      expect(events.map((event) => event.updatedAt)).toEqual([
+        afterMessage?.updatedAt,
+        afterUpdate?.updatedAt,
+      ]);
+      expect(events.every((event) => event.chatId === chat.id)).toBe(true);
+    } finally {
+      unsubscribe();
+    }
+  });
+});
