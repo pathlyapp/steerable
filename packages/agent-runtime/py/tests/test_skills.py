@@ -433,6 +433,74 @@ async def test_catalog_injected_first_round_only(skills_root: Path) -> None:
     assert second_catalog[0].content_text == catalog_msgs[0].content_text
 
 
+def nonleading_system_indices(messages: list[LLMMessage]) -> list[int]:
+    """Positions Qwen3.8's chat template rejects.
+
+    ``Qwen3.8-27B`` ``chat_template.jinja`` raises
+    ``System message must be at the beginning.`` for every system message
+    that is not ``messages[0]``.
+    """
+    return [
+        index
+        for index, message in enumerate(messages)
+        if message.role == "system" and index != 0
+    ]
+
+
+async def test_qwen_template_rejects_a_system_role_catalog(skills_root: Path) -> None:
+    """The skill catalog must not be a second system message.
+
+    CIFLog's first turn is one system prompt plus the user text. Appending
+    the catalog as ``role=system`` made a self-hosted Qwen3.8-27B-W8A8
+    return HTTP 400. The follow-up tool round has to keep that shape too.
+    """
+    from steerable_agent_runtime.llm.openai_compat import _encode_message
+
+    provider = make_provider(
+        [
+            {"tool_calls": [tc("get_data")]},
+            {"content": "done"},
+        ]
+    )
+    router = ToolRouter()
+
+    @tool(name="get_data", description="fetch")
+    async def get_data() -> str:
+        return "data"
+
+    router.register(get_data)
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(),
+        hooks=SkillHooks(
+            FilesystemSkillProvider([skills_root]),
+            conditions={"tool:local_read_file"},
+        ),
+    )
+    await collect(
+        loop.run(
+            [
+                LLMMessage.text_of("system", "BASE PROMPT"),
+                LLMMessage.text_of("user", "hi"),
+            ],
+            tools=[{"type": "function", "function": {"name": "get_data"}}],
+        )
+    )
+
+    assert len(provider.calls) == 2
+    first = provider.calls[0]
+    assert [message.role for message in first] == ["system", "user", "user"]
+    assert first[0].content_text == "BASE PROMPT"
+    assert first[1].content_text == "hi"
+    assert "# Available skills" in first[2].content_text
+    for request in provider.calls:
+        assert nonleading_system_indices(request) == []
+        wire_roles = [_encode_message(message)["role"] for message in request]
+        assert wire_roles[0] == "system"
+        assert wire_roles.count("system") == 1
+
+
 async def test_catalog_injected_without_system_message(skills_root: Path) -> None:
     provider = make_provider([{"content": "done"}])
     loop = CoreLoop(

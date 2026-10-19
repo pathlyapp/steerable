@@ -162,6 +162,43 @@ async def test_skills_param_injects_catalog_and_advertises_tool(
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_and_catalog_keep_a_single_leading_system(
+    skills_root: Path,
+) -> None:
+    """Desktop turns pass ``systemPrompt`` and let the sidecar append the catalog.
+
+    Qwen3.8-27B rejects the request when that catalog is a system message
+    after the user text (HTTP 400, ``System message must be at the beginning.``).
+    The tool-call follow-up must not grow another system message either.
+    """
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="skill", arguments={"name": "local-exec"})),
+            _text_round("done"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+    await _run_stream(
+        sidecar,
+        _params(
+            skills_root,
+            systemPrompt="你是 CIFLog 测井助手。",
+            messages=[{"role": "user", "content": "hi"}],
+        ),
+    )
+
+    assert len(provider.seen_messages) == 2
+    first = provider.seen_messages[0]
+    assert [message.role for message in first] == ["system", "user", "user"]
+    assert first[0].content_text == "你是 CIFLog 测井助手。"
+    assert first[1].content_text == "hi"
+    assert "# Available skills" in first[2].content_text
+    for request in provider.seen_messages:
+        system_at = [index for index, message in enumerate(request) if message.role == "system"]
+        assert system_at == [0]
+
+
+@pytest.mark.asyncio
 async def test_skills_param_executes_skill_call_in_process(skills_root: Path) -> None:
     provider = _ScriptedProvider(
         [
