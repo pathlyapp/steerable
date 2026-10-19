@@ -55,7 +55,7 @@ import { createAskUserBridge } from '../sidecar/reverse-ask-user.js';
 import { startHostSidecar, shutdownHostSidecar } from '../sidecar/boot.js';
 import { createVisibleTerminalExec } from './visible-terminal-exec.js';
 import { createJsonStore } from '../json-store.js';
-import { bindWorkspaceSkillRoots } from '../local-backend/skill-loader.js';
+import { bindWorkspaceSkillRoots, listSkillRoots } from '../local-backend/skill-loader.js';
 import { collectPackExecWritableRoots } from '../local-backend/pack-turn-hooks.js';
 import { getChatAttachmentsDir } from '../attachments.js';
 import { ensureChatWorkspace } from '../project-home.js';
@@ -115,6 +115,21 @@ export interface HostRuntime {
   start(): Promise<void>;
   /** 关停：杀终端、停 mock、关 sidecar。 */
   shutdown(): Promise<void>;
+}
+
+/**
+ * spill 目录作为只读根：工具输出超过内联上限时 sidecar 会把全文落到
+ * ``STEERABLE_SPILL_DIR``（BS 宿主由 run-bs-server.mjs 设为
+ * ``<userDataDir>/sidecar/steerable-spill``），并告诉模型去哪读全文。
+ * 只把它加进 shell 沙箱而不加进文件工具读根，模型就会「读自己刚被指到的
+ * 文件」而报路径越界——实测事故里正是如此。只读，不授予写入。
+ *
+ * 未设置该 env 时返回空表：sidecar 的回退目录是系统临时目录，把它整片
+ * 开给文件工具得不偿失，那种部署继续走 shell cat。
+ */
+function spillReadRoots(): string[] {
+  const dir = process.env.STEERABLE_SPILL_DIR?.trim();
+  return dir ? [dir] : [];
 }
 
 export async function createHostRuntime(options: HostRuntimeOptions): Promise<HostRuntime> {
@@ -342,14 +357,24 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
         toolRouter,
         resolveProjectRoot: async (chatId) =>
           localBackendRouter.resolveChatWorkspaceRoot(chatId),
-        // 写：源文件夹、包声明的可写根，以及各自的子目录。附件目录保持只读。
+        // 读：附件目录、源文件夹、包声明的可写根，以及只读参考面（技能根 /
+        // spill 根）。凡运行时"会写进去、模型需要读回来"的目录都必须可读；
+        // 否则 local_read_file 一律「路径越界」，模型只能退回 shell cat 绕行。
+        // 读集合不越出模型本就能读/本就被允许写入的范围。
         resolveAdditionalReadRoots: async (chatId) => {
           const project = await localBackendRouter.resolveChatProject(chatId);
           return [
             getChatAttachmentsDir(chatId),
             ...(project?.sourceFolders ?? []),
+            ...collectPackExecWritableRoots(chatId),
+            // 技能根：workflows/references/templates 是只读参考，模型必须能读
+            // （spec_lock_reference.md 定义 pptx_layouts 怎么写，正是它被拒过）。
+            ...listSkillRoots(),
+            // spill 根：工具输出过大时 sidecar 落到这里，模型要读回全文。
+            ...spillReadRoots(),
           ];
         },
+        // 写：源文件夹、包声明的可写根，以及各自的子目录。附件目录保持只读。
         resolveAdditionalWriteRoots: async (chatId) => {
           const project = await localBackendRouter.resolveChatProject(chatId);
           return [

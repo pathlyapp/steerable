@@ -370,14 +370,18 @@ class SystemPromptFragment(ContextFragment):
 
     role: LLMRole = "system"
     content_kind: str = "system_prompt"
-    max_tokens: int | None = 4096
+    #: Align the system-prompt backstop with the framework's absolute
+    #: per-fragment ceiling. Desktop prompts with pinned/eager skills (e.g.
+    #: word-master + ppt-master) legitimately reach ~6-8k tokens; the old
+    #: 4k cap silently truncated the very skill body the agent bound.
+    max_tokens: int | None = FRAGMENT_TOKEN_CEILING
     review_note: str | None = (
-        "Desktop production prompts (persona + eager skill layer + runtime "
-        "environment + tool reality check) measure 1-3k tokens; 4k is the "
-        "headroom for larger skill stacks, not the target. Crossings "
-        "degrade with a visible marker so an over-budget assembly is "
-        "discoverable in the transcript instead of silently inflating every "
-        "request."
+        "Desktop production prompts (persona + pinned/eager skill stack + "
+        "runtime environment + tool reality check) legitimately reach 6-8k "
+        "tokens when an agent pins large skills. Reusing the absolute "
+        "per-fragment ceiling (10k) keeps a bounded backstop without "
+        "truncating the bound skill body; crossings still degrade with a "
+        "visible marker."
     )
 
     def __init__(self, prompt: str) -> None:

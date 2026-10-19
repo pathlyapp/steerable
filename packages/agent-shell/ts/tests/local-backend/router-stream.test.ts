@@ -381,14 +381,56 @@ describe('流式回合 SSE 序列', () => {
       costUsd: 0.001,
     });
 
-    expect(supervisor.call).toHaveBeenCalledWith('trace.fetch', { traceId: 'trace-abc' }, { timeoutMs: 5000 });
+    // 60s（DEEPPATH_TRACE_FETCH_TIMEOUT_MS 可覆盖）：5s 会丢长跑 trace。
+    expect(supervisor.call).toHaveBeenCalledWith('trace.fetch', { traceId: 'trace-abc' }, { timeoutMs: 60_000 });
     const trace = await h.store.getTrace('trace-abc');
     expect(trace).not.toBeNull();
     expect(trace!.status).toBe('completed');
     expect(JSON.parse(trace!.payload)).toMatchObject({ coreloop: true, trace: { durationMs: 42 } });
     // trace 挂到本轮那条 assistant 消息上
-    const assistant = (await h.store.listMessages(chat.id, 10))[0];
-    expect(trace!.messageId).toBe(assistant.id);
+    const assistant = await h.store.listMessages(chat.id, 10);
+    expect(trace!.messageId).toBe(assistant[0].id);
+  });
+
+  it('侧车截断超长 trace 时，落库带上截断标记（别把残片当完整现场）', async () => {
+    const chat = await seedChat();
+    const { supervisor } = installStream(() => {}, { status: 'completed', traceId: 'trace-big' });
+    const original = supervisor.call.getMockImplementation()!;
+    supervisor.call.mockImplementation(async (method: string, ...rest: unknown[]) => {
+      if (method === 'trace.fetch') {
+        // _handle_trace_fetch 对超长 trace 的头+尾切片
+        return {
+          trace: { durationMs: 4_692_176, eventCount: 161_111 },
+          spans: [],
+          events: [{ kind: 'completion' }],
+          eventsTotal: 161_111,
+          eventsTruncated: true,
+        };
+      }
+      return await original(method, ...rest);
+    });
+    const warned: string[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warned.push(String(args[0]));
+    });
+    try {
+      await makeRouter().handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
+        makeEmitCapture().emit,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+
+    const trace = await h.store.getTrace('trace-big');
+    expect(trace).not.toBeNull();
+    expect(JSON.parse(trace!.payload)).toMatchObject({
+      coreloop: true,
+      eventsTruncated: true,
+      eventsTotal: 161_111,
+    });
+    // 截断必须是可观测事件，而不是静默丢数据
+    expect(warned.some((line) => line.includes('coreloop trace truncated for storage'))).toBe(true);
   });
 
   it('配置 OTLP endpoint 后导出 trace（metadata 档位）', async () => {
@@ -483,7 +525,7 @@ describe('流式回合失败与取消', () => {
     const metadata = JSON.parse(assistant.messageMetadata!);
     expect(metadata).toMatchObject({ completionStatus: 'failed', traceId: 'trace-fail' });
     // 失败趟的部分 trace 也被持久化（dogfood 信号）
-    expect(supervisor.call).toHaveBeenCalledWith('trace.fetch', { traceId: 'trace-fail' }, { timeoutMs: 5000 });
+    expect(supervisor.call).toHaveBeenCalledWith('trace.fetch', { traceId: 'trace-fail' }, { timeoutMs: 60_000 });
     expect((await h.store.getTrace('trace-fail'))?.status).toBe('failed');
   });
 
@@ -855,6 +897,48 @@ describe('流式回合的提示词与工具面', () => {
     );
     expect(seen[1].systemPrompt).toContain('新版角色提示词');
     expect(seen[1].systemPrompt).not.toContain('旧版角色提示词');
+  });
+
+  it('绑定技能走 pinned 通道，而不是混进硬排除的 exclude', async () => {
+    h.loadSkills.mockResolvedValue([
+      {
+        name: 'ppt-master',
+        dirName: 'ppt-master',
+        displayName: '',
+        description: 'PPT workflow',
+        priority: 600,
+        tags: [],
+        conditions: [],
+        match: 'any',
+        layer: 'catalog',
+        modelInvocable: true,
+        content: 'PPT-MASTER-BODY',
+        skillsDir: '/skills',
+      },
+    ]);
+    const agent = await h.store.createChatAgent({
+      name: 'PPT智能体',
+      skillIds: ['ppt-master'],
+    });
+    const chat = await h.store.createChat('对话', agent.id, null);
+    const { seen } = installStream(() => {});
+    await makeRouter().handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/send`,
+        body: { message: '生成PPT' },
+      },
+      makeEmitCapture().emit,
+    );
+
+    // The body is eager-injected...
+    expect(seen[0].systemPrompt).toContain('PPT-MASTER-BODY');
+    // ...and the sidecar gets it as pinned (catalog suppression) while
+    // `exclude` stays reserved for hard mode/whitelist drops. Before this
+    // split, `ppt-master` landed in exclude and the skill tool returned
+    // "not available in this mode".
+    expect(seen[0].skills.pinned).toEqual(['ppt-master']);
+    expect(seen[0].skills.exclude).not.toContain('ppt-master');
   });
 
   it('绑定项目的会话：系统提示词追加项目围栏；信任项目时注入规则文件', async () => {

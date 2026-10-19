@@ -1,27 +1,42 @@
 /**
  * TurnFilesCard 契约（Codex 样式）：
- * 1. 最终文件（Deliverables）：展示为独立文件卡片（含图标、类型标签如 Presentation · PPTX、Open in 下拉按钮）；
+ * 1. 最终文件（Deliverables）：展示为独立文件卡片（含图标、类型标签如 Presentation · PPTX、Download / Open in 操作）；
  * 2. 中间修改文件（Edited files）：展示为 Edited N files 卡片，含增删统计与 Review 按钮；
  * 3. 过滤临时锁定文件（如 ~$*.pptx）；
- * 4. 点击文件或打开按钮均调 openLocalPath 用系统默认应用打开；
- * 5. 打开失败在卡片内给出原因；空列表不渲染。
+ * 4. 点击文件或打开按钮均调 openLocalPath 用系统默认应用打开；下载按钮调 getLocalFileDownload；
+ * 5. 打开/下载失败在卡片内给出原因；空列表不渲染。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { openLocalPath } from '@/lib/local-api';
+import { getLocalFileDownload, openLocalPath } from '@/lib/local-api';
+import { saveBase64AsFile } from '@/lib/download';
 import { TurnFilesCard } from './TurnFilesCard';
 import type { TurnFile } from './turn-files';
 
 vi.mock('@/lib/local-api', () => ({
   openLocalPath: vi.fn(async () => ({ success: true })),
+  getLocalFileDownload: vi.fn(async () => ({
+    fileName: '自我介绍.pptx',
+    mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    size: 2048,
+    base64: 'QkFTRTY0',
+  })),
+}));
+
+vi.mock('@/lib/download', () => ({
+  saveBase64AsFile: vi.fn(),
 }));
 
 const openLocalPathMock = vi.mocked(openLocalPath);
+const getLocalFileDownloadMock = vi.mocked(getLocalFileDownload);
+const saveBase64AsFileMock = vi.mocked(saveBase64AsFile);
 
 afterEach(() => {
   cleanup();
   openLocalPathMock.mockClear();
   openLocalPathMock.mockResolvedValue({ success: true });
+  getLocalFileDownloadMock.mockClear();
+  saveBase64AsFileMock.mockClear();
 });
 
 function makeFile(overrides: Partial<TurnFile> = {}): TurnFile {
@@ -191,5 +206,35 @@ describe('TurnFilesCard', () => {
     expect(screen.getByText('Open with default app')).toBeTruthy();
     expect(screen.getByText('Show in folder')).toBeTruthy();
     expect(screen.getByText('Copy file path')).toBeTruthy();
+  });
+
+  it('点击下载按钮读取本会话产物并落盘', async () => {
+    render(<TurnFilesCard files={[makeFile()]} chatId="chat-1" />);
+
+    fireEvent.click(screen.getByText('Download'));
+
+    await waitFor(() =>
+      expect(getLocalFileDownloadMock).toHaveBeenCalledWith('chat-1', '/proj/自我介绍.pptx'),
+    );
+    expect(saveBase64AsFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({ fileName: '自我介绍.pptx', base64: 'QkFTRTY0' }),
+    );
+  });
+
+  it('下载失败时在卡片内显示原因', async () => {
+    getLocalFileDownloadMock.mockRejectedValueOnce(new Error('没有找到文件'));
+    render(<TurnFilesCard files={[makeFile()]} chatId="chat-1" />);
+
+    fireEvent.click(screen.getByText('Download'));
+
+    await screen.findByText(/没有找到文件/);
+    expect(saveBase64AsFileMock).not.toHaveBeenCalled();
+  });
+
+  it('没有会话 id 时下载按钮禁用', () => {
+    render(<TurnFilesCard files={[makeFile()]} />);
+
+    const button = screen.getByText('Download').closest('button') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
   });
 });

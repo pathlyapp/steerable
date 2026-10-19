@@ -5,3 +5,13 @@ packages:
   - "tests/conformance/ts"
   - "examples/ts-minimal"
   - "examples/web-shell"
+
+# pnpm 10 起 build 脚本默认全部不执行，approve 列表只能放在这里；
+# package.json 的 `pnpm` 字段已不再读取（10.23 起每次 install 只会刷一条
+# ignored 警告）。少了这段，better-sqlite3 / node-pty / esbuild 装完没有
+# 二进制，运行期才报错。
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild
+  - node-pty
+

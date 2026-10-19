@@ -340,6 +340,22 @@ class NoopHooks:
         """
         return result.success
 
+    def wall_status(self) -> str | None:
+        """Terminal status a ``before_completion`` wrap-up swallowed, or None.
+
+        ``before_completion`` may grant a *narration* round after the turn
+        already hit a wall (``failed`` / ``budget_exhausted``). That round
+        produces a natural-language summary, so the loop's own terminal
+        status becomes ``completed`` even though the task never finished —
+        and the host's auto-continue, which only resumes on
+        ``budget_exhausted``, reads ``completed`` as "the model decided it
+        was done" and stops. Returning the pre-wrap-up status lets the host
+        report (and resume) the wall instead of the laundered completion.
+
+        Default None: no wrap-up disguised a wall.
+        """
+        return None
+
 
 class ChainHooks:
     """Compose several hooks into one ``LoopHooks``.
@@ -507,3 +523,19 @@ class ChainHooks:
             if callable(judge) and not judge(result, call):
                 return False
         return True
+
+    def wall_status(self) -> str | None:
+        """First hook that recorded a wrap-up-swallowed wall wins.
+
+        AntiHallucinationHooks is the recorder today. Probed with
+        ``getattr`` like the other optional capabilities, so a chain of
+        product hooks that never wraps up answers None without needing the
+        method.
+        """
+        for hook in self._hooks:
+            probe = getattr(hook, "wall_status", None)
+            if callable(probe):
+                status = probe()
+                if status is not None:
+                    return status
+        return None

@@ -63,11 +63,17 @@ export interface SkillTurnContext {
   /** 活跃条件串(tool:* / has-tools / plan-mode),与提示词拼装同源。 */
   conditions: string[];
   /**
-   * 目录里不出现的技能:模式级排除(plan 模式排掉执行类技能)、智能体关闭
-   * 「允许其他技能」时的未勾选项、以及已随系统提示词常驻的勾选项(避免
-   * 模型再调 `skill` 工具加载第二遍)。
+   * 硬排除:模式级排除(plan 模式排掉执行类技能)、智能体关闭「允许其他
+   * 技能」时的未勾选项。sidecar 的 `skill` 工具会直接用
+   * `not available in this mode` 拒绝这些名字。
    */
   exclude: string[];
+  /**
+   * 已由宿主 eager 注入正文的 pinned 技能。sidecar 不应再把它们列进
+   * catalog(避免重复),但 `skill` 工具仍必须能按需加载完整正文——
+   * 大技能可能被 system prompt cap 截断,模型重载是合法恢复路径。
+   */
+  pinned: string[];
   /** 智能体的「加载全部技能」:catalog 无视条件全量列出。 */
   ignoreConditions: boolean;
 }

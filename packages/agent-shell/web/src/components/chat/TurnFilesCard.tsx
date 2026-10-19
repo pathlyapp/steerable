@@ -3,6 +3,7 @@ import {
   LuCheck,
   LuChevronDown,
   LuCopy,
+  LuDownload,
   LuExternalLink,
   LuFile,
   LuFileDiff,
@@ -14,7 +15,8 @@ import {
   LuPresentation,
   LuUndo2,
 } from 'react-icons/lu';
-import { openLocalPath } from '@/lib/local-api';
+import { getLocalFileDownload, openLocalPath } from '@/lib/local-api';
+import { saveBase64AsFile } from '@/lib/download';
 import { hostToolChrome } from '@/lib/host-tools';
 import { t } from '@/i18n';
 import {
@@ -46,11 +48,15 @@ export interface ExecutedActionLike {
 interface TurnFilesCardProps {
   files: TurnFile[];
   executedActions?: ExecutedActionLike[];
+  /** 当前会话：浏览器模式下载回合产物必须带 chatId 交给后端做归属校验。 */
+  chatId?: string | null;
 }
 
-export function TurnFilesCard({ files, executedActions }: TurnFilesCardProps) {
+export function TurnFilesCard({ files, executedActions, chatId }: TurnFilesCardProps) {
   const [openingPath, setOpeningPath] = useState<string | null>(null);
   const [openError, setOpenError] = useState<{ path: string; message: string } | null>(null);
+  const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<{ path: string; message: string } | null>(null);
   const allowOpenPath = hostToolChrome('local-fs');
 
   const { deliverables, intermediates, totalAdditions, totalDeletions } = groupTurnFiles(
@@ -80,6 +86,27 @@ export function TurnFilesCard({ files, executedActions }: TurnFilesCardProps) {
     }
   };
 
+  const handleDownload = async (filePath: string) => {
+    if (!chatId) {
+      setDownloadError({ path: filePath, message: t('Chat is not ready for download') });
+      return;
+    }
+    if (downloadingPath) return;
+    setDownloadingPath(filePath);
+    setDownloadError(null);
+    try {
+      const file = await getLocalFileDownload(chatId, filePath);
+      saveBase64AsFile(file);
+    } catch (err) {
+      setDownloadError({
+        path: filePath,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setDownloadingPath(null);
+    }
+  };
+
   const handleReveal = async (filePath: string) => {
     const { dir } = splitTurnFilePath(filePath);
     const targetDir = dir || filePath;
@@ -96,10 +123,14 @@ export function TurnFilesCard({ files, executedActions }: TurnFilesCardProps) {
               key={file.path}
               file={file}
               onOpen={() => void handleOpen(file.path)}
+              onDownload={() => void handleDownload(file.path)}
               onReveal={() => void handleReveal(file.path)}
               busy={openingPath === file.path}
+              downloading={downloadingPath === file.path}
               error={openError?.path === file.path ? openError.message : null}
+              downloadError={downloadError?.path === file.path ? downloadError.message : null}
               allowOpen={allowOpenPath}
+              allowDownload={Boolean(chatId)}
             />
           ))}
         </div>
@@ -128,19 +159,27 @@ export function TurnFilesCard({ files, executedActions }: TurnFilesCardProps) {
 interface DeliverableCardProps {
   file: TurnFile;
   onOpen: () => void;
+  onDownload: () => void;
   onReveal: () => void;
   busy: boolean;
+  downloading: boolean;
   error: string | null;
+  downloadError: string | null;
   allowOpen: boolean;
+  allowDownload: boolean;
 }
 
 function DeliverableCard({
   file,
   onOpen,
+  onDownload,
   onReveal,
   busy,
+  downloading,
   error,
+  downloadError,
   allowOpen,
+  allowDownload,
 }: DeliverableCardProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -209,8 +248,23 @@ function DeliverableCard({
           </div>
         </div>
 
-        {/* 右侧：Open in ⌵ 动作按钮 */}
-        <div className="relative shrink-0" ref={menuRef}>
+        {/* 右侧：下载 + Open in ⌵ 动作按钮 */}
+        <div className="relative flex shrink-0 items-center gap-1.5" ref={menuRef}>
+          <button
+            type="button"
+            onClick={onDownload}
+            disabled={!allowDownload || downloading}
+            title={file.path}
+            className="flex h-[26px] items-center gap-1 rounded-agent-md border border-agent-border bg-agent-canvas px-2 text-xs font-medium text-agent-foreground shadow-xs transition-colors hover:border-agent-border/80 hover:bg-agent-muted/50 disabled:opacity-50"
+          >
+            {downloading ? (
+              <LuLoaderCircle className="h-3.5 w-3.5 animate-spin text-agent-muted-foreground" />
+            ) : (
+              <LuDownload className="h-3.5 w-3.5 text-agent-muted-foreground" />
+            )}
+            <span>{t('Download')}</span>
+          </button>
+
           <div className="flex items-center rounded-agent-md border border-agent-border bg-agent-canvas shadow-xs hover:border-agent-border/80 transition-colors">
             <button
               type="button"
@@ -283,6 +337,11 @@ function DeliverableCard({
       {error && (
         <div className="mt-2 px-1 text-[11px] text-agent-destructive" role="status">
           {t('Could not open: {error}', { error })}
+        </div>
+      )}
+      {downloadError && (
+        <div className="mt-2 px-1 text-[11px] text-agent-destructive" role="status">
+          {t('Could not download: {error}', { error: downloadError })}
         </div>
       )}
     </div>

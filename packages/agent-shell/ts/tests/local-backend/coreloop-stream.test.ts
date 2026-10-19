@@ -223,6 +223,33 @@ describe('streamCoreLoopTurn', () => {
     expect(sent[0].worldState).toBeUndefined();
   });
 
+  it('forwards pinned skill context separately from hard excludes', async () => {
+    const { supervisor, sent } = makeSupervisor([
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+
+    await streamCoreLoopTurn({
+      ...BASE_OPTIONS,
+      supervisor,
+      onText: () => {},
+      skills: {
+        roots: ['/skills'],
+        conditions: ['has-tools'],
+        exclude: ['plan-mode'],
+        pinned: ['ppt-master'],
+        ignoreConditions: false,
+      },
+    });
+
+    expect(sent[0].skills).toEqual({
+      roots: ['/skills'],
+      conditions: ['has-tools'],
+      exclude: ['plan-mode'],
+      pinned: ['ppt-master'],
+      ignoreConditions: false,
+    });
+  });
+
   it('W6-10: forwards the full notice payload so hosts can detect a framework compaction', async () => {
     const { supervisor } = makeSupervisor([
       {

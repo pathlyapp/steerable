@@ -416,6 +416,25 @@ export async function openLocalPath(targetPath: string) {
   });
 }
 
+/** 回合产物下载内容：base64 字节 + 浏览器下载所需文件名与 MIME。 */
+export interface LocalFileDownload {
+  fileName: string;
+  mime: string;
+  size: number;
+  base64: string;
+}
+
+/**
+ * 读取本会话回合产物文件，交给浏览器落盘下载。CS（Tauri）与 BS（团队版）
+ * 两种宿主都经 localBackend 通道，浏览器模式不再依赖“系统应用打开”。
+ */
+export async function getLocalFileDownload(chatId: string, targetPath: string) {
+  return bridge().localBackend.request<LocalFileDownload>({
+    method: 'GET',
+    path: `/api/v2/local/download?chatId=${encodeURIComponent(chatId)}&path=${encodeURIComponent(targetPath)}`,
+  });
+}
+
 /** 后端确认存在的路径：`candidate` 是正文里的原字面量，`path` 是落地绝对路径。 */
 export interface ResolvedLocalPath {
   candidate: string;

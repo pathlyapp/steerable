@@ -387,7 +387,17 @@ export interface SidecarChatStreamRequest {
   skills?: {
     roots: string[];
     conditions?: string[];
+    /**
+     * Hard mode/whitelist exclusions. Sidecar's skill tool refuses these
+     * names with `not available in this mode`.
+     */
     exclude?: string[];
+    /**
+     * Host-injected/eager skills. Suppressed from the sidecar catalog (the
+     * host already put the body in the system prompt) but still loadable by
+     * the skill tool, so truncation or a model re-load never dead-ends.
+     */
+    pinned?: string[];
     ignoreConditions?: boolean;
     mode?: 'layered' | 'eager';
   };
