@@ -16,6 +16,7 @@ from steerable_agent_runtime import (
     ToolRouter,
     make_ask_user_tool,
 )
+from steerable_agent_runtime.ask_user import normalize_ask_user_questions
 from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
 
 
@@ -342,17 +343,59 @@ def test_ask_user_rejects_a_select_with_one_option() -> None:
     assert "2-4" in content
 
 
-def test_ask_user_rejects_an_overlong_header() -> None:
-    """The chip label is capped at 12 chars (CC parity)."""
-    content = _run_rejection(
-        {
-            "intro": "?",
-            "questions": [
-                {"id": "env", "text": "Which env?", "header": "this header is far too long"}
-            ],
-        }
+def test_ask_user_clips_an_overlong_header() -> None:
+    """The chip label is capped at 12 chars. A local model that overshoots
+    still gets a card; the label is clipped on a word boundary."""
+    questions = normalize_ask_user_questions(
+        [
+            {
+                "id": "env",
+                "text": "Which env?",
+                "header": "this header is far too long",
+                "multiSelect": False,
+            }
+        ]
     )
-    assert "<= 12" in content
+    assert questions[0]["header"] == "this header"
+    assert len(questions[0]["header"]) <= 12
+
+
+@pytest.mark.asyncio
+async def test_ask_user_accepts_qwen_intro_alias_and_long_header() -> None:
+    """The fenced payload qwen2.5 emits uses ``intro questions`` and a header
+    longer than the chip cap. Both must still open a question card."""
+    router = ToolRouter()
+    asked: list[dict[str, Any]] = []
+
+    async def handler(intro: str, questions: list[dict[str, Any]]) -> dict[str, Any]:
+        asked.append({"intro": intro, "questions": questions})
+        return {}
+
+    _register(router, handler)
+    result = await router.dispatch(
+        ToolCall(
+            id="q1",
+            name=ASK_USER_TOOL_NAME,
+            arguments={
+                "intro questions": "请问您的位置和姓名。",
+                "outro": "谢谢您的帮助。",
+                "questions": [
+                    {
+                        "header": "是否提供更多信息? (请选择)",
+                        "id": "location",
+                        "text": "位置",
+                        "multiSelect": False,
+                    },
+                    {"id": "name", "text": "姓名", "multiSelect": False},
+                ],
+            },
+        )
+    )
+    assert result.success
+    assert asked[0]["intro"] == "请问您的位置和姓名。"
+    headers = [question["header"] for question in asked[0]["questions"]]
+    assert all(len(header) <= 12 for header in headers)
+    assert headers[0].startswith("是否提供更多信息")
 
 
 @pytest.mark.asyncio

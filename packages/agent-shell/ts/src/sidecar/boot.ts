@@ -30,6 +30,9 @@ import {
   deriveWebEgressHosts,
   pickFreePort,
   recordEgressPosture,
+  seatbeltHostEntry,
+  seatbeltProfileCoversBaseUrl,
+  setPlainEndpointRestarter,
   startEgressProxy,
   type EgressProxyHandle,
 } from './egress-proxy.js';
@@ -72,6 +75,65 @@ export interface HostSidecarDeps {
 let egressProxyRef: EgressProxyHandle | null = null;
 let supervisorRef: SidecarSupervisor | null = null;
 let sidecarGeneration = 0;
+let hostSidecarDeps: HostSidecarDeps | null = null;
+/** plain-http 端点。spawn 名单里没有它时，重启前写在这里，下一次 profile 带上。 */
+let admittedPlainBaseUrl: string | undefined;
+let spawnEgress: { hosts: string[] | undefined; webEgress: boolean } | null = null;
+let restartInFlight: Promise<void> | null = null;
+let restarting = false;
+
+function withAdmittedPlain(hosts: string[] | undefined): string[] | undefined {
+  if (!hosts) return hosts;
+  const extra = seatbeltHostEntry(admittedPlainBaseUrl);
+  if (!extra || hosts.includes(extra)) return hosts;
+  return [...hosts, extra];
+}
+
+async function restartHostSidecar(): Promise<void> {
+  const deps = hostSidecarDeps;
+  if (!deps) return;
+  if (restartInFlight) {
+    await restartInFlight;
+    return;
+  }
+  const run = (async () => {
+    restarting = true;
+    try {
+      await shutdownHostSidecar();
+      await startHostSidecar(deps);
+    } finally {
+      restarting = false;
+    }
+  })();
+  restartInFlight = run;
+  try {
+    await run;
+  } finally {
+    if (restartInFlight === run) restartInFlight = null;
+  }
+}
+
+setPlainEndpointRestarter(async (baseUrl) => {
+  if (!hostSidecarDeps || !spawnEgress) return false;
+  if (seatbeltProfileCoversBaseUrl(baseUrl, spawnEgress.hosts, spawnEgress.webEgress)) {
+    return false;
+  }
+  const extra = seatbeltHostEntry(baseUrl);
+  if (!extra) return false;
+  admittedPlainBaseUrl = baseUrl;
+  log.info(`[sidecar] restarting to admit ${extra}`);
+  try {
+    await restartHostSidecar();
+  } catch (err) {
+    log.warn('[sidecar] restart for plain endpoint failed', err);
+    return false;
+  }
+  return seatbeltProfileCoversBaseUrl(
+    baseUrl,
+    spawnEgress?.hosts,
+    spawnEgress?.webEgress ?? false,
+  );
+});
 
 async function deriveSidecarEgressAllowList(): Promise<string[] | undefined> {
   const envList = (process.env.STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS ?? '')
@@ -79,7 +141,7 @@ async function deriveSidecarEgressAllowList(): Promise<string[] | undefined> {
     .map((h) => h.trim())
     .filter(Boolean);
   if (envList.length > 0) return envList;
-  const derived = deriveEgressAllowListFromBaseUrl(llmService.getSettings().baseUrl);
+  const derived = deriveEgressAllowListFromBaseUrl(llmService.getSettings().baseUrl) ?? [];
   // W4-8: the sidecar's httpx stack honors ambient proxies (env vars, and
   // the macOS system proxy via getproxies). A configured proxy is an
   // effective egress point — without it in the allow-list, the sandbox
@@ -87,7 +149,7 @@ async function deriveSidecarEgressAllowList(): Promise<string[] | undefined> {
   // system proxy 127.0.0.1:7890 hijacked even 127.0.0.1:11434 because
   // getproxies() does not surface the system bypass list).
   const proxies = await collectAmbientProxyEndpoints();
-  const merged = [...new Set([...(derived ?? []), ...proxies])];
+  const merged = withAdmittedPlain([...new Set([...derived, ...proxies])]) ?? [];
   if (merged.length === 0) {
     log.warn('[sidecar] cannot derive egress allow-list from provider baseUrl; outbound stays open');
     return undefined;
@@ -263,6 +325,7 @@ export async function wirePluginRegistry(
  * et al.) can await it via whenSidecarSupervisor().
  */
 export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
+  hostSidecarDeps = deps;
   const generation = ++sidecarGeneration;
   const pythonRunner = process.env.STEERABLE_PYTHON?.trim();
   const runCodeEnabled = true;
@@ -391,6 +454,16 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
       // profile already allows writes to; userData would be denied.
       // Path is per-flavor / env-overridable — see resolveSidecarStoragePath.
       const storagePath = resolveSidecarStoragePath();
+      // W4-3: sandbox default-on. This list is fixed at spawn. HTTPS hosts
+      // are added at runtime via allowEgressForBaseUrl. plain-http (Ollama)
+      // cannot, so that path restarts the sidecar with the new host appended.
+      const sandboxAllowedHosts = withAdmittedPlain(
+        egressProxy?.sandboxAllowedHosts ?? (await deriveSidecarEgressAllowList()),
+      );
+      // egress-proxy 模式下不开 web-egress（*:80/443 会架空代理的按主机
+      // 名单）：web 工具改走代理（HTTPS_PROXY），代理白名单与 sidecar
+      // 应用层域名名单同源（3.1b/3.1d）。
+      const sandboxWebEgress = webToolsEnabled() && !egressProxy;
       const supervisor = await SidecarSupervisor.start({
         args: [
           '--storage-path',
@@ -400,17 +473,8 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
         // 测试 tmpdir、显式 STEERABLE_SIDECAR_STORAGE_PATH）时，沙箱必须显式
         // 授予该目录写权限，否则 sidecar 打不开 sessions.db/sessions.lock。
         sandboxWritableRoots: [path.dirname(storagePath)],
-        // W4-3: sandbox default-on. This list is fixed at spawn (the sandbox
-        // profile cannot be edited afterwards), so a provider change reaches it
-        // only on restart — plain-http endpoints therefore still need one. The
-        // proxy's own CONNECT list does track the setting at runtime, via
-        // allowEgressForBaseUrl.
-        sandboxAllowedHosts:
-          egressProxy?.sandboxAllowedHosts ?? (await deriveSidecarEgressAllowList()),
-        // egress-proxy 模式下不开 web-egress（*:80/443 会架空代理的按主机
-        // 名单）：web 工具改走代理（HTTPS_PROXY），代理白名单与 sidecar
-        // 应用层域名名单同源（3.1b/3.1d）。
-        sandboxWebEgress: webToolsEnabled() && !egressProxy,
+        sandboxAllowedHosts,
+        sandboxWebEgress,
         // 3.1b：代理模式下 web_fetch 的 SSRF 预检仍在沙箱内做 DNS（抓取
         // 本身走代理隧道），所以只放行解析器 socket——无 IP 可达性。
         sandboxAllowResolver: webToolsEnabled() && Boolean(egressProxy),
@@ -442,6 +506,7 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
           void created.shutdown();
         }
       });
+      spawnEgress = { hosts: sandboxAllowedHosts, webEgress: sandboxWebEgress };
       await wireSupervisor(supervisor);
       return supervisor;
     } catch (err) {
@@ -461,6 +526,15 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
 /** 宿主退出钩子：停 supervisor + egress proxy。幂等。 */
 export async function shutdownHostSidecar(): Promise<void> {
   sidecarGeneration += 1;
+  // Drop the resolved boot promise before the process exits so waiters do
+  // not observe the supervisor being stopped. A restart keeps the admitted
+  // plain-http endpoint so the next spawn's profile includes it.
+  setSidecarSupervisorPending(null);
+  if (!restarting) {
+    admittedPlainBaseUrl = undefined;
+    spawnEgress = null;
+    hostSidecarDeps = null;
+  }
   if (supervisorRef) {
     const supervisor = supervisorRef;
     supervisorRef = null;

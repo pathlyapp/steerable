@@ -92,6 +92,66 @@ export function egressAllowEntry(
   };
 }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+const DEFAULT_REMOTE_PORTS = [443, 80];
+/** Same alphabet as the Seatbelt profile builder. Anything else is not a host entry. */
+const HOST_ENTRY_RE = /^[A-Za-z0-9._-]+(?::[0-9]+)?$/;
+
+/**
+ * `host` or `host:port` for `baseUrl`, or null when it cannot be written
+ * into a Seatbelt profile.
+ */
+export function seatbeltHostEntry(baseUrl: string | undefined): string | null {
+  const target = egressAllowEntry(baseUrl);
+  if (!target || !HOST_ENTRY_RE.test(target.entry)) return null;
+  return target.entry;
+}
+
+function parseSeatbeltEntry(entry: string): { loopback: boolean; ports: number[] } | null {
+  const trimmed = entry.trim();
+  if (!HOST_ENTRY_RE.test(trimmed)) return null;
+  const colon = trimmed.lastIndexOf(':');
+  const portText = colon > 0 ? trimmed.slice(colon + 1) : '';
+  const hasPort = /^\d+$/.test(portText);
+  const host = hasPort ? trimmed.slice(0, colon) : trimmed;
+  const port = hasPort ? Number(portText) : null;
+  if (port !== null && (port < 1 || port > 65535)) return null;
+  return {
+    loopback: LOOPBACK_HOSTS.has(host),
+    ports: port === null ? DEFAULT_REMOTE_PORTS : [port],
+  };
+}
+
+/**
+ * Whether a Seatbelt profile spawned with this allow-list can already open
+ * `baseUrl`.
+ *
+ * `allowedHosts === undefined` is the open-outbound profile. Loopback is not
+ * covered by `*:80` / `*:443`: Seatbelt's `*` does not match `localhost`, so
+ * a local runtime on `127.0.0.1:11434` needs its own `localhost:11434` rule.
+ * A remote host with no port degrades to 443 and 80 for every non-loopback
+ * target, matching the profile builder.
+ */
+export function seatbeltProfileCoversBaseUrl(
+  baseUrl: string | undefined,
+  allowedHosts: readonly string[] | undefined,
+  webEgress: boolean,
+): boolean {
+  if (allowedHosts === undefined) return true;
+  const target = egressAllowEntry(baseUrl);
+  if (!target || !HOST_ENTRY_RE.test(target.entry)) return true;
+  const port = target.port ? Number(target.port) : target.proxied ? 443 : 80;
+  if (port < 1 || port > 65535) return true;
+  const loopback = LOOPBACK_HOSTS.has(target.host);
+  if (!loopback && webEgress && (port === 80 || port === 443)) return true;
+  for (const entry of allowedHosts) {
+    const parsed = parseSeatbeltEntry(entry);
+    if (!parsed || !parsed.ports.includes(port)) continue;
+    if (loopback ? parsed.loopback : !parsed.loopback) return true;
+  }
+  return false;
+}
+
 /**
  * 从 provider baseUrl 构建代理计划。https 端点进代理名单；http 端点留在
  * 直连列表。派生不出任何代理条目（无 https 端点且无 web 域名）时返回
@@ -454,6 +514,20 @@ export function getActiveEgressProxyEndpoint(): string | null {
  */
 let activeControl: { port: number; token: string; log: (line: string) => void } | null = null;
 
+let plainEndpointRestarter: ((baseUrl: string) => Promise<boolean>) | null = null;
+
+/** boot 注册。plain-http 端点改不了已启动的 Seatbelt profile，只能重启 sidecar。 */
+export function setPlainEndpointRestarter(
+  restarter: ((baseUrl: string) => Promise<boolean>) | null,
+): void {
+  plainEndpointRestarter = restarter;
+}
+
+async function restartForUnproxied(baseUrl: string | undefined): Promise<boolean> {
+  if (!baseUrl || !plainEndpointRestarter) return false;
+  return plainEndpointRestarter(baseUrl);
+}
+
 /**
  * 把 `baseUrl` 的主机加进运行中代理的会话白名单。
  *
@@ -469,15 +543,18 @@ let activeControl: { port: number; token: string; log: (line: string) => void } 
  * 放行是会话域的（代理进程退出即失效），条目形态与 `buildEgressProxyPlan`
  * 的派生一致，两处语义不会分叉。
  *
- * @returns 已放行为 true；无可放行之处为 false——代理没在跑、URL 解析不了，
- * 或端点是 plain-http（那类端点不进代理，由 spawn 时的沙箱 profile 钉死，
- * 运行期改不了，仍需重启）。
+ * plain-http 不进 CONNECT 代理。Seatbelt profile 在 spawn 时钉死，这类端点
+ * 只能靠 boot 注册的 restarter 重启 sidecar，把主机写进新 profile。
+ *
+ * @param baseUrl 要放行的 provider 地址。
+ * @returns 已放行或已重启 sidecar 为 true。代理没在跑、URL 解析不了、端点
+ * 是 plain-http，且没有 restarter（或名单已经覆盖）时为 false。
  */
 export async function allowEgressForBaseUrl(baseUrl: string | undefined): Promise<boolean> {
   const control = activeControl;
-  if (!control) return false;
+  if (!control) return restartForUnproxied(baseUrl);
   const target = egressAllowEntry(baseUrl);
-  if (!target || !target.proxied) return false;
+  if (!target || !target.proxied) return restartForUnproxied(baseUrl);
   const entry = target.entry;
   try {
     const response = await fetch(`http://127.0.0.1:${control.port}/allow`, {

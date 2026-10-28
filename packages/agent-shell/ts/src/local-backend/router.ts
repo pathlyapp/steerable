@@ -1922,13 +1922,6 @@ export class LocalBackendRouter {
     // Bearer、Anthropic x-api-key、Google x-goog-api-key），再与 models.dev
     // 能力表 join。refresh=1 绕过 60s 缓存。凭证随设置显式下发。
     if (method === 'GET' && pathname === '/api/v2/llm/models') {
-      const supervisor = await whenSidecarSupervisor();
-      if (!supervisor) {
-        return {
-          status: 503,
-          data: { error: 'sidecar 未就绪', models: [], catalogStatus: 'offline' },
-        };
-      }
       const settings = llmService.getSettings();
       const draftBase = url.searchParams.get('baseUrl');
       const draftKey = url.searchParams.get('apiKey');
@@ -1945,7 +1938,16 @@ export class LocalBackendRouter {
         }
         // 设置页验的是用户当场填的地址，通常还没保存，所以不在 boot 时派生的
         // 代理白名单上。放行它，否则每次「测试」都被自己的代理 403。
+        // plain-http（本机 Ollama）放不进 CONNECT 代理，这里会重启 sidecar；
+        // 必须在重启之后再取 supervisor，否则 listModels 打到已退出的进程。
         await allowEgressForBaseUrl(baseUrl);
+        const supervisor = await whenSidecarSupervisor();
+        if (!supervisor) {
+          return {
+            status: 503,
+            data: { error: 'sidecar 未就绪', models: [], catalogStatus: 'offline' },
+          };
+        }
         const catalog = await supervisor.listModels({
           baseUrl,
           apiKey,

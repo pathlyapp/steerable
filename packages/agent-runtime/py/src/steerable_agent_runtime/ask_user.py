@@ -131,11 +131,12 @@ def normalize_ask_user_questions(
 ) -> list[dict[str, Any]]:
     """Map known alias keys onto the canonical payload fields, enforce the
     Claude Code ``AskUserQuestion`` bounds (1-4 questions, 2-4 options per
-    select, ``header`` <=12 chars, ``multiSelect`` explicit), and require the
-    two fields the host card cannot render without (``id`` to key the answer,
-    ``text`` to label the control). A violation raises ``ToolDispatchError`` —
-    the router wraps it as the tool result, so the model sees exactly what to
-    fix and retries within the same turn."""
+    select, ``multiSelect`` explicit), and require the two fields the host
+    card cannot render without (``id`` to key the answer, ``text`` to label
+    the control). An over-long ``header`` is clipped to 12 characters so a
+    local model that ignores the cap still gets a card. Any other violation
+    raises ``ToolDispatchError`` — the router wraps it as the tool result, so
+    the model sees exactly what to fix and retries within the same turn."""
     if not isinstance(questions, list):
         raise ToolDispatchError(
             f"ask_user: questions must be an array, got {type(questions).__name__}"
@@ -166,8 +167,8 @@ def normalize_ask_user_questions(
                 f"ask_user: questions[{index}] is missing a non-empty string "
                 '"text" (the question label shown to the user).'
             )
-        # header: optional on the wire; validate length when present, derive
-        # from text when absent so the card always has a chip label.
+        # header: optional on the wire. Derive from text when absent, and
+        # clip an over-long label so the chip still fits.
         header = q.get("header")
         if header is None:
             q["header"] = _derive_header(q["text"])
@@ -176,10 +177,7 @@ def normalize_ask_user_questions(
                 f"ask_user: questions[{index}].header must be a non-empty string."
             )
         elif len(header) > _MAX_HEADER_LEN:
-            raise ToolDispatchError(
-                f"ask_user: questions[{index}].header is {len(header)} chars; "
-                f"the chip label must be <= {_MAX_HEADER_LEN}."
-            )
+            q["header"] = _derive_header(header)
         # multiSelect: CC requires the model to commit to single vs multi —
         # the field is required, so an omission is a model error to fix, not
         # a default to assume.
@@ -233,6 +231,23 @@ class AskUserHandler(Protocol):
     ) -> Awaitable[dict[str, Any]]: ...
 
 
+def _resolve_intro(intro: str | None, extra: dict[str, Any]) -> str:
+    """Return the framing line, accepting local-model key spellings.
+
+    Qwen often emits ``"intro questions"`` (a space, or an underscore) instead
+    of ``intro``. The published schema still requires ``intro``; this only
+    recovers a call that already arrived with the framing text under another
+    key.
+    """
+    if isinstance(intro, str) and intro.strip():
+        return intro.strip()
+    for key, value in extra.items():
+        folded = key.replace(" ", "_").replace("-", "_").lower()
+        if folded.startswith("intro") and isinstance(value, str) and value.strip():
+            return value.strip()
+    raise ToolDispatchError("ask_user: intro must be a non-empty string")
+
+
 def make_ask_user_tool(handler: AskUserHandler) -> Callable[..., Awaitable[dict[str, Any]]]:
     """Build the ``ask_user`` tool handler bound to ``handler``.
 
@@ -244,11 +259,17 @@ def make_ask_user_tool(handler: AskUserHandler) -> Callable[..., Awaitable[dict[
     """
 
     async def ask_user(
-        intro: str,
-        questions: list[dict[str, Any]],
+        intro: str | None = None,
+        questions: list[dict[str, Any]] | None = None,
         outro: str | None = None,
         context: dict[str, Any] | None = None,
+        **extra: Any,
     ) -> dict[str, Any]:
+        intro = _resolve_intro(intro, extra)
+        if not isinstance(questions, list):
+            raise ToolDispatchError(
+                "ask_user: questions must be an array of question objects."
+            )
         normalized = normalize_ask_user_questions(questions)
         answers = await _call_handler(handler, intro, normalized, context)
         return {

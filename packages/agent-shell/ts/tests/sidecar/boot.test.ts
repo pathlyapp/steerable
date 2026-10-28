@@ -62,21 +62,26 @@ vi.mock('../../src/sidecar/reverse-spawn.js', () => ({
 vi.mock('../../src/sidecar/proxy-detect.js', () => ({
   collectAmbientProxyEndpoints: mocks.collectAmbientProxyEndpoints,
 }));
-vi.mock('../../src/sidecar/egress-proxy.js', () => ({
-  buildEgressProxyPlan: mocks.buildEgressProxyPlan,
-  decideEgressProxy: mocks.decideEgressProxy,
-  ensureEgressProxyExecutable: mocks.ensureEgressProxyExecutable,
-  deriveWebEgressHosts: mocks.deriveWebEgressHosts,
-  pickFreePort: mocks.pickFreePort,
-  recordEgressPosture: mocks.recordEgressPosture,
-  startEgressProxy: mocks.startEgressProxy,
-}));
+vi.mock('../../src/sidecar/egress-proxy.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/sidecar/egress-proxy.js')>();
+  return {
+    ...actual,
+    buildEgressProxyPlan: mocks.buildEgressProxyPlan,
+    decideEgressProxy: mocks.decideEgressProxy,
+    ensureEgressProxyExecutable: mocks.ensureEgressProxyExecutable,
+    deriveWebEgressHosts: mocks.deriveWebEgressHosts,
+    pickFreePort: mocks.pickFreePort,
+    recordEgressPosture: mocks.recordEgressPosture,
+    startEgressProxy: mocks.startEgressProxy,
+  };
+});
 vi.mock('../../src/tool-router.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../src/tool-router.js')>();
   return { ...mod, webToolsEnabled: mocks.webToolsEnabled };
 });
 vi.mock('../../src/storage/web-search-settings.js', () => ({
   sidecarWebSearchEnv: mocks.sidecarWebSearchEnv,
+  defaultSearchBaseUrl: () => 'https://search.example',
 }));
 vi.mock('../../src/hosted-web-search.js', () => ({
   executeHostedWebSearch: mocks.executeHostedWebSearch,
@@ -86,6 +91,7 @@ vi.mock('../../src/product-config.js', () => ({
 }));
 
 import { startHostSidecar, shutdownHostSidecar } from '../../src/sidecar/boot.js';
+import { allowEgressForBaseUrl } from '../../src/sidecar/egress-proxy.js';
 
 /** 假 supervisor：EventEmitter（once/emit）+ 测试期可断言的 RPC 桩。 */
 function fakeSupervisor(overrides: Record<string, unknown> = {}) {
@@ -511,5 +517,26 @@ describe('shutdownHostSidecar', () => {
     await startHostSidecar(makeDeps());
     await shutdownHostSidecar();
     expect(stop).toHaveBeenCalledOnce();
+  });
+});
+
+describe('plain-http endpoint admit', () => {
+  it('restarts the sidecar so a local Ollama port joins the spawn allow-list', async () => {
+    const sup = fakeSupervisor();
+    mocks.supervisorStart.mockResolvedValue(sup);
+    await startHostSidecar(makeDeps());
+
+    expect(await allowEgressForBaseUrl('http://127.0.0.1:11434')).toBe(true);
+    expect(mocks.supervisorStart).toHaveBeenCalledTimes(2);
+    expect(mocks.supervisorStart.mock.calls[1][0].sandboxAllowedHosts).toEqual([
+      'llm.example',
+      '127.0.0.1:11434',
+    ]);
+
+    expect(await allowEgressForBaseUrl('http://127.0.0.1:11434')).toBe(false);
+    expect(mocks.supervisorStart).toHaveBeenCalledTimes(2);
+    // Remote 443 is already open via web egress; no second restart.
+    expect(await allowEgressForBaseUrl('https://api.openai.com/v1')).toBe(false);
+    expect(mocks.supervisorStart).toHaveBeenCalledTimes(2);
   });
 });

@@ -79,6 +79,26 @@ def test_stripper_drops_markdown_pseudo_call() -> None:
     assert _strip([text]) == "let me check\nDone!"
 
 
+def test_stripper_drops_qwen_json_fence_split_across_chunks() -> None:
+    chunks = [
+        "```js",
+        "on\n",
+        '{"name": "ask_user", "arguments": {"intro": "hi"}}',
+        "\n```",
+    ]
+    assert _strip(chunks) == ""
+
+
+def test_stripper_keeps_a_code_fence() -> None:
+    text = "```python\nprint('hi')\n```"
+    assert _strip([text]) == text
+
+
+def test_stripper_keeps_a_fenced_config() -> None:
+    text = '```json\n{"host": "127.0.0.1"}\n```'
+    assert _strip([text]) == text
+
+
 def test_stripper_holds_partial_opener_then_releases() -> None:
     # "[Tool" at a chunk end is held back; when the next chunk shows it was
     # NOT an opener, the held text is released.
@@ -181,6 +201,39 @@ async def test_loop_display_stream_strips_pseudo_but_recovers_call() -> None:
         e.data["delta"] for e in events if e.kind == "content_delta"
     )
     assert "[Tool call:" not in displayed
+    assert "get_weather" not in displayed.split("It is sunny")[0]
+    assert "Checking the weather." in displayed
+    assert "It is sunny in Berlin." in displayed
+    assert executed == ["Berlin"]
+    assert events[-1].data["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_loop_display_stream_strips_json_fence_but_recovers_call() -> None:
+    # Qwen/Ollama emit the tool call as a ```json fence. The display must
+    # not show the fence, and the loop must still run the tool.
+    pieces = [
+        "Checking the weather.\n",
+        "```json\n",
+        '{"name": "get_weather", "arguments": {"city": "Berlin"}}',
+        "\n```",
+    ]
+    provider = make_provider(
+        [{"content_pieces": pieces}, {"content": "It is sunny in Berlin."}]
+    )
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def get_weather(city: str) -> str:
+        executed.append(city)
+        return "sunny"
+
+    router.register(get_weather)
+    loop = CoreLoop(provider, RouterToolExecutor(router))
+    events = await collect(loop.run([LLMMessage.text_of("user", "weather?")]))
+
+    displayed = "".join(e.data["delta"] for e in events if e.kind == "content_delta")
+    assert "```" not in displayed
     assert "get_weather" not in displayed.split("It is sunny")[0]
     assert "Checking the weather." in displayed
     assert "It is sunny in Berlin." in displayed
