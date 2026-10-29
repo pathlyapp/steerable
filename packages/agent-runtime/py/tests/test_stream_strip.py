@@ -99,6 +99,25 @@ def test_stripper_keeps_a_fenced_config() -> None:
     assert _strip([text]) == text
 
 
+def test_stripper_shows_a_text_tool_as_the_reply() -> None:
+    # Local models wrap the answer as {"name":"text","arguments":{"value":...}}.
+    text = '{"name": "text", "arguments": {"value": "Hello, World!"}}'
+    assert _strip(['{"name": "te', 'xt", "arguments": {"value": "Hello, World!"}}']) == (
+        "Hello, World!"
+    )
+    assert _strip([text]) == "Hello, World!"
+
+
+def test_stripper_hides_a_bare_tool_object() -> None:
+    text = '{"name": "get_weather", "arguments": {"city": "Berlin"}}'
+    assert _strip([text[:12], text[12:]]) == ""
+
+
+def test_stripper_keeps_json_that_is_not_a_tool() -> None:
+    text = '{"host": "127.0.0.1"}'
+    assert _strip([text]) == text
+
+
 def test_stripper_holds_partial_opener_then_releases() -> None:
     # "[Tool" at a chunk end is held back; when the next chunk shows it was
     # NOT an opener, the held text is released.
@@ -239,6 +258,52 @@ async def test_loop_display_stream_strips_json_fence_but_recovers_call() -> None
     assert "It is sunny in Berlin." in displayed
     assert executed == ["Berlin"]
     assert events[-1].data["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_loop_display_stream_shows_text_tool_as_reply() -> None:
+    # The whole message is a fake text tool. Show the value, do not call it.
+    payload = '{"name": "text", "arguments": {"value": "Hello, World!"}}'
+    provider = make_provider([{"content_pieces": [payload[:20], payload[20:]]}])
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def text(value: str) -> str:
+        executed.append(value)
+        return value
+
+    router.register(text)
+    loop = CoreLoop(provider, RouterToolExecutor(router))
+    events = await collect(loop.run([LLMMessage.text_of("user", "hello")]))
+
+    displayed = "".join(e.data["delta"] for e in events if e.kind == "content_delta")
+    assert displayed == "Hello, World!"
+    assert executed == []
+    assert events[-1].data["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_loop_display_stream_strips_bare_tool_json_but_recovers_call() -> None:
+    payload = '{"name": "get_weather", "arguments": {"city": "Berlin"}}'
+    provider = make_provider(
+        [{"content_pieces": [payload[:18], payload[18:]]}, {"content": "It is sunny."}]
+    )
+    router = ToolRouter()
+    executed: list[str] = []
+
+    async def get_weather(city: str) -> str:
+        executed.append(city)
+        return "sunny"
+
+    router.register(get_weather)
+    loop = CoreLoop(provider, RouterToolExecutor(router))
+    events = await collect(loop.run([LLMMessage.text_of("user", "weather?")]))
+
+    displayed = "".join(e.data["delta"] for e in events if e.kind == "content_delta")
+    assert "get_weather" not in displayed
+    assert "{" not in displayed.split("It is sunny.")[0]
+    assert "It is sunny." in displayed
+    assert executed == ["Berlin"]
 
 
 @pytest.mark.asyncio

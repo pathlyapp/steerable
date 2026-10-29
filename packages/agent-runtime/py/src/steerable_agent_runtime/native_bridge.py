@@ -33,6 +33,7 @@ from steerable_agent_runtime.loop import (
 from steerable_agent_runtime.pseudo import (
     PseudoStreamStripper,
     extract_inline_tool_calls,
+    reply_text_from_call,
     split_trailing_high_surrogate,
 )
 from steerable_agent_runtime.replay import build_step_decision_event
@@ -316,7 +317,8 @@ async def _collect_stream(
         send("chunk", chunk={"finish_reason": cut_finish_reason})
     elif not tool_seen:
         recovered, _ = extract_inline_tool_calls("".join(raw_content))
-        for index, call in enumerate(recovered):
+        actionable = [call for call in recovered if reply_text_from_call(call) is None]
+        for index, call in enumerate(actionable):
             send(
                 "chunk",
                 chunk={
