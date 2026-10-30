@@ -1,5 +1,11 @@
 # @steerable/agent-cli
 
+## [0.7.2]
+
+### Changed
+
+* The CoreLoop native wheel pin is 1.0.5.
+
 ## [0.7.1]
 
 ### Fixed
