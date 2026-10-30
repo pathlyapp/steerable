@@ -220,7 +220,7 @@ export function SettingsPage() {
     for (const panel of packPanels) {
       list.push({
         id: panel.panelId,
-        label: panel.title,
+        label: t(panel.title),
         Icon: panel.Icon ?? LuSettings,
       });
     }
@@ -503,7 +503,7 @@ export function SettingsPage() {
                     {panel.Icon ? (
                       <panel.Icon className="h-3.5 w-3.5 text-agent-muted-foreground" />
                     ) : null}
-                    {panel.title}
+                    {t(panel.title)}
                   </h2>
                   <panel.Component />
                 </section>

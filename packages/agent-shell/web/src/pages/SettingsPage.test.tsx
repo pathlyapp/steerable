@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { configureI18n, registerLocale, resetI18nForTests } from '@/i18n/runtime';
+import { registerPackRenderer } from '@/packs/registry';
 
 const { save } = vi.hoisted(() => ({ save: vi.fn(async () => {}) }));
 
@@ -63,6 +65,7 @@ function renderSettings(search = '') {
 afterEach(() => {
   cleanup();
   save.mockClear();
+  resetI18nForTests();
 });
 
 describe('SettingsPage header save', () => {
@@ -172,5 +175,24 @@ describe('SettingsPage header save', () => {
     } finally {
       window.ResizeObserver = originalRO;
     }
+  });
+
+  it('translates a pack settings title for the page language', () => {
+    registerLocale('zh', { 'Command line': '命令行' });
+    configureI18n({
+      locales: ['en', 'zh'],
+      defaultLocale: 'zh',
+      systemLocale: 'zh-CN',
+      storage: { getItem: () => null, setItem: () => undefined },
+    });
+    registerPackRenderer('cli-title-test', {
+      settingsPanels: [{
+        panelId: 'cli',
+        title: 'Command line',
+        Component: () => null,
+      }],
+    });
+    renderSettings();
+    expect(screen.getByRole('heading', { name: '命令行' })).toBeTruthy();
   });
 });
