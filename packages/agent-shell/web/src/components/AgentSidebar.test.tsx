@@ -738,9 +738,12 @@ describe('AgentSidebar 会话行交互', () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(screen.getByTestId('sidebar-chat-delete'));
     });
-    fireEvent.keyDown(screen.getByTestId('sidebar-chat-delete'), { key: 'Enter' });
+    fireEvent.click(screen.getByTestId('sidebar-chat-delete'));
     expect(screen.getByTestId('sidebar-delete-chat-dialog')).toBeTruthy();
     fireEvent.click(screen.getByTestId('sidebar-delete-chat-dialog-cancel'));
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByTestId('sidebar-chat-more'));
+    });
 
     openChatMenu();
     fireEvent.keyDown(window, { key: 'Escape' });

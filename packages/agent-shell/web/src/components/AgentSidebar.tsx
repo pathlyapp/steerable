@@ -1932,6 +1932,7 @@ export function AgentSidebar({
             void forkThisChat(target);
           }}
           onDelete={() => {
+            chatMenu.anchor.focus();
             setPendingDeleteChat({ id: chatMenu.id, title: chatMenu.title });
             setChatMenu(null);
           }}
