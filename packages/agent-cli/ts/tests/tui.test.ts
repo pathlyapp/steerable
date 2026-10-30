@@ -811,6 +811,11 @@ describe('backend-initiated turns', () => {
 describe('clipboard paste', () => {
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+  /** Windows binds paste to Alt+V so Ctrl+V stays with the console. */
+  function pasteChord(): string {
+    return process.platform === 'win32' ? '\x1bv' : '\x16';
+  }
+
   it('TUI-067 attaches a pasted image and inserts clipboard text when there is no image', async () => {
     expect(imageExtension(png)).toBe('png');
     expect(imageExtension(new Uint8Array([1, 2, 3]))).toBeNull();
@@ -820,7 +825,7 @@ describe('clipboard paste', () => {
       readClipboard: async () => ({ image: png }),
     });
     await imageSession.open();
-    imageSession.handleInput('\x16');
+    imageSession.handleInput(pasteChord());
     await waitFor(() => (imageSession.snapshot().attachments ?? []).length === 1);
     const name = imageSession.snapshot().attachments?.[0] ?? '';
     expect(name).toMatch(/^clipboard-[0-9a-f]+\.png$/);
@@ -832,7 +837,7 @@ describe('clipboard paste', () => {
       readClipboard: async () => ({ text: '贴上' }),
     });
     await textSession.open();
-    textSession.handleInput('\x16');
+    textSession.handleInput(pasteChord());
     await waitFor(() => textSession.snapshot().draft === '贴上');
     expect(textSession.snapshot().attachments ?? []).toEqual([]);
   });
