@@ -60,7 +60,7 @@ describe('AppearanceSettingsPanel', () => {
     const setHostLocale = vi.fn();
     vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
       setLocale: setHostLocale,
-    } as HostBridge);
+    } as unknown as HostBridge);
     render(
       <I18nProvider>
         <AppearanceSettingsPanel />
@@ -84,13 +84,13 @@ describe('AppearanceSettingsPanel', () => {
     vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
       getZoom: async () => 1.2,
       setZoom,
-      onZoomChanged: (callback) => {
+      onZoomChanged: (callback: (payload: { scale: number }) => void) => {
         listeners.add(callback);
         return () => {
           listeners.delete(callback);
         };
       },
-    } as HostBridge);
+    } as unknown as HostBridge);
     render(<AppearanceSettingsPanel />);
     expect((await screen.findByTestId('interface-zoom-level')).textContent).toBe('120%');
     fireEvent.click(screen.getByTestId('interface-zoom-in'));

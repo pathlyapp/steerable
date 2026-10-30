@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   expandRunCodeActions,
+  type ExecutedActionLike,
   summarizeRunCodeAction,
   summarizeWebAction,
   parseDelegateSubagent,
@@ -208,7 +209,7 @@ describe('summarizeRunCodeAction / expandRunCodeActions', () => {
         ],
       },
     });
-    const rows = expandRunCodeActions([
+    const rows = expandRunCodeActions<ExecutedActionLike>([
       { tool: 'run_code', arguments: { description: 'click' }, result: preview },
     ]);
     expect(rows.map((row) => row.tool)).toEqual(['run_code', 'browser_click']);
@@ -219,7 +220,7 @@ describe('summarizeRunCodeAction / expandRunCodeActions', () => {
   });
 
   it('历史里的 data 对象把本会话允许留在内层工具上', () => {
-    const rows = expandRunCodeActions([
+    const rows = expandRunCodeActions<ExecutedActionLike>([
       {
         tool: 'run_code',
         result: {
