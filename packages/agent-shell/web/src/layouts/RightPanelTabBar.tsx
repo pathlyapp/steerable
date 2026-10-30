@@ -192,7 +192,7 @@ function unopenedPanels(
     const Icon = slot.Icon;
     entries.push({
       id: slot.slotId,
-      title: slot.title,
+      title: t(slot.title),
       testId: `header-slot-${slot.slotId}`,
       icon: <Icon className="h-3.5 w-3.5 shrink-0" />,
     });

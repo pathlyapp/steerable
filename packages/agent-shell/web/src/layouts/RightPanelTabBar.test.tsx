@@ -1,11 +1,13 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PackChatSlotContribution } from '@/packs/registry';
+import { configureI18n, registerLocale, resetI18nForTests } from '@/i18n/runtime';
 import { createRightPanelTab } from '@/layouts/right-panel-tabs';
 import { RightPanelTabBar } from './RightPanelTabBar';
 
 afterEach(() => {
   cleanup();
+  resetI18nForTests();
 });
 
 const ppt: PackChatSlotContribution = {
@@ -105,5 +107,18 @@ describe('RightPanelTabBar', () => {
     fireEvent.click(screen.getByTestId('right-panel-add'));
     fireEvent.click(screen.getByTestId('header-slot-browser'));
     expect(onOpen).toHaveBeenCalledWith('browser');
+  });
+
+  it('translates the add-menu slot title for the page language', () => {
+    registerLocale('zh', { Browser: '浏览器' });
+    configureI18n({
+      locales: ['en', 'zh'],
+      defaultLocale: 'zh',
+      systemLocale: 'zh-CN',
+      storage: { getItem: () => null, setItem: () => undefined },
+    });
+    renderBar({ tabs: [], activeTabId: '', slots: [browser], showTerminal: false });
+    fireEvent.click(screen.getByTestId('right-panel-add'));
+    expect(screen.getByTestId('header-slot-browser').textContent).toContain('浏览器');
   });
 });

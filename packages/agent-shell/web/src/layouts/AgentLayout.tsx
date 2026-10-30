@@ -365,7 +365,7 @@ function AgentLayoutContent() {
     return {
       kind,
       contentId,
-      title: request.title || contentTitle(contentId, slot.title),
+      title: request.title || contentTitle(contentId, t(slot.title)),
     };
   }, [packChatSlots]);
 
