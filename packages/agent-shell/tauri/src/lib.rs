@@ -51,17 +51,17 @@ impl DesktopConfig {
 }
 
 fn install_menu(app: &tauri::App, data_dir_name: &str) -> tauri::Result<()> {
-    let new_chat = MenuItemBuilder::with_id("new-chat", "新建对话")
+    let labels = zoom::zoom_menu_labels("zh");
+    let new_chat = MenuItemBuilder::with_id("new-chat", labels.new_chat)
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
-    let labels = zoom::zoom_menu_labels("zh");
     let open_terminal = MenuItemBuilder::with_id("open-terminal", labels.open_terminal)
         .accelerator("CmdOrCtrl+T")
         .build(app)?;
-    let quit = MenuItemBuilder::with_id("app-quit", "退出")
+    let quit = MenuItemBuilder::with_id("app-quit", labels.quit)
         .accelerator("CmdOrCtrl+Q")
         .build(app)?;
-    let file = SubmenuBuilder::new(app, "文件")
+    let file = SubmenuBuilder::new(app, labels.file)
         .item(&new_chat)
         .separator()
         .close_window()
@@ -70,10 +70,10 @@ fn install_menu(app: &tauri::App, data_dir_name: &str) -> tauri::Result<()> {
         .build()?;
     // Predefined Paste delivers an empty clipboard into WKWebView. Own the
     // shortcut and read the pasteboard from the host process instead.
-    let paste = MenuItemBuilder::with_id("edit-paste", "粘贴")
+    let paste = MenuItemBuilder::with_id("edit-paste", labels.paste)
         .accelerator("CmdOrCtrl+V")
         .build(app)?;
-    let edit = SubmenuBuilder::new(app, "编辑")
+    let edit = SubmenuBuilder::new(app, labels.edit)
         .undo()
         .redo()
         .separator()
@@ -111,6 +111,11 @@ fn install_menu(app: &tauri::App, data_dir_name: &str) -> tauri::Result<()> {
         app,
         data_dir_name,
         zoom::ZoomMenuItems {
+            file: file.clone(),
+            new_chat,
+            quit,
+            edit: edit.clone(),
+            paste,
             zoom_in,
             zoom_in_plus,
             zoom_out,

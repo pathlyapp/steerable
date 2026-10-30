@@ -21,6 +21,11 @@ struct ZoomChanged {
 }
 
 pub struct ZoomMenuItems {
+    pub file: Submenu<Wry>,
+    pub new_chat: MenuItem<Wry>,
+    pub quit: MenuItem<Wry>,
+    pub edit: Submenu<Wry>,
+    pub paste: MenuItem<Wry>,
     pub zoom_in: MenuItem<Wry>,
     pub zoom_in_plus: MenuItem<Wry>,
     pub zoom_out: MenuItem<Wry>,
@@ -36,6 +41,11 @@ pub struct ZoomControls {
 }
 
 pub struct ZoomMenuLabels {
+    pub file: &'static str,
+    pub new_chat: &'static str,
+    pub quit: &'static str,
+    pub edit: &'static str,
+    pub paste: &'static str,
     pub view: &'static str,
     pub zoom_in: &'static str,
     pub zoom_out: &'static str,
@@ -43,11 +53,17 @@ pub struct ZoomMenuLabels {
     pub open_terminal: &'static str,
 }
 
-/// View-menu labels for the page locale. Both zoom-in rows share one label.
+/// App-menu labels for the page locale. Both zoom-in rows share one label.
+/// Undo, cut, and the other predefined items stay with the operating system.
 pub fn zoom_menu_labels(locale: &str) -> ZoomMenuLabels {
     let normalized = locale.trim().to_lowercase().replace('_', "-");
     if normalized == "zh" || normalized.starts_with("zh-") {
         ZoomMenuLabels {
+            file: "文件",
+            new_chat: "新建对话",
+            quit: "退出",
+            edit: "编辑",
+            paste: "粘贴",
             view: "视图",
             zoom_in: "放大",
             zoom_out: "缩小",
@@ -56,6 +72,11 @@ pub fn zoom_menu_labels(locale: &str) -> ZoomMenuLabels {
         }
     } else {
         ZoomMenuLabels {
+            file: "File",
+            new_chat: "New chat",
+            quit: "Quit",
+            edit: "Edit",
+            paste: "Paste",
             view: "View",
             zoom_in: "Zoom in",
             zoom_out: "Zoom out",
@@ -226,6 +247,11 @@ pub fn apply_locale(app: &AppHandle, locale: &str) {
         return;
     };
     let labels = zoom_menu_labels(locale);
+    let _ = controls.menu.file.set_text(labels.file);
+    let _ = controls.menu.new_chat.set_text(labels.new_chat);
+    let _ = controls.menu.quit.set_text(labels.quit);
+    let _ = controls.menu.edit.set_text(labels.edit);
+    let _ = controls.menu.paste.set_text(labels.paste);
     let _ = controls.menu.view.set_text(labels.view);
     let _ = controls.menu.zoom_in.set_text(labels.zoom_in);
     let _ = controls.menu.zoom_in_plus.set_text(labels.zoom_in);
@@ -374,12 +400,22 @@ mod tests {
     #[test]
     fn menu_labels_follow_the_page_locale() {
         let chinese = zoom_menu_labels("zh-CN");
+        assert_eq!(chinese.file, "文件");
+        assert_eq!(chinese.new_chat, "新建对话");
+        assert_eq!(chinese.quit, "退出");
+        assert_eq!(chinese.edit, "编辑");
+        assert_eq!(chinese.paste, "粘贴");
         assert_eq!(chinese.view, "视图");
         assert_eq!(chinese.zoom_in, "放大");
         assert_eq!(chinese.zoom_out, "缩小");
         assert_eq!(chinese.zoom_reset, "实际大小");
         assert_eq!(chinese.open_terminal, "打开终端");
         let english = zoom_menu_labels("en");
+        assert_eq!(english.file, "File");
+        assert_eq!(english.new_chat, "New chat");
+        assert_eq!(english.quit, "Quit");
+        assert_eq!(english.edit, "Edit");
+        assert_eq!(english.paste, "Paste");
         assert_eq!(english.view, "View");
         assert_eq!(english.zoom_in, "Zoom in");
         assert_eq!(english.zoom_out, "Zoom out");
