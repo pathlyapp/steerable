@@ -182,7 +182,7 @@ async def test_system_prompt_and_catalog_keep_a_single_leading_system(
         sidecar,
         _params(
             skills_root,
-            systemPrompt="你是 CIFLog 测井助手。",
+            systemPrompt="你是示例助手。",
             messages=[{"role": "user", "content": "hi"}],
         ),
     )
@@ -190,7 +190,7 @@ async def test_system_prompt_and_catalog_keep_a_single_leading_system(
     assert len(provider.seen_messages) == 2
     first = provider.seen_messages[0]
     assert [message.role for message in first] == ["system", "user", "user"]
-    assert first[0].content_text == "你是 CIFLog 测井助手。"
+    assert first[0].content_text == "你是示例助手。"
     assert first[1].content_text == "hi"
     assert "# Available skills" in first[2].content_text
     for request in provider.seen_messages:

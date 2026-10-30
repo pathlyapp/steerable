@@ -250,7 +250,7 @@ describe('project binding command', () => {
     try {
       const code = await createCli({
         argv: ['run', '整理下载目录'],
-        commandName: 'aroli',
+        commandName: 'agent',
         stdout: capture().stream,
         stderr: stderr.stream,
         stdinIsTTY: true,
@@ -259,8 +259,8 @@ describe('project binding command', () => {
         },
       });
       expect(code).toBe(2);
-      expect(stderr.text()).toContain('请改用：aroli run --project <目录> "…"');
-      expect(stderr.text()).toContain('aroli run --no-project');
+      expect(stderr.text()).toContain('请改用：agent run --project <目录> "…"');
+      expect(stderr.text()).toContain('agent run --no-project');
       expect(stderr.text()).not.toContain('<product>');
     } finally {
       process.chdir(previousCwd);

@@ -25,6 +25,15 @@ const client: AgentClient = {
     if (method === 'GET' && requestPath === '/api/v2/chats') return { status: 200, data: { chats: [] } };
     if (method === 'GET' && requestPath === '/api/v2/local-settings/llm') return { status: 200, data: { model: 'demo-model' } };
     if (method === 'POST' && requestPath === '/api/v2/chats/new') return { status: 200, data: { chatId: 'chat-1' } };
+    if (method === 'POST' && requestPath === '/api/v2/projects/resolve') {
+      return {
+        status: 200,
+        data: {
+          project: { id: 'proj-1', name: 'cli', folderPath: process.cwd() },
+          created: false,
+        },
+      };
+    }
     if (method === 'GET' && requestPath.endsWith('/goal')) return { status: 200, data: { goal } };
     if (method === 'GET' && requestPath.endsWith('/loops')) return { status: 200, data: { loops } };
     if (method === 'DELETE' && requestPath.includes('/loops/')) {

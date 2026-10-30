@@ -145,7 +145,7 @@ export const COMMAND_NAME_TOKEN = '<product>';
  * A blank name, the token itself, or a name that is not a command token is left unchanged.
  *
  * @param text Help or protected-directory text.
- * @param commandName Bin name such as `aroli` or `steerable-cli`.
+ * @param commandName Bin name such as `agent` or `steerable-cli`.
  * @returns Text with the placeholder replaced when the name is usable.
  */
 export function renderCommandName(text: string, commandName: string | undefined): string {

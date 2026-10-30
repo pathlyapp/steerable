@@ -28,4 +28,4 @@
 
 ### Changed
 
-* Help text and the protected-directory message use the running command name (`aroli`, `steerable-cli`) instead of the `<product>` placeholder.
+* Help text and the protected-directory message use the running command name (`agent`, `steerable-cli`) instead of the `<product>` placeholder.

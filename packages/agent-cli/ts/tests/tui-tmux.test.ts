@@ -58,7 +58,10 @@ describe.skipIf(!TmuxDriver.isAvailable())('tui tmux smoke', () => {
       expect(await driver.waitFor('已中断')).toContain('已中断');
       driver.send('C-c');
       await driver.waitForScreen((screen) => !screen.includes('已中断'), 'TUI screen to close');
-      await driver.waitFor('sh-');
+      await driver.waitForScreen(
+        (screen) => /sh-/.test(screen) || /(^|\n)\$/.test(screen),
+        'shell prompt',
+      );
       driver.send('echo __TUI_RESTORED__', 'C-m');
       const restored = await driver.waitForScreen(
         (screen) => (screen.match(/__TUI_RESTORED__/g)?.length ?? 0) >= 2,

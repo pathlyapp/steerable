@@ -63,14 +63,14 @@ describe('createCli', () => {
     const stderr = capture();
     const code = await createCli({
       argv: ['--help'],
-      commandName: 'aroli',
+      commandName: 'agent',
       stdout: stdout.stream,
       stderr: stderr.stream,
       createClient: async () => client(),
     });
     expect(code).toBe(0);
-    expect(stdout.text()).toContain('aroli run "列出当前目录"');
-    expect(stdout.text()).toContain('aroli doctor');
+    expect(stdout.text()).toContain('agent run "列出当前目录"');
+    expect(stdout.text()).toContain('agent doctor');
     expect(stdout.text()).not.toContain('<product>');
 
     const ignored = capture();

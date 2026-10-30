@@ -450,7 +450,7 @@ def nonleading_system_indices(messages: list[LLMMessage]) -> list[int]:
 async def test_qwen_template_rejects_a_system_role_catalog(skills_root: Path) -> None:
     """The skill catalog must not be a second system message.
 
-    CIFLog's first turn is one system prompt plus the user text. Appending
+    The product's first turn is one system prompt plus the user text. Appending
     the catalog as ``role=system`` made a self-hosted Qwen3.8-27B-W8A8
     return HTTP 400. The follow-up tool round has to keep that shape too.
     """

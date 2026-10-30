@@ -23,7 +23,7 @@ export function satisfies(current: string, required: string): boolean {
   return true;
 }
 
-/** @param current Installed version. @param stderr Where the failure text is written. @param product Command name, such as `aroli`. @returns `0` when the version is new enough, otherwise `1`. */
+/** @param current Installed version. @param stderr Where the failure text is written. @param product Command name, such as `agent`. @returns `0` when the version is new enough, otherwise `1`. */
 export function ensureSupportedNode(
   current: string,
   stderr: NodeVersionWriter,

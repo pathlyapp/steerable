@@ -61,8 +61,7 @@ describe.skipIf(!TmuxDriver.isAvailable())('project file in tmux', () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       expect(fs.readFileSync(hello, 'utf8')).toBe('phase1-hello\n');
-      session.send('C-c');
-      await session.waitUntilGone(10_000);
+      await leaveTui(session);
     } catch (error) {
       await session.writeFailureArtifacts(error);
       throw error;
@@ -114,8 +113,7 @@ describe.skipIf(!TmuxDriver.isAvailable())('project file in tmux', () => {
       expect(fs.readFileSync(hello, 'utf8')).toBe('phase1-hello\n');
       const done = session.capture();
       expect(done).not.toContain('审批 local_');
-      session.send('C-c');
-      await session.waitUntilGone(10_000);
+      await leaveTui(session);
     } catch (error) {
       await session.writeFailureArtifacts(error);
       throw error;
@@ -124,6 +122,20 @@ describe.skipIf(!TmuxDriver.isAvailable())('project file in tmux', () => {
     }
   }, 45_000);
 });
+
+/** Ctrl+C leaves. A turn that is still finishing takes the first press as an interrupt. */
+async function leaveTui(session: TmuxDriver): Promise<void> {
+  session.send('C-c');
+  const started = Date.now();
+  while (session.exists() && Date.now() - started < 10_000) {
+    if (session.capture().includes('已中断')) {
+      session.send('C-c');
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  await session.waitUntilGone(10_000);
+}
 
 function isolatedEnv(dataDir: string): NodeJS.ProcessEnv {
   const env = { ...process.env, DEEPPATH_USER_DATA_DIR: dataDir };

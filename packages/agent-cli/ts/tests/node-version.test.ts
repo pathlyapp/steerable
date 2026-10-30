@@ -23,11 +23,11 @@ describe('node version', () => {
 
   it('prints the required and current versions and exits before other modules', () => {
     let written = '';
-    expect(ensureSupportedNode('22.12.0', { write: (chunk) => { written += chunk; } }, 'aroli')).toBe(1);
+    expect(ensureSupportedNode('22.12.0', { write: (chunk) => { written += chunk; } }, 'agent')).toBe(1);
     expect(written).toBe(
-      'aroli 需要 Node.js 26.4.0 或更高版本，当前为 22.12.0。\n升级方法：https://nodejs.org/\n',
+      'agent 需要 Node.js 26.4.0 或更高版本，当前为 22.12.0。\n升级方法：https://nodejs.org/\n',
     );
-    expect(ensureSupportedNode('26.4.0', { write: () => { throw new Error('no output'); } }, 'aroli')).toBe(0);
+    expect(ensureSupportedNode('26.4.0', { write: () => { throw new Error('no output'); } }, 'agent')).toBe(0);
     expect(nodeDoctorLine('26.4.1')).toBe('Node.js: 26.4.1（需要 ≥ 26.4.0） ✓\n');
     expect(nodeDoctorLine('22.12.0')).toContain('✗');
   });
