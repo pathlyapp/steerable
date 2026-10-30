@@ -12,6 +12,7 @@
  *     may drift from any public cloud API. Aligning the two is out of scope.
  */
 
+import { getLocale } from '@/i18n';
 import { getHostBridge } from './host-bridge';
 
 export interface LocalChat {
@@ -637,7 +638,7 @@ export async function forkChat(chatId: string) {
   return bridge().localBackend.request<{ chatId: string }>({
     method: 'POST',
     path: `/api/v2/chats/${encodeURIComponent(chatId)}/fork`,
-    body: {},
+    body: { locale: getLocale() },
   });
 }
 

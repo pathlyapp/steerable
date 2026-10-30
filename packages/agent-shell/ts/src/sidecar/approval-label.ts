@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { canonicalFencePath } from '../fence-path.js';
+import { canonicalFencePath, canonicalPathInside } from '../fence-path.js';
 
 const COMMAND_TOOLS = new Set(['local_exec_shell', 'local_run_snippet']);
 // Only the shell starts an explicit cwd outside the writable roots. A snippet
@@ -35,6 +35,21 @@ export function resolveApprovalCategoryLabel(input: ApprovalCategoryLabelInput):
   if (builtin) return input.translate(builtin);
   if (COMMAND_TOOLS.has(input.toolName) || COMMAND_TOOLS.has(input.category)) return input.translate('Command');
   return undefined;
+}
+
+/** English source string for the approval card. The web view translates it. */
+export function hostApprovalCategoryLabel(input: {
+  category: string;
+  toolName: string;
+  declaredLabel?: Readonly<Record<string, string>>;
+}): string | undefined {
+  return resolveApprovalCategoryLabel({
+    locale: 'en',
+    category: input.category,
+    toolName: input.toolName,
+    ...(input.declaredLabel ? { declaredLabel: input.declaredLabel } : {}),
+    translate: (message) => message,
+  });
 }
 
 export type CwdFence = 'project' | 'workspace';
@@ -88,7 +103,7 @@ export function shellCwdOutsideProject(input: {
   if (!input.projectRoot || typeof input.cwd !== 'string' || !input.cwd.trim()) return false;
   const target = resolveCwd(input.cwd.trim(), input.projectRoot, input.home ?? homedir());
   const roots = [input.projectRoot, ...input.sourceFolders];
-  return !roots.some((root) => withinRoot(root, target));
+  return !roots.some((root) => canonicalPathInside(root, target));
 }
 
 function declaredLabel(
@@ -114,12 +129,4 @@ function resolveCwd(cwd: string, projectRoot: string, home: string): string {
   const root = canonicalFencePath(path.resolve(projectRoot));
   const resolved = path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(root, expanded);
   return canonicalFencePath(resolved);
-}
-
-function withinRoot(root: string, target: string): boolean {
-  const relative = path.relative(
-    canonicalFencePath(path.resolve(root)),
-    canonicalFencePath(path.resolve(target)),
-  );
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }

@@ -20,6 +20,97 @@ import type {
 } from '../sidecar/index.js';
 import type { LlmMessage } from '../llm/types.js';
 
+/** Markers an older engine left inside the tool-result preview JSON. */
+function markersFromToolPreview(preview: string | undefined): {
+  sandbox?: CoreLoopToolAction['sandbox'];
+  approval?: CoreLoopToolAction['approval'];
+} {
+  if (!preview || preview[0] !== '{') return {};
+  const record = previewData(preview);
+  if (!record) return {};
+  const sandbox = record._sandbox;
+  const approval = record._approval;
+  return {
+    ...(sandbox && typeof sandbox === 'object' && !Array.isArray(sandbox)
+      && typeof (sandbox as { enforcement?: unknown }).enforcement === 'string'
+      ? { sandbox: sandbox as CoreLoopToolAction['sandbox'] }
+      : {}),
+    ...(approval && typeof approval === 'object' && !Array.isArray(approval)
+      ? { approval: approval as CoreLoopToolAction['approval'] }
+      : {}),
+  };
+}
+
+function previewData(preview: string): { _sandbox?: unknown; _approval?: unknown } | undefined {
+  try {
+    const parsed = JSON.parse(preview) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const data = (parsed as { data?: unknown }).data;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return undefined;
+    return data as { _sandbox?: unknown; _approval?: unknown };
+  } catch {
+    // The published loop cuts the preview at 300 characters and appends an
+    // ellipsis. The marker objects are placed first so they are still intact.
+    return {
+      _sandbox: objectAfterKey(preview, '_sandbox'),
+      _approval: objectAfterKey(preview, '_approval'),
+    };
+  }
+}
+
+function objectAfterKey(text: string, key: string): Record<string, unknown> | undefined {
+  const needle = `"${key}"`;
+  let from = 0;
+  while (from < text.length) {
+    const found = text.indexOf(needle, from);
+    if (found < 0) return undefined;
+    const colon = text.indexOf(':', found + needle.length);
+    if (colon < 0) return undefined;
+    let index = colon + 1;
+    while (text[index] === ' ' || text[index] === '\n' || text[index] === '\t') index += 1;
+    if (text[index] !== '{') {
+      from = found + needle.length;
+      continue;
+    }
+    const end = matchingBrace(text, index);
+    if (end < 0) return undefined;
+    try {
+      const value = JSON.parse(text.slice(index, end + 1)) as unknown;
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return value as Record<string, unknown>;
+      }
+    } catch {
+      // The cut landed inside this object. A later copy of the key will not
+      // be more complete.
+      return undefined;
+    }
+    from = found + needle.length;
+  }
+  return undefined;
+}
+
+function matchingBrace(text: string, open: number): number {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let index = open; index < text.length; index += 1) {
+    const char = text[index] ?? '';
+    if (inString) {
+      if (escape) escape = false;
+      else if (char === '\\') escape = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
 export interface CoreLoopToolAction {
   id?: string;
   tool: string;
@@ -466,6 +557,7 @@ export async function streamCoreLoopTurn(
           if (chunk.toolResult) {
             const started = pendingCalls.get(chunk.toolResult.id);
             pendingCalls.delete(chunk.toolResult.id);
+            const lifted = markersFromToolPreview(chunk.toolResult.resultPreview);
             options.onToolAction?.({
               id: chunk.toolResult.id,
               tool: chunk.toolResult.name,
@@ -474,8 +566,8 @@ export async function streamCoreLoopTurn(
               result: chunk.toolResult.resultPreview,
               error: chunk.toolResult.error,
               durationMs: chunk.toolResult.durationMs,
-              sandbox: chunk.toolResult.sandbox,
-              approval: chunk.toolResult.approval,
+              sandbox: chunk.toolResult.sandbox ?? lifted.sandbox,
+              approval: chunk.toolResult.approval ?? lifted.approval,
             });
           }
           if (chunk.notice) {

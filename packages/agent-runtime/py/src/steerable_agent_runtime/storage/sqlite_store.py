@@ -17,10 +17,10 @@ Concurrency: like ``InMemoryStorage``, all mutations run under one asyncio
 lock (safe under concurrent ``await`` in a single loop). Across processes
 the database uses WAL, ``busy_timeout``, and a shared lease on the sibling
 ``*.lock`` file, so two sidecars can write different sessions. Schema
-migration takes that file exclusively and fails when another process has
-the database open. A ``user_version`` newer than this process refuses to
-open. Process death releases the kernel lock; the lock file is never
-deleted.
+migration takes that file exclusively. A peer that is applying the schema
+is waited on briefly; a lease that is still held, or a ``user_version``
+newer than this process, refuses to open. Process death releases the
+kernel lock; the lock file is never deleted.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 from collections.abc import Iterable
 from typing import Any
 
@@ -45,6 +46,11 @@ from .write_lease import WriteLease, acquire_shared_lease, acquire_write_lease
 
 SCHEMA_VERSION = 1
 _BUSY_TIMEOUT_MS = 5000
+# A second process can observe version 0 while the first still holds the
+# exclusive lease to create the schema. The hold is the migration itself,
+# not a live sidecar, so wait out that window before refusing.
+_PEER_MIGRATION_WAIT_S = 1.0
+_PEER_MIGRATION_POLL_S = 0.02
 
 _SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -138,31 +144,47 @@ def _apply_schema(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _newer_than_this_program(version: int) -> StorageUpgradeBlockedError:
+    return StorageUpgradeBlockedError(
+        f"sidecar database version {version} is newer than this program ({SCHEMA_VERSION})"
+    )
+
+
 def _open_lease(path: str) -> WriteLease:
-    version = _read_user_version(path)
-    if version > SCHEMA_VERSION:
-        raise StorageUpgradeBlockedError(
-            f"sidecar database version {version} is newer than this program ({SCHEMA_VERSION})"
-        )
-    if version < SCHEMA_VERSION:
+    deadline = time.monotonic() + _PEER_MIGRATION_WAIT_S
+    while True:
+        version = _read_user_version(path)
+        if version > SCHEMA_VERSION:
+            raise _newer_than_this_program(version)
+        if version == SCHEMA_VERSION:
+            return acquire_shared_lease(path)
         try:
             exclusive = acquire_write_lease(path)
         except StoreAlreadyOwnedError as exc:
-            version = _read_user_version(path)
-            if version < SCHEMA_VERSION:
+            if time.monotonic() >= deadline:
+                version = _read_user_version(path)
+                if version > SCHEMA_VERSION:
+                    raise _newer_than_this_program(version) from exc
+                if version == SCHEMA_VERSION:
+                    return acquire_shared_lease(path)
                 raise StorageUpgradeBlockedError(
                     "sidecar database needs an upgrade but another process has it open"
                 ) from exc
-        else:
-            try:
+            time.sleep(_PEER_MIGRATION_POLL_S)
+            continue
+        try:
+            version = _read_user_version(path)
+            if version > SCHEMA_VERSION:
+                raise _newer_than_this_program(version)
+            if version < SCHEMA_VERSION:
                 db = _connect(path)
                 try:
                     _apply_schema(db)
                 finally:
                     db.close()
-            finally:
-                exclusive.release()
-    return acquire_shared_lease(path)
+        finally:
+            exclusive.release()
+        return acquire_shared_lease(path)
 
 
 class SqliteStorage:

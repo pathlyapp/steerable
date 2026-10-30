@@ -1101,9 +1101,7 @@ export function AgentSidebar({
               ? t("This workspace is too large to fork ({size}).", {
                   size: formatForkBytes(bytes),
                 })
-              : err instanceof Error
-                ? err.message
-                : String(err);
+              : t(err instanceof Error && err.message ? err.message : 'Fork failed');
         setRenameHint({ chatId: chat.id, text });
       } finally {
         forkingChatRef.current = null;

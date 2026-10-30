@@ -29,6 +29,7 @@ import { LocalBackendRouter } from '../../src/local-backend/router.js';
 import { acquireChatWriteLock } from '../../src/storage/process-locks.js';
 import type { ToolRouter } from '../../src/tool-router.js';
 import { setProductConfig } from '../../src/product-config.js';
+import { chatWorkspacePath } from '../../src/project-home.js';
 
 function makeRouter(options: {
   toolRouter?: Record<string, unknown>;
@@ -246,6 +247,35 @@ describe('流式回合 SSE 序列', () => {
       view: { card: 'read', declared: true, title: '/a' },
     });
     expect(metadata.timeline.some((b: { type: string }) => b.type === 'tools')).toBe(true);
+  });
+
+  it('本会话允许记在主对话的工具行上', async () => {
+    const chat = await seedChat();
+    const approval = { kind: 'allow_for_session', category: 'browser', cached: true };
+    installStream((opts) => {
+      opts.onToolStart({ id: 'call-1', tool: 'browser_click', arguments: { ref: 'e1' } });
+      opts.onToolAction({
+        id: 'call-1',
+        tool: 'browser_click',
+        arguments: { ref: 'e1' },
+        result: 'clicked',
+        success: true,
+        approval,
+      });
+      opts.onText('点过了');
+    });
+    const cap = makeEmitCapture();
+    await makeRouter().handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '点一下' } },
+      cap.emit,
+    );
+
+    const actionEvents = cap.byType('executed_actions');
+    const last = actionEvents.at(-1)?.data as { actions: Array<Record<string, unknown>> };
+    expect(last.actions[0]).toMatchObject({ tool: 'browser_click', approval });
+    const assistant = (await h.store.listMessages(chat.id, 10))[0];
+    const metadata = JSON.parse(assistant.messageMetadata!);
+    expect(metadata.executedActions[0]).toMatchObject({ tool: 'browser_click', approval });
   });
 
   it('reasoning 片段以 type:reasoning 转发', async () => {
@@ -792,9 +822,27 @@ describe('流式回合的提示词与工具面', () => {
     const { seen } = installStream(() => {});
     const toolRouter = makeToolRouter({
       schemas: [
-        { name: 'browser_scroll', description: '滚动', inputSchema: { type: 'object' }, mode: 'read' },
-        { name: 'browser_hover', description: '悬停', inputSchema: { type: 'object' }, mode: 'read' },
-        { name: 'browser_click', description: '点击', inputSchema: { type: 'object' }, mode: 'external' },
+        {
+          name: 'browser_scroll',
+          description: '滚动',
+          inputSchema: { type: 'object' },
+          mode: 'read',
+          approval: { category: 'browser' },
+        },
+        {
+          name: 'browser_hover',
+          description: '悬停',
+          inputSchema: { type: 'object' },
+          mode: 'read',
+          approval: { category: 'browser' },
+        },
+        {
+          name: 'browser_click',
+          description: '点击',
+          inputSchema: { type: 'object' },
+          mode: 'external',
+          approval: { category: 'browser' },
+        },
         { name: 'local_write_file', description: '写文件', inputSchema: { type: 'object' }, mode: 'write' },
       ],
     });
@@ -806,11 +854,20 @@ describe('流式回合的提示词与工具面', () => {
       },
       makeEmitCapture().emit,
     );
-    const toolNames = seen[0].tools.map((tool: { name: string }) => tool.name);
+    const tools = seen[0].tools as Array<{ name: string; mode?: string; approvalCategory?: string }>;
+    const toolNames = tools.map((tool) => tool.name);
     expect(toolNames).toContain('browser_scroll');
     expect(toolNames).toContain('browser_hover');
     expect(toolNames).not.toContain('browser_click');
     expect(toolNames).not.toContain('local_write_file');
+    expect(tools.find((tool) => tool.name === 'browser_scroll')).toMatchObject({
+      mode: 'read',
+      approvalCategory: 'browser',
+    });
+    expect(tools.find((tool) => tool.name === 'browser_hover')).toMatchObject({
+      mode: 'read',
+      approvalCategory: 'browser',
+    });
   });
 
   it('智能体工具策略（allowlist）真实收窄本轮工具面', async () => {
@@ -1005,6 +1062,10 @@ describe('流式回合的提示词与工具面', () => {
     expect(projectPromptTail(String(seen[0].systemPrompt), chat.id)).toBe(
       `${PROJECT_MODE_PROMPT}\n\n${PROJECT_RULES_PROMPT}`,
     );
+    expect(String(seen[0].systemPrompt)).toContain('后端当前工作目录：/tmp/proj-1');
+    if (process.cwd() !== '/tmp/proj-1') {
+      expect(String(seen[0].systemPrompt)).not.toContain(`后端当前工作目录：${process.cwd()}`);
+    }
   });
 
   it('未信任的项目不注入规则文件内容', async () => {
@@ -1044,6 +1105,52 @@ describe('流式回合的提示词与工具面', () => {
       '只有 local_exec_shell 的显式 cwd 可以在工作区外：命令仍在沙箱中运行，写入该目录会被拒绝。',
     );
     expect(prompt).toContain('pwsh 与代码片段的 cwd 必须留在工作区内。');
+    const workspace = prompt.match(/工作区：(\S+)/)?.[1];
+    expect(workspace).toBeTruthy();
+    expect(prompt).toContain(`后端当前工作目录：${workspace}`);
+    if (workspace !== process.cwd()) {
+      expect(prompt).not.toContain(`后端当前工作目录：${process.cwd()}`);
+    }
+  });
+
+  it('审批 pathBase 是项目家目录，未绑定项目时是对话工作区', async () => {
+    const documentsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'path-base-docs-'));
+    const previous = process.env.STEERABLE_DOCUMENTS_DIR;
+    process.env.STEERABLE_DOCUMENTS_DIR = documentsDir;
+    try {
+      const registry = makeProjectRegistry([
+        {
+          id: 'proj-1',
+          name: '演示项目',
+          folderPath: '/tmp/proj-1',
+          trusted: false,
+          sourceFolders: ['/extra-src'],
+        },
+      ]);
+      const projectChat = await h.store.createChat('项目对话', 'agent-a', 'proj-1');
+      const looseChat = await seedChat('独立对话');
+      const { seen } = installStream(() => {});
+      const router = makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) });
+      await router.handleStream(
+        { method: 'POST', path: `/api/v2/chats/${projectChat.id}/send`, body: { message: 'hi' } },
+        makeEmitCapture().emit,
+      );
+      await router.handleStream(
+        { method: 'POST', path: `/api/v2/chats/${looseChat.id}/send`, body: { message: 'hi' } },
+        makeEmitCapture().emit,
+      );
+      expect(seen[0].approval).toMatchObject({ mode: 'host', pathBase: '/tmp/proj-1' });
+      expect(seen[0].approval.timeoutMs).toBeUndefined();
+      expect(seen[0].approval.writableRoots).toEqual(['/tmp/proj-1', '/extra-src']);
+      const looseBase = chatWorkspacePath(looseChat.id);
+      expect(seen[1].approval).toMatchObject({ mode: 'host', pathBase: looseBase });
+      expect(seen[1].approval.timeoutMs).toBeUndefined();
+      expect(seen[1].approval.writableRoots).toEqual([looseBase]);
+    } finally {
+      if (previous === undefined) delete process.env.STEERABLE_DOCUMENTS_DIR;
+      else process.env.STEERABLE_DOCUMENTS_DIR = previous;
+      await fs.rm(documentsDir, { recursive: true, force: true });
+    }
   });
 
   it('命令沙箱关闭时，系统提示不再说 shell 写入会被拒绝', async () => {

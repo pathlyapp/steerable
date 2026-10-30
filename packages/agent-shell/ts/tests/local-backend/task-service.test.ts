@@ -254,6 +254,9 @@ describe('task-service / runTask', () => {
     expect(call.toolContext).toMatchObject({ chatId: 'chat-1', taskId: result.taskId });
     // 后台任务不挂 ask_user。
     expect(call.askUser).toBe(false);
+    // 相对路径先接到项目家目录，不接到源文件夹。
+    expect(call.approval).toMatchObject({ mode: 'host', pathBase: '/repo' });
+    expect(call.approval?.timeoutMs).toBeUndefined();
     // 创建与终态各广播一次 task-updated；推理增量另走 task-process。
     expect(
       h.broadcasts.filter((b) => b.eventName === 'task-updated'),
@@ -299,6 +302,43 @@ describe('task-service / runTask', () => {
     expect(snapshot?.stale).toBe(false);
     expect(snapshot?.timeline.map((b) => b.type)).toEqual(['reasoning', 'tools', 'text']);
     expect((await h.store.getTask(result.taskId))?.processJson).toContain('先跑命令');
+  });
+
+  it('本会话允许记在任务过程的工具行上', async () => {
+    const sampling = new TaskService({
+      store: h.store,
+      worktreeService: h.worktree,
+      toolRouter: {
+        listModelSchemas: () => [{ name: 'browser_click', description: '', inputSchema: {} }],
+      } as never,
+      resolveChatProject: async () => null,
+      broadcast: (eventName, payload) => h.broadcasts.push({ eventName, payload }),
+      getSupervisor: () => ({}) as never,
+      runStream: async (options) => {
+        options.onToolStart?.({
+          id: 'c1',
+          tool: 'browser_click',
+          arguments: { ref: 'e1' },
+        });
+        options.onToolAction?.({
+          id: 'c1',
+          tool: 'browser_click',
+          arguments: { ref: 'e1' },
+          success: true,
+          result: 'clicked',
+          approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+        });
+        return { status: 'completed', traceId: 'trace-allow' };
+      },
+    });
+    const result = await sampling.runTask({ chatId: 'chat-1', task: '点一下' });
+    await waitTaskTerminal(h.store, result.taskId);
+    const snapshot = await sampling.getProcess(result.taskId);
+    const tools = snapshot?.timeline.find((block) => block.type === 'tools');
+    expect(tools?.type === 'tools' ? tools.actions[0] : null).toMatchObject({
+      tool: 'browser_click',
+      approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+    });
   });
 
   it('depth-1：任务回合的工具列表没有 task_run', async () => {
@@ -383,6 +423,7 @@ describe('task-service / Task×Worktree', () => {
     });
     // writableRoots 收窄到 worktree（不是项目根）。
     expect(call.execSandbox?.writableRoots).toEqual(['/repo/.steerable/worktrees/demo']);
+    expect(call.approval).toMatchObject({ pathBase: '/repo/.steerable/worktrees/demo' });
   });
 
   it('worktree 建不起来 → 同步抛错，不落任务行', async () => {

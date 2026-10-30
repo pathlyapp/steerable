@@ -81,19 +81,20 @@ fn install_menu(app: &tauri::App, data_dir_name: &str) -> tauri::Result<()> {
         .item(&paste)
         .select_all()
         .build()?;
-    let zoom_in = MenuItemBuilder::with_id("view-zoom-in", "放大")
+    let labels = zoom::zoom_menu_labels("zh");
+    let zoom_in = MenuItemBuilder::with_id("view-zoom-in", labels.zoom_in)
         .accelerator("CmdOrCtrl+=")
         .build(app)?;
     // One menu item accepts one accelerator. `Plus` is not a muda key code,
     // so the shifted equals key is registered separately for layouts where
     // `+` requires Shift.
-    let zoom_in_plus = MenuItemBuilder::with_id("view-zoom-in-plus", "放大")
+    let zoom_in_plus = MenuItemBuilder::with_id("view-zoom-in-plus", labels.zoom_in)
         .accelerator("CmdOrCtrl+Shift+=")
         .build(app)?;
-    let zoom_out = MenuItemBuilder::with_id("view-zoom-out", "缩小")
+    let zoom_out = MenuItemBuilder::with_id("view-zoom-out", labels.zoom_out)
         .accelerator("CmdOrCtrl+-")
         .build(app)?;
-    let zoom_reset = MenuItemBuilder::with_id("view-zoom-reset", "实际大小")
+    let zoom_reset = MenuItemBuilder::with_id("view-zoom-reset", labels.zoom_reset)
         .accelerator("CmdOrCtrl+0")
         .build(app)?;
     zoom::bind(
@@ -102,6 +103,7 @@ fn install_menu(app: &tauri::App, data_dir_name: &str) -> tauri::Result<()> {
         zoom_in.clone(),
         zoom_in_plus.clone(),
         zoom_out.clone(),
+        zoom_reset.clone(),
     )
     .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
     let view = SubmenuBuilder::new(app, "视图")
@@ -250,7 +252,8 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
             python_runner_use_default,
             python_runner_restart,
             zoom::ui_get_zoom,
-            zoom::ui_set_zoom
+            zoom::ui_set_zoom,
+            zoom::ui_set_locale
         ])
         .setup(move |app| {
             install_menu(app, &config.data_dir_name)?;

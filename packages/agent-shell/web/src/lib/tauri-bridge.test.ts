@@ -109,6 +109,12 @@ describe('createTauriBridge', () => {
     expect(seen).toEqual([1.2]);
   });
 
+  it('sends the page locale so the view menu can change language', () => {
+    const bridge = createTauriBridge();
+    bridge.setLocale!('en');
+    expect(mocks.invoke).toHaveBeenCalledWith('ui_set_locale', { locale: 'en' });
+  });
+
   it('reads plain text from the host clipboard', async () => {
     mocks.invoke.mockResolvedValue('粘贴文本');
     const bridge = createTauriBridge();

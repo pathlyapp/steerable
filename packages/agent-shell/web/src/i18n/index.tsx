@@ -9,8 +9,15 @@ import {
   supportedLocales,
   t,
 } from './runtime';
+import { getHostBridge } from '@/lib/host-bridge';
 
 export { configureI18n, getLocale, registerLocale, setLocale, supportedLocales, t };
+
+/** Tell the desktop shell the page locale so native menus can relabel. */
+export function notifyHostLocale(locale: string): void {
+  getHostBridge()?.setLocale?.(locale);
+}
+
 export { LOCALE_STORAGE_KEY, SOURCE_LOCALE, normalizeLocale, resolveLocale } from './translate';
 
 interface I18nContextValue {
@@ -35,7 +42,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       t,
       setLocale: (next) => {
         if (!setLocale(next)) return;
-        window.steerableHost?.setLocale?.(next);
+        notifyHostLocale(next);
       },
     }),
     [locale],

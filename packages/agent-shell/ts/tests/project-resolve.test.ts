@@ -91,6 +91,14 @@ describe('ProjectRegistry.resolveByFolder', () => {
     expect(sibling.project.name).toBe('Repo-extra');
   });
 
+  it('reuses a child directory whose name starts with ..', () => {
+    const registry = new ProjectRegistry(memoryStore());
+    const stored = registry.create({ name: 'repo', folderPath: '/work/repo' });
+    const nested = registry.resolveByFolder('/work/repo/..notes', { origin: 'cli', realpath });
+    expect(nested.created).toBe(false);
+    expect(nested.project.id).toBe(stored.id);
+  });
+
   it('keeps POSIX paths case-sensitive', () => {
     const registry = new ProjectRegistry(memoryStore());
     registry.create({ name: 'repo', folderPath: '/Work/Repo' });

@@ -6,6 +6,7 @@ import type { SSEEvent } from '@steerable/agent-protocol';
 
 import { autoAnswer, decisionFor, resolveApprovalRequest } from '../src/approve.js';
 import { createCli } from '../src/cli.js';
+import { runTurn } from '../src/run.js';
 import { cliText } from '../src/copy.js';
 import { runHelp, tuiHelp } from '../src/help.js';
 import { visibleText } from '../src/tui/screen.js';
@@ -279,6 +280,216 @@ describe('run unattended output', () => {
     });
   });
 
+  it('writes auto_answered immediately before the tool event', async () => {
+    const toolSeen = deferred();
+    const decided = deferred();
+    const stdout = capture();
+    const code = await createCli({
+      argv: ['run', 'go', '--approve', 'allow-all', '--stream-json', '--no-project'],
+      stdout: stdout.stream,
+      stderr: capture().stream,
+      stdinIsTTY: true,
+      createClient: async () => client({
+        events: async function* () {
+          await toolSeen.promise;
+          yield approval('web_fetch', 'network_egress', 'other');
+        },
+        decideApproval: async () => {
+          decided.resolve();
+          return true;
+        },
+        stream: async function* () {
+          yield { type: 'tool_call', payload: { id: 'c1', name: 'web_fetch', arguments: {} } } as SSEEvent;
+          toolSeen.resolve();
+          await decided.promise;
+          yield { type: 'tool_result', payload: { id: 'c1', name: 'web_fetch', success: true } } as SSEEvent;
+          yield { type: 'done' } as SSEEvent;
+        },
+      }),
+    });
+    expect(code).toBe(0);
+    const types = stdout.text().trim().split('\n').map((line) => (JSON.parse(line) as { type?: string }).type);
+    const answerAt = types.indexOf('auto_answered');
+    expect(types[answerAt + 1]).toBe('tool_call');
+  });
+
+  it('writes auto_answered immediately before the executed_actions snapshot', async () => {
+    const toolSeen = deferred();
+    const decided = deferred();
+    const stdout = capture();
+    const code = await createCli({
+      argv: ['run', 'go', '--approve', 'allow-all', '--stream-json', '--no-project'],
+      stdout: stdout.stream,
+      stderr: capture().stream,
+      stdinIsTTY: true,
+      createClient: async () => client({
+        events: async function* () {
+          await toolSeen.promise;
+          yield approval('web_fetch', 'network_egress', 'other');
+        },
+        decideApproval: async () => {
+          decided.resolve();
+          return true;
+        },
+        stream: async function* () {
+          yield {
+            type: 'executed_actions',
+            actions: [{ id: 'c1', tool: 'web_fetch' }],
+          } as SSEEvent;
+          toolSeen.resolve();
+          await decided.promise;
+          yield {
+            type: 'executed_actions',
+            actions: [{ id: 'c1', tool: 'web_fetch', success: true, durationMs: 10 }],
+          } as SSEEvent;
+          yield { type: 'done' } as SSEEvent;
+        },
+      }),
+    });
+    expect(code).toBe(0);
+    const types = stdout.text().trim().split('\n').map((line) => (JSON.parse(line) as { type?: string }).type);
+    const answerAt = types.indexOf('auto_answered');
+    expect(types[answerAt + 1]).toBe('executed_actions');
+    expect(types.filter((type) => type === 'executed_actions')).toHaveLength(2);
+  });
+
+  it('keeps an earlier auto_answered line when the stream ends before the other tool is approved', async () => {
+    const toolSeen = deferred();
+    const firstDecided = deferred();
+    const stdout = capture();
+    const code = await createCli({
+      argv: ['run', 'go', '--approve', 'allow-all', '--stream-json', '--no-project'],
+      stdout: stdout.stream,
+      stderr: capture().stream,
+      stdinIsTTY: true,
+      createClient: async () => client({
+        events: async function* () {
+          await toolSeen.promise;
+          yield approval('local_exec_shell', 'shell', 'destructive');
+        },
+        decideApproval: async () => {
+          firstDecided.resolve();
+          return true;
+        },
+        stream: async function* () {
+          yield {
+            type: 'executed_actions',
+            actions: [
+              { id: 'a', tool: 'local_exec_shell' },
+              { id: 'b', tool: 'browser_navigate' },
+            ],
+          } as SSEEvent;
+          toolSeen.resolve();
+          await firstDecided.promise;
+        },
+      }),
+    });
+    expect(code).toBe(0);
+    const types = stdout.text().trim().split('\n').map((line) => (JSON.parse(line) as { type?: string }).type);
+    const answerAt = types.indexOf('auto_answered');
+    expect(answerAt).toBeGreaterThanOrEqual(0);
+    expect(types[answerAt + 1]).toBe('executed_actions');
+  });
+
+  it('prints settled tool progress on stderr', async () => {
+    const stdout = capture();
+    const stderr = capture();
+    const code = await runTurn(client({
+      stream: async function* () {
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'call-1',
+            tool: 'local_write_file',
+            view: { title: 'hello.txt' },
+          }],
+        } as SSEEvent;
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'call-1',
+            tool: 'local_write_file',
+            view: { title: 'hello.txt' },
+            success: true,
+            durationMs: 100,
+          }, {
+            id: 'call-2',
+            tool: 'local_exec_shell',
+            view: { title: 'ls' },
+            success: true,
+            durationMs: 200,
+            approval: { kind: 'allow_for_session', cached: true },
+          }],
+        } as SSEEvent;
+        yield { type: 'content', content: 'done' } as SSEEvent;
+        yield { type: 'done' } as SSEEvent;
+      },
+    }), {
+      task: 'go',
+      chatId: 'chat-1',
+      files: [],
+      policy: 'deny',
+      json: false,
+      streamJson: false,
+    }, stdout.stream, stderr.stream, new AbortController().signal);
+    expect(code).toBe(0);
+    expect(stderr.text()).toBe('▸ local_write_file  hello.txt  ✓ 0.1s\n▸ local_exec_shell  ls  ✓ 0.2s 本会话已允许\n');
+    expect(stdout.text()).toBe('done');
+  });
+
+  it('prints an auto-allowed egress host on stderr', async () => {
+    const stdout = capture();
+    const stderr = capture();
+    const seen = deferred();
+    const code = await runTurn(client({
+      events: async function* () {
+        yield approval('network_egress', 'network_egress', 'other', {
+          arguments: { host: 'registry.example.org', port: 443 },
+        });
+      },
+      decideApproval: async () => {
+        seen.resolve();
+        return true;
+      },
+      stream: async function* () {
+        await seen.promise;
+        yield { type: 'content', content: 'ok' } as SSEEvent;
+        yield { type: 'done' } as SSEEvent;
+      },
+    }), {
+      task: 'go',
+      chatId: 'chat-1',
+      files: [],
+      policy: 'allow-all',
+      json: false,
+      streamJson: false,
+    }, stdout.stream, stderr.stream, new AbortController().signal);
+    expect(code).toBe(0);
+    expect(stderr.text()).toContain('▸ network_egress  registry.example.org  ✓ 自动\n');
+    expect(stdout.text()).toBe('ok');
+  });
+
+  it('includes the bound project in --json', async () => {
+    const stdout = capture();
+    const code = await runTurn(client(), {
+      task: 'go',
+      chatId: 'chat-1',
+      projectId: 'p_51a0',
+      files: [],
+      policy: 'deny',
+      json: true,
+      streamJson: false,
+    }, stdout.stream, capture().stream, new AbortController().signal);
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      ok: true,
+      chatId: 'chat-1',
+      projectId: 'p_51a0',
+      text: 'ok',
+      exitCode: 0,
+    });
+  });
+
   it('writes one auto_answered line for each of the four requests', async () => {
     const gate = deferred();
     let remaining = 4;
@@ -379,6 +590,56 @@ describe('tui unattended status', () => {
     });
     await waitFor(() => visibleText(session.render(80)).includes('审批 delete_file'));
     expect(decisions).toEqual(['allow_once']);
+  });
+
+  it('keeps the auto mark after the tool row settles', async () => {
+    const gate = deferred();
+    const events = queue();
+    const session = new AgentTui(client({
+      events: events.stream,
+      decideApproval: async () => {
+        gate.resolve();
+        return true;
+      },
+      stream: async function* () {
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'call-1',
+            tool: 'local_exec_shell',
+            arguments: { command: 'npm test' },
+            view: { title: 'npm test' },
+          }],
+        } as SSEEvent;
+        await gate.promise;
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'call-1',
+            tool: 'local_exec_shell',
+            arguments: { command: 'npm test' },
+            view: { title: 'npm test' },
+            success: true,
+            durationMs: 8200,
+          }],
+        } as SSEEvent;
+        yield { type: 'done' } as SSEEvent;
+      },
+    }), {
+      product: 'Demo',
+      approvalPolicy: { policy: 'allow-all', answerAsk: true },
+      onExit() {},
+    });
+    await session.open();
+    const sending = (async () => {
+      for (const char of 'go') session.handleInput(char);
+      session.handleInput('\r');
+      await session.settled();
+    })();
+    await waitFor(() => visibleText(session.render(90)).includes('…'));
+    events.push(approval('local_exec_shell', 'shell', 'destructive'));
+    await sending;
+    expect(visibleText(session.render(90))).toContain('▸ local_exec_shell  npm test  ✓ 8.2s 自动');
   });
 
   it('submits a bracketed paste and finishes without an approval row', async () => {
@@ -495,6 +756,67 @@ describe('tui unattended status', () => {
     expect(answers).toEqual([{ answers: { q1: cliText('ask.unattended'), q2: cliText('ask.unattended') } }]);
   });
 
+  it('keeps one expandable ask line after the tool row settles', async () => {
+    const answered = deferred();
+    const events = queue();
+    const session = new AgentTui(client({
+      events: events.stream,
+      answerAsk: async () => {
+        answered.resolve();
+        return true;
+      },
+      stream: async function* () {
+        yield {
+          type: 'executed_actions',
+          actions: [{ id: 'ask-1', tool: 'ask_user', view: { title: '继续吗' } }],
+        } as SSEEvent;
+        await answered.promise;
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'ask-1',
+            tool: 'ask_user',
+            view: { title: '继续吗' },
+            success: true,
+            durationMs: 120,
+          }],
+        } as SSEEvent;
+        yield { type: 'content', content: '好' } as SSEEvent;
+        yield { type: 'done' } as SSEEvent;
+      },
+    }), {
+      product: 'Demo',
+      approvalPolicy: { policy: 'allow-all', answerAsk: true },
+      onExit() {},
+    });
+    await session.open();
+    const sending = (async () => {
+      for (const char of 'go') session.handleInput(char);
+      session.handleInput('\r');
+      await session.settled();
+    })();
+    await waitFor(() => visibleText(session.render(80)).includes('▸ ask_user'));
+    events.push({
+      channel: 'ask-user:request',
+      payload: {
+        requestId: 'ask-1',
+        prompt: '继续吗',
+        questions: [{ id: 'q1', text: '要不要同时改重试次数？' }],
+      },
+    });
+    await sending;
+    const folded = visibleText(session.render(80));
+    expect(folded.match(/▸ ask_user/g)).toHaveLength(1);
+    expect(folded).toContain(`✓ ${cliText('tui.toolAutoAnswer')}`);
+    expect(folded).not.toContain('要不要同时改重试次数？');
+    expect(folded).not.toContain(cliText('ask.unattended'));
+    session.handleInput('\x0f');
+    const open = visibleText(session.render(80));
+    expect(open.match(/▸ ask_user/g)).toHaveLength(1);
+    expect(open).toContain('问 要不要同时改重试次数？');
+    expect(open).toContain(`答 ${cliText('ask.unattended')}`);
+  });
+
   it('answers a shell, egress, an external tool, and an ask without an approval row', async () => {
     const decisions: string[] = [];
     const answers: unknown[] = [];
@@ -541,12 +863,44 @@ describe('tui unattended status', () => {
     expect(answers).toEqual([{ answers: { q1: cliText('ask.unattended') } }]);
   });
 
+  it('shows the egress host on an auto-allowed row', async () => {
+    const events = queue();
+    const session = new AgentTui(client({
+      events: events.stream,
+      decideApproval: async () => true,
+    }), {
+      product: 'Demo',
+      approvalPolicy: { policy: 'allow-all', answerAsk: true },
+      onExit() {},
+    });
+    await session.open();
+    events.push(approval('network_egress', 'network_egress', 'other', {
+      arguments: { host: 'registry.example.org', port: 443 },
+    }));
+    await waitFor(() => visibleText(session.render(100)).includes('registry.example.org'));
+    const screen = visibleText(session.render(100));
+    expect(screen).toContain('▸ network_egress  registry.example.org');
+    expect(screen).toContain('✓ 自动');
+    expect(screen).not.toContain(':443');
+    expect(screen).not.toContain('审批 network_egress');
+    events.push(approval('network_egress', 'network_egress', 'other', {
+      requestId: 'network_egress-2',
+      arguments: { host: 'pypi.example.org', port: 8443 },
+    }));
+    await waitFor(() => visibleText(session.render(100)).includes('pypi.example.org:8443'));
+    const both = visibleText(session.render(100));
+    expect(both.match(/▸ network_egress/g)).toHaveLength(2);
+    expect(both).toContain('registry.example.org');
+    expect(both).toContain('pypi.example.org:8443');
+  });
+
   it('labels a tool covered by a session allow', () => {
     expect(toolStatus({
       tool: 'browser_click',
       success: true,
+      durationMs: 300,
       approval: { kind: 'allow_for_session', cached: true },
-    })).toBe(cliText('tui.toolSessionAllow'));
+    })).toBe(`✓ 0.3s ${cliText('tui.toolSessionAllow')}`);
     expect(toolStatus({
       tool: 'browser_navigate',
       success: true,

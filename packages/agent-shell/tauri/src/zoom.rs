@@ -26,6 +26,31 @@ pub struct ZoomControls {
     zoom_in: MenuItem<Wry>,
     zoom_in_plus: MenuItem<Wry>,
     zoom_out: MenuItem<Wry>,
+    zoom_reset: MenuItem<Wry>,
+}
+
+pub struct ZoomMenuLabels {
+    pub zoom_in: &'static str,
+    pub zoom_out: &'static str,
+    pub zoom_reset: &'static str,
+}
+
+/// View-menu labels for the page locale. Both zoom-in rows share one label.
+pub fn zoom_menu_labels(locale: &str) -> ZoomMenuLabels {
+    let normalized = locale.trim().to_lowercase().replace('_', "-");
+    if normalized == "zh" || normalized.starts_with("zh-") {
+        ZoomMenuLabels {
+            zoom_in: "放大",
+            zoom_out: "缩小",
+            zoom_reset: "实际大小",
+        }
+    } else {
+        ZoomMenuLabels {
+            zoom_in: "Zoom in",
+            zoom_out: "Zoom out",
+            zoom_reset: "Actual size",
+        }
+    }
 }
 
 pub struct LoadedZoom {
@@ -180,6 +205,7 @@ pub fn bind(
     zoom_in: MenuItem<Wry>,
     zoom_in_plus: MenuItem<Wry>,
     zoom_out: MenuItem<Wry>,
+    zoom_reset: MenuItem<Wry>,
 ) -> Result<(), String> {
     let path = user_data_dir(app.handle(), data_dir_name)?.join("window-state.json");
     app.manage(ZoomControls {
@@ -188,8 +214,20 @@ pub fn bind(
         zoom_in,
         zoom_in_plus,
         zoom_out,
+        zoom_reset,
     });
     Ok(())
+}
+
+pub fn apply_locale(app: &AppHandle, locale: &str) {
+    let Some(controls) = app.try_state::<ZoomControls>() else {
+        return;
+    };
+    let labels = zoom_menu_labels(locale);
+    let _ = controls.zoom_in.set_text(labels.zoom_in);
+    let _ = controls.zoom_in_plus.set_text(labels.zoom_in);
+    let _ = controls.zoom_out.set_text(labels.zoom_out);
+    let _ = controls.zoom_reset.set_text(labels.zoom_reset);
 }
 
 pub fn apply_saved(app: &AppHandle) {
@@ -272,6 +310,11 @@ pub fn ui_get_zoom(app: AppHandle) -> f64 {
 }
 
 #[tauri::command]
+pub fn ui_set_locale(app: AppHandle, locale: String) {
+    apply_locale(&app, &locale);
+}
+
+#[tauri::command]
 pub fn ui_set_zoom(app: AppHandle, scale: f64) -> f64 {
     if !scale.is_finite() {
         eprintln!("[zoom] ignoring non-numeric zoom");
@@ -319,6 +362,19 @@ mod tests {
         assert!((scale - 1.2).abs() < 1e-9);
         assert!((step_zoom(scale, 0) - 1.2).abs() < 1e-9);
         assert!((DEFAULT_ZOOM - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn menu_labels_follow_the_page_locale() {
+        let chinese = zoom_menu_labels("zh-CN");
+        assert_eq!(chinese.zoom_in, "放大");
+        assert_eq!(chinese.zoom_out, "缩小");
+        assert_eq!(chinese.zoom_reset, "实际大小");
+        let english = zoom_menu_labels("en");
+        assert_eq!(english.zoom_in, "Zoom in");
+        assert_eq!(english.zoom_out, "Zoom out");
+        assert_eq!(english.zoom_reset, "Actual size");
+        assert_eq!(zoom_menu_labels("").zoom_in, "Zoom in");
     }
 
     #[test]

@@ -677,7 +677,11 @@ function execCwdOf(
 function isCoveredByRoots(cwd: string, roots: readonly string[]): boolean {
   return roots.some((root) => {
     const rel = path.relative(path.resolve(root), cwd);
-    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+    return rel === '' || (
+      rel !== '..' &&
+      !rel.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(rel)
+    );
   });
 }
 

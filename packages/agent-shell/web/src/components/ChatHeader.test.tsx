@@ -15,6 +15,7 @@ import type { LocalChat, LocalProject, LocalTask } from '@/lib/local-api';
 import type { TurnFile } from './chat/turn-files';
 import { ChatHeader } from './ChatHeader';
 import { forkSourceTime } from './chat/timestamp';
+import { getLocale } from '@/i18n';
 import type { PackChatSlotContribution } from '@/packs/registry';
 
 afterEach(() => {
@@ -106,6 +107,7 @@ describe('ChatHeader 分叉来源', () => {
     expect(request).toHaveBeenCalledWith(expect.objectContaining({
       method: 'POST',
       path: '/api/v2/chats/chat_1/fork',
+      body: { locale: getLocale() },
     }));
     window.location.hash = '';
   });
@@ -121,6 +123,7 @@ describe('ChatHeader 分叉来源', () => {
     await waitFor(() => {
       expect(screen.getByTestId('header-fork-chat').getAttribute('title')).toContain('still generating');
     });
+    expect(screen.getByTestId('header-fork-error').textContent).toContain('still generating');
     expect(window.location.hash).not.toContain('chat-new');
 
     request.mockRejectedValue(Object.assign(new Error('large'), {
@@ -130,6 +133,12 @@ describe('ChatHeader 分叉来源', () => {
     fireEvent.click(screen.getByTestId('header-fork-chat'));
     await waitFor(() => {
       expect(screen.getByTestId('header-fork-chat').getAttribute('title')).toContain('600.0 MB');
+    });
+
+    request.mockRejectedValue(Object.assign(new Error('Fork failed'), { status: 500 }));
+    fireEvent.click(screen.getByTestId('header-fork-chat'));
+    await waitFor(() => {
+      expect(screen.getByTestId('header-fork-chat').getAttribute('title')).toContain('Fork failed');
     });
   });
 });

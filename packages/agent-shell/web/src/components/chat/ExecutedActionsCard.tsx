@@ -72,6 +72,7 @@ export interface ExecutedAction {
     title: string;
     declared: boolean;
   };
+  durationMs?: number;
 }
 
 export interface ExecutedActionsCardProps {
@@ -165,7 +166,7 @@ function actionToTool(action: ExecutedAction, idx: number): ToolExecutionPayload
     args: action.arguments,
     output: action.result,
     error: errorText,
-    durationMs: null,
+    durationMs: typeof action.durationMs === 'number' ? action.durationMs : null,
     icon: null,
     expandable: true,
   };

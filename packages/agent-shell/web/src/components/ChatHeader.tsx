@@ -178,9 +178,7 @@ export function ChatHeader({
             ? t('This workspace is too large to fork ({size}).', {
                 size: typeof bytes === 'number' ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : '',
               })
-            : err instanceof Error
-              ? err.message
-              : String(err),
+            : t(err instanceof Error && err.message ? err.message : 'Fork failed'),
       );
     } finally {
       setForking(false);
@@ -555,6 +553,14 @@ function ChatActionsMenu({
         onClick={onFork}
         data-testid="header-fork-chat"
       />
+      {forkError ? (
+        <p
+          className="px-3 pb-1 text-[10px] leading-snug text-agent-muted-foreground"
+          data-testid="header-fork-error"
+        >
+          {forkError}
+        </p>
+      ) : null}
       {showBranches && (
         <MenuRow
           icon={<LuGitBranch className="h-3.5 w-3.5" />}

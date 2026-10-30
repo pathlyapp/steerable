@@ -141,6 +141,33 @@ _PATH_ARG_TOOLS = {
 }
 
 
+def _front_load_markers(
+    data: dict[str, Any] | None, approval_marker: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Put sandbox and approval markers ahead of the tool payload.
+
+    A published loop keeps only the first 300 characters of the result
+    preview and, for a sibling that finished before a terminal tool in
+    the same batch, does not copy those markers onto the event. They
+    have to be readable from that prefix.
+    """
+    body = dict(data or {})
+    sandbox = body.pop("_sandbox", None)
+    approval = (
+        approval_marker.get("_approval")
+        if approval_marker is not None
+        else body.get("_approval")
+    )
+    body.pop("_approval", None)
+    ordered: dict[str, Any] = {}
+    if isinstance(sandbox, dict):
+        ordered["_sandbox"] = sandbox
+    if isinstance(approval, dict):
+        ordered["_approval"] = approval
+    ordered.update(body)
+    return ordered
+
+
 def declared_target_paths(request: ApprovalRequest) -> list[str] | None:
     """Filesystem targets of a path-scoped tool, or None when the call is not one.
 
@@ -623,9 +650,10 @@ class ApprovalExecutor:
             )
         ctx.consent_granted = True
         result = await self._inner.execute(call, ctx)
-        if approval_marker is not None:
+        data = result.data if isinstance(result.data, dict) else None
+        if approval_marker is not None or (data is not None and "_sandbox" in data):
             result = result.model_copy(
-                update={"data": {**(result.data or {}), **approval_marker}}
+                update={"data": _front_load_markers(data, approval_marker)}
             )
         return result
 

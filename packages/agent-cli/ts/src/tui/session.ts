@@ -40,7 +40,7 @@ import { searchHits, searchLabel } from './search.js';
 import { ruleStatusLine, type RuleContext } from '../rules.js';
 import { transcriptEdge } from './scroll.js';
 import { todosFromAction, type SessionTodo } from './todos.js';
-import { historyRows, toolOutput, toolStatus, type ToolAction } from './transcript.js';
+import { formatDuration, historyRows, toolOutput, toolStatus, type ToolAction } from './transcript.js';
 import { formatUsage } from './usage.js';
 
 export interface AgentTuiOptions {
@@ -104,12 +104,56 @@ export class AgentTui implements Component {
   private mode: 'agent' | 'plan' = 'agent';
   private permission: 'ask' | 'auto' | 'read' = 'ask';
   private approvalPolicy: ApprovalSpec = { policy: 'ask', answerAsk: false };
-  private readonly autoTools = new Set<string>();
+  private readonly pendingAuto = new Map<string, number>();
 
   private markAutoTool(name: string): void {
-    this.autoTools.add(name);
-    const line = [...this.lines].reverse().find((item) => item.kind === 'tool' && item.name === name && item.status === '…');
-    if (line) line.status = cliText('tui.toolAuto');
+    const line = [...this.lines].reverse().find((item) => item.kind === 'tool' && item.name === name);
+    if (line && !line.auto && !sessionAllowStatus(line.status)) {
+      line.auto = true;
+      line.status = appendAuto(line.status);
+      return;
+    }
+    this.pendingAuto.set(name, (this.pendingAuto.get(name) ?? 0) + 1);
+  }
+
+  private ensureEgressLine(args: unknown): void {
+    const target = egressTarget(args);
+    const existing = [...this.lines].reverse().find((line) => line.kind === 'tool' && line.name === 'network_egress');
+    if (existing && !existing.auto) {
+      if (!existing.args && target) existing.args = target;
+      if (!existing.status || existing.status === '…') existing.status = '✓';
+      return;
+    }
+    this.lines.push({
+      kind: 'tool',
+      name: 'network_egress',
+      args: target,
+      status: '✓',
+    });
+  }
+
+  private latestAskLine(): TranscriptLine | undefined {
+    for (let index = this.lines.length - 1; index >= 0; index -= 1) {
+      const line = this.lines[index];
+      if (line?.kind === 'tool' && line.name === 'ask_user') return line;
+    }
+    return undefined;
+  }
+
+  private unboundAskLine(): number {
+    for (let index = this.lines.length - 1; index >= 0; index -= 1) {
+      const line = this.lines[index];
+      if (line?.kind === 'tool' && line.name === 'ask_user' && !line.id) return index;
+    }
+    return -1;
+  }
+
+  private takePendingAuto(name: string): boolean {
+    const pending = this.pendingAuto.get(name) ?? 0;
+    if (pending <= 0) return false;
+    if (pending === 1) this.pendingAuto.delete(name);
+    else this.pendingAuto.set(name, pending - 1);
+    return true;
   }
   private todos: SessionTodo[] = [];
   private goal: SessionGoal | null = null;
@@ -1024,18 +1068,36 @@ export class AgentTui implements Component {
       const payload = event.payload ?? {};
       const name = typeof payload.name === 'string' ? payload.name : 'tool';
       const args = toolArgs(payload.arguments ?? payload.input);
+      const auto = this.takePendingAuto(name);
+      if (name === 'network_egress') {
+        const existing = [...this.lines].reverse().find((line) => line.kind === 'tool' && line.name === name);
+        if (existing) {
+          if (!existing.args && args) existing.args = args;
+          if (auto) {
+            existing.auto = true;
+            existing.status = appendAuto(existing.status);
+          }
+          return;
+        }
+      }
       this.lines.push({
         kind: 'tool',
         name,
         args,
-        status: this.autoTools.has(name) ? cliText('tui.toolAuto') : '…',
+        status: auto ? cliText('tui.toolAuto') : '…',
+        ...(auto ? { auto: true } : {}),
       });
-      this.autoTools.delete(name);
       return;
     }
     if (event.type === 'tool_result') {
-      const tool = [...this.lines].reverse().find((line) => line.kind === 'tool' && (line.status === '…' || line.status === cliText('tui.toolAuto')));
-      if (tool && tool.status !== cliText('tui.toolAuto')) tool.status = '✓';
+      const tool = [...this.lines].reverse().find((line) => line.kind === 'tool' && openToolStatus(line.status));
+      if (!tool || sessionAllowStatus(tool.status)) return;
+      const payload = event.payload ?? {};
+      const failed = payload.success === false || payload.error != null;
+      const duration = typeof payload.durationMs === 'number' ? formatDuration(payload.durationMs) : '';
+      const mark = failed ? '✗' : '✓';
+      const base = duration ? `${mark} ${duration}` : mark;
+      tool.status = tool.auto ? appendAuto(base) : base;
       return;
     }
     if (String(event.type) === 'reasoning' && typeof event.content === 'string') {
@@ -1074,6 +1136,9 @@ export class AgentTui implements Component {
           : this.approvalPolicy;
         const decision = decisionFor(spec, { mode: payload.mode }, 'tui');
         if (decision !== 'prompt') {
+          if (decision === 'allow_once' && payload.toolName === 'network_egress') {
+            this.ensureEgressLine(payload.arguments);
+          }
           if (decision === 'allow_once' && payload.toolName) this.markAutoTool(payload.toolName);
           void this.client.decideApproval(payload.requestId, decision);
           this.touch();
@@ -1102,13 +1167,22 @@ export class AgentTui implements Component {
             .map((question) => question.text?.trim() ?? '')
             .filter((text) => text.length > 0);
           const answer = cliText('ask.unattended');
-          this.lines.push({
-            kind: 'tool',
-            name: 'ask_user',
-            args: intro || asked[0] || '',
-            status: cliText('tui.toolAutoAnswer'),
-            output: [...asked.map((text) => `问 ${text}`), `答 ${answer}`].join('\n'),
-          });
+          const args = intro || asked[0] || '';
+          const output = [...asked.map((text) => `问 ${text}`), `答 ${answer}`].join('\n');
+          const line = this.latestAskLine();
+          if (line && !autoAnswerStatus(line.status)) {
+            if (!line.args) line.args = args;
+            line.status = autoAnswerMark();
+            line.output = output;
+          } else {
+            this.lines.push({
+              kind: 'tool',
+              name: 'ask_user',
+              args,
+              status: autoAnswerMark(),
+              output,
+            });
+          }
           this.touch();
           continue;
         }
@@ -1144,11 +1218,26 @@ export class AgentTui implements Component {
       const nextTodos = todosFromAction(action.tool, action.arguments, action.result);
       if (nextTodos) this.todos = nextTodos;
       const next = toolLine(action);
-      const index = next.id
+      let index = next.id
         ? this.lines.findIndex((line) => line.kind === 'tool' && line.id === next.id)
         : -1;
+      if (index < 0 && next.name === 'ask_user') index = this.unboundAskLine();
+      const prior = index >= 0 ? this.lines[index] : undefined;
+      const keepAnswer = autoAnswerStatus(prior?.status);
+      const auto = prior?.auto === true || (!keepAnswer && this.takePendingAuto(next.name ?? ''));
+      if (auto) {
+        next.auto = true;
+        next.status = appendAuto(next.status);
+      }
       if (index >= 0) {
-        next.open = this.lines[index]?.open;
+        next.open = prior?.open;
+        if (keepAnswer && prior) {
+          next.status = autoAnswerMark();
+          if (prior.output) next.output = prior.output;
+          if (!next.args && prior.args) next.args = prior.args;
+        } else if (prior?.output && !next.output) {
+          next.output = prior.output;
+        }
         this.lines[index] = next;
       } else {
         this.lines.push(next);
@@ -1333,7 +1422,11 @@ export class AgentTui implements Component {
 
   private async forkChat(): Promise<void> {
     if (!this.chatId) return;
-    const created = await this.client.request('POST', `/api/v2/chats/${encodeURIComponent(this.chatId)}/fork`, {});
+    const created = await this.client.request(
+      'POST',
+      `/api/v2/chats/${encodeURIComponent(this.chatId)}/fork`,
+      { locale: 'zh' },
+    );
     if (created.status === 409) {
       this.status = '正在生成，结束后再分叉';
       this.touch();
@@ -1460,6 +1553,43 @@ async function defaultSaveAttachments(
     path: file.path,
     ...(file.error ? { error: file.error } : {}),
   }));
+}
+
+function egressTarget(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const record = value as { host?: unknown; port?: unknown };
+  const host = typeof record.host === 'string' ? record.host : '';
+  if (!host) return '';
+  const port = typeof record.port === 'number' ? record.port : null;
+  if (port === null || port === 80 || port === 443) return host;
+  return `${host}:${port}`;
+}
+
+function autoAnswerMark(): string {
+  return `✓ ${cliText('tui.toolAutoAnswer')}`;
+}
+
+function autoAnswerStatus(status: string | undefined): boolean {
+  const phrase = cliText('tui.toolAutoAnswer');
+  return status === phrase || status === autoAnswerMark() || (status?.endsWith(` ${phrase}`) ?? false);
+}
+
+function appendAuto(status: string | undefined): string {
+  const auto = cliText('tui.toolAuto');
+  const session = cliText('tui.toolSessionAllow');
+  if (autoAnswerStatus(status)) return autoAnswerMark();
+  if (!status || status === '…') return auto;
+  if (status === session || status.endsWith(` ${session}`) || status === auto || status.endsWith(` ${auto}`)) return status;
+  return `${status} ${auto}`;
+}
+
+function sessionAllowStatus(status: string | undefined): boolean {
+  const session = cliText('tui.toolSessionAllow');
+  return status === session || (status?.endsWith(` ${session}`) ?? false);
+}
+
+function openToolStatus(status: string | undefined): boolean {
+  return status === '…' || status === cliText('tui.toolAuto');
 }
 
 function toolLine(action: ToolAction): TranscriptLine {

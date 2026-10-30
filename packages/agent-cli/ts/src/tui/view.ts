@@ -20,6 +20,7 @@ import {
   approvalLines,
   attachmentText,
   bannerLines,
+  projectStatusLine,
   chatText,
   composerRows,
   draftHint,
@@ -211,7 +212,7 @@ export class OpenTuiView {
     this.readOnly.visible = screen.readOnly;
     this.draft.content = draftContent(screen.draft, screen.cursor);
     this.composer.height = composerRows(screen.draft, Math.max(1, this.renderer.width - 2));
-    const project = [screen.projectLabel, screen.ruleLabel].filter((line) => line && line.length > 0).join(' │ ');
+    const project = projectStatusLine(screen);
     const status = [project, screen.status].filter((line) => line && line.length > 0).join('\n');
     this.status.content = status;
     this.status.visible = status.length > 0;

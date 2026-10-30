@@ -11,8 +11,15 @@ import asyncio
 import json
 
 import pytest
-from steerable_agent_protocol.generated import ToolCall
-from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
+from steerable_agent_protocol.generated import ToolCall, ToolResult
+from steerable_agent_runtime import (
+    ApprovalDecision,
+    ApprovalExecutor,
+    CoreLoop,
+    LoopContext,
+    SessionApprovalCache,
+)
+from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk, LLMUsage
 
 from steerable_sidecar.sidecar import Sidecar
 
@@ -216,6 +223,55 @@ async def test_host_mode_asks_and_executes_on_allow() -> None:
     # Task streams run under task:<id>; the card belongs to the parent chat.
     assert host.approval_requests[0]["chatId"] == "chat-parent"
     assert [c["name"] for c in host.reverse_calls] == ["delete_file"]
+
+
+@pytest.mark.asyncio
+async def test_task_session_allow_reuses_the_parent_chat() -> None:
+    parent = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="browser_navigate", arguments={})),
+            _text_round("parent done"),
+        ]
+    )
+    task = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c2", name="browser_click", arguments={})),
+            _text_round("task done"),
+        ]
+    )
+    providers = iter([parent, task])
+    sidecar = Sidecar(llm_provider_factory=lambda _params: next(providers))
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {
+            "browser_navigate": {"success": True},
+            "browser_click": {"success": True},
+        },
+        approvals={"kind": "allow_for_session", "reason": "ok"},
+    )
+    sidecar.server.attach_writer(host)
+    tools = _browser_tools()
+
+    await _run_stream(
+        sidecar,
+        _base_params(approval={"mode": "host"}, tools=tools, chatId="chat-parent"),
+    )
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host"},
+            tools=tools,
+            chatId="task:1",
+            toolContext={"mode": "agent", "chatId": "chat-parent"},
+        ),
+    )
+
+    assert [item["toolName"] for item in host.approval_requests] == ["browser_navigate"]
+    assert [call["name"] for call in host.reverse_calls] == [
+        "browser_navigate",
+        "browser_click",
+    ]
 
 
 @pytest.mark.asyncio
@@ -962,6 +1018,7 @@ async def test_subagent_scroll_skips_the_card_and_navigate_asks() -> None:
     assert [item["toolName"] for item in host.approval_requests] == ["browser_navigate"]
     assert host.approval_requests[0]["mode"] == "external"
     assert host.approval_requests[0]["category"] == "browser"
+    assert host.approval_requests[0]["chatId"] == "chat-child-browser"
     assert [call["name"] for call in host.reverse_calls] == [
         "browser_scroll",
         "browser_navigate",
@@ -975,3 +1032,243 @@ async def test_subagent_scroll_skips_the_card_and_navigate_asks() -> None:
     assert all(
         "mode" not in tool and "approvalCategory" not in tool for tool in child_tools
     )
+
+
+@pytest.mark.asyncio
+async def test_explicit_approval_wins_over_the_preview() -> None:
+    transport = _CapturingTransport()
+
+    class _Event:
+        kind = "tool_call_result"
+        data = {
+            "id": "c1",
+            "name": "browser_click",
+            "success": True,
+            "approval": {"kind": "allow_once", "category": "browser", "waitMs": 12},
+            "resultPreview": json.dumps(
+                {
+                    "success": True,
+                    "data": {
+                        "_approval": {
+                            "kind": "allow_for_session",
+                            "category": "browser",
+                            "cached": True,
+                        }
+                    },
+                }
+            ),
+        }
+
+    await Sidecar._emit_loop_event(transport, "stream-1", _Event())
+    result = transport.events[0][1]["toolResult"]
+    assert result["approval"]["kind"] == "allow_once"
+    assert result["approval"]["waitMs"] == 12
+
+
+@pytest.mark.asyncio
+async def test_parallel_terminal_sibling_keeps_the_session_allow_marker() -> None:
+    class _Exec:
+        def concurrency_safe(self, _call: ToolCall) -> bool:
+            return True
+
+        async def execute(self, call: ToolCall, _ctx: object) -> ToolResult:
+            if call.name == "stop":
+                return ToolResult(
+                    success=True,
+                    terminal=True,
+                    data={"terminal_status": "waiting_user"},
+                )
+            if call.name == "write_a":
+                return ToolResult(
+                    success=True,
+                    data={
+                        "_sandbox": {"enforcement": "workspace"},
+                        "_approval": {
+                            "kind": "allow_for_session",
+                            "category": "browser",
+                            "cached": True,
+                        },
+                        "real": "w" * 500,
+                    },
+                )
+            return ToolResult(success=True, data={"real": call.name})
+
+    class _Prov:
+        name = "fake"
+        model = "fake"
+
+        def __init__(self) -> None:
+            self._round = 0
+
+        async def complete(self, *_args: object, **_kwargs: object) -> None:
+            raise NotImplementedError
+
+        def stream(self, _messages: object, **_kwargs: object):
+            self._round += 1
+            round_index = self._round
+
+            async def _gen():
+                if round_index == 1:
+                    for name, call_id in (("stop", "stop"), ("write_a", "a"), ("write_b", "b")):
+                        yield LLMStreamChunk(
+                            tool_call_delta=ToolCall(id=call_id, name=name, arguments={})
+                        )
+                    yield LLMStreamChunk(
+                        finish_reason="tool_calls",
+                        usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                    )
+                else:
+                    yield LLMStreamChunk(content_delta="done")
+                    yield LLMStreamChunk(
+                        finish_reason="stop",
+                        usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                    )
+
+            return _gen()
+
+    transport = _CapturingTransport()
+    loop = CoreLoop(_Prov(), _Exec())
+    async for event in loop.run([LLMMessage.text_of("user", "go")]):
+        if event.kind == "tool_call_result":
+            await Sidecar._emit_loop_event(transport, "stream-1", event)
+
+    results = {
+        params["toolResult"]["id"]: params["toolResult"]
+        for method, params in transport.events
+        if method == "stream.chunk" and "toolResult" in params
+    }
+    assert results["a"]["approval"] == {
+        "kind": "allow_for_session",
+        "category": "browser",
+        "cached": True,
+    }
+    assert results["a"]["sandbox"] == {"enforcement": "workspace"}
+    assert "approval" not in results["b"]
+
+
+@pytest.mark.asyncio
+async def test_cached_session_allow_survives_a_long_parallel_result() -> None:
+    class _AllowOnce:
+        async def approve(self, _request: object) -> ApprovalDecision:
+            return ApprovalDecision("allow_for_session")
+
+    class _Blob:
+        async def execute(self, _call: ToolCall, _ctx: object) -> ToolResult:
+            return ToolResult(
+                success=True,
+                data={"blob": "w" * 500, "_sandbox": {"enforcement": "workspace"}},
+            )
+
+    approval = ApprovalExecutor(
+        _Blob(),
+        _AllowOnce(),
+        session=SessionApprovalCache(),
+    )
+    await approval.execute(ToolCall(id="seed", name="write_a", arguments={}), LoopContext())
+
+    class _Exec:
+        def concurrency_safe(self, _call: ToolCall) -> bool:
+            return True
+
+        async def execute(self, call: ToolCall, ctx: object) -> ToolResult:
+            if call.name == "stop":
+                return ToolResult(
+                    success=True,
+                    terminal=True,
+                    data={"terminal_status": "waiting_user"},
+                )
+            if call.name == "write_a":
+                return await approval.execute(call, ctx)
+            return ToolResult(success=True, data={"real": call.name})
+
+    class _Prov:
+        name = "fake"
+        model = "fake"
+
+        def __init__(self) -> None:
+            self._round = 0
+
+        async def complete(self, *_args: object, **_kwargs: object) -> None:
+            raise NotImplementedError
+
+        def stream(self, _messages: object, **_kwargs: object):
+            self._round += 1
+            round_index = self._round
+
+            async def _gen():
+                if round_index == 1:
+                    for name, call_id in (("stop", "stop"), ("write_a", "a"), ("write_b", "b")):
+                        yield LLMStreamChunk(
+                            tool_call_delta=ToolCall(id=call_id, name=name, arguments={})
+                        )
+                    yield LLMStreamChunk(
+                        finish_reason="tool_calls",
+                        usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                    )
+                else:
+                    yield LLMStreamChunk(content_delta="done")
+                    yield LLMStreamChunk(
+                        finish_reason="stop",
+                        usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                    )
+
+            return _gen()
+
+    transport = _CapturingTransport()
+    loop = CoreLoop(_Prov(), _Exec())
+    previews: dict[str, str] = {}
+    async for event in loop.run([LLMMessage.text_of("user", "go")]):
+        if event.kind == "tool_call_result":
+            preview = event.data.get("resultPreview")
+            if isinstance(preview, str):
+                previews[str(event.data.get("id"))] = preview
+            await Sidecar._emit_loop_event(transport, "stream-1", event)
+
+    assert '"_approval"' in previews["a"]
+    results = {
+        params["toolResult"]["id"]: params["toolResult"]
+        for method, params in transport.events
+        if method == "stream.chunk" and "toolResult" in params
+    }
+    assert results["a"]["approval"] == {
+        "kind": "allow_for_session",
+        "category": "write_a",
+        "cached": True,
+    }
+    assert results["a"]["sandbox"] == {"enforcement": "workspace"}
+
+
+def test_truncated_preview_keeps_markers_placed_first() -> None:
+    from steerable_sidecar.sidecar import _markers_from_result_preview
+
+    full = json.dumps(
+        {
+            "success": True,
+            "data": {
+                "_sandbox": {"enforcement": "workspace"},
+                "_approval": {
+                    "kind": "allow_for_session",
+                    "category": "browser",
+                    "cached": True,
+                },
+                "blob": "x" * 500,
+            },
+        }
+    )
+    sandbox, approval = _markers_from_result_preview(full[:300] + "…")
+    assert sandbox == {"enforcement": "workspace"}
+    assert approval == {
+        "kind": "allow_for_session",
+        "category": "browser",
+        "cached": True,
+    }
+    buried = json.dumps(
+        {
+            "success": True,
+            "data": {
+                "blob": "x" * 500,
+                "_approval": {"kind": "allow_for_session", "cached": True},
+            },
+        }
+    )
+    assert _markers_from_result_preview(buried[:300] + "…") == (None, None)

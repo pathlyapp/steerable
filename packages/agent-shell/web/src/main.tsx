@@ -2,7 +2,7 @@ import { StrictMode, lazy, Suspense, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createHashRouter, RouterProvider } from 'react-router-dom';
 import { AppShell } from './AppShell';
-import { I18nProvider, configureI18n, getLocale } from './i18n';
+import { I18nProvider, configureI18n, getLocale, notifyHostLocale } from './i18n';
 import { AgentLayout } from './layouts/AgentLayout';
 import { AgentPage } from './pages/AgentPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -105,7 +105,7 @@ export async function bootstrap(): Promise<void> {
     defaultLocale: import.meta.env.VITE_DEFAULT_LOCALE || 'en',
   });
   document.documentElement.lang = getLocale() === 'zh' ? 'zh-CN' : getLocale();
-  window.steerableHost?.setLocale?.(getLocale());
+  notifyHostLocale(getLocale());
   document.title = BRAND_NAME;
   const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
   if (icon) {

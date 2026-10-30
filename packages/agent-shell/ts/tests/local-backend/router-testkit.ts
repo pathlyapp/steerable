@@ -775,6 +775,7 @@ export interface ToolSchemaStub {
   description: string;
   inputSchema: Record<string, unknown>;
   mode: 'read' | 'write' | 'external';
+  approval?: { category?: string } | null;
 }
 
 export const DEFAULT_TOOL_SCHEMAS: ToolSchemaStub[] = [

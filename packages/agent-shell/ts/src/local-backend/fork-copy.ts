@@ -69,6 +69,6 @@ export function forkPathRewriter(oldChatId: string, newChatId: string): (text: s
   const pairs = [
     ...forkPrefixPairs(chatAttachmentsDirPath(oldChatId), chatAttachmentsDirPath(newChatId)),
     ...forkPrefixPairs(chatWorkspacePath(oldChatId), chatWorkspacePath(newChatId)),
-  ];
+  ].sort((left, right) => right[0].length - left[0].length);
   return (text) => pairs.reduce((current, [from, to]) => replacePathPrefix(current, from, to), text);
 }

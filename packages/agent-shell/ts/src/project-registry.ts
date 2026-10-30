@@ -372,5 +372,8 @@ function locateProject(
 
 function isInsideFolder(parent: string, child: string, platformPath: path.PlatformPath): boolean {
   const relative = platformPath.relative(parent, child);
-  return relative !== '' && !relative.startsWith('..') && !platformPath.isAbsolute(relative);
+  return relative !== ''
+    && relative !== '..'
+    && !relative.startsWith(`..${platformPath.sep}`)
+    && !platformPath.isAbsolute(relative);
 }

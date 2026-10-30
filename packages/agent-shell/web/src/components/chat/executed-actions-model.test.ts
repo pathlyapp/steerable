@@ -144,6 +144,118 @@ describe('summarizeRunCodeAction / expandRunCodeActions', () => {
     ]);
     expect(rows.map((r) => r.tool)).toEqual(['run_code', 'stub_a']);
   });
+
+  it('内层工具行不带外层程序的本会话允许', () => {
+    const rows = expandRunCodeActions([
+      {
+        tool: 'run_code',
+        approval: { kind: 'allow_for_session', cached: true },
+        result: {
+          success: true,
+          data: {
+            calls: [{ tool: 'browser_click', arguments: {}, result: { success: true } }],
+          },
+        },
+      },
+    ]);
+    expect(rows[0]?.approval).toEqual({ kind: 'allow_for_session', cached: true });
+    expect(rows[1]?.tool).toBe('browser_click');
+    expect(rows[1]?.approval).toBeUndefined();
+  });
+
+  it('内层工具行用自己结果里的本会话允许', () => {
+    const rows = expandRunCodeActions([
+      {
+        tool: 'run_code',
+        approval: { kind: 'allow_for_session', cached: true },
+        result: {
+          success: true,
+          data: {
+            calls: [
+              {
+                tool: 'browser_click',
+                arguments: {},
+                result: {
+                  success: true,
+                  data: {
+                    _approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    ]);
+    expect(rows[1]?.approval).toEqual({ kind: 'allow_for_session', cached: true });
+  });
+
+  it('结果是预览 JSON 字符串时仍展开内层并读出本会话允许', () => {
+    const preview = JSON.stringify({
+      success: true,
+      data: {
+        calls: [
+          {
+            tool: 'browser_click',
+            arguments: {},
+            result: {
+              success: true,
+              data: {
+                _approval: { kind: 'allow_for_session', cached: true },
+              },
+            },
+          },
+        ],
+      },
+    });
+    const rows = expandRunCodeActions([
+      { tool: 'run_code', arguments: { description: 'click' }, result: preview },
+    ]);
+    expect(rows.map((row) => row.tool)).toEqual(['run_code', 'browser_click']);
+    expect(rows[1]?.approval).toEqual({ kind: 'allow_for_session', cached: true });
+    expect(summarizeRunCodeAction('run_code', { description: 'click' }, preview)).toBe(
+      'Program "click" · 1 inner tools',
+    );
+  });
+
+  it('历史里的 data 对象把本会话允许留在内层工具上', () => {
+    const rows = expandRunCodeActions([
+      {
+        tool: 'run_code',
+        result: {
+          calls: [
+            {
+              tool: 'browser_scroll',
+              arguments: {},
+              result: { _approval: { kind: 'allow_for_session', cached: true } },
+            },
+          ],
+        },
+      },
+    ]);
+    expect(rows[1]?.approval).toEqual({ kind: 'allow_for_session', cached: true });
+  });
+
+  it('内层工具行不沿用程序的 id 和标题', () => {
+    const rows = expandRunCodeActions([
+      {
+        id: 'program-1',
+        tool: 'run_code',
+        view: { title: 'two stubs', declared: true },
+        result: {
+          success: true,
+          data: {
+            calls: [{ tool: 'stub_a', arguments: {}, result: { success: true } }],
+          },
+        },
+      },
+    ]);
+    expect(rows[0]?.id).toBe('program-1');
+    expect(rows[0]?.view?.title).toBe('two stubs');
+    expect(rows[1]?.id).toBeUndefined();
+    expect(rows[1]?.view).toBeUndefined();
+    expect(rows[1]?.tool).toBe('stub_a');
+  });
 });
 
 describe('delegate_subagent 摘要', () => {

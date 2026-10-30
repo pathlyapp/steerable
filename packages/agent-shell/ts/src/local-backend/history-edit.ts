@@ -52,9 +52,12 @@ export function rewindFrom(messages: readonly StoredTurn[]): { deleteFromId: str
 
 /**
  * Replace `from` only when it is a complete path prefix: the next character
- * is a separator or the end of the string. A longer name that merely starts
- * with the same characters is left alone. On Windows the match ignores
- * letter case and treats `/` and `\` as the same separator.
+ * is a separator or the end of the string, and the previous character does
+ * not continue a path. Letters and digits count in any script, so a Han
+ * character glues the same way an ASCII letter does. A longer name that
+ * merely starts with the same characters is left alone.
+ * On Windows the match ignores letter case and treats `/` and `\` as the
+ * same separator.
  */
 export function replacePathPrefix(
   text: string,
@@ -92,9 +95,18 @@ function prefixesEqual(left: string, right: string, platform: NodeJS.Platform): 
 function findPrefix(text: string, source: string, fromIndex: number, win32: boolean): number {
   const limit = text.length - source.length;
   for (let index = fromIndex; index <= limit; index += 1) {
+    if (index > 0 && continuesPath(text[index - 1] ?? '')) continue;
     if (regionEquals(text, index, source, win32)) return index;
   }
   return -1;
+}
+
+function continuesPath(char: string): boolean {
+  if (char === '/' || char === '\\' || char === ':' || char === '.' || char === '_'
+    || char === '-' || char === '~') {
+    return true;
+  }
+  return /[\p{L}\p{N}\p{M}]/u.test(char);
 }
 
 function regionEquals(text: string, at: number, source: string, win32: boolean): boolean {

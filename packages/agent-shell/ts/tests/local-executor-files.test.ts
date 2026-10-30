@@ -179,6 +179,10 @@ describe('路径围栏 · isPathWithinRoot / buildProjectRootViolation', () => {
     expect(isPathWithinRoot(path.join(`${root}-other`, 'x.txt'), root)).toBe(false);
   });
 
+  it('名字以 .. 开头的子目录仍在界内', () => {
+    expect(isPathWithinRoot(path.join(root, '..notes', 'a.txt'), root)).toBe(true);
+  });
+
   it('上级目录与根外路径被拒绝', () => {
     expect(isPathWithinRoot(path.dirname(root), root)).toBe(false);
     expect(isPathWithinRoot(path.resolve(os.tmpdir(), 'elsewhere'), root)).toBe(false);

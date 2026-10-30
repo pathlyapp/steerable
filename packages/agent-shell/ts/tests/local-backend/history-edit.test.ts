@@ -51,6 +51,18 @@ describe('history edit', () => {
     expect(copied[0]?.content).toBe('/tmp/next/a');
     expect(copied[0]?.messageMetadata).toBe(JSON.stringify({ file: '/tmp/next/a' }));
     expect(replacePathPrefix('/tmp/Chat/a', '/tmp/chat', '/tmp/next', 'darwin')).toBe('/tmp/Chat/a');
+    expect(replacePathPrefix('/var/tmp/chat/a.txt', '/tmp/chat', '/tmp/next', 'darwin')).toBe(
+      '/var/tmp/chat/a.txt',
+    );
+    expect(replacePathPrefix('note /tmp/chat/a.txt', '/tmp/chat', '/tmp/next', 'darwin')).toBe(
+      'note /tmp/next/a.txt',
+    );
+    expect(replacePathPrefix('/项目/tmp/chat/a.txt', '/tmp/chat', '/tmp/next', 'darwin')).toBe(
+      '/项目/tmp/chat/a.txt',
+    );
+    expect(replacePathPrefix('路径：/tmp/chat/a.txt', '/tmp/chat', '/tmp/next', 'darwin')).toBe(
+      '路径：/tmp/next/a.txt',
+    );
   });
 
   it('rewrites a Windows path when only case or slash direction differs', () => {
@@ -94,6 +106,25 @@ describe('history edit', () => {
       if (previous === undefined) delete process.env.STEERABLE_DOCUMENTS_DIR;
       else process.env.STEERABLE_DOCUMENTS_DIR = previous;
       rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  it('rewrites a workspace whose real path adds /private', () => {
+    const docs = mkdtempSync(path.join(tmpdir(), 'fork-var-'));
+    const previous = process.env.STEERABLE_DOCUMENTS_DIR;
+    process.env.STEERABLE_DOCUMENTS_DIR = docs;
+    try {
+      const rewrite = forkPathRewriter('old-chat', 'new-chat');
+      const logical = chatWorkspacePath('old-chat');
+      const real = canonicalFencePath(path.resolve(logical));
+      const nextLogical = chatWorkspacePath('new-chat');
+      const nextReal = canonicalFencePath(path.resolve(nextLogical));
+      expect(rewrite(`${real}/a.txt`)).toBe(`${nextReal}/a.txt`);
+      expect(rewrite(`${logical}/a.txt`)).toBe(`${nextLogical}/a.txt`);
+    } finally {
+      if (previous === undefined) delete process.env.STEERABLE_DOCUMENTS_DIR;
+      else process.env.STEERABLE_DOCUMENTS_DIR = previous;
+      rmSync(docs, { recursive: true, force: true });
     }
   });
 });

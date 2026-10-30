@@ -26,6 +26,16 @@ Path(sys.argv[2]).write_text("held", encoding="utf-8")
 time.sleep(60)
 """
 
+_BRIEF_HOLDER = r"""
+import sys, time
+from pathlib import Path
+from steerable_agent_runtime.storage.write_lease import acquire_write_lease
+lease = acquire_write_lease(sys.argv[1])
+Path(sys.argv[2]).write_text("held", encoding="utf-8")
+time.sleep(0.3)
+lease.release()
+"""
+
 
 def _spawn_holder(db_path: Path, flag: Path) -> subprocess.Popen[str]:
     return subprocess.Popen(
@@ -70,6 +80,26 @@ def test_second_process_fails_loud(tmp_path: Path) -> None:
     finally:
         holder.kill()
         holder.wait(timeout=5)
+
+
+def test_open_waits_while_a_peer_holds_the_migration_lease(tmp_path: Path) -> None:
+    db = tmp_path / "sessions.db"
+    flag = tmp_path / "held"
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _BRIEF_HOLDER, str(db), str(flag)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_held(holder, flag)
+        store = SqliteStorage(str(db))
+        store.close()
+        assert holder.wait(timeout=5) == 0
+    finally:
+        if holder.poll() is None:
+            holder.kill()
+            holder.wait(timeout=5)
 
 
 def test_successor_opens_after_holder_is_killed(tmp_path: Path) -> None:

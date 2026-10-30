@@ -86,7 +86,17 @@ export function setLocale(locale: string): boolean {
 }
 
 export function t(message: string, params?: Record<string, string | number>): string {
-  const table = current === SOURCE_LOCALE ? undefined : catalogs[current];
+  return tFor(current, message, params);
+}
+
+/** Translate `message` for one request without changing the process locale. */
+export function tFor(
+  locale: string,
+  message: string,
+  params?: Record<string, string | number>,
+): string {
+  const normalized = normalizeLocale(locale) ?? SOURCE_LOCALE;
+  const table = normalized === SOURCE_LOCALE ? undefined : catalogs[normalized];
   const template = table?.[message] ?? message;
   return formatMessage(template, params);
 }

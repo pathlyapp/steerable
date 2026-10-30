@@ -32,6 +32,7 @@ import { SidecarSupervisor } from '../../src/sidecar/index.js';
 import type { ToolRouter } from '../../src/tool-router.js';
 import type { TaskService } from '../../src/local-backend/task-service.js';
 import { registerAuthProvider, type Principal } from '../../src/auth/index.js';
+import { registerLocale, resetI18nForTests } from '../../src/i18n.js';
 import type { ScopedStore } from '../../src/storage/scoped-store.js';
 import { resetProductConfigForTests, setProductConfig } from '../../src/product-config.js';
 import { chatAttachmentsDirPath } from '../../src/attachments.js';
@@ -317,7 +318,7 @@ describe('会话路由', () => {
     const rewound = await router.handle({ method: 'POST', path: `/api/v2/chats/${forkId}/rewind` });
     expect(rewound).toMatchObject({ status: 200, data: { removed: 2 } });
     expect((await h.store.listMessages(forkId)).map((message) => message.content)).toEqual([folded[2]]);
-    expect((await h.store.getChat(forkId))?.title).toBe('原对话（分叉）');
+    expect((await h.store.getChat(forkId))?.title).toBe('原对话 (fork)');
     expect((await h.store.getChat(forkId))?.forkedFrom).toBe(chat.id);
     await h.store.addMessage(forkId, 'user', '只在新会话');
     await h.store.addMessage(chat.id, 'assistant', '只在原会话');
@@ -333,6 +334,34 @@ describe('会话路由', () => {
       if (prevDocs === undefined) delete process.env.STEERABLE_DOCUMENTS_DIR;
       else process.env.STEERABLE_DOCUMENTS_DIR = prevDocs;
     }
+  });
+
+  it('fork title uses the request locale', async () => {
+    await withForkDirs(async () => {
+      resetI18nForTests();
+      registerLocale('zh', { '{title} (fork)': '{title}（分叉）' });
+      try {
+        const chat = await h.store.createChat('原对话', 'agent-a', null);
+        const router = makeRouter();
+        const chinese = await router.handle({
+          method: 'POST',
+          path: `/api/v2/chats/${chat.id}/fork`,
+          body: { locale: 'zh-CN' },
+        });
+        const chineseId = (chinese.data as { chatId?: string }).chatId ?? '';
+        expect(chinese.status).toBe(200);
+        expect((await h.store.getChat(chineseId))?.title).toBe('原对话（分叉）');
+        const english = await router.handle({
+          method: 'POST',
+          path: `/api/v2/chats/${chat.id}/fork`,
+          body: { locale: 'en' },
+        });
+        const englishId = (english.data as { chatId?: string }).chatId ?? '';
+        expect((await h.store.getChat(englishId))?.title).toBe('原对话 (fork)');
+      } finally {
+        resetI18nForTests();
+      }
+    });
   });
 
   it('分叉复制附件、改写路径，项目会话不复制工作区', async () => {
@@ -458,6 +487,7 @@ describe('会话路由', () => {
       try {
         const forked = await makeRouter().handle({ method: 'POST', path: `/api/v2/chats/${chat.id}/fork` });
         expect(forked.status).toBe(500);
+        expect((forked.data as { detail: string }).detail).toBe('Fork failed');
         expect(copies).toBe(2);
         expect((await h.store.listChats()).chats.map((item) => item.title)).toEqual(['半途失败']);
         expect(attachmentNames().filter((name) => !beforeAttachments.includes(name))).toEqual([]);
@@ -480,6 +510,7 @@ describe('会话路由', () => {
       try {
         const forked = await makeRouter().handle({ method: 'POST', path: `/api/v2/chats/${chat.id}/fork` });
         expect(forked.status).toBe(500);
+        expect((forked.data as { detail: string }).detail).toBe('Fork failed');
         const titles = (await h.store.listChats()).chats.map((item) => item.title);
         expect(titles).toEqual(['会失败']);
       } finally {

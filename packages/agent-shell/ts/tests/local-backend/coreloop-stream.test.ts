@@ -401,7 +401,130 @@ describe('streamCoreLoopTurn', () => {
       error: undefined,
       durationMs: 5,
       sandbox: undefined,
+      approval: undefined,
     });
+  });
+
+  it('forwards a cached session allow onto the tool action', async () => {
+    const approval = { kind: 'allow_for_session', category: 'browser', cached: true };
+    const { supervisor } = makeSupervisor([
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolCall: { id: 'c1', name: 'browser_click', arguments: { ref: 'e1' } },
+        },
+      },
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolResult: {
+            id: 'c1',
+            name: 'browser_click',
+            success: true,
+            resultPreview: 'clicked',
+            approval,
+          },
+        },
+      },
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+    const onToolAction = vi.fn();
+
+    await streamCoreLoopTurn({ ...BASE_OPTIONS, supervisor, onText: () => {}, onToolAction });
+
+    expect(onToolAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'c1',
+        tool: 'browser_click',
+        approval,
+      }),
+    );
+  });
+
+  it('lifts a cached session allow left inside the result preview', async () => {
+    const preview = JSON.stringify({
+      success: true,
+      data: {
+        clicked: true,
+        _sandbox: { enforcement: 'workspace' },
+        _approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+      },
+    });
+    const { supervisor } = makeSupervisor([
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolCall: { id: 'c1', name: 'browser_click', arguments: { ref: 'e1' } },
+        },
+      },
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolResult: {
+            id: 'c1',
+            name: 'browser_click',
+            success: true,
+            resultPreview: preview,
+          },
+        },
+      },
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+    const onToolAction = vi.fn();
+
+    await streamCoreLoopTurn({ ...BASE_OPTIONS, supervisor, onText: () => {}, onToolAction });
+
+    expect(onToolAction).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'c1',
+      sandbox: { enforcement: 'workspace' },
+      approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+    }));
+  });
+
+  it('lifts a session allow from a preview cut at 300 characters', async () => {
+    const full = JSON.stringify({
+      success: true,
+      data: {
+        _sandbox: { enforcement: 'workspace' },
+        _approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+        blob: 'x'.repeat(500),
+      },
+    });
+    const { supervisor } = makeSupervisor([
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolCall: { id: 'c1', name: 'browser_click', arguments: { ref: 'e1' } },
+        },
+      },
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolResult: {
+            id: 'c1',
+            name: 'browser_click',
+            success: true,
+            resultPreview: `${full.slice(0, 300)}…`,
+          },
+        },
+      },
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+    const onToolAction = vi.fn();
+
+    await streamCoreLoopTurn({ ...BASE_OPTIONS, supervisor, onText: () => {}, onToolAction });
+
+    expect(onToolAction).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'c1',
+      sandbox: { enforcement: 'workspace' },
+      approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+    }));
   });
 
   it('forwards reasoning deltas and tool-start before the result', async () => {

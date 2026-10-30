@@ -30,6 +30,12 @@ const STATUS_LABEL: Record<Status, string> = {
   cancelled: '已取消',
 };
 
+function formatToolDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 10_000) return `${(Math.round(ms / 100) / 10).toFixed(1)}s`;
+  return `${Math.round(ms / 1000)}s`;
+}
+
 const STATUS_TONE: Record<Status, string> = {
   pending: 'text-[var(--agent-muted-foreground,#6b7280)]',
   running: 'text-amber-600',
@@ -102,6 +108,7 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
   const [expanded, setExpanded] = React.useState(defaultExpanded);
   const status = (payload.status ?? 'pending') as Status;
   const title = label ?? payload.name;
+  const duration = typeof payload.durationMs === 'number' ? formatToolDuration(payload.durationMs) : '';
 
   return (
     <div
@@ -152,11 +159,11 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
             <span className="ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap">
               <StatusIcon status={status} />
               <span className={STATUS_TONE[status]}>{STATUS_LABEL[status]}</span>
+              {duration && (
+                <span className="text-[var(--agent-muted-foreground,#9ca3af)]">· {duration}</span>
+              )}
               {note && (
                 <span className="text-[var(--agent-muted-foreground,#6b7280)]">{note}</span>
-              )}
-              {typeof payload.durationMs === 'number' && (
-                <span className="text-[var(--agent-muted-foreground,#9ca3af)]">· {payload.durationMs}ms</span>
               )}
             </span>
           </span>

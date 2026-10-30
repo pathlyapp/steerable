@@ -57,6 +57,10 @@ describe('AppearanceSettingsPanel', () => {
       systemLocale: 'en',
       storage: { getItem: () => null, setItem: () => undefined },
     });
+    const setHostLocale = vi.fn();
+    vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
+      setLocale: setHostLocale,
+    } as HostBridge);
     render(
       <I18nProvider>
         <AppearanceSettingsPanel />
@@ -66,6 +70,7 @@ describe('AppearanceSettingsPanel', () => {
     fireEvent.click(screen.getByTestId('locale-option-zh'));
     expect(screen.getByTestId('locale-settings').textContent).toContain('语言');
     expect(screen.getByTestId('thinking-display-hidden').textContent).toBe('隐藏');
+    expect(setHostLocale).toHaveBeenCalledWith('zh');
   });
 
   it('hides interface zoom when the host has no zoom controls', () => {

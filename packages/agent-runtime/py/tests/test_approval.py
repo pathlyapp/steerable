@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from steerable_agent_protocol.generated import ToolCall
+from steerable_agent_protocol.generated import ToolCall, ToolResult
 
 from steerable_agent_runtime import (
     ApprovalAborted,
@@ -211,6 +211,25 @@ async def test_session_scope_caches_per_category() -> None:
     assert second.data["_approval"]["cached"] is True
     assert second.data["_approval"]["kind"] == "allow_for_session"
     assert first.data["_approval"].get("cached") is not True
+
+
+@pytest.mark.asyncio
+async def test_session_allow_marker_precedes_a_large_result() -> None:
+    class _Blob:
+        async def execute(self, _call: ToolCall, _ctx: object) -> ToolResult:
+            return ToolResult(
+                success=True,
+                data={"blob": "x" * 500, "_sandbox": {"enforcement": "workspace"}},
+            )
+
+    executor = ApprovalExecutor(
+        _Blob(),
+        _ScriptedApprover([ApprovalDecision("allow_for_session")]),
+        session=SessionApprovalCache(),
+    )
+    result = await executor.execute(_call("write_file", path="/a"), LoopContext())
+    assert list(result.data)[:2] == ["_sandbox", "_approval"]
+    assert result.data["blob"] == "x" * 500
 
 
 @pytest.mark.asyncio

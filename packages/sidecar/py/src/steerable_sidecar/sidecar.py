@@ -2038,7 +2038,7 @@ class Sidecar:
             executor = ApprovalExecutor(
                 executor,
                 approver,
-                session=self._approval_session(params.get("chatId")),
+                session=self._approval_session(approval_chat_id or params.get("chatId")),
                 store=JsonApprovalStore(store_path) if store_path else None,
                 timeout_s=(float(timeout_ms) / 1000.0) if timeout_ms else None,
                 resolve=approval_resolve,
@@ -2585,6 +2585,16 @@ class Sidecar:
                 payload["sandbox"] = data["sandbox"]
             if "approval" in data:
                 payload["approval"] = data["approval"]
+            # Older engines omit the top-level fields when a sibling already
+            # finished before a terminal tool. The preview still carries them.
+            if "sandbox" not in payload or "approval" not in payload:
+                lifted_sandbox, lifted_approval = _markers_from_result_preview(
+                    data.get("resultPreview")
+                )
+                if "sandbox" not in payload and lifted_sandbox is not None:
+                    payload["sandbox"] = lifted_sandbox
+                if "approval" not in payload and lifted_approval is not None:
+                    payload["approval"] = lifted_approval
             await transport.emit_notification(
                 "stream.chunk", {"streamId": stream_id, "toolResult": payload}
             )
@@ -2818,6 +2828,61 @@ def _connect_stdio_threaded() -> tuple[asyncio.StreamReader, Any]:
         target=_pump_stdin, name="sidecar-stdin-pump", daemon=True
     ).start()
     return reader, _ThreadedStdoutWriter()
+
+
+def _markers_from_result_preview(preview: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Sandbox and approval objects embedded in a tool-result preview.
+
+    The loop event usually lifts these itself. When it does not, they remain
+    under ``data._sandbox`` and ``data._approval`` in the preview JSON. A
+    published loop also cuts that preview at 300 characters, so a marker
+    past the cut is gone; one that still fits is read without parsing the
+    rest of the truncated JSON.
+    """
+    if not isinstance(preview, str) or not preview.startswith("{"):
+        return None, None
+    try:
+        parsed = json.loads(preview)
+    except json.JSONDecodeError:
+        return (
+            _object_after_key(preview, "_sandbox"),
+            _object_after_key(preview, "_approval"),
+        )
+    if not isinstance(parsed, dict):
+        return None, None
+    body = parsed.get("data")
+    if not isinstance(body, dict):
+        return None, None
+    sandbox = body.get("_sandbox")
+    approval = body.get("_approval")
+    return (
+        sandbox if isinstance(sandbox, dict) else None,
+        approval if isinstance(approval, dict) else None,
+    )
+
+
+def _object_after_key(text: str, key: str) -> dict[str, Any] | None:
+    needle = f'"{key}"'
+    decoder = json.JSONDecoder()
+    start = 0
+    while True:
+        found = text.find(needle, start)
+        if found < 0:
+            return None
+        colon = text.find(":", found + len(needle))
+        if colon < 0:
+            return None
+        index = colon + 1
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        try:
+            value, _end = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            start = found + len(needle)
+            continue
+        if isinstance(value, dict):
+            return value
+        start = found + len(needle)
 
 
 def _approval_prompt_chat_id(params: dict[str, Any]) -> str | None:

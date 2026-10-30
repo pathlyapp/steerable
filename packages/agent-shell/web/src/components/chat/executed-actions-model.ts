@@ -106,14 +106,9 @@ export function summarizeRunCodeAction(
       : t('Program');
   const head =
     description.length > 40 ? `${description.slice(0, 37)}…` : description;
-  const data = resultData(result);
-  const calls = Array.isArray((data as { calls?: unknown } | null)?.calls)
-    ? ((data as { calls: RunCodeCall[] }).calls)
-    : [];
-  const failed =
-    result &&
-    typeof result === 'object' &&
-    (result as { success?: unknown }).success === false;
+  const parsed = asObject(parseJsonValue(result));
+  const calls = runCodeCalls(result);
+  const failed = parsed?.success === false;
   if (failed) return t('Program "{name}" failed', { name: head });
   return calls.length > 0
     ? t('Program "{name}" · {count} inner tools', { name: head, count: calls.length })
@@ -121,10 +116,14 @@ export function summarizeRunCodeAction(
 }
 
 export interface ExecutedActionLike {
+  id?: string;
   tool: string;
   arguments?: unknown;
   result?: unknown;
   sandbox?: { backend?: string; enforcement: string };
+  approval?: { kind?: string; cached?: boolean };
+  view?: { title?: string; declared?: boolean };
+  durationMs?: number;
 }
 
 export interface DelegateSubagentView {
@@ -602,21 +601,44 @@ export function summarizeTaskAction(
   return null;
 }
 
+function runCodeBody(result: unknown): Record<string, unknown> | null {
+  const obj = asObject(parseJsonValue(result));
+  if (!obj) return null;
+  return asObject(obj.data) ?? obj;
+}
+
+function runCodeCalls(result: unknown): RunCodeCall[] {
+  const calls = runCodeBody(result)?.calls;
+  return Array.isArray(calls) ? (calls as RunCodeCall[]) : [];
+}
+
+function approvalFromNestedResult(result: unknown): ExecutedActionLike['approval'] {
+  const marker = asObject(runCodeBody(result)?._approval);
+  if (!marker || typeof marker.kind !== 'string') return undefined;
+  return {
+    kind: marker.kind,
+    ...(marker.cached === true ? { cached: true } : {}),
+  };
+}
+
 /** Flatten a run_code action into the outer program plus inner tool rows. */
 export function expandRunCodeActions<T extends ExecutedActionLike>(actions: T[]): T[] {
   const out: T[] = [];
   for (const action of actions) {
     out.push(action);
     if (action.tool !== 'run_code') continue;
-    const data = resultData(action.result) as { calls?: RunCodeCall[] } | null;
-    const calls = Array.isArray(data?.calls) ? data.calls : [];
+    const calls = runCodeCalls(action.result);
     for (const call of calls) {
       const name = typeof call.tool === 'string' ? call.tool : 'tool';
       out.push({
         ...action,
+        id: undefined,
+        view: undefined,
+        durationMs: undefined,
         tool: name,
         arguments: call.arguments,
         result: call.result,
+        approval: approvalFromNestedResult(call.result),
       });
     }
   }

@@ -45,12 +45,15 @@ describe('ToolsFlow / declared view', () => {
             tool: 'browser_click',
             arguments: { ref: 'e1' },
             result: { success: true },
+            durationMs: 120,
             approval: { kind: 'allow_for_session', cached: true },
           },
         ]}
       />,
     );
-    expect(screen.getByText('Allowed for this chat')).toBeTruthy();
+    const row = screen.getByText('Allowed for this chat').parentElement?.textContent ?? '';
+    expect(row.indexOf('0.1s')).toBeGreaterThan(row.indexOf('已完成'));
+    expect(row.indexOf('Allowed for this chat')).toBeGreaterThan(row.indexOf('0.1s'));
   });
 });
 

@@ -12,6 +12,8 @@ export interface TranscriptLine {
   name?: string;
   args?: string;
   status?: string;
+  /** This row was answered by the unattended policy, so the status keeps the auto mark. */
+  auto?: boolean;
   id?: string;
   output?: string;
   diff?: string;
@@ -206,11 +208,24 @@ function screenLines(screen: TuiScreen): string[] {
   for (const item of screen.queued ?? []) lines.push(`排队 ${item}`);
   if (screen.search) lines.push(screen.search);
   lines.push(draftLine(screen.draft, screen.cursor));
-  const project = [screen.projectLabel, screen.ruleLabel].filter((line) => line && line.length > 0).join(' │ ');
+  const project = projectStatusLine(screen);
   if (project) lines.push(project);
   if (screen.status) lines.push(screen.status);
   lines.push(footerText());
   return lines;
+}
+
+/** 状态行最左侧是无人值守提示，后面用竖线和项目、规则接在同一行。 */
+export function projectStatusLine(screen: TuiScreen): string {
+  let approval = '';
+  if (screen.permission === 'auto' && screen.approvalPolicy === 'allow-all') {
+    approval = cliText('tui.approvalClosed');
+  } else if (screen.permission !== 'auto' && screen.approvalPolicy === 'allow-read') {
+    approval = cliText('tui.approvalRead');
+  }
+  return [approval, screen.projectLabel, screen.ruleLabel]
+    .filter((line) => line && line.length > 0)
+    .join(' │ ');
 }
 
 export function bannerLines(screen: TuiScreen): string[] {
@@ -223,10 +238,8 @@ export function bannerLines(screen: TuiScreen): string[] {
     for (const todo of screen.todos ?? []) lines.push(todoText(todo));
   }
   if (screen.mode === 'plan') lines.push('模式 计划');
-  if (screen.permission === 'auto') {
-    lines.push(screen.approvalPolicy === 'allow-all' ? cliText('tui.approvalClosed') : '权限 本会话自动');
-  } else if (screen.approvalPolicy === 'allow-read') {
-    lines.push(cliText('tui.approvalRead'));
+  if (screen.permission === 'auto' && screen.approvalPolicy !== 'allow-all') {
+    lines.push('权限 本会话自动');
   }
   if (screen.permission === 'read') lines.push('权限 只读');
   for (const row of screen.panel ?? []) lines.push(row);

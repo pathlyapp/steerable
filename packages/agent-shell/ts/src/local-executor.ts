@@ -355,7 +355,11 @@ export function isGuiLaunchCommand(command: string): boolean {
  */
 export function isPathWithinRoot(resolvedPath: string, resolvedRoot: string): boolean {
   const rel = path.relative(resolvedRoot, resolvedPath);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || (
+    rel !== '..' &&
+    !rel.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(rel)
+  );
 }
 
 export { canonicalFencePath, expandFencePath, resolveFencePath } from './fence-path.js';

@@ -4,6 +4,7 @@ import path from 'node:path';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
+import { getLocale, tFor } from '../i18n.js';
 import { getAppRootDir, getUserDataDir, shellOpenPath } from '../runtime.js';
 import {
   acquireChatWriteLock,
@@ -469,8 +470,22 @@ function persistedAgentIdFromMetadata(raw: string | null | undefined): string | 
 function relativeRulePath(folderPath: string, file: string): string {
   if (!path.isAbsolute(file)) return file;
   const relative = path.relative(folderPath, file);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return path.basename(file);
+  if (
+    !relative
+    || relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) return path.basename(file);
   return relative;
+}
+
+/** Fork title in the caller's locale. The stored default title stays `新对话`. */
+function forkTitle(source: string, requestedLocale: unknown): string {
+  const title = (source || '新对话').trim() || '新对话';
+  const locale = typeof requestedLocale === 'string' && requestedLocale.trim()
+    ? requestedLocale
+    : getLocale();
+  return tFor(locale, '{title} (fork)', { title });
 }
 
 export class LocalBackendRouter {
@@ -1331,7 +1346,7 @@ export class LocalBackendRouter {
 
     const forkMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/fork$/);
     if (forkMatch && method === 'POST') {
-      return await this.forkChat(forkMatch[1]);
+      return await this.forkChat(forkMatch[1], request.body);
     }
 
     const rewindMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/rewind$/);
@@ -3285,7 +3300,16 @@ export class LocalBackendRouter {
       .join('\n\n');
 
     const polluted = this.detectToolDenialInHistory(historyAssistantTexts);
-    const runtimeEnvironment = this.buildRuntimeEnvironmentContext(chatMode);
+    const chatProject = await this.resolveChatProject(chatId);
+    const workspaceRoot = chatProject
+      ? chatProject.folderPath
+      : await this.resolveChatWorkspaceRoot(chatId);
+    // 与本回合发出的 execSandbox.enabled 同一条件。中途改成完整权限
+    // 只更新审批卡，这段提示已经发给模型。
+    const commandSandboxOn =
+      clampExecPolicy(parseExecPolicy(payload.execPolicy), getResolvedHostTools()) !== 'full' &&
+      process.env.STEERABLE_EXEC_SANDBOX !== '0';
+    const runtimeEnvironment = this.buildRuntimeEnvironmentContext(chatMode, workspaceRoot);
     // 名录进 realityCheck：两条系统提示拼装路径（技能拼装 / 用户整段覆盖）
     // 都会带上它，且位置在末尾——不动技能正文那段 prompt cache 前缀。
     const activeGoal = (await this.toolRouter.goals().get(chatId)).goal;
@@ -3390,15 +3414,6 @@ export class LocalBackendRouter {
     // 项目模式：绑定项目的对话在系统提示末尾追加沙箱约定（两条拼装路径
     // 都追加）。硬围栏在 ToolRouter/LocalExecutor，这里让模型事先知道边界，
     // 减少越界尝试。
-    const chatProject = await this.resolveChatProject(chatId);
-    const workspaceRoot = chatProject
-      ? chatProject.folderPath
-      : await this.resolveChatWorkspaceRoot(chatId);
-    // 与本回合发出的 execSandbox.enabled 同一条件。中途改成完整权限
-    // 只更新审批卡，这段提示已经发给模型。
-    const commandSandboxOn =
-      clampExecPolicy(parseExecPolicy(payload.execPolicy), getResolvedHostTools()) !== 'full' &&
-      process.env.STEERABLE_EXEC_SANDBOX !== '0';
     if (chatProject) {
       const sourceFolderLine =
         chatProject.sourceFolders.length > 0
@@ -3744,10 +3759,10 @@ export class LocalBackendRouter {
     );
   }
 
-  private buildRuntimeEnvironmentContext(chatMode: 'agent' | 'plan'): string {
+  private buildRuntimeEnvironmentContext(chatMode: 'agent' | 'plan', workingDirectory: string): string {
     const platform = process.platform;
     const arch = process.arch;
-    const cwd = process.cwd();
+    const cwd = workingDirectory;
     const shell =
       platform === 'win32'
         ? 'Windows PowerShell（默认；不要使用 bash/Linux 专属语法，除非工具返回证明实际 shell 是 WSL/bash）'
@@ -3761,6 +3776,7 @@ export class LocalBackendRouter {
             ? 'Linux'
             : platform;
 
+    // 命令缺省 cwd 和相对路径都按这个目录解析，不按宿主进程的当前目录。
     const lines = [
       '',
       '',
@@ -3932,7 +3948,7 @@ export class LocalBackendRouter {
     };
   }
 
-  private async forkChat(chatId: string): Promise<LocalBackendResponse> {
+  private async forkChat(chatId: string, body: unknown): Promise<LocalBackendResponse> {
     const chat = await this.store.getChat(chatId);
     if (!chat) return { status: 404, data: { detail: 'chat not found' } };
     const lease = this.tryChatLock(chatId);
@@ -3957,7 +3973,7 @@ export class LocalBackendRouter {
           };
         }
       }
-      const title = `${(chat.title || '新对话').trim() || '新对话'}（分叉）`;
+      const title = forkTitle(chat.title, this.toRecord(body).locale);
       const created = await this.store.createChat(title, chat.agentId, chat.projectId);
       createdId = created.id;
       await this.store.updateChat(created.id, { forkedFrom: chat.id });
@@ -3983,7 +3999,7 @@ export class LocalBackendRouter {
       }
       if (attachmentsDst) await removeForkDirectory(attachmentsDst);
       if (workspaceDst) await removeForkDirectory(workspaceDst);
-      return { status: 500, data: { detail: '分叉失败' } };
+      return { status: 500, data: { detail: 'Fork failed' } };
     } finally {
       lease.release();
     }

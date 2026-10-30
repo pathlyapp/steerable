@@ -2,7 +2,12 @@ import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { approvalCwdFence, resolveApprovalCategoryLabel, shellCwdOutsideProject } from '../../src/sidecar/approval-label.js';
+import {
+  approvalCwdFence,
+  hostApprovalCategoryLabel,
+  resolveApprovalCategoryLabel,
+  shellCwdOutsideProject,
+} from '../../src/sidecar/approval-label.js';
 
 const dictionary: Record<string, string> = {
   'Internet access': '出网',
@@ -25,6 +30,22 @@ describe('resolveApprovalCategoryLabel', () => {
       toolName: 'browser_navigate',
       declaredLabel: { 'zh-CN': '浏览器操作', en: 'Browser actions' },
       translate: (message) => message,
+    })).toBe('Browser actions');
+  });
+
+  it('sends the English source so the web card can translate it', () => {
+    expect(hostApprovalCategoryLabel({
+      category: 'network_egress',
+      toolName: 'network_egress',
+    })).toBe('Internet access');
+    expect(hostApprovalCategoryLabel({
+      category: 'local_exec_shell',
+      toolName: 'local_exec_shell',
+    })).toBe('Command');
+    expect(hostApprovalCategoryLabel({
+      category: 'browser',
+      toolName: 'browser_navigate',
+      declaredLabel: { 'zh-CN': '浏览器操作', en: 'Browser actions' },
     })).toBe('Browser actions');
   });
 
@@ -91,6 +112,21 @@ describe('shellCwdOutsideProject', () => {
       toolName: 'local_run_snippet',
       cwd: '~/Downloads',
       projectRoot: '/work/repo',
+      sourceFolders: [],
+      home: '/Users/me',
+    })).toBe(false);
+    expect(shellCwdOutsideProject({
+      toolName: 'local_exec_shell',
+      cwd: '/work/repo/..notes',
+      projectRoot: '/work/repo',
+      sourceFolders: [],
+      home: '/Users/me',
+    })).toBe(false);
+    expect(approvalCwdFence({
+      toolName: 'local_exec_shell',
+      cwd: '/work/repo/..notes',
+      projectRoot: '/work/repo',
+      workspaceRoot: null,
       sourceFolders: [],
       home: '/Users/me',
     })).toBe(false);

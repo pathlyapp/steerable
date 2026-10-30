@@ -97,6 +97,9 @@ export function createTauriBridge(): HostBridge {
     readClipboardText: () => invoke<string>('host_read_clipboard_text'),
     getZoom: () => invoke<number>('ui_get_zoom'),
     setZoom: (scale) => invoke<number>('ui_set_zoom', { scale }),
+    setLocale: (locale) => {
+      void invoke('ui_set_locale', { locale });
+    },
     onZoomChanged(callback) {
       let unlisten: UnlistenFn | undefined;
       let cancelled = false;

@@ -517,6 +517,7 @@ export class TaskService {
             error: action.error,
             durationMs: action.durationMs,
             ...(action.sandbox ? { sandbox: action.sandbox } : {}),
+            ...(action.approval ? { approval: action.approval } : {}),
             threw: false,
           };
           if (idx >= 0) entry.actions[idx] = row;

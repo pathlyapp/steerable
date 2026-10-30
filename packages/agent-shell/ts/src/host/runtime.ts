@@ -51,8 +51,7 @@ import {
   bindStorageInstance,
   type InstanceLease,
 } from '../storage/process-locks.js';
-import { t } from '../i18n.js';
-import { approvalCwdFence, resolveApprovalCategoryLabel } from '../sidecar/approval-label.js';
+import { approvalCwdFence, hostApprovalCategoryLabel } from '../sidecar/approval-label.js';
 import { createApprovalBridge } from '../sidecar/reverse-approval.js';
 import { createAskUserBridge } from '../sidecar/reverse-ask-user.js';
 import { startHostSidecar, shutdownHostSidecar } from '../sidecar/boot.js';
@@ -316,13 +315,10 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
     onLog: (line) => onLog(line),
     categoryLabel: (toolName, category) => {
       const declaredLabel = toolRouter.getSchemaByName(toolName)?.approval?.label;
-      // The card translates this English source in the interface language.
-      return resolveApprovalCategoryLabel({
-        locale: 'en',
+      return hostApprovalCategoryLabel({
         category,
         toolName,
         ...(declaredLabel ? { declaredLabel } : {}),
-        translate: (message) => t(message),
       });
     },
     outsideWorkspace: async ({ toolName, arguments: args, chatId }) => {

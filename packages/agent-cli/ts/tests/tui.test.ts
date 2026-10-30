@@ -70,6 +70,42 @@ describe('tui screen', () => {
     expect(blocked).toContain('目标 · 阻塞 · 完整实现目标 · 需要用户凭据');
   });
 
+  it('puts the unattended phrase on the left of the project status line', () => {
+    const base = {
+      product: 'Demo',
+      title: 'Notes',
+      modelName: 'demo-model',
+      lines: [] as [],
+      approval: null,
+      ask: null,
+      chats: null,
+      readOnly: false,
+      help: false,
+      draft: '',
+      cursor: 0,
+      status: '',
+      projectLabel: '项目 my-repo · …/code/my-repo',
+      ruleLabel: '已加载 2 个规则文件',
+    };
+    const closed = visibleText(renderScreen({
+      ...base,
+      permission: 'auto',
+      approvalPolicy: 'allow-all',
+    }, 120));
+    expect(closed).toContain('审批已关闭 │ 项目 my-repo · …/code/my-repo │ 已加载 2 个规则文件');
+    expect(closed.split('审批已关闭').length - 1).toBe(1);
+    expect(closed).not.toContain('权限 本会话自动');
+
+    const read = visibleText(renderScreen({
+      ...base,
+      permission: 'ask',
+      approvalPolicy: 'allow-read',
+      ruleLabel: undefined,
+    }, 120));
+    expect(read).toContain('只读自动放行 │ 项目 my-repo · …/code/my-repo');
+    expect(read.split('只读自动放行').length - 1).toBe(1);
+  });
+
   it('TUI-030 TUI-040 TUI-051 renders a tool card, seven approval decisions, and a read-only chat', () => {
     const tool = visibleText(renderScreen({
       product: 'Demo',
@@ -1041,8 +1077,7 @@ describe('files and sub-agents', () => {
     await typeLine(session, '点一下');
     await waitFor(() => visibleText(session.render(72)).includes('本会话已允许'));
     const screen = visibleText(session.render(72));
-    expect(screen).toMatch(/browser_click\s+本会话已允许/);
-    expect(screen).not.toContain('✓');
+    expect(screen).toMatch(/browser_click\s+✓ 本会话已允许/);
   });
 });
 
@@ -1220,9 +1255,11 @@ describe('transcript tools', () => {
 
   it('TUI /fork 在占用和超限时写状态行', async () => {
     let mode: 'busy' | 'big' | 'small' = 'busy';
+    const bodies: unknown[] = [];
     const session = new AgentTui(fakeClient({
-      request: async (method, requestPath) => {
+      request: async (method, requestPath, body) => {
         if (method === 'POST' && requestPath.endsWith('/fork')) {
+          bodies.push(body);
           if (mode === 'busy') return { status: 409, data: { code: 'chat_busy' } };
           if (mode === 'small') return { status: 413, data: { bytes: 2048 } };
           return { status: 413, data: { bytes: 600 * 1024 * 1024 } };
@@ -1244,6 +1281,7 @@ describe('transcript tools', () => {
     mode = 'small';
     await typeLine(session, '/fork');
     await waitFor(() => visibleText(session.render(72)).includes('工作区太大，无法分叉（2 KB）'));
+    expect(bodies).toEqual([{ locale: 'zh' }, { locale: 'zh' }, { locale: 'zh' }]);
   });
 
   it('TUI-036 TUI-044 TUI-064A sends plan mode, lists todos, and cycles permission', async () => {

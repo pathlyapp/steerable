@@ -20,14 +20,15 @@ export function formatDuration(ms: number): string {
 }
 
 export function toolStatus(action: ToolAction): string {
-  if (action.approval?.kind === 'allow_for_session' && action.approval.cached === true) {
-    return cliText('tui.toolSessionAllow');
-  }
   const settled = typeof action.durationMs === 'number' || typeof action.success === 'boolean' || action.error != null;
   if (!settled) return '…';
   const mark = action.success === false || action.error != null ? '✗' : '✓';
   const duration = typeof action.durationMs === 'number' ? formatDuration(action.durationMs) : '';
-  return duration ? `${mark} ${duration}` : mark;
+  const base = duration ? `${mark} ${duration}` : mark;
+  if (action.approval?.kind === 'allow_for_session' && action.approval.cached === true) {
+    return `${base} ${cliText('tui.toolSessionAllow')}`;
+  }
+  return base;
 }
 
 export function toolOutput(action: ToolAction): string {
