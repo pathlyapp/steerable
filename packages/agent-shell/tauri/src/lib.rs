@@ -54,7 +54,8 @@ fn install_menu(app: &tauri::App, data_dir_name: &str) -> tauri::Result<()> {
     let new_chat = MenuItemBuilder::with_id("new-chat", "新建对话")
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
-    let open_terminal = MenuItemBuilder::with_id("open-terminal", "打开终端")
+    let labels = zoom::zoom_menu_labels("zh");
+    let open_terminal = MenuItemBuilder::with_id("open-terminal", labels.open_terminal)
         .accelerator("CmdOrCtrl+T")
         .build(app)?;
     let quit = MenuItemBuilder::with_id("app-quit", "退出")
@@ -81,7 +82,6 @@ fn install_menu(app: &tauri::App, data_dir_name: &str) -> tauri::Result<()> {
         .item(&paste)
         .select_all()
         .build()?;
-    let labels = zoom::zoom_menu_labels("zh");
     let zoom_in = MenuItemBuilder::with_id("view-zoom-in", labels.zoom_in)
         .accelerator("CmdOrCtrl+=")
         .build(app)?;
@@ -97,16 +97,7 @@ fn install_menu(app: &tauri::App, data_dir_name: &str) -> tauri::Result<()> {
     let zoom_reset = MenuItemBuilder::with_id("view-zoom-reset", labels.zoom_reset)
         .accelerator("CmdOrCtrl+0")
         .build(app)?;
-    zoom::bind(
-        app,
-        data_dir_name,
-        zoom_in.clone(),
-        zoom_in_plus.clone(),
-        zoom_out.clone(),
-        zoom_reset.clone(),
-    )
-    .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
-    let view = SubmenuBuilder::new(app, "视图")
+    let view = SubmenuBuilder::new(app, labels.view)
         .item(&zoom_in)
         .item(&zoom_in_plus)
         .item(&zoom_out)
@@ -116,6 +107,19 @@ fn install_menu(app: &tauri::App, data_dir_name: &str) -> tauri::Result<()> {
         .separator()
         .fullscreen()
         .build()?;
+    zoom::bind(
+        app,
+        data_dir_name,
+        zoom::ZoomMenuItems {
+            zoom_in,
+            zoom_in_plus,
+            zoom_out,
+            zoom_reset,
+            view: view.clone(),
+            open_terminal,
+        },
+    )
+    .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
     let menu = MenuBuilder::new(app)
         .items(&[&file, &edit, &view])
         .build()?;

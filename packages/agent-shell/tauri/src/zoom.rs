@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::menu::MenuItem;
+use tauri::menu::{MenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 pub const MIN_ZOOM: f64 = 0.8;
@@ -20,19 +20,27 @@ struct ZoomChanged {
     scale: f64,
 }
 
+pub struct ZoomMenuItems {
+    pub zoom_in: MenuItem<Wry>,
+    pub zoom_in_plus: MenuItem<Wry>,
+    pub zoom_out: MenuItem<Wry>,
+    pub zoom_reset: MenuItem<Wry>,
+    pub view: Submenu<Wry>,
+    pub open_terminal: MenuItem<Wry>,
+}
+
 pub struct ZoomControls {
     path: PathBuf,
     scale: Mutex<f64>,
-    zoom_in: MenuItem<Wry>,
-    zoom_in_plus: MenuItem<Wry>,
-    zoom_out: MenuItem<Wry>,
-    zoom_reset: MenuItem<Wry>,
+    menu: ZoomMenuItems,
 }
 
 pub struct ZoomMenuLabels {
+    pub view: &'static str,
     pub zoom_in: &'static str,
     pub zoom_out: &'static str,
     pub zoom_reset: &'static str,
+    pub open_terminal: &'static str,
 }
 
 /// View-menu labels for the page locale. Both zoom-in rows share one label.
@@ -40,15 +48,19 @@ pub fn zoom_menu_labels(locale: &str) -> ZoomMenuLabels {
     let normalized = locale.trim().to_lowercase().replace('_', "-");
     if normalized == "zh" || normalized.starts_with("zh-") {
         ZoomMenuLabels {
+            view: "视图",
             zoom_in: "放大",
             zoom_out: "缩小",
             zoom_reset: "实际大小",
+            open_terminal: "打开终端",
         }
     } else {
         ZoomMenuLabels {
+            view: "View",
             zoom_in: "Zoom in",
             zoom_out: "Zoom out",
             zoom_reset: "Actual size",
+            open_terminal: "Open terminal",
         }
     }
 }
@@ -199,22 +211,12 @@ pub fn user_data_dir(app: &AppHandle, data_dir_name: &str) -> Result<PathBuf, St
     Ok(dir)
 }
 
-pub fn bind(
-    app: &tauri::App,
-    data_dir_name: &str,
-    zoom_in: MenuItem<Wry>,
-    zoom_in_plus: MenuItem<Wry>,
-    zoom_out: MenuItem<Wry>,
-    zoom_reset: MenuItem<Wry>,
-) -> Result<(), String> {
+pub fn bind(app: &tauri::App, data_dir_name: &str, menu: ZoomMenuItems) -> Result<(), String> {
     let path = user_data_dir(app.handle(), data_dir_name)?.join("window-state.json");
     app.manage(ZoomControls {
         path,
         scale: Mutex::new(DEFAULT_ZOOM),
-        zoom_in,
-        zoom_in_plus,
-        zoom_out,
-        zoom_reset,
+        menu,
     });
     Ok(())
 }
@@ -224,10 +226,12 @@ pub fn apply_locale(app: &AppHandle, locale: &str) {
         return;
     };
     let labels = zoom_menu_labels(locale);
-    let _ = controls.zoom_in.set_text(labels.zoom_in);
-    let _ = controls.zoom_in_plus.set_text(labels.zoom_in);
-    let _ = controls.zoom_out.set_text(labels.zoom_out);
-    let _ = controls.zoom_reset.set_text(labels.zoom_reset);
+    let _ = controls.menu.view.set_text(labels.view);
+    let _ = controls.menu.zoom_in.set_text(labels.zoom_in);
+    let _ = controls.menu.zoom_in_plus.set_text(labels.zoom_in);
+    let _ = controls.menu.zoom_out.set_text(labels.zoom_out);
+    let _ = controls.menu.zoom_reset.set_text(labels.zoom_reset);
+    let _ = controls.menu.open_terminal.set_text(labels.open_terminal);
 }
 
 pub fn apply_saved(app: &AppHandle) {
@@ -288,9 +292,12 @@ fn commit(
         .scale
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = scale;
-    let _ = controls.zoom_in.set_enabled(zoom_in_enabled(scale));
-    let _ = controls.zoom_in_plus.set_enabled(zoom_in_enabled(scale));
-    let _ = controls.zoom_out.set_enabled(zoom_out_enabled(scale));
+    let _ = controls.menu.zoom_in.set_enabled(zoom_in_enabled(scale));
+    let _ = controls
+        .menu
+        .zoom_in_plus
+        .set_enabled(zoom_in_enabled(scale));
+    let _ = controls.menu.zoom_out.set_enabled(zoom_out_enabled(scale));
     if persist {
         if let Err(error) = write_zoom(&controls.path, scale) {
             eprintln!("[zoom] failed to write window-state.json: {error}");
@@ -367,13 +374,17 @@ mod tests {
     #[test]
     fn menu_labels_follow_the_page_locale() {
         let chinese = zoom_menu_labels("zh-CN");
+        assert_eq!(chinese.view, "视图");
         assert_eq!(chinese.zoom_in, "放大");
         assert_eq!(chinese.zoom_out, "缩小");
         assert_eq!(chinese.zoom_reset, "实际大小");
+        assert_eq!(chinese.open_terminal, "打开终端");
         let english = zoom_menu_labels("en");
+        assert_eq!(english.view, "View");
         assert_eq!(english.zoom_in, "Zoom in");
         assert_eq!(english.zoom_out, "Zoom out");
         assert_eq!(english.zoom_reset, "Actual size");
+        assert_eq!(english.open_terminal, "Open terminal");
         assert_eq!(zoom_menu_labels("").zoom_in, "Zoom in");
     }
 
