@@ -1,5 +1,11 @@
 # @steerable/agent-cli
 
+## [0.7.1]
+
+### Fixed
+
+* Web package tests typecheck in the release build.
+
 ## [0.7.0]
 
 ### Breaking Changes
