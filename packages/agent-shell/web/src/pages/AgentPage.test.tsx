@@ -103,6 +103,7 @@ vi.mock('@/lib/local-api', () => ({
   setProjectTrusted: vi.fn(async () => ({ success: true })),
   updateChatProject: vi.fn(async () => ({ id: 'chat-1', projectId: null })),
   updateProject: vi.fn(async () => ({ success: true })),
+  getChat: vi.fn(async () => ({ id: 'chat-1', title: 'Chat', forkedFrom: null })),
   getChatBranches: vi.fn(async () => ({ activeRecordId: 'r1', lineage: [], children: [] })),
   activateChatBranch: vi.fn(async () => ({ activeRecordId: 'r1', messageCount: 0 })),
   getChatBranchTree: vi.fn(async () => ({
