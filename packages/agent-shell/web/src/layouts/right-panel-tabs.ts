@@ -143,7 +143,7 @@ export function normalizeRightPanelEntry(
  *
  * 兼容这些历史格式：
  *   - v2：{"version":2,"sessions":{"<chatId>":{"tabs":[...],"activeTabId":"..."}}}；
- *   - 旧多标签：{"<chatId>": { "tabs": ["ppt", "terminal"], "active": "ppt" }}；
+ *   - 旧多标签：{"<chatId>": { "tabs": ["<slotId>", "terminal"], "active": "<slotId>" }}；
  *   - 单值映射：{"<chatId>": "terminal" | "<slotId>"} → 一个标签；
  *   - 整个值就是单个字符串 → 迁到当前会话；
  *   - 更老：只记录终端是否打开过的布尔 key。

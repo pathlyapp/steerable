@@ -586,9 +586,7 @@ async fn validate_local(path: &Path) -> Result<(), String> {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let output = command.output()
-        .await
-        .map_err(|error| error.to_string())?;
+    let output = command.output().await.map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err("Selected Python could not be started".into());
     }

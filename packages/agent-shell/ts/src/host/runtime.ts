@@ -393,7 +393,7 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
             ...(project?.sourceFolders ?? []),
             ...collectPackExecWritableRoots(chatId),
             // 技能根：workflows/references/templates 是只读参考，模型必须能读
-            // （spec_lock_reference.md 定义 pptx_layouts 怎么写，正是它被拒过）。
+            // （技能包里的版式说明曾因读不到而被拒）。
             ...listSkillRoots(),
             // spill 根：工具输出过大时 sidecar 落到这里，模型要读回全文。
             ...spillReadRoots(),
