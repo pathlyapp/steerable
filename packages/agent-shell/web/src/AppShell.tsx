@@ -1,10 +1,12 @@
 import { Outlet } from 'react-router-dom';
+import { ZoomToast } from './components/ZoomToast';
 import { hasHostBridge } from './lib/host-bridge';
 import { isDemoMode } from './lib/demo-flag';
 
 export function AppShell() {
   return (
     <div className="flex h-full w-full flex-col bg-agent-canvas text-agent-foreground">
+      <ZoomToast />
       <main className="flex flex-1 overflow-hidden">
         <Outlet />
       </main>

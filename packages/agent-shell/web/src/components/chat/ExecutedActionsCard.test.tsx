@@ -36,6 +36,22 @@ describe('ToolsFlow / declared view', () => {
     );
     expect(screen.getByText('/tmp/secret')).toBeTruthy();
   });
+
+  it('marks a call covered by a session allow', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'browser_click',
+            arguments: { ref: 'e1' },
+            result: { success: true },
+            approval: { kind: 'allow_for_session', cached: true },
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText('Allowed for this chat')).toBeTruthy();
+  });
 });
 
 describe('ToolsFlow / todo_write', () => {

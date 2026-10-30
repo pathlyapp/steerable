@@ -88,6 +88,40 @@ describe('streamCoreLoopTurn', () => {
     ]);
   });
 
+  it('forwards declared mode and approvalCategory beside the function schema', async () => {
+    const { supervisor, sent } = makeSupervisor([
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+
+    await streamCoreLoopTurn({
+      ...BASE_OPTIONS,
+      supervisor,
+      onText: () => {},
+      tools: [
+        {
+          name: 'browser_scroll',
+          description: 'scroll',
+          inputSchema: { type: 'object' },
+          mode: 'read',
+          approvalCategory: 'browser',
+        },
+      ],
+    });
+
+    expect(sent[0].tools).toEqual([
+      {
+        type: 'function',
+        function: {
+          name: 'browser_scroll',
+          description: 'scroll',
+          parameters: { type: 'object' },
+        },
+        mode: 'read',
+        approvalCategory: 'browser',
+      },
+    ]);
+  });
+
   it('W6-3: a message carrying images is sent as structured wire parts', async () => {
     const { supervisor, sent } = makeSupervisor([
       { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },

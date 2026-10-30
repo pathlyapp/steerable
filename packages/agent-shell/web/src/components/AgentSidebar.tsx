@@ -88,10 +88,13 @@ import {
   LuFolderPlus,
   LuPencil,
   LuEllipsis,
+  LuGitBranch,
   LuCircleHelp,
+  LuTerminal,
 } from "react-icons/lu";
 import { RiPushpin2Fill, RiPushpin2Line } from "react-icons/ri";
 import { parseChatTitle } from "@/lib/chat-title";
+import { chatRowKeys } from "@/lib/chat-row-keys";
 import { getDateGroupLabel, getDateGroupPriority } from "@/lib/date-groups";
 import { getHostBridge, hasHostBridge } from "@/lib/host-bridge";
 import { hasGeneralSettingsChrome, hostToolChrome, settingsChrome } from "@/lib/host-tools";
@@ -100,7 +103,9 @@ import {
   deleteProject,
   getChatLiveStream,
   openLocalPath,
+  forkChat,
   setChatPinned,
+  updateChatTitle,
   updateProject,
   type LocalChat,
   type LocalChatAgent,
@@ -173,6 +178,103 @@ function placeProjectMenu(anchor: HTMLElement): { top: number; left: number } {
   const width = 224;
   const left = Math.min(box.right + 4, window.innerWidth - width - 8);
   return { top: Math.max(8, box.top), left };
+}
+
+function formatForkBytes(bytes: number | undefined): string {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes)) return "";
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function ChatRowMenu({
+  anchor,
+  onClose,
+  onRename,
+  onFork,
+  onDelete,
+}: {
+  anchor: HTMLElement;
+  onClose: () => void;
+  onRename: () => void;
+  onFork: () => void;
+  onDelete: () => void;
+}) {
+  const pos = placeProjectMenu(anchor);
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [index, setIndex] = useState(0);
+  const actions = [
+    { testId: "sidebar-chat-rename", label: t("Rename"), run: onRename, danger: false, ariaLabel: undefined as string | undefined },
+    { testId: "sidebar-chat-fork", label: t("Fork"), run: onFork, danger: false, ariaLabel: undefined as string | undefined },
+    { testId: "sidebar-chat-delete", label: t("Delete"), run: onDelete, danger: true, ariaLabel: t("Delete chat") },
+  ];
+  useEffect(() => {
+    buttonRefs.current[index]?.focus();
+  }, [index]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const count = actions.length;
+        setIndex((current) =>
+          event.key === "ArrowDown" ? (current + 1) % count : (current - 1 + count) % count,
+        );
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, actions.length]);
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-[90]" onClick={onClose} />
+      <div
+        role="menu"
+        className="fixed z-[91] w-44 overflow-hidden rounded-2xl border border-agent-border bg-agent-canvas p-1 shadow-lg"
+        style={pos}
+        data-testid="sidebar-chat-menu"
+      >
+        {actions.map((action, actionIndex) => (
+          <button
+            key={action.testId}
+            ref={(node) => {
+              buttonRefs.current[actionIndex] = node;
+            }}
+            type="button"
+            role="menuitem"
+            data-testid={action.testId}
+            title={action.ariaLabel}
+            aria-label={action.ariaLabel}
+            onClick={action.run}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              action.run();
+            }}
+            className={[
+              "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-agent-foreground/5",
+              action.danger ? "text-agent-destructive" : "text-agent-foreground",
+              actionIndex === actions.length - 1 ? "mt-1 border-t border-agent-border/60" : "",
+            ].join(" ")}
+          >
+            {actionIndex === 0 ? (
+              <LuPencil className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
+            ) : action.danger ? (
+              <LuTrash2 className="h-3.5 w-3.5 shrink-0" />
+            ) : (
+              <LuGitBranch className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
+            )}
+            {action.label}
+          </button>
+        ))}
+      </div>
+    </>,
+    document.body,
+  );
 }
 
 function ProjectOverflowMenu({
@@ -369,6 +471,7 @@ export function AgentSidebar({
     refreshChats,
     setSelectedAgentId,
     deleteChat,
+    patchChatTitle,
     isLoadingMoreChats,
     hasMoreChats,
     loadMoreChats,
@@ -567,6 +670,23 @@ export function AgentSidebar({
     null,
   );
   const [renamingValue, setRenamingValue] = useState("");
+  const [chatMenu, setChatMenu] = useState<{
+    id: string;
+    title: string;
+    anchor: HTMLElement;
+  } | null>(null);
+  const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  const [renamingChatValue, setRenamingChatValue] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameHint, setRenameHint] = useState<{
+    chatId: string;
+    text: string;
+  } | null>(null);
+  const renameCancelledRef = useRef(false);
+  const renameBusyRef = useRef(false);
+  const [renamingBusy, setRenamingBusy] = useState(false);
+  const [forkingChatId, setForkingChatId] = useState<string | null>(null);
+  const forkingChatRef = useRef<string | null>(null);
   const [pendingDeleteProject, setPendingDeleteProject] =
     useState<LocalProject | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(
@@ -908,10 +1028,94 @@ export function AgentSidebar({
     [pinningChatId, refreshChats],
   );
 
+  useEffect(() => {
+    if (!renameHint) return;
+    const timer = window.setTimeout(() => setRenameHint(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [renameHint]);
+
+  const beginChatRename = useCallback((chat: { id: string; title: string }) => {
+    setChatMenu(null);
+    setRenameError(null);
+    setRenameHint(null);
+    renameCancelledRef.current = false;
+    setRenamingChatId(chat.id);
+    setRenamingChatValue(chat.title);
+  }, []);
+
+  const commitChatRename = useCallback(
+    async (chatId: string, previous: string) => {
+      if (renameBusyRef.current) return;
+      const next = renamingChatValue.trim();
+      if (!next || next === previous) {
+        setRenamingChatId(null);
+        setRenameError(null);
+        return;
+      }
+      renameBusyRef.current = true;
+      setRenamingBusy(true);
+      try {
+        await updateChatTitle(chatId, next);
+        patchChatTitle(chatId, next);
+        setRenamingChatId(null);
+        setRenameError(null);
+      } catch (err) {
+        const status = (err as { status?: number }).status;
+        if (status === 409) {
+          setRenamingChatId(null);
+          setRenameError(null);
+          setRenameHint({
+            chatId,
+            text: t(
+              "This chat is running in another process. Try renaming it again in a moment.",
+            ),
+          });
+          return;
+        }
+        setRenameError(err instanceof Error ? err.message : String(err));
+      } finally {
+        renameBusyRef.current = false;
+        setRenamingBusy(false);
+      }
+    },
+    [patchChatTitle, renamingChatValue],
+  );
+
+  const forkThisChat = useCallback(
+    async (chat: { id: string }) => {
+      if (forkingChatRef.current) return;
+      forkingChatRef.current = chat.id;
+      setForkingChatId(chat.id);
+      setChatMenu(null);
+      try {
+        const created = await forkChat(chat.id);
+        await refreshChats();
+        navigate(`/agent/${created.chatId}`);
+      } catch (err) {
+        const status = (err as { status?: number }).status;
+        const bytes = (err as { data?: { bytes?: number } }).data?.bytes;
+        const text =
+          status === 409
+            ? t("This chat is still generating. Fork it after this turn finishes.")
+            : status === 413
+              ? t("This workspace is too large to fork ({size}).", {
+                  size: formatForkBytes(bytes),
+                })
+              : err instanceof Error
+                ? err.message
+                : String(err);
+        setRenameHint({ chatId: chat.id, text });
+      } finally {
+        forkingChatRef.current = null;
+        setForkingChatId(null);
+      }
+    },
+    [navigate, refreshChats],
+  );
+
   // 单条会话行——无项目日期分组和项目分组共用同一个渲染，避免两份 JSX。
   const renderChatRow = (chat: (typeof normalizedChats)[number]) => {
     const isCurrent = currentChatId === chat.id;
-    const isDeleting = deletingChatId === chat.id;
     const isPinning = pinningChatId === chat.id;
     const isStreaming = Boolean(
       chat.isStreaming || streamingChatIds.has(chat.id),
@@ -921,6 +1125,80 @@ export function AgentSidebar({
       pendingAskUserChatIds.has(chat.id) ||
       pendingApprovalChatIds.has(chat.id),
     );
+    const renameHintText =
+      renameHint?.chatId === chat.id ? (
+        <p
+          className="px-2.5 pb-1 text-[10px] leading-snug text-agent-muted-foreground"
+          data-testid="sidebar-chat-rename-hint"
+        >
+          {renameHint.text}
+        </p>
+      ) : null;
+
+    if (renamingChatId === chat.id) {
+      return (
+        <div
+          key={chat.id}
+          className="group/item relative"
+          data-testid="sidebar-chat-row"
+          data-chat-id={chat.id}
+        >
+          <form
+            className="px-2.5 py-0.5"
+            aria-busy={renamingBusy}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void commitChatRename(chat.id, chat.title);
+            }}
+          >
+            <div className="relative">
+            <input
+              autoFocus
+              readOnly={renamingBusy}
+              data-testid="sidebar-chat-rename-input"
+              value={renamingChatValue}
+              aria-label={t("Rename")}
+              onChange={(event) => setRenamingChatValue(event.target.value)}
+              onBlur={() => {
+                if (renameCancelledRef.current) {
+                  renameCancelledRef.current = false;
+                  return;
+                }
+                if (renameBusyRef.current) return;
+                void commitChatRename(chat.id, chat.title);
+              }}
+              onFocus={(event) => event.currentTarget.select()}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                if (renameBusyRef.current) return;
+                renameCancelledRef.current = true;
+                setRenamingChatId(null);
+                setRenameError(null);
+              }}
+              className="h-6 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-2 pr-6 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30 read-only:opacity-70"
+            />
+            {renamingBusy ? (
+              <LuLoaderCircle
+                className="pointer-events-none absolute right-1.5 top-1 h-3.5 w-3.5 animate-spin text-agent-muted-foreground"
+                data-testid="sidebar-chat-rename-busy"
+                aria-hidden="true"
+              />
+            ) : null}
+            </div>
+            {renameError ? (
+              <p
+                className="mt-0.5 text-[10px] leading-snug text-agent-destructive"
+                data-testid="sidebar-chat-rename-error"
+              >
+                {renameError}
+              </p>
+            ) : null}
+          </form>
+          {renameHintText}
+        </div>
+      );
+    }
 
     return (
       <div
@@ -933,6 +1211,11 @@ export function AgentSidebar({
           type="button"
           onClick={() => {
             navigate(`/agent/${chat.id}`);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== chatRowKeys.rename) return;
+            event.preventDefault();
+            beginChatRename(chat);
           }}
           className={[
             "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors duration-200",
@@ -969,7 +1252,17 @@ export function AgentSidebar({
               aria-label={t("Triggered by automation")}
             />
           )}
-          <span className="min-w-0 truncate leading-none">{chat.title}</span>
+          <span className="min-w-0 truncate leading-none group-hover/item:pr-14 group-focus-within/item:pr-14">
+            {chat.title}
+          </span>
+          {forkingChatId === chat.id ? (
+            <span
+              className="shrink-0 text-[10px] text-agent-muted-foreground"
+              data-testid="sidebar-chat-forking"
+            >
+              {t("Forking…")}
+            </span>
+          ) : null}
         </button>
         {/* Semi-transparent gradient container for action buttons:
             fades long text smoothly to the left so buttons don't collide with text. */}
@@ -1002,21 +1295,21 @@ export function AgentSidebar({
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              setPendingDeleteChat({ id: chat.id, title: chat.title });
+              setChatMenu({
+                id: chat.id,
+                title: chat.title,
+                anchor: event.currentTarget,
+              });
             }}
-            disabled={isDeleting}
-            className="flex h-6 w-6 items-center justify-center rounded-full text-agent-foreground/70 transition-all duration-200 hover:bg-agent-foreground/10 hover:text-agent-destructive disabled:cursor-not-allowed disabled:opacity-100"
-            title={t("Delete chat")}
-            aria-label={t("Delete chat")}
-            data-testid="sidebar-chat-delete"
+            className="flex h-6 w-6 items-center justify-center rounded-full text-agent-foreground/70 transition-all duration-200 hover:bg-agent-foreground/10 hover:text-agent-foreground"
+            title={t("More actions")}
+            aria-label={t("More actions")}
+            data-testid="sidebar-chat-more"
           >
-            <LuTrash2
-              className={["h-3.5 w-3.5", isDeleting ? "animate-pulse" : ""].join(
-                " ",
-              )}
-            />
+            <LuEllipsis className="h-3.5 w-3.5" />
           </button>
         </div>
+        {renameHintText}
       </div>
     );
   };
@@ -1352,6 +1645,16 @@ export function AgentSidebar({
                                     <span className="min-w-0 truncate normal-case">
                                       {project.name}
                                     </span>
+                                    {project.origin === "cli" ? (
+                                      <span
+                                        className="ml-1 inline-flex shrink-0"
+                                        title={t("Created from the command line")}
+                                        aria-label={t("Created from the command line")}
+                                        data-testid="sidebar-project-cli-origin"
+                                      >
+                                        <LuTerminal className="h-3 w-3" aria-hidden="true" />
+                                      </span>
+                                    ) : null}
                                     <span className="ml-1 shrink-0">
                                       {collapsedProjectIds.has(project.id) ? (
                                         <LuChevronRight className="h-3 w-3" />
@@ -1610,6 +1913,32 @@ export function AgentSidebar({
             />
           );
         })()}
+
+      {chatMenu ? (
+        <ChatRowMenu
+          anchor={chatMenu.anchor}
+          onClose={() => {
+            const chatId = chatMenu.id;
+            setChatMenu(null);
+            requestAnimationFrame(() => {
+              const row = document.querySelector(
+                `[data-testid="sidebar-chat-row"][data-chat-id="${CSS.escape(chatId)}"]`,
+              );
+              row?.querySelector("button")?.focus();
+            });
+          }}
+          onRename={() => beginChatRename(chatMenu)}
+          onFork={() => {
+            const target = chatMenu;
+            setChatMenu(null);
+            void forkThisChat(target);
+          }}
+          onDelete={() => {
+            setPendingDeleteChat({ id: chatMenu.id, title: chatMenu.title });
+            setChatMenu(null);
+          }}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={pendingDeleteChat !== null}

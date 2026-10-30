@@ -1,4 +1,8 @@
 #!/usr/bin/env node
-import { createCli } from './cli.js';
+import { ensureSupportedNode } from './node-version.js';
 
-process.exit(await createCli({ installSignals: true }));
+const status = ensureSupportedNode(process.versions.node, process.stderr, 'steerable-cli');
+if (status !== 0) process.exit(status);
+
+const { createCli } = await import('./cli.js');
+process.exit(await createCli({ installSignals: true, commandName: 'steerable-cli' }));

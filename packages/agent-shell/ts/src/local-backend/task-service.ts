@@ -34,6 +34,7 @@ import type { SidecarChatStreamRequest } from '../sidecar/index.js';
 import {
   buildWorldState,
   streamCoreLoopTurn,
+  toTurnTool,
 } from './coreloop-stream.js';
 import { builtinSubagentParam } from './subagent-profiles.js';
 import { buildExecSandbox } from '../sidecar/exec-sandbox.js';
@@ -425,11 +426,7 @@ export class TaskService {
     const tools = this.deps.toolRouter
       .listModelSchemas()
       .filter((schema) => schema.name !== 'task_run')
-      .map((schema) => ({
-        name: schema.name,
-        description: schema.description,
-        inputSchema: schema.inputSchema,
-      }));
+      .map((schema) => toTurnTool(schema));
 
     let answer = '';
     let status: TaskRecord['status'] = 'completed';
@@ -473,7 +470,9 @@ export class TaskService {
           },
         }),
         execSandbox,
-        approval: approval ? { ...approval, writableRoots } : undefined,
+        approval: approval
+          ? { ...approval, writableRoots, ...(fenceRoot ? { pathBase: fenceRoot } : {}) }
+          : undefined,
         // 与主对话同一套内置画像（explore/research/coder）——任务回合的
         // 子代理编排语义不分叉。
         subagent: builtinSubagentParam(),

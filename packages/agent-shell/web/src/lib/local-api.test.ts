@@ -175,6 +175,17 @@ describe('local-api 智能体', () => {
       path: '/api/v2/chat-agents/agent-1',
     });
   });
+
+  it('updateChatTitle 用 PATCH settings 提交标题', async () => {
+    const request = installBridge();
+    request.mockResolvedValue({ id: 'chat/1', title: '周报' });
+    await api.updateChatTitle('chat/1', '周报');
+    expect(request).toHaveBeenCalledWith({
+      method: 'PATCH',
+      path: '/api/v2/chats/chat%2F1/settings',
+      body: { title: '周报' },
+    });
+  });
 });
 
 describe('local-api 运行中回合', () => {

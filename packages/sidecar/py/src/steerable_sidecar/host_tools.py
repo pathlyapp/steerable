@@ -16,6 +16,7 @@ enforce them (deeppath-agent's ToolRouter carries the same 61-rule set).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any, cast
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
@@ -104,12 +105,15 @@ class HostApprover:
         timeout: float | None = None,
         amendment_sink: Any | None = None,
         chat_id: str | None = None,
+        sandbox_enforced: Callable[[], bool] | None = None,
     ) -> None:
         self._server = server
         self._method = method
         self._timeout = timeout
         self._amendment_sink = amendment_sink
         self._chat_id = chat_id if isinstance(chat_id, str) and chat_id else None
+        # Read at approve time so a mid-turn full-access switch is visible.
+        self._sandbox_enforced = sandbox_enforced
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
         params: dict[str, Any] = {
@@ -122,6 +126,9 @@ class HostApprover:
         if self._chat_id:
             # The renderer only shows the card in the chat that asked.
             params["chatId"] = self._chat_id
+        if self._sandbox_enforced is not None:
+            # False: the card must not say writes outside the cwd are blocked.
+            params["sandboxEnforced"] = bool(self._sandbox_enforced())
         try:
             payload: Any = await self._server.call(
                 self._method,

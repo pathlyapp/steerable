@@ -64,6 +64,12 @@ export class TmuxDriver {
     assertOk(this.tmux(['send-keys', '-t', this.session, ...keys]), `send ${keys.join(' ')}`);
   }
 
+  /** Send bytes as typed text. Key names such as Enter are not interpreted. */
+  sendLiteral(text: string): void {
+    this.inputs.push(`literal ${JSON.stringify(text)}`);
+    assertOk(this.tmux(['send-keys', '-l', '-t', this.session, text]), 'send literal');
+  }
+
   resize(width: number, height: number): void {
     this.inputs.push(`resize ${width}x${height}`);
     assertOk(

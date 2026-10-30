@@ -342,7 +342,7 @@ async def test_discovered_notes_state_injects_union_with_disclaimer(tmp_path, mo
     (tmp_path / "AGENTS.md").write_text("project rule", encoding="utf-8")
     (tmp_path / "AGENTS.local.md").write_text("personal hint", encoding="utf-8")
 
-    hooks = DiscoveredNotesState(cwd=tmp_path).hooks()
+    hooks = DiscoveredNotesState(cwd=tmp_path, trusted=lambda _directory: True).hooks()
     action = await hooks.pre_step([], _Ctx(round_index=0))
     assert action.kind == "proceed" and action.appends
     text = action.appends[0].message.content[0].text
@@ -360,9 +360,35 @@ async def test_discovered_notes_state_no_files_is_a_noop(tmp_path, monkeypatch) 
 
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path / "nohome")
     monkeypatch.delenv("STEERABLE_MANAGED_NOTES_PATH", raising=False)
-    hooks = DiscoveredNotesState(cwd=tmp_path).hooks()
+    hooks = DiscoveredNotesState(cwd=tmp_path, trusted=lambda _directory: True).hooks()
     action = await hooks.pre_step([], _Ctx(round_index=0))
     assert action.kind == "proceed" and not action.appends
+
+
+@pytest.mark.asyncio
+async def test_discovered_notes_state_skips_untrusted_project_files(tmp_path, monkeypatch) -> None:
+    from steerable_agent_runtime.harness import DiscoveredNotesState
+
+    managed = tmp_path / "managed.md"
+    managed.write_text("managed rule", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".steerable").mkdir()
+    (home / ".steerable" / "AGENTS.md").write_text("user rule", encoding="utf-8")
+    monkeypatch.setenv("STEERABLE_MANAGED_NOTES_PATH", str(managed))
+    monkeypatch.setattr("pathlib.Path.home", lambda: home)
+    (tmp_path / "AGENTS.md").write_text("project rule", encoding="utf-8")
+    (tmp_path / "AGENTS.local.md").write_text("personal hint", encoding="utf-8")
+
+    hooks = DiscoveredNotesState(
+        cwd=tmp_path,
+        trusted=lambda _directory: False,
+    ).hooks()
+    action = await hooks.pre_step([], _Ctx(round_index=0))
+    assert action.kind == "proceed" and action.appends
+    text = action.appends[0].message.content[0].text
+    assert "managed rule" in text and "user rule" in text
+    assert "project rule" not in text and "personal hint" not in text
 
 
 @pytest.mark.asyncio

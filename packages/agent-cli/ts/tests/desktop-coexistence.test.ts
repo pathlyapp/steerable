@@ -81,7 +81,9 @@ describe('desktop host beside the command line', () => {
   it('approves a read tool beside the desktop host, then a denied tool exits 3', async () => {
     const home = fs.mkdtempSync(path.join('/tmp', 'agent-cli-turn-'));
     dirs.push(home);
+    const repo = path.join(home, 'repo-a');
     const dir = path.join(home, 'data');
+    fs.mkdirSync(repo);
     fs.mkdirSync(dir);
     const restore = useIsolatedHome(home, dir);
     const desktop = startDesktop(dir);
@@ -105,7 +107,7 @@ describe('desktop host beside the command line', () => {
       const stdout = capture();
       const stderr = capture();
       const running = createCli({
-        argv: ['run', '列出当前目录', '--approve', 'allow-read', '--stream-json', '--data-dir', dir],
+        argv: ['run', '列出当前目录', '--approve', 'allow-read', '--stream-json', '--project', repo, '--data-dir', dir],
         stdout: stdout.stream,
         stderr: stderr.stream,
         createClient: async (options) => {
@@ -118,6 +120,7 @@ describe('desktop host beside the command line', () => {
       expect(Date.now() - armed).toBeLessThan(2_000);
       const code = await running;
       expect(code, `${stderr.text()}\n${stdout.text()}`).toBe(0);
+      expect(stderr.text()).toContain(`已绑定项目 repo-a：${fs.realpathSync(repo)}`);
       const events = stdout.text().split('\n').filter(Boolean).map((line) => JSON.parse(line) as { type?: string; content?: string });
       expect(events.some((event) => event.type === 'content' && event.content?.includes('目录是空的'))).toBe(true);
       expect(stdout.text()).toContain('local_list_scripts');
@@ -125,17 +128,18 @@ describe('desktop host beside the command line', () => {
       const denied = capture();
       const deniedErr = capture();
       const deniedCode = await createCli({
-        argv: ['run', '删除构建目录', '--data-dir', dir, '--timeout', '20s'],
+        argv: ['run', '删除构建目录', '--project', repo, '--data-dir', dir, '--timeout', '20s'],
         stdout: denied.stream,
         stderr: deniedErr.stream,
         createClient: async (options) => createLocalClient({ ...options, startSidecar: true }),
       });
       expect(deniedCode, deniedErr.text()).toBe(3);
+      expect(deniedErr.text()).not.toContain('已绑定项目');
 
       await desktop.hold(chatId);
       const busyErr = capture();
       const busyCode = await createCli({
-        argv: ['run', '继续', '--chat', chatId, '--data-dir', dir],
+        argv: ['run', '继续', '--chat', chatId, '--project', repo, '--data-dir', dir],
         stdout: capture().stream,
         stderr: busyErr.stream,
         createClient: (options) => createLocalClient({ ...options, startSidecar: false }),
@@ -403,7 +407,7 @@ function writeRunScript(dataDir: string, cli: string): string {
   fs.writeFileSync(script, `
 import { createCli } from ${JSON.stringify(pathToFileURL(cli).href)};
 const code = await createCli({
-  argv: ['run', process.argv[2], '--approve', 'allow-read', '--data-dir', process.argv[3]],
+  argv: ['run', process.argv[2], '--approve', 'allow-read', '--no-project', '--data-dir', process.argv[3]],
   stdout: process.stdout,
   stderr: process.stderr,
 });
@@ -484,6 +488,10 @@ function startMockLlm(): Promise<{ baseUrl: string; close: () => Promise<void> }
       if (round > 1) {
         const content = slot ? `slot-${slot} 完成` : task === 'allow' ? '目录是空的。' : '已拒绝。';
         writeReply(res, true, { kind: 'text', content });
+        return;
+      }
+      if (task === 'deny') {
+        writeReply(res, true, { kind: 'tool', name: 'delete_file', args: { path: '/tmp/outside-the-project' } });
         return;
       }
       writeReply(res, true, { kind: 'tool', name: 'local_list_scripts', args: {} });

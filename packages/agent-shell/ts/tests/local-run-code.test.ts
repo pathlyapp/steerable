@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execSync } from 'node:child_process';
-import { LocalExecutor } from '../src/local-executor.js';
+import { expandFencePath, LocalExecutor } from '../src/local-executor.js';
 import { ToolRouter } from '../src/tool-router.js';
 
 const hasPython = (() => {
@@ -148,7 +148,7 @@ describe('ToolRouter / local_run_snippet', () => {
       { name: 'local_run_snippet', arguments: { language: 'node', code: '1' } },
       { projectRoot: root },
     );
-    expect(seenCwd).toBe(root);
+    expect(seenCwd).toBe(expandFencePath(root));
 
     const outside = process.platform === 'win32' ? 'C:\\other' : '/etc';
     const rejected = await router.execute(
@@ -175,7 +175,7 @@ describe('ToolRouter / local_run_snippet', () => {
       { name: 'local_run_snippet', arguments: { language: 'node', code: '1', cwd: nested } },
       { projectRoot: root, additionalWriteRoots: [source] },
     );
-    expect(seenCwd).toBe(nested);
+    expect(seenCwd).toBe(expandFencePath(nested));
 
     const sibling = process.platform === 'win32' ? 'C:\\src\\other' : '/tmp/src-other';
     const rejected = await router.execute(

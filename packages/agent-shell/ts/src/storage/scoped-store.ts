@@ -25,7 +25,7 @@ export interface ScopedStore {
   createChatWithId(chatId: string, title?: string, agentId?: string | null, projectId?: string | null): Promise<ChatSessionRecord>;
   clearProjectAssignment(projectId: string): Promise<number>;
   getChat(chatId: string): Promise<ChatSessionRecord | null>;
-  updateChat(chatId: string, updates: Partial<Pick<ChatSessionRecord, 'title' | 'systemPrompt' | 'pinnedRefs' | 'isPinned' | 'projectId'>>): Promise<ChatSessionRecord | null>;
+  updateChat(chatId: string, updates: Partial<Pick<ChatSessionRecord, 'title' | 'systemPrompt' | 'pinnedRefs' | 'isPinned' | 'projectId' | 'titleSource' | 'forkedFrom'>>): Promise<ChatSessionRecord | null>;
   deleteChat(chatId: string): Promise<boolean>;
   chatHasMessages(chatId: string): Promise<boolean>;
   deleteChatIfEmpty(chatId: string): Promise<boolean>;

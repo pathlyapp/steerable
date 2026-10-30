@@ -470,12 +470,19 @@ All three layers are **on by default** in the DeepPath desktop build:
   for as long as the proxy was up. `STEERABLE_EXEC_SANDBOX=0` restores
   unconfined execution.
 - **Approval algebra** runs in host mode on every turn: the sidecar's
-  `ApprovalExecutor` asks the Electron approval modal over the reverse
+  `ApprovalExecutor` asks the desktop approval card over the reverse
   channel (`approval.request`), the user picks among the seven variants
   (allow/deny × once/session/always + abort), and durable decisions
-  persist to `~/.steerable/approvals.json`. Unanswered prompts fail
-  closed as `timed_out` after 120s. `STEERABLE_APPROVAL=0` restores the
-  legacy ungated behavior.
+  persist to `~/.steerable/approvals.json` under the approval category.
+  A tool approval waits until the user answers. The reverse channel's
+  120s default does not close it. An egress approval (`network_egress`)
+  still fails closed after 180s, and that network request fails.
+  A tool approval includes `sandboxEnforced` when the turn installed a
+  workspace approver. `false` means the command sandbox is off, and the
+  card does not say that writes are blocked.
+  `STEERABLE_APPROVAL=0` removes the approval layer for this process.
+  Destructive tools are then rejected by the tool router. Unattended
+  runs use `--approve allow-all`.
 - **Approval policy rules** (W2.4, codex execpolicy's counterpart):
   `approval.policyPath` loads an ordered rule list — `{tool, decision,
   commandPrefix}` — consulted after the lattice's own caches and before

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from .compaction import CompactionHooks
@@ -719,10 +720,12 @@ class DiscoveredNotesState:
 
     Unlike ``FilesystemState`` (one explicit path the model maintains), this
     is read-only discovery: the notes are project/user/managed-owned context
-    the session reads, not a working file it edits.
+    the session reads, not a working file it edits. ``trusted`` gates the
+    ``project`` and ``local`` levels; ``managed`` and ``user`` are always read.
     """
 
     cwd: Path | str
+    trusted: Callable[[Path], bool]
     max_chars: int = 8_000
     name: str = "discovered-notes"
     assumes: str = (
@@ -737,15 +740,16 @@ class DiscoveredNotesState:
         return InMemoryStorage()
 
     def hooks(self, *, provider: LLMProvider | None = None) -> LoopHooks:
-        return _DiscoveredNotesInjection(Path(self.cwd), self.max_chars)
+        return _DiscoveredNotesInjection(Path(self.cwd), self.max_chars, self.trusted)
 
 
 class _DiscoveredNotesInjection(NoopHooks):
     """pre_step slice: discover and append the notes union once per turn."""
 
-    def __init__(self, cwd: Path, max_chars: int) -> None:
+    def __init__(self, cwd: Path, max_chars: int, trusted: Callable[[Path], bool]) -> None:
         self._cwd = cwd
         self._max_chars = max_chars
+        self._trusted = trusted
 
     async def pre_step(self, transcript: Any, ctx: Any) -> Any:
         from .hooks import PreStepAction, TranscriptAppend
@@ -755,6 +759,8 @@ class _DiscoveredNotesInjection(NoopHooks):
         sections: list[tuple[str, Path, str]] = []
         budget = self._max_chars
         for level, path in discover_notes_files(self._cwd):
+            if level in ("project", "local") and not self._trusted(path.parent):
+                continue
             if budget <= 0:
                 break
             try:

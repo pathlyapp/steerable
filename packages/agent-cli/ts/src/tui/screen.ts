@@ -1,5 +1,6 @@
 import { Box, CURSOR_MARKER, Text, type Component } from '@earendil-works/pi-tui';
 
+import { cliText } from '../copy.js';
 import { childLines, type ChildRow } from './children.js';
 import { splitAtCursor } from './editor.js';
 import { keyLabel } from './keys.js';
@@ -23,6 +24,7 @@ export interface ChatRow {
   title: string;
   busy: boolean;
   selected: boolean;
+  projectId?: string | null;
 }
 
 export interface PickRow {
@@ -43,6 +45,8 @@ export interface TuiScreen {
   draft: string;
   cursor: number;
   status: string;
+  projectLabel?: string;
+  ruleLabel?: string;
   picks?: PickRow[] | null;
   attachments?: string[];
   children?: ChildRow[];
@@ -53,6 +57,7 @@ export interface TuiScreen {
   panel?: string[] | null;
   mode?: 'agent' | 'plan';
   permission?: 'ask' | 'auto' | 'read';
+  approvalPolicy?: 'ask' | 'deny' | 'allow-read' | 'allow-all';
   todos?: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed' }>;
   goal?: {
     objective: string;
@@ -126,6 +131,7 @@ export function helpLines(): string[] {
     '/tasks 后台任务',
     '/fork 分叉',
     '/rewind 回退',
+    '/rules 项目规则',
     '/permissions 会话权限',
     '/copy 复制回答',
     '/editor 外部编辑器',
@@ -200,6 +206,8 @@ function screenLines(screen: TuiScreen): string[] {
   for (const item of screen.queued ?? []) lines.push(`排队 ${item}`);
   if (screen.search) lines.push(screen.search);
   lines.push(draftLine(screen.draft, screen.cursor));
+  const project = [screen.projectLabel, screen.ruleLabel].filter((line) => line && line.length > 0).join(' │ ');
+  if (project) lines.push(project);
   if (screen.status) lines.push(screen.status);
   lines.push(footerText());
   return lines;
@@ -215,7 +223,11 @@ export function bannerLines(screen: TuiScreen): string[] {
     for (const todo of screen.todos ?? []) lines.push(todoText(todo));
   }
   if (screen.mode === 'plan') lines.push('模式 计划');
-  if (screen.permission === 'auto') lines.push('权限 本会话自动');
+  if (screen.permission === 'auto') {
+    lines.push(screen.approvalPolicy === 'allow-all' ? cliText('tui.approvalClosed') : '权限 本会话自动');
+  } else if (screen.approvalPolicy === 'allow-read') {
+    lines.push(cliText('tui.approvalRead'));
+  }
   if (screen.permission === 'read') lines.push('权限 只读');
   for (const row of screen.panel ?? []) lines.push(row);
   return lines;

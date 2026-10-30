@@ -8,6 +8,7 @@ import { acquireChatWriteLock } from '@steerable/agent-shell/storage/process-loc
 import type { AgentClient } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import { createCli } from '../src/cli.js';
+import { nodeDoctorLine } from '../src/node-version.js';
 import { decisionFor } from '../src/approve.js';
 
 const dirs: string[] = [];
@@ -57,6 +58,33 @@ describe('createCli', () => {
     expect(stdout.text()).toContain('<product> doctor');
   });
 
+  it('replaces the product placeholder when the bin name is set', async () => {
+    const stdout = capture();
+    const stderr = capture();
+    const code = await createCli({
+      argv: ['--help'],
+      commandName: 'aroli',
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      createClient: async () => client(),
+    });
+    expect(code).toBe(0);
+    expect(stdout.text()).toContain('aroli run "列出当前目录"');
+    expect(stdout.text()).toContain('aroli doctor');
+    expect(stdout.text()).not.toContain('<product>');
+
+    const ignored = capture();
+    const ignoredCode = await createCli({
+      argv: ['--help'],
+      commandName: 'not a command',
+      stdout: ignored.stream,
+      stderr: capture().stream,
+      createClient: async () => client(),
+    });
+    expect(ignoredCode).toBe(0);
+    expect(ignored.text()).toContain('<product> doctor');
+  });
+
   it('rejects an unknown command', async () => {
     const stderr = capture();
     const code = await createCli({
@@ -72,7 +100,7 @@ describe('createCli', () => {
   it('writes stream-json lines for a finished turn', async () => {
     const stdout = capture();
     const code = await createCli({
-      argv: ['run', 'say hello', '--stream-json', '--data-dir', tempDir()],
+      argv: ['run', 'say hello', '--stream-json', '--no-project', '--data-dir', tempDir()],
       stdout: stdout.stream,
       stderr: capture().stream,
       createClient: async () => client(),
@@ -90,7 +118,7 @@ describe('createCli', () => {
     });
     const stdout = capture();
     const code = await createCli({
-      argv: ['run', 'delete it', '--data-dir', tempDir()],
+      argv: ['run', 'delete it', '--no-project', '--data-dir', tempDir()],
       stdout: stdout.stream,
       stderr: capture().stream,
       createClient: async () => client({
@@ -119,7 +147,7 @@ describe('createCli', () => {
   it('exits 6 when the chat is busy', async () => {
     const stderr = capture();
     const code = await createCli({
-      argv: ['run', '--chat', 'chat-1', 'again', '--data-dir', tempDir()],
+      argv: ['run', '--chat', 'chat-1', 'again', '--no-project', '--data-dir', tempDir()],
       stdout: capture().stream,
       stderr: stderr.stream,
       createClient: async () => client({
@@ -137,7 +165,7 @@ describe('createCli', () => {
     const stderr = capture();
     const kinds: string[] = [];
     const code = await createCli({
-      argv: ['run', 'go', '--approve', 'allow-all', '--data-dir', tempDir()],
+      argv: ['run', 'go', '--approve', 'allow-all', '--no-project', '--data-dir', tempDir()],
       stdout: capture().stream,
       stderr: stderr.stream,
       createClient: async () => client({
@@ -210,6 +238,7 @@ describe('createCli', () => {
         createClient: async () => client(),
       });
       expect(code).toBe(0);
+      expect(stdout.text()).toContain(nodeDoctorLine(process.versions.node).trim());
       expect(stdout.text()).toContain(`data dir: ${dir}`);
       expect(stdout.text()).toContain(`log file: ${path.join(dir, 'logs', 'main.log')}`);
       expect(stdout.text()).toContain('chat-busy');
@@ -221,10 +250,16 @@ describe('createCli', () => {
 });
 
 describe('decisionFor', () => {
-  it('allows a read tool only under allow-read', () => {
-    expect(decisionFor('allow-read', { toolName: 'local_read_file', category: 'local' })).toBe('allow_once');
-    expect(decisionFor('allow-read', { toolName: 'local_exec_shell', category: 'local' })).toBe('deny_once');
-    expect(decisionFor('deny', { toolName: 'local_read_file' })).toBe('deny_once');
+  it('follows the declared mode', () => {
+    const read = { policy: 'allow-read' as const, answerAsk: false };
+    const deny = { policy: 'deny' as const, answerAsk: false };
+    const all = { policy: 'allow-all' as const, answerAsk: true };
+    expect(decisionFor(read, { mode: 'read' }, 'run')).toBe('allow_once');
+    expect(decisionFor(read, { mode: 'destructive' }, 'run')).toBe('deny_once');
+    expect(decisionFor(read, { mode: 'destructive' }, 'tui')).toBe('prompt');
+    expect(decisionFor(deny, { mode: 'read' }, 'run')).toBe('deny_once');
+    expect(decisionFor(all, { mode: 'other' }, 'run')).toBe('allow_once');
+    expect(decisionFor({ policy: 'ask', answerAsk: false }, { mode: 'read' }, 'tui')).toBe('prompt');
   });
 });
 

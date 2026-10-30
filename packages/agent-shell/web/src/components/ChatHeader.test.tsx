@@ -9,11 +9,12 @@
  *   - 待合并的 worktree 行上直接给出合并/丢弃。
  * 列表本身的订阅与刷新归 useChatTasks，见 chat/useChatTasks.test.ts。
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LocalChat, LocalProject, LocalTask } from '@/lib/local-api';
 import type { TurnFile } from './chat/turn-files';
 import { ChatHeader } from './ChatHeader';
+import { forkSourceTime } from './chat/timestamp';
 import type { PackChatSlotContribution } from '@/packs/registry';
 
 afterEach(() => {
@@ -62,6 +63,76 @@ function openResources() {
 function taskItem(name: string) {
   return screen.getByRole('button', { name });
 }
+
+describe('ChatHeader 分叉来源', () => {
+  it('显示来源条，链到原会话', async () => {
+    const request = vi.fn(async () => ({
+      id: 'chat_1',
+      title: '循环任务',
+      forkedFrom: { chatId: 'old', title: '原会话' },
+    }));
+    (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
+    render(<ChatHeader chat={CHAT} />);
+    const source = await screen.findByTestId('chat-fork-source');
+    const open = screen.getByTestId('chat-fork-open-source');
+    expect(open.getAttribute('href')).toBe('#/agent/old');
+    expect(open.textContent).toBe('Open the original chat');
+    expect(source.textContent).toContain(`Forked from "原会话" · ${forkSourceTime(CHAT.createdAt)}`);
+  });
+
+  it('原会话已删除时不显示来源条', async () => {
+    const request = vi.fn(async () => ({
+      id: 'chat_1',
+      title: '循环任务',
+      forkedFrom: null,
+    }));
+    (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
+    render(<ChatHeader chat={CHAT} />);
+    await waitFor(() => expect(request).toHaveBeenCalled());
+    expect(screen.queryByTestId('chat-fork-source')).toBeNull();
+  });
+
+  it('头部菜单分叉成功后打开新会话', async () => {
+    const request = vi.fn(async (call: { method?: string; path?: string }) => {
+      if (call.method === 'POST' && call.path?.endsWith('/fork')) return { chatId: 'chat-new' };
+      return { id: 'chat_1', title: '循环任务', forkedFrom: null };
+    });
+    (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
+    window.location.hash = '#/agent/chat_1';
+    render(<ChatHeader chat={CHAT} />);
+    fireEvent.click(screen.getByTestId('header-chat-menu'));
+    fireEvent.click(screen.getByTestId('header-fork-chat'));
+    await waitFor(() => expect(window.location.hash).toBe('#/agent/chat-new'));
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'POST',
+      path: '/api/v2/chats/chat_1/fork',
+    }));
+    window.location.hash = '';
+  });
+
+  it('头部菜单在占用和过大时把原因留在分叉按钮上', async () => {
+    const request = vi.fn(async () => {
+      throw Object.assign(new Error('busy'), { status: 409 });
+    });
+    (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
+    render(<ChatHeader chat={CHAT} />);
+    fireEvent.click(screen.getByTestId('header-chat-menu'));
+    fireEvent.click(screen.getByTestId('header-fork-chat'));
+    await waitFor(() => {
+      expect(screen.getByTestId('header-fork-chat').getAttribute('title')).toContain('still generating');
+    });
+    expect(window.location.hash).not.toContain('chat-new');
+
+    request.mockRejectedValue(Object.assign(new Error('large'), {
+      status: 413,
+      data: { bytes: 600 * 1024 * 1024 },
+    }));
+    fireEvent.click(screen.getByTestId('header-fork-chat'));
+    await waitFor(() => {
+      expect(screen.getByTestId('header-fork-chat').getAttribute('title')).toContain('600.0 MB');
+    });
+  });
+});
 
 describe('ChatHeader 后台任务角标', () => {
   it('没有任务时不显示计数', () => {

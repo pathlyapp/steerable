@@ -474,6 +474,7 @@ describe('slash commands', () => {
       '/tasks 后台任务',
       '/fork 分叉',
       '/rewind 回退',
+      '/rules 项目规则',
       '/permissions 会话权限',
       '/copy 复制回答',
       '/editor 外部编辑器',
@@ -1019,6 +1020,30 @@ describe('files and sub-agents', () => {
     session.handleInput('\x0f');
     expect(visibleText(session.render(72))).not.toContain('SECRET-LINE');
   });
+
+  it('marks a live tool row when a session allow already covers it', async () => {
+    const client = fakeClient({
+      async *stream() {
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'call-1',
+            tool: 'browser_click',
+            success: true,
+            approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+          }],
+        } as SSEEvent;
+        yield { type: 'tool_result', payload: { name: 'browser_click' } } as SSEEvent;
+      },
+    });
+    const session = new AgentTui(client, { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '点一下');
+    await waitFor(() => visibleText(session.render(72)).includes('本会话已允许'));
+    const screen = visibleText(session.render(72));
+    expect(screen).toMatch(/browser_click\s+本会话已允许/);
+    expect(screen).not.toContain('✓');
+  });
 });
 
 describe('transcript tools', () => {
@@ -1186,9 +1211,39 @@ describe('transcript tools', () => {
     await waitFor(() => visibleText(session.render(72)).includes('已压缩 2 条'));
     await typeLine(session, '/fork');
     await waitFor(() => visibleText(session.render(72)).includes('分叉过来'));
-    expect(visibleText(session.render(72))).toContain('已分叉');
+    const forked = visibleText(session.render(72));
+    expect(forked).toContain('已分叉');
+    expect(forked).toContain('Demo · 分叉');
     await typeLine(session, '/rewind');
     await waitFor(() => visibleText(session.render(72)).includes('已回退'));
+  });
+
+  it('TUI /fork 在占用和超限时写状态行', async () => {
+    let mode: 'busy' | 'big' | 'small' = 'busy';
+    const session = new AgentTui(fakeClient({
+      request: async (method, requestPath) => {
+        if (method === 'POST' && requestPath.endsWith('/fork')) {
+          if (mode === 'busy') return { status: 409, data: { code: 'chat_busy' } };
+          if (mode === 'small') return { status: 413, data: { bytes: 2048 } };
+          return { status: 413, data: { bytes: 600 * 1024 * 1024 } };
+        }
+        if (requestPath.endsWith('/messages')) return { status: 200, data: { messages: [] } };
+        if (method === 'GET' && requestPath === '/api/v2/chats') {
+          return { status: 200, data: { chats: [{ id: 'chat-1', title: 'Notes' }] } };
+        }
+        if (requestPath.startsWith('/api/v2/chats/')) return { status: 200, data: { id: 'chat-1', title: 'Notes' } };
+        return { status: 200, data: { model: 'demo-model' } };
+      },
+    }), { product: 'Demo', onExit() {} });
+    await session.open();
+    await typeLine(session, '/fork');
+    await waitFor(() => visibleText(session.render(72)).includes('正在生成，结束后再分叉'));
+    mode = 'big';
+    await typeLine(session, '/fork');
+    await waitFor(() => visibleText(session.render(72)).includes('工作区太大，无法分叉（600.0 MB）'));
+    mode = 'small';
+    await typeLine(session, '/fork');
+    await waitFor(() => visibleText(session.render(72)).includes('工作区太大，无法分叉（2 KB）'));
   });
 
   it('TUI-036 TUI-044 TUI-064A sends plan mode, lists todos, and cycles permission', async () => {
@@ -1231,7 +1286,7 @@ describe('transcript tools', () => {
       channel: 'approval:request',
       payload: { requestId: 'req-9', toolName: 'local_exec_shell', arguments: { command: 'ls' } },
     });
-    await waitFor(() => decisions.includes('allow_for_session'));
+    await waitFor(() => decisions.includes('allow_once'));
     expect(visibleText(session.render(72))).not.toContain('审批');
     await typeLine(session, '/permissions');
     await typeLine(session, '不该发出去');

@@ -1,13 +1,15 @@
 import type { AgentClient } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
 
-import { decisionFor, denied, type ApprovePolicy } from './approve.js';
+import { autoAnswer, decisionFor, denied, type ApprovalSpec, type ApprovePolicy } from './approve.js';
+import { cliText } from './copy.js';
+import { ruleStatusLine, type RuleContext } from './rules.js';
 
 export interface RunRequest {
   task: string;
   chatId?: string;
   agentId?: string;
-  cwd?: string;
+  projectId?: string;
   files: string[];
   policy: ApprovePolicy;
   json: boolean;
@@ -23,12 +25,13 @@ export async function runTurn(
   signal: AbortSignal,
 ): Promise<number> {
   if (request.policy === 'allow-all') {
-    stderr.write('warning: --approve allow-all allows every tool call in this run\n');
+    stderr.write(`${cliText('cli.approveAllWarning')}\n`);
   }
   let chatId = request.chatId;
   if (!chatId) {
     const created = await client.request('POST', '/api/v2/chats/new', {
       ...(request.agentId ? { agentId: request.agentId } : {}),
+      ...(request.projectId ? { projectId: request.projectId } : {}),
     });
     if (created.status !== 200) {
       stderr.write(`failed to create chat (${created.status})\n`);
@@ -40,11 +43,14 @@ export async function runTurn(
       return 1;
     }
   }
+  await reportRules(client, chatId, stderr);
 
   let exitCode = 0;
   let deniedApproval = false;
   const text: string[] = [];
-  const approvals = watchApprovals(client, request.policy, () => {
+  const autoAnswered: AutoAnswered[] = [];
+  const spec: ApprovalSpec = { policy: request.policy, answerAsk: request.policy === 'allow-all' };
+  const approvals = watchApprovals(client, spec, request, stdout, autoAnswered, () => {
     deniedApproval = true;
   });
   try {
@@ -68,14 +74,25 @@ export async function runTurn(
       chatId,
       text: text.join(''),
       exitCode,
+      autoAnswered,
     })}\n`);
   }
   return exitCode;
 }
 
+async function reportRules(
+  client: AgentClient,
+  chatId: string,
+  stderr: NodeJS.WritableStream,
+): Promise<void> {
+  const response = await client.request('GET', `/api/v2/chats/${encodeURIComponent(chatId)}/project-context`, undefined);
+  if (response.status !== 200) return;
+  const line = ruleStatusLine(response.data as RuleContext, 'cli');
+  if (line) stderr.write(`${line}\n`);
+}
+
 function messageText(request: RunRequest): string {
   const lines = [request.task];
-  if (request.cwd) lines.push(`Working directory: ${request.cwd}`);
   if (request.files.length > 0) {
     lines.push('Files:');
     for (const file of request.files) lines.push(`- ${file}`);
@@ -83,9 +100,16 @@ function messageText(request: RunRequest): string {
   return lines.join('\n');
 }
 
+type AutoAnswered =
+  | { kind: 'approval'; toolName: string; category: string; decision: string }
+  | { kind: 'ask_user'; prompt: string };
+
 function watchApprovals(
   client: AgentClient,
-  policy: ApprovePolicy,
+  spec: ApprovalSpec,
+  request: RunRequest,
+  stdout: NodeJS.WritableStream,
+  autoAnswered: AutoAnswered[],
   onDenied: () => void,
 ): { stop: () => void } {
   let stopped = false;
@@ -93,14 +117,32 @@ function watchApprovals(
     for await (const event of client.events()) {
       if (stopped) return;
       if (event.channel === 'approval:request') {
-        const prompt = event.payload as { requestId?: string; toolName?: string; category?: string };
+        const prompt = event.payload as { requestId?: string; toolName?: string; category?: string; mode?: string };
         if (!prompt.requestId) continue;
-        const kind = decisionFor(policy, prompt);
+        const kind = decisionFor(spec, { mode: prompt.mode }, 'run');
+        if (kind === 'prompt') continue;
         if (denied(kind)) onDenied();
+        const record: AutoAnswered = {
+          kind: 'approval',
+          toolName: prompt.toolName ?? '',
+          category: prompt.category ?? '',
+          decision: kind,
+        };
+        autoAnswered.push(record);
+        if (request.streamJson) stdout.write(`${JSON.stringify({ type: 'auto_answered', ...record })}\n`);
         await client.decideApproval(prompt.requestId, kind);
       } else if (event.channel === 'ask-user:request') {
-        const prompt = event.payload as { requestId?: string };
-        if (prompt.requestId) await client.answerAsk(prompt.requestId, {});
+        const prompt = event.payload as { requestId?: string; prompt?: string; questions?: { id: string }[] };
+        if (!prompt.requestId) continue;
+        if (spec.answerAsk) {
+          const questions = prompt.questions?.length ? prompt.questions : [{ id: 'answer' }];
+          const record: AutoAnswered = { kind: 'ask_user', prompt: prompt.prompt ?? '' };
+          autoAnswered.push(record);
+          if (request.streamJson) stdout.write(`${JSON.stringify({ type: 'auto_answered', ...record })}\n`);
+          await client.answerAsk(prompt.requestId, { answers: autoAnswer(questions) });
+        } else {
+          await client.answerAsk(prompt.requestId, {});
+        }
       }
     }
   })();

@@ -94,6 +94,21 @@ describe('createTauriBridge', () => {
     expect(paste).toHaveBeenCalledWith({ text: '粘贴文本', files: [] });
   });
 
+  it('gets and sets the desktop zoom', async () => {
+    mocks.invoke.mockResolvedValue(1.5);
+    const bridge = createTauriBridge();
+    await expect(bridge.getZoom!()).resolves.toBe(1.5);
+    expect(mocks.invoke).toHaveBeenCalledWith('ui_get_zoom');
+    await bridge.setZoom!(1.2);
+    expect(mocks.invoke).toHaveBeenCalledWith('ui_set_zoom', { scale: 1.2 });
+    const seen: number[] = [];
+    bridge.onZoomChanged!(({ scale }) => seen.push(scale));
+    expect(mocks.listen).toHaveBeenCalledWith('ui:zoom-changed', expect.any(Function));
+    const listener = mocks.listen.mock.calls.find(([event]) => event === 'ui:zoom-changed')?.[1];
+    listener?.({ payload: { scale: 1.2 } });
+    expect(seen).toEqual([1.2]);
+  });
+
   it('reads plain text from the host clipboard', async () => {
     mocks.invoke.mockResolvedValue('粘贴文本');
     const bridge = createTauriBridge();

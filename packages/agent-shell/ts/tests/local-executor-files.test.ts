@@ -14,6 +14,7 @@
  * Apple Maps URL 规范化 / 系统打开错误映射（mock runtime 边界，不真打开）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { realpathSync, symlinkSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -39,6 +40,8 @@ import {
   hashContent,
   isPathWithinRoot,
 } from '../src/local-executor.js';
+import { ToolRouter } from '../src/tool-router.js';
+import { canonicalPathInside } from '../src/fence-path.js';
 
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'exec-files-'));
@@ -221,7 +224,7 @@ describe('路径围栏 · read/write 集成', () => {
       const blocked = await executor.readLocalFile({ path: outsideFile }, root);
       expect(blocked.success).toBe(false);
       expect(blocked.error).toContain('路径越界');
-      expect(blocked.error).toContain(root);
+      expect(blocked.error).toContain(realpathSync(root));
     });
   });
 
@@ -277,7 +280,7 @@ describe('路径围栏 · read/write 集成', () => {
       );
       expect(sibling.success).toBe(false);
       expect(sibling.error).toContain('路径越界');
-      expect(sibling.error).toContain(outside);
+      expect(sibling.error).toContain(realpathSync(outside));
 
       const prefix = await executor.writeLocalFile(
         { path: path.join(outside + '-evil', 'x.txt'), content: 'no' },
@@ -290,6 +293,140 @@ describe('路径围栏 · read/write 集成', () => {
       const ok = await executor.writeLocalFile({ path: path.join(root, 'f.txt'), content: 'x' }, root);
       expect(ok.success).toBe(true);
     });
+  });
+
+  it('符号链接指向项目内时放行，指向项目外时拒绝', async () => {
+    await withRootAndOutside(async ({ root, outside }) => {
+      const linkParent = await mkdtemp(path.join(os.tmpdir(), 'fence-link-'));
+      const link = path.join(linkParent, 'link');
+      const escape = path.join(root, 'escape');
+      symlinkSync(root, link, 'dir');
+      symlinkSync(outside, escape, 'dir');
+      try {
+        const executor = new LocalExecutor();
+        const viaLink = await executor.writeLocalFile(
+          { path: path.join(link, 'a.txt'), content: 'via-link' },
+          root,
+        );
+        expect(viaLink.success).toBe(true);
+        const readBack = await executor.readLocalFile({ path: path.join(root, 'a.txt') }, link);
+        expect(readBack.success).toBe(true);
+        expect(readBack.content).toBe('via-link');
+
+        const leaked = await executor.writeLocalFile(
+          { path: path.join(escape, 'x.txt'), content: 'no' },
+          root,
+        );
+        expect(leaked.success).toBe(false);
+        expect(leaked.error).toContain('路径越界');
+      } finally {
+        await rm(linkParent, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it('相对路径按项目家目录解析，越出项目的相对路径被拒绝', async () => {
+    await withTempDir(async (dir) => {
+      const project = path.join(dir, 'proj');
+      await mkdir(project);
+      const executor = new LocalExecutor();
+      const written = await executor.writeLocalFile(
+        { path: 'hello.txt', content: 'hi' },
+        project,
+      );
+      expect(written.success).toBe(true);
+      expect(await readFile(path.join(project, 'hello.txt'), 'utf8')).toBe('hi');
+
+      const read = await executor.readLocalFile({ path: 'hello.txt' }, project);
+      expect(read.success).toBe(true);
+      expect(read.content).toBe('hi');
+
+      await writeFile(path.join(dir, 'secret.txt'), 'no', 'utf8');
+      const leaked = await executor.readLocalFile({ path: '../secret.txt' }, project);
+      expect(leaked.success).toBe(false);
+      expect(leaked.error).toContain('路径越界');
+
+      await mkdir(path.join(project, 'src'));
+      await writeFile(path.join(project, 'src', 'note.txt'), 'phase1-marker\n', 'utf8');
+      const router = new ToolRouter(executor, { list: () => [] } as never);
+      const found = await router.execute(
+        { name: 'grep', arguments: { pattern: 'phase1-marker', path: 'src' } },
+        { projectRoot: project },
+      ) as { success: boolean; matches?: Array<{ path: string }> };
+      expect(found.success).toBe(true);
+      expect(found.matches?.map((hit) => hit.path)).toContain('note.txt');
+    });
+  });
+
+  it('符号链接目录里的文件仍算在根内，指向根外的链接不算', async () => {
+    await withTempDir(async (dir) => {
+      const docs = path.join(dir, 'docs');
+      const link = path.join(dir, 'link');
+      await mkdir(docs);
+      await writeFile(path.join(docs, 'a.txt'), 'yes', 'utf8');
+      symlinkSync(docs, link, 'dir');
+      await writeFile(path.join(dir, 'secret.txt'), 'no', 'utf8');
+      symlinkSync(path.join(dir, 'secret.txt'), path.join(docs, 'escape'), 'file');
+
+      expect(canonicalPathInside(link, path.join(link, 'a.txt'))).toBe(true);
+      expect(canonicalPathInside(link, path.join(docs, 'a.txt'))).toBe(true);
+      expect(canonicalPathInside(link, path.join(docs, 'escape'))).toBe(false);
+    });
+  });
+
+  it('项目围栏拒绝写入 ~/.bashrc 与 /etc/hosts，文件内容不变', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'fence-sensitive-'));
+    const hosts = process.platform === 'win32'
+      ? path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts')
+      : '/etc/hosts';
+    const targets = [path.join(os.homedir(), '.bashrc'), '~/.bashrc', hosts];
+    const snapshots = new Map<string, Buffer | null>();
+    const remember = async (target: string) => {
+      const resolved = target.startsWith('~')
+        ? path.join(os.homedir(), target.slice(1))
+        : target;
+      if (snapshots.has(resolved)) return resolved;
+      try {
+        snapshots.set(resolved, await readFile(resolved));
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT') throw error;
+        snapshots.set(resolved, null);
+      }
+      return resolved;
+    };
+    try {
+      const executor = new LocalExecutor();
+      for (const target of targets) {
+        await remember(target);
+        const blocked = await executor.writeLocalFile(
+          { path: target, content: 'phase1-should-not-land\n' },
+          root,
+        );
+        expect(blocked.success).toBe(false);
+        expect(blocked.error).toContain('路径越界');
+      }
+      for (const [resolved, snapshot] of snapshots) {
+        if (snapshot === null) {
+          await expect(readFile(resolved)).rejects.toMatchObject({ code: 'ENOENT' });
+        } else {
+          expect(await readFile(resolved)).toEqual(snapshot);
+        }
+      }
+    } finally {
+      for (const [resolved, snapshot] of snapshots) {
+        try {
+          const current = await readFile(resolved);
+          if (snapshot === null) await rm(resolved, { force: true });
+          else if (!snapshot.equals(current)) await writeFile(resolved, snapshot);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (snapshot === null && code === 'ENOENT') continue;
+          throw error;
+        }
+      }
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('不给 projectRoot：无围栏，任意路径可读写', async () => {

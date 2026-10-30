@@ -42,7 +42,8 @@ export interface ProductConfig {
   hostTools?: Record<string, boolean | { capability?: boolean; chrome?: boolean }>;
   /**
    * 命令安全询问：host = 弹宿主审批；off = 本轮不挂审批。缺省 host。
-   * STEERABLE_APPROVAL=0 仍是调试逃生口。
+   * STEERABLE_APPROVAL=0 关掉本轮审批层，破坏性工具由工具路由拒绝。
+   * 需要放行时用命令行 `--approve allow-all`，不要依赖这个环境变量。
    */
   approval?: 'host' | 'off';
   /**
@@ -124,6 +125,11 @@ export interface ProductConfig {
     locales: string[];
     defaultLocale: string;
   };
+  /**
+   * 无项目会话分叉时，工作区复制的字节上限。缺省 500 MiB。
+   * 超过则接口返回 413，不创建新会话。
+   */
+  forkWorkspaceMaxBytes?: number;
 }
 
 /** shell 内置智能体：只有产品显式 `true` 才开。 */

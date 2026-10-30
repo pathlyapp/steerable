@@ -115,9 +115,19 @@ describe('LocalStore / updateChat', () => {
     const chat = await store.createChat('原标题', 'agent-a', 'proj-1');
     const updated = await store.updateChat(chat.id, { title: '新标题', systemPrompt: undefined });
     expect(updated?.title).toBe('新标题');
+    expect(updated?.titleSource).toBeNull();
     expect(updated?.agentId).toBe('agent-a');
     expect(updated?.projectId).toBe('proj-1');
     expect(updated?.systemPrompt).toBeNull();
+  });
+
+  it('titleSource 往返；不传则保留原值', async () => {
+    const { store } = await createTestStore();
+    const chat = await store.createChat('新对话');
+    expect((await store.getChat(chat.id))?.titleSource).toBeNull();
+    expect((await store.updateChat(chat.id, { title: '周报', titleSource: 'user' }))?.titleSource).toBe('user');
+    expect((await store.updateChat(chat.id, { isPinned: true }))?.titleSource).toBe('user');
+    expect((await store.getChat(chat.id))?.title).toBe('周报');
   });
 
   it('projectId 显式传 null 才是移出项目', async () => {

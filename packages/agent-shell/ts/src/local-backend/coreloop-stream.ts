@@ -35,6 +35,8 @@ export interface CoreLoopToolAction {
    * is user-visible.
    */
   sandbox?: { backend?: string; enforcement: string };
+  /** Session-allow reuse lifted onto the stream chunk. */
+  approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number };
 }
 
 export interface CoreLoopTurnOutcome {
@@ -78,6 +80,37 @@ export interface SkillTurnContext {
   ignoreConditions: boolean;
 }
 
+/** 一轮发给 sidecar 的工具。`mode` 与 `approvalCategory` 是可选线协议字段。 */
+export interface TurnToolWire {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  mode?: string;
+  approvalCategory?: string;
+}
+
+/**
+ * 把宿主工具 schema 收成线协议上的一项。未声明审批类别时不带 `approvalCategory`，
+ * sidecar 按工具名做类别。
+ */
+export function toTurnTool(schema: {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  mode?: string;
+  approval?: { category?: string } | null;
+}): TurnToolWire {
+  const tool: TurnToolWire = {
+    name: schema.name,
+    description: schema.description,
+    inputSchema: schema.inputSchema,
+  };
+  if (schema.mode) tool.mode = schema.mode;
+  const category = schema.approval?.category;
+  if (category) tool.approvalCategory = category;
+  return tool;
+}
+
 export interface StreamCoreLoopTurnOptions {
   supervisor: SidecarSupervisor;
   chatId: string;
@@ -93,7 +126,7 @@ export interface StreamCoreLoopTurnOptions {
    */
   resume?: boolean;
   messages: LlmMessage[];
-  tools: Array<{ name: string; description: string; inputSchema: unknown }>;
+  tools: TurnToolWire[];
   provider: string;
   model: string;
   baseUrl?: string;
@@ -368,6 +401,8 @@ export async function streamCoreLoopTurn(
         description: t.description,
         parameters: t.inputSchema ?? { type: 'object', properties: {} },
       },
+      ...(t.mode ? { mode: t.mode } : {}),
+      ...(t.approvalCategory ? { approvalCategory: t.approvalCategory } : {}),
     })),
   };
 
@@ -440,6 +475,7 @@ export async function streamCoreLoopTurn(
               error: chunk.toolResult.error,
               durationMs: chunk.toolResult.durationMs,
               sandbox: chunk.toolResult.sandbox,
+              approval: chunk.toolResult.approval,
             });
           }
           if (chunk.notice) {

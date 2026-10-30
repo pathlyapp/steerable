@@ -3,6 +3,7 @@ mod commands;
 mod host;
 mod python_runner;
 mod update;
+mod zoom;
 
 use commands::{
     host_capture_screenshot, host_read_clipboard, host_read_clipboard_text, host_save_text_file,
@@ -49,7 +50,7 @@ impl DesktopConfig {
     }
 }
 
-fn install_menu(app: &tauri::App) -> tauri::Result<()> {
+fn install_menu(app: &tauri::App, data_dir_name: &str) -> tauri::Result<()> {
     let new_chat = MenuItemBuilder::with_id("new-chat", "新建对话")
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
@@ -80,7 +81,35 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
         .item(&paste)
         .select_all()
         .build()?;
+    let zoom_in = MenuItemBuilder::with_id("view-zoom-in", "放大")
+        .accelerator("CmdOrCtrl+=")
+        .build(app)?;
+    // One menu item accepts one accelerator. `Plus` is not a muda key code,
+    // so the shifted equals key is registered separately for layouts where
+    // `+` requires Shift.
+    let zoom_in_plus = MenuItemBuilder::with_id("view-zoom-in-plus", "放大")
+        .accelerator("CmdOrCtrl+Shift+=")
+        .build(app)?;
+    let zoom_out = MenuItemBuilder::with_id("view-zoom-out", "缩小")
+        .accelerator("CmdOrCtrl+-")
+        .build(app)?;
+    let zoom_reset = MenuItemBuilder::with_id("view-zoom-reset", "实际大小")
+        .accelerator("CmdOrCtrl+0")
+        .build(app)?;
+    zoom::bind(
+        app,
+        data_dir_name,
+        zoom_in.clone(),
+        zoom_in_plus.clone(),
+        zoom_out.clone(),
+    )
+    .map_err(|error| tauri::Error::Io(std::io::Error::other(error)))?;
     let view = SubmenuBuilder::new(app, "视图")
+        .item(&zoom_in)
+        .item(&zoom_in_plus)
+        .item(&zoom_out)
+        .item(&zoom_reset)
+        .separator()
         .item(&open_terminal)
         .separator()
         .fullscreen()
@@ -96,6 +125,9 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
         "open-terminal" => {
             let _ = app.emit("menu:open-terminal", ());
         }
+        "view-zoom-in" | "view-zoom-in-plus" => zoom::zoom_in(app),
+        "view-zoom-out" => zoom::zoom_out(app),
+        "view-zoom-reset" => zoom::zoom_reset(app),
         "edit-paste" => {
             let _ = app.emit("menu:paste", clipboard::read_clipboard());
         }
@@ -216,10 +248,12 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
             python_runner_pick_local,
             python_runner_use_local,
             python_runner_use_default,
-            python_runner_restart
+            python_runner_restart,
+            zoom::ui_get_zoom,
+            zoom::ui_set_zoom
         ])
         .setup(move |app| {
-            install_menu(app)?;
+            install_menu(app, &config.data_dir_name)?;
             let handle = app.handle().clone();
             thread::spawn(move || {
                 let (host, url) = match HostProcess::spawn(&handle, &config) {
@@ -274,6 +308,7 @@ pub fn run(context: tauri::Context<tauri::Wry>, config: DesktopConfig) {
                         .show(move |_| exit_handle.exit(1));
                     return;
                 }
+                zoom::apply_saved(&handle);
                 if REVEAL_WHEN_READY.swap(false, Ordering::SeqCst) {
                     focus_main_window(&handle);
                 }

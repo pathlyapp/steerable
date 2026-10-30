@@ -3,7 +3,9 @@ import path from 'node:path';
 import {
   LocalExecutor,
   buildProjectRootViolation,
+  canonicalFencePath,
   expandFencePath,
+  resolveFencePath,
   isPathWithinRoot,
   writableFenceRoots,
   writableFenceViolation,
@@ -17,7 +19,7 @@ import type { McpServerRegistry } from './mcp-server-registry.js';
 import type { ProjectRegistry } from './project-registry.js';
 import type { TaskService } from './local-backend/task-service.js';
 import type { WorktreeService } from './local-backend/worktree-service.js';
-import type { ToolContribution, ToolMode, ToolExposure } from './scenario/pack.js';
+import type { ToolApprovalSpec, ToolContribution, ToolMode, ToolExposure } from './scenario/pack.js';
 
 export type { ToolMode, ToolExposure } from './scenario/pack.js';
 import {
@@ -69,7 +71,9 @@ export interface ToolCall {
  * `projectRoot` 是项目模式的硬沙箱根：非空时
  *   - 读路径必须落在根内，或落在 additionalReadRoots 内（含各自子目录）
  *   - 写路径必须落在根内，或落在 additionalWriteRoots 内（含各自子目录）
- *   - local_exec_shell 的 cwd 默认改为项目根；显式 cwd 必须落在上述可写根内
+ *   - local_exec_shell 的 cwd 默认改为项目根；显式 cwd 可以落在可写根外，
+ *     命令仍启动。命令沙箱开着时，写入由 exec 沙箱拒绝；沙箱关掉时这次写入不会被沙箱拦住。
+ *     pwsh 与 local_run_snippet 的 cwd 仍必须落在可写根内
  * 无项目对话（null/缺省）行为与之前完全一致。
  */
 export interface ToolExecContext {
@@ -106,6 +110,34 @@ export interface ToolSchema {
   mode: ToolMode;
   /** 曝光层；缺省 `direct`。MCP 动态工具默认 `deferred`。 */
   exposure?: ToolExposure;
+  /** 审批分组。缺省时 sidecar 用工具名做类别。 */
+  approval?: ToolApprovalSpec;
+}
+
+/** 审批类别：小写开头，最长 64，且不占用内置类别。 */
+export const APPROVAL_CATEGORY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+
+export const RESERVED_APPROVAL_CATEGORIES: ReadonlySet<string> = new Set([
+  'network_egress',
+  'sandbox_escalation',
+]);
+
+/**
+ * 装配期校验包工具的审批类别。非法或与内置类别同名时抛错，宿主不装上该包。
+ */
+export function assertToolApproval(contribution: Pick<ToolContribution, 'name' | 'approval'>): void {
+  const approval = contribution.approval;
+  if (approval == null) return;
+  const category = approval.category;
+  if (
+    typeof category !== 'string'
+    || !APPROVAL_CATEGORY_PATTERN.test(category)
+    || RESERVED_APPROVAL_CATEGORIES.has(category)
+  ) {
+    throw new Error(
+      `[tool-router] tool ${contribution.name} has invalid approval category '${String(category)}'`,
+    );
+  }
 }
 
 type ShellExecutor = (request: LocalExecRequest) => Promise<LocalExecResult>;
@@ -200,6 +232,7 @@ export class ToolRouter {
       if (existing.has(contribution.name)) {
         throw new Error(`[tool-router] duplicate tool name from contribution: ${contribution.name}`);
       }
+      assertToolApproval(contribution);
       this.contributedTools.set(contribution.name, contribution);
       existing.add(contribution.name);
     }
@@ -659,6 +692,7 @@ export class ToolRouter {
         inputSchema: c.inputSchema,
         mode: c.mode,
         ...(c.exposure ? { exposure: c.exposure } : {}),
+        ...(c.approval ? { approval: c.approval } : {}),
       })),
     ];
   }
@@ -1188,6 +1222,7 @@ export class ToolRouter {
           },
           projectRoot,
           context?.additionalWriteRoots ?? null,
+          { allowOutside: true },
         );
       case 'write_stdin':
         return await writeShellStdin({
@@ -1279,7 +1314,7 @@ export class ToolRouter {
           target: String(args.target || ''),
         });
       case 'local_run_snippet': {
-        // 与 local_exec_shell 同款项目沙箱：cwd 默认项目根，显式越界拒绝。
+        // cwd 默认项目根。代码片段不走 exec 沙箱，显式越界 cwd 直接拒绝。
         const sandboxed = this.applyProjectCwdSandbox(
           { cwd: typeof args.cwd === 'string' ? args.cwd : undefined },
           projectRoot,
@@ -1591,20 +1626,23 @@ export class ToolRouter {
   }
 
   /**
-   * 项目模式硬沙箱（cwd 维度）：有可写根时，cwd 默认收到项目家目录；
-   * 模型显式给的 cwd 必须落在家目录或额外可写根（源文件夹）内，含各自子目录。
-   * 相对 cwd 按家目录解析（而不是进程 cwd）。
+   * 项目模式的 cwd 解析：有可写根时，缺省 cwd 收到项目家目录。
+   * 相对 cwd 按家目录解析（而不是进程 cwd）。`~` 与命令围栏同一规则。
    *
-   * 注意边界：shell 命令文本里内嵌的绝对路径无法可靠解析，围栏只覆盖
-   * cwd 与文件读写工具。命令实际写盘还受 exec 沙箱的 writableRoots 约束，
-   * 那些根同样包含子目录。
+   * `allowOutside` 为真时，落在可写根外的 cwd 仍原样交给执行器。只有
+   * `local_exec_shell` 走这条路。命令沙箱开着时，审批卡说明写入该目录会被拒绝；
+   * 沙箱关掉时卡片不说这句话，这次写入也不会被沙箱拦住。
+   * `pwsh` 与代码片段不走这条路，越界 cwd 继续返回路径越界。
    *
-   * local_exec_shell 与 local_run_snippet 共用本 helper。
+   * 命令文本里内嵌的绝对路径无法可靠解析。文件读写工具另有路径围栏，
+   * 不随命令沙箱开关放行。命令沙箱开着时，shell 的实际写盘还受 exec 沙箱的
+   * writableRoots 约束，那些根含其子目录。
    */
   private applyProjectCwdSandbox<T extends { cwd?: string }>(
     request: T,
     projectRoot?: string | null,
     additionalWriteRoots?: string[] | null,
+    options?: { allowOutside?: boolean },
   ): { request: T } | { error: LocalExecResult } {
     const roots = writableFenceRoots(projectRoot, additionalWriteRoots);
     if (roots.length === 0) return { request };
@@ -1613,11 +1651,11 @@ export class ToolRouter {
       const expanded = request.cwd.startsWith('~')
         ? path.join(os.homedir(), request.cwd.slice(1))
         : request.cwd;
-      const resolvedCwd = path.isAbsolute(expanded)
+      const resolvedCwd = canonicalFencePath(path.isAbsolute(expanded)
         ? path.resolve(expanded)
-        : path.resolve(home, expanded);
+        : path.resolve(home, expanded));
       const violation = writableFenceViolation(resolvedCwd, roots);
-      if (violation) {
+      if (violation && !options?.allowOutside) {
         return {
           error: {
             success: false,
@@ -1635,8 +1673,14 @@ export class ToolRouter {
     request: LocalExecRequest,
     projectRoot?: string | null,
     additionalWriteRoots?: string[] | null,
+    options?: { allowOutside?: boolean },
   ): Promise<LocalExecResult> {
-    const sandboxed = this.applyProjectCwdSandbox(request, projectRoot, additionalWriteRoots);
+    const sandboxed = this.applyProjectCwdSandbox(
+      request,
+      projectRoot,
+      additionalWriteRoots,
+      options,
+    );
     if ('error' in sandboxed) return sandboxed.error;
     if (this.shellExecutor) {
       return this.shellExecutor(sandboxed.request);
@@ -1650,22 +1694,11 @@ export class ToolRouter {
     additionalReadRoots?: string[] | null,
   ): { path: string } | { error: string } {
     if (!inputPath.trim()) return { error: 'path 不能为空' };
-    const expanded = inputPath.startsWith('~')
-      ? path.join(os.homedir(), inputPath.slice(1))
-      : inputPath;
-    const resolved = path.resolve(expanded);
+    const resolved = resolveFencePath(inputPath, projectRoot);
     if (!projectRoot) return { path: resolved };
-    const root = path.resolve(
-      projectRoot.startsWith('~')
-        ? path.join(os.homedir(), projectRoot.slice(1))
-        : projectRoot,
-    );
-    const inAdditionalRoot = (additionalReadRoots ?? []).some((candidate) => {
-      const expandedCandidate = candidate.startsWith('~')
-        ? path.join(os.homedir(), candidate.slice(1))
-        : candidate;
-      return isPathWithinRoot(resolved, path.resolve(expandedCandidate));
-    });
+    const root = expandFencePath(projectRoot);
+    const inAdditionalRoot = (additionalReadRoots ?? []).some((candidate) =>
+      isPathWithinRoot(resolved, expandFencePath(candidate)));
     if (!isPathWithinRoot(resolved, root) && !inAdditionalRoot) {
       return { error: buildProjectRootViolation(resolved, root) };
     }

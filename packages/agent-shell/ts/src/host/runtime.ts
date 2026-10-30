@@ -11,6 +11,7 @@
  * 这也是阶段 3 上提框架后 `@steerable/agent-shell` 的核心装配件：场景包
  * （ScenarioPack）的服务/工具贡献在 0.3 逐槽接入本模块。
  */
+import { homedir } from 'node:os';
 import {
   LocalExecutor,
   setDefaultExecTimeoutMs,
@@ -50,6 +51,8 @@ import {
   bindStorageInstance,
   type InstanceLease,
 } from '../storage/process-locks.js';
+import { t } from '../i18n.js';
+import { approvalCwdFence, resolveApprovalCategoryLabel } from '../sidecar/approval-label.js';
 import { createApprovalBridge } from '../sidecar/reverse-approval.js';
 import { createAskUserBridge } from '../sidecar/reverse-ask-user.js';
 import { startHostSidecar, shutdownHostSidecar } from '../sidecar/boot.js';
@@ -311,6 +314,32 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
     broadcast,
     hasWindow,
     onLog: (line) => onLog(line),
+    categoryLabel: (toolName, category) => {
+      const declaredLabel = toolRouter.getSchemaByName(toolName)?.approval?.label;
+      // The card translates this English source in the interface language.
+      return resolveApprovalCategoryLabel({
+        locale: 'en',
+        category,
+        toolName,
+        ...(declaredLabel ? { declaredLabel } : {}),
+        translate: (message) => t(message),
+      });
+    },
+    outsideWorkspace: async ({ toolName, arguments: args, chatId }) => {
+      if (!chatId || !localBackendRouter) return false;
+      const project = await localBackendRouter.resolveChatProject(chatId);
+      const workspaceRoot = project
+        ? null
+        : await localBackendRouter.resolveChatWorkspaceRoot(chatId);
+      return approvalCwdFence({
+        toolName,
+        cwd: args.cwd,
+        projectRoot: project?.folderPath ?? null,
+        workspaceRoot,
+        sourceFolders: project?.sourceFolders ?? [],
+        home: homedir(),
+      });
+    },
   });
   const askUserBridge = createAskUserBridge({
     broadcast,

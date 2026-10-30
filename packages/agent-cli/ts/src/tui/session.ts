@@ -10,6 +10,8 @@ import type { ApprovalDecisionKind } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import { saveAttachmentFiles } from '@steerable/agent-shell/attachments';
 
+import { autoAnswer, decisionFor, type ApprovalSpec } from '../approve.js';
+import { cliText } from '../copy.js';
 import { applyChildEvent, childLines, type ChildRow } from './children.js';
 import { readSystemClipboard, saveClipboardImage, writeSystemClipboard, type ClipboardRead } from './clipboard.js';
 import { completeSlash, slashAt } from './commands.js';
@@ -35,6 +37,7 @@ import {
 } from './prompt-history.js';
 import { renderScreen, type ChatRow, type TranscriptLine, type TuiScreen } from './screen.js';
 import { searchHits, searchLabel } from './search.js';
+import { ruleStatusLine, type RuleContext } from '../rules.js';
 import { transcriptEdge } from './scroll.js';
 import { todosFromAction, type SessionTodo } from './todos.js';
 import { historyRows, toolOutput, toolStatus, type ToolAction } from './transcript.js';
@@ -50,6 +53,9 @@ export interface AgentTuiOptions {
   writeClipboard?: (text: string) => Promise<void>;
   editInEditor?: (text: string) => Promise<string>;
   exportDir?: string;
+  projectId?: string;
+  projectLabel?: string;
+  approvalPolicy?: ApprovalSpec;
   liveIntervalMs?: number;
   onExit: () => void;
   onChange?: () => void;
@@ -97,6 +103,14 @@ export class AgentTui implements Component {
   private panel: string[] | null = null;
   private mode: 'agent' | 'plan' = 'agent';
   private permission: 'ask' | 'auto' | 'read' = 'ask';
+  private approvalPolicy: ApprovalSpec = { policy: 'ask', answerAsk: false };
+  private readonly autoTools = new Set<string>();
+
+  private markAutoTool(name: string): void {
+    this.autoTools.add(name);
+    const line = [...this.lines].reverse().find((item) => item.kind === 'tool' && item.name === name && item.status === '…');
+    if (line) line.status = cliText('tui.toolAuto');
+  }
   private todos: SessionTodo[] = [];
   private goal: SessionGoal | null = null;
   private loops: SessionLoop[] = [];
@@ -106,6 +120,7 @@ export class AgentTui implements Component {
   private children: ChildRow[] = [];
   private readonly cwd: string;
   private status = '';
+  private ruleLabel = '';
   private stopped = false;
   private turnAbort: AbortController | null = null;
   private pending: Promise<void> = Promise.resolve();
@@ -114,6 +129,10 @@ export class AgentTui implements Component {
     this.client = client;
     this.options = options;
     this.cwd = options.cwd ?? process.cwd();
+    if (options.approvalPolicy) {
+      this.approvalPolicy = options.approvalPolicy;
+      if (options.approvalPolicy.policy === 'allow-all') this.permission = 'auto';
+    }
     ensureAgentKeybindings();
   }
 
@@ -124,8 +143,15 @@ export class AgentTui implements Component {
       if (model) this.modelName = model;
     }
     this.rows = await this.loadChats();
-    const current = this.rows[0];
+    const projectId = this.options.projectId;
+    const current = projectId
+      ? this.rows.find((chat) => chat.projectId === projectId)
+      : this.rows[0];
     if (current) await this.openChat(current.id);
+    else if (projectId) {
+      await this.ensureChat();
+      await this.refreshRules();
+    }
     void this.watch();
     this.touch();
   }
@@ -300,7 +326,7 @@ export class AgentTui implements Component {
     if (this.browseHistory(data)) return;
     const edited = editDraft(this.buffer, data);
     if (edited === 'submit') {
-      void this.submit();
+      this.pending = this.submit();
       return;
     }
     if (edited === 'edited') leavePromptHistory(this.prompts);
@@ -359,6 +385,19 @@ export class AgentTui implements Component {
     return !this.approval && !this.help && !this.chats;
   }
 
+  /**
+   * Insert text from a bracketed paste the terminal already split out.
+   * OpenTUI delivers that as a paste event, not as the raw `\x1b[200~` sequence.
+   */
+  acceptDecodedPaste(text: string): void {
+    if (!this.composing()) return;
+    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (normalized.length === 0) return;
+    insertText(this.buffer, normalized);
+    this.refreshPicks();
+    this.touch();
+  }
+
   private consumePaste(data: string): void {
     let chunk = data;
     if (this.paste === null) {
@@ -368,10 +407,10 @@ export class AgentTui implements Component {
     this.paste += chunk;
     const end = this.paste.indexOf('\x1b[201~');
     if (end < 0) return;
-    const text = this.paste.slice(0, end).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const text = this.paste.slice(0, end);
     const rest = this.paste.slice(end + '\x1b[201~'.length);
     this.paste = null;
-    if (text.length > 0) insertText(this.buffer, text);
+    this.acceptDecodedPaste(text);
     if (rest.length > 0) this.applyInput(rest);
   }
 
@@ -389,6 +428,8 @@ export class AgentTui implements Component {
       draft: this.buffer.text,
       cursor: this.buffer.cursor,
       status: this.status,
+      ...(this.options.projectLabel ? { projectLabel: this.options.projectLabel } : {}),
+      ...(this.ruleLabel ? { ruleLabel: this.ruleLabel } : {}),
       picks: this.pickRows(),
       attachments: this.attachments.map((file) => file.name),
       children: this.children,
@@ -399,6 +440,7 @@ export class AgentTui implements Component {
       panel: this.panel,
       mode: this.mode,
       permission: this.permission,
+      approvalPolicy: this.approvalPolicy.policy,
       todos: this.todos,
       goal: this.goal,
       loops: this.loops,
@@ -527,7 +569,7 @@ export class AgentTui implements Component {
   private async loadChats(): Promise<ChatRow[]> {
     const listed = await this.client.request('GET', '/api/v2/chats', undefined);
     const rows = listed.status === 200
-      ? ((listed.data as { chats?: Array<{ id: string; title?: string }> }).chats ?? [])
+      ? ((listed.data as { chats?: Array<{ id: string; title?: string; projectId?: string | null }> }).chats ?? [])
       : [];
     const busy = new Set(this.options.busyChatIds ?? (this.options.dataDir ? listBusyChatIds(this.options.dataDir) : []));
     return rows.map((chat) => ({
@@ -535,6 +577,7 @@ export class AgentTui implements Component {
       title: chat.title || chat.id,
       busy: busy.has(chat.id),
       selected: false,
+      projectId: chat.projectId ?? null,
     }));
   }
 
@@ -569,6 +612,7 @@ export class AgentTui implements Component {
     this.attachments = [];
     await this.refreshGoal(id);
     await this.refreshLoops(id);
+    await this.refreshRules();
     this.touch();
     this.armLive(id);
   }
@@ -662,7 +706,7 @@ export class AgentTui implements Component {
       return;
     }
     if (command === 'new') {
-      const created = await this.client.request('POST', '/api/v2/chats/new', {});
+      const created = await this.client.request('POST', '/api/v2/chats/new', this.newChatBody());
       const chatId = (created.data as { chatId?: string }).chatId;
       if (!chatId) {
         this.status = 'failed to create chat';
@@ -735,7 +779,18 @@ export class AgentTui implements Component {
       await this.rewindChat();
       return;
     }
+    if (command === 'rules') {
+      await this.showRules();
+      return;
+    }
     if (command === 'permissions') {
+      if (this.approvalPolicy.policy === 'allow-all' || this.approvalPolicy.policy === 'allow-read') {
+        this.approvalPolicy = { policy: 'ask', answerAsk: false };
+        this.permission = 'ask';
+        this.status = '权限 询问';
+        this.touch();
+        return;
+      }
       this.permission = this.permission === 'ask' ? 'auto' : this.permission === 'auto' ? 'read' : 'ask';
       this.status = this.permission === 'ask' ? '权限 询问' : this.permission === 'auto' ? '权限 本会话自动' : '权限 只读';
       this.touch();
@@ -869,11 +924,48 @@ export class AgentTui implements Component {
     };
   }
 
+  private newChatBody(): { projectId?: string } {
+    return this.options.projectId ? { projectId: this.options.projectId } : {};
+  }
+
   private async ensureChat(): Promise<void> {
     if (this.chatId) return;
-    const created = await this.client.request('POST', '/api/v2/chats/new', {});
+    const created = await this.client.request('POST', '/api/v2/chats/new', this.newChatBody());
     this.chatId = (created.data as { chatId?: string }).chatId ?? 'draft';
     this.title = this.chatId;
+  }
+
+  private async refreshRules(): Promise<void> {
+    const context = await this.ruleContext();
+    if (!context) return;
+    this.ruleLabel = ruleStatusLine(context, 'tui') ?? '';
+  }
+
+  private async showRules(): Promise<void> {
+    await this.ensureChat();
+    const context = await this.ruleContext();
+    if (!context?.project) {
+      this.status = '没有绑定项目';
+      this.touch();
+      return;
+    }
+    const files = context.files ?? [];
+    const summary = ruleStatusLine(context, 'tui') ?? '没有规则文件';
+    this.lines.push({ kind: 'tree', text: summary });
+    for (const file of files) this.lines.push({ kind: 'tree', text: file });
+    this.ruleLabel = ruleStatusLine(context, 'tui') ?? '';
+    this.touch();
+  }
+
+  private async ruleContext(): Promise<RuleContext | null> {
+    if (!this.chatId) return null;
+    const response = await this.client.request(
+      'GET',
+      `/api/v2/chats/${encodeURIComponent(this.chatId)}/project-context`,
+      undefined,
+    );
+    if (response.status !== 200) return null;
+    return response.data as RuleContext;
   }
 
   private async runTurn(text: string, images: Array<{ path: string; name: string }> = []): Promise<void> {
@@ -908,6 +1000,8 @@ export class AgentTui implements Component {
       }
       if (controller.signal.aborted) this.queue = [];
       if (this.turnAbort === controller) this.turnAbort = null;
+      await this.refreshRules();
+      this.touch();
     }
   }
 
@@ -930,12 +1024,18 @@ export class AgentTui implements Component {
       const payload = event.payload ?? {};
       const name = typeof payload.name === 'string' ? payload.name : 'tool';
       const args = toolArgs(payload.arguments ?? payload.input);
-      this.lines.push({ kind: 'tool', name, args, status: '…' });
+      this.lines.push({
+        kind: 'tool',
+        name,
+        args,
+        status: this.autoTools.has(name) ? cliText('tui.toolAuto') : '…',
+      });
+      this.autoTools.delete(name);
       return;
     }
     if (event.type === 'tool_result') {
-      const tool = [...this.lines].reverse().find((line) => line.kind === 'tool' && line.status === '…');
-      if (tool) tool.status = '✓';
+      const tool = [...this.lines].reverse().find((line) => line.kind === 'tool' && (line.status === '…' || line.status === cliText('tui.toolAuto')));
+      if (tool && tool.status !== cliText('tui.toolAuto')) tool.status = '✓';
       return;
     }
     if (String(event.type) === 'reasoning' && typeof event.content === 'string') {
@@ -967,10 +1067,15 @@ export class AgentTui implements Component {
     for await (const event of this.client.events()) {
       if (this.stopped) return;
       if (event.channel === 'approval:request') {
-        const payload = event.payload as { requestId?: string; toolName?: string; arguments?: unknown };
+        const payload = event.payload as { requestId?: string; toolName?: string; arguments?: unknown; mode?: string };
         if (!payload.requestId) continue;
-        if (this.permission === 'auto') {
-          void this.client.decideApproval(payload.requestId, 'allow_for_session');
+        const spec = this.permission === 'auto'
+          ? { policy: 'allow-all' as const, answerAsk: this.approvalPolicy.answerAsk }
+          : this.approvalPolicy;
+        const decision = decisionFor(spec, { mode: payload.mode }, 'tui');
+        if (decision !== 'prompt') {
+          if (decision === 'allow_once' && payload.toolName) this.markAutoTool(payload.toolName);
+          void this.client.decideApproval(payload.requestId, decision);
           this.touch();
           continue;
         }
@@ -980,8 +1085,34 @@ export class AgentTui implements Component {
           summary: toolArgs(payload.arguments),
         };
       } else if (event.channel === 'ask-user:request') {
-        const payload = event.payload as { requestId?: string; prompt?: string };
-        if (payload.requestId) this.ask = { requestId: payload.requestId, prompt: payload.prompt ?? '' };
+        const payload = event.payload as {
+          requestId?: string;
+          prompt?: string;
+          intro?: string;
+          questions?: Array<{ id?: string; text?: string }>;
+        };
+        if (!payload.requestId) continue;
+        const intro = (payload.prompt || payload.intro || '').trim();
+        if (this.approvalPolicy.answerAsk) {
+          const questions = payload.questions?.length ? payload.questions : [{ id: 'answer' }];
+          void this.client.answerAsk(payload.requestId, {
+            answers: autoAnswer(questions.flatMap((question) => question.id ? [{ id: question.id }] : [])),
+          });
+          const asked = questions
+            .map((question) => question.text?.trim() ?? '')
+            .filter((text) => text.length > 0);
+          const answer = cliText('ask.unattended');
+          this.lines.push({
+            kind: 'tool',
+            name: 'ask_user',
+            args: intro || asked[0] || '',
+            status: cliText('tui.toolAutoAnswer'),
+            output: [...asked.map((text) => `问 ${text}`), `答 ${answer}`].join('\n'),
+          });
+          this.touch();
+          continue;
+        }
+        this.ask = { requestId: payload.requestId, prompt: intro };
       } else if (event.channel === 'goal-changed') {
         const payload = event.payload as { chatId?: string; goal?: SessionGoal | null };
         if (payload.chatId === this.chatId) this.goal = payload.goal ?? null;
@@ -1203,6 +1334,17 @@ export class AgentTui implements Component {
   private async forkChat(): Promise<void> {
     if (!this.chatId) return;
     const created = await this.client.request('POST', `/api/v2/chats/${encodeURIComponent(this.chatId)}/fork`, {});
+    if (created.status === 409) {
+      this.status = '正在生成，结束后再分叉';
+      this.touch();
+      return;
+    }
+    if (created.status === 413) {
+      const bytes = numberField(created.data, 'bytes');
+      this.status = `工作区太大，无法分叉（${formatForkBytes(bytes)}）`;
+      this.touch();
+      return;
+    }
     const chatId = created.status === 200 ? textField(created.data, 'chatId') : '';
     if (!chatId) {
       this.status = '分叉失败';
@@ -1345,6 +1487,12 @@ function textField(value: unknown, key: string): string {
   if (!value || typeof value !== 'object') return '';
   const field = (value as Record<string, unknown>)[key];
   return typeof field === 'string' ? field : '';
+}
+
+function formatForkBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
 }
 
 function numberField(value: unknown, key: string): number {

@@ -18,9 +18,11 @@ import {
   buildWorldState,
   getActiveCoreLoopStreamId,
   streamCoreLoopTurn,
+  toTurnTool,
   type CoreLoopToolAction,
   type SkillTurnContext,
   type StreamCoreLoopTurnOptions,
+  type TurnToolWire,
 } from './coreloop-stream.js';
 import {
   driveWithAutoContinue,
@@ -111,13 +113,15 @@ import {
 import { resolveBranchActivation } from './branch-helper.js';
 import { detectInterruptedTurn } from './interrupted-helper.js';
 import { handlePortableRequest } from './portable-service.js';
-import { isPortableProduct } from '../product-config.js';
+import { getProductConfig, isPortableProduct } from '../product-config.js';
 import { dropCurrentUserMessage } from './history-helper.js';
 import { parseImageAttachments, processImageAttachments } from '../image-attachment.js';
 import { chatAttachmentsDirPath, isValidChatAttachmentsKey } from '../attachments.js';
-import { loadProjectRuleFiles } from '../project-rules.js';
+import { canonicalFencePath, canonicalPathInside } from '../fence-path.js';
+import { listProjectRuleFiles, loadProjectRuleFiles } from '../project-rules.js';
 import {
   allocateProjectHome,
+  chatWorkspacePath,
   ensureChatWorkspace,
   ensureProjectHome,
   expandUserPath,
@@ -125,6 +129,13 @@ import {
 import type { TaskService } from './task-service.js';
 import { registerLiveStream, getLiveStream, removeLiveStream } from './live-stream.js';
 import { compactHistory, forkHistory, rewindFrom, type StoredTurn } from './history-edit.js';
+import {
+  copyForkDirectory,
+  DEFAULT_FORK_WORKSPACE_MAX_BYTES,
+  directorySizeBytes,
+  forkPathRewriter,
+  removeForkDirectory,
+} from './fork-copy.js';
 import {
   beginPackTurnObservers,
   collectPackExecWritableRoots,
@@ -182,14 +193,9 @@ function readProjectOrderIds(value: unknown): string[] | null {
 /** 回合产物下载上限：base64 走 localBackend JSON 通道，过大文件先拒绝。 */
 const MAX_LOCAL_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 
-/** `target` 是否位于 `root` 内部（含 root 本身）。 */
+/** `target` 是否位于 `root` 内部（含 root 本身）。比较前解析符号链接。 */
 function isPathInsideRoot(root: string, target: string): boolean {
-  const rel = path.relative(path.resolve(root), path.resolve(target));
-  return rel === '' || (
-    rel !== '..' &&
-    !rel.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(rel)
-  );
+  return canonicalPathInside(root, target);
 }
 
 /** 从一条消息的 `messageMetadata` 里取出本回合产物的绝对路径。 */
@@ -457,6 +463,14 @@ function parseMessageMetadata(raw: string | null | undefined): Record<string, un
 function persistedAgentIdFromMetadata(raw: string | null | undefined): string | undefined {
   const agentId = parseMessageMetadata(raw)?.agentId;
   return typeof agentId === 'string' && agentId ? agentId : undefined;
+}
+
+/** Rule path relative to the project root. A path outside that root keeps its base name. */
+function relativeRulePath(folderPath: string, file: string): string {
+  if (!path.isAbsolute(file)) return file;
+  const relative = path.relative(folderPath, file);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return path.basename(file);
+  return relative;
 }
 
 export class LocalBackendRouter {
@@ -896,6 +910,32 @@ export class LocalBackendRouter {
       };
     }
 
+    if (pathname === '/api/v2/projects/resolve' && method === 'POST') {
+      const registry = this.toolRouter.projectRegistry;
+      if (!registry) {
+        return { status: 503, data: { error: '项目注册表不可用' } };
+      }
+      const payload = this.toRecord(request.body);
+      const folderPath = typeof payload.folderPath === 'string' ? expandUserPath(payload.folderPath) : '';
+      if (!folderPath.trim()) {
+        return { status: 400, data: { error: '项目文件夹不能为空' } };
+      }
+      try {
+        const resolved = registry.resolveByFolder(folderPath, {
+          ...(payload.origin === 'cli' ? { origin: 'cli' as const } : {}),
+        });
+        return {
+          status: 200,
+          data: { project: resolved.project, created: resolved.created },
+        };
+      } catch (err) {
+        return {
+          status: 400,
+          data: { error: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
     const projectMatch = pathname.match(/^\/api\/v2\/projects\/([^/]+)$/);
     if (projectMatch) {
       const projectId = decodeURIComponent(projectMatch[1]);
@@ -1037,15 +1077,16 @@ export class LocalBackendRouter {
         return { status: 200, data: { project: null } };
       }
       const trusted = registry!.isTrusted(project.id);
-      // 仅在已信任时才真正读取规则文件内容；未信任时只探测「有没有」，
-      // 不读内容（发现本身不解析、不注入）。
-      const rules = loadProjectRuleFiles(project.folderPath);
+      const files = trusted
+        ? loadProjectRuleFiles(project.folderPath).files
+        : listProjectRuleFiles(project.folderPath);
       return {
         status: 200,
         data: {
           project: { id: project.id, name: project.name, folderPath: project.folderPath, trusted },
-          ruleFileCount: rules.files.length,
-          rulesActive: trusted && rules.files.length > 0,
+          ruleFileCount: files.length,
+          rulesActive: trusted && files.length > 0,
+          files: files.map((file) => relativeRulePath(project.folderPath, file)),
         },
       };
     }
@@ -1056,6 +1097,7 @@ export class LocalBackendRouter {
       if (method === 'GET') {
         const chat = await this.store.getChat(chatId);
         if (!chat) return this.notFound('Chat not found');
+        const source = chat.forkedFrom ? await this.store.getChat(chat.forkedFrom) : null;
         return {
           status: 200,
           data: {
@@ -1069,6 +1111,7 @@ export class LocalBackendRouter {
             isPinned: chat.isPinned,
             systemPrompt: chat.systemPrompt,
             pinnedRefs: chat.pinnedRefs,
+            forkedFrom: source ? { chatId: source.id, title: source.title } : null,
           },
         };
       }
@@ -1146,12 +1189,19 @@ export class LocalBackendRouter {
           return this.badRequest('projectId 必须是项目 id 字符串或 null');
         }
       }
+      let titleUpdate: string | undefined;
+      if (typeof payload.title === 'string') {
+        const trimmed = payload.title.trim();
+        if (!trimmed) return this.badRequest('标题不能为空');
+        titleUpdate = trimmed;
+      }
       const lease = this.tryChatLock(chatId);
       if (!lease) return this.chatBusy();
       let updated;
       try {
         updated = await this.store.updateChat(chatId, {
-          title: typeof payload.title === 'string' ? payload.title : undefined,
+          title: titleUpdate,
+          titleSource: titleUpdate !== undefined ? 'user' : undefined,
           systemPrompt: typeof payload.systemPrompt === 'string' ? payload.systemPrompt : undefined,
           pinnedRefs: Array.isArray(payload.pinnedRefs) ? payload.pinnedRefs : undefined,
           projectId: projectIdUpdate,
@@ -1160,6 +1210,12 @@ export class LocalBackendRouter {
         lease.release();
       }
       if (!updated) return this.notFound('Chat not found');
+      if (titleUpdate !== undefined) {
+        this.broadcast?.('chat-title-updated', {
+          chatId,
+          title: updated.title,
+        });
+      }
       return {
         status: 200,
         data: {
@@ -1275,14 +1331,7 @@ export class LocalBackendRouter {
 
     const forkMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/fork$/);
     if (forkMatch && method === 'POST') {
-      const chatId = forkMatch[1];
-      const chat = await this.store.getChat(chatId);
-      if (!chat) return { status: 404, data: { detail: 'chat not found' } };
-      const created = await this.store.createChat(chat.title || '分叉', chat.agentId, chat.projectId);
-      for (const write of forkHistory(await this.historyTurns(chatId))) {
-        await this.store.addMessage(created.id, write.role, write.content, write.messageMetadata);
-      }
-      return { status: 200, data: { chatId: created.id } };
+      return await this.forkChat(forkMatch[1]);
     }
 
     const rewindMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/rewind$/);
@@ -2789,11 +2838,7 @@ export class LocalBackendRouter {
     const turnTools = this.toolRouter
       .listModelSchemas(turnAgents.capability.toolPolicy)
       .filter(schema => chatMode !== 'plan' || schema.mode === 'read')
-      .map(schema => ({
-        name: schema.name,
-        description: schema.description,
-        inputSchema: schema.inputSchema,
-      }));
+      .map(schema => toTurnTool(schema));
 
     // 用户通过 "/" 显式指定的 MCP 工具：从注册表补齐元信息，available 取决于
     // 该工具本轮是否真的在 turnTools 里（未启用/未连接/被 plan 模式过滤都算
@@ -2814,11 +2859,7 @@ export class LocalBackendRouter {
       ) {
         const schema = this.toolRouter.getSchemaByName(token);
         if (schema && (chatMode !== 'plan' || schema.mode === 'read')) {
-          turnTools.push({
-            name: schema.name,
-            description: schema.description,
-            inputSchema: schema.inputSchema,
-          });
+          turnTools.push(toTurnTool(schema));
         }
       }
       forcedMcpTool = {
@@ -2949,15 +2990,18 @@ export class LocalBackendRouter {
           });
           return;
         }
-        if (fresh.title && fresh.title !== '新对话') {
+        if (fresh.titleSource === 'user' || (fresh.title && fresh.title !== '新对话')) {
           console.log('[local-backend] title-gen skip', {
             chatId,
-            reason: 'user-changed-title',
+            reason: fresh.titleSource === 'user' ? 'user-title' : 'user-changed-title',
             currentTitle: fresh.title,
           });
           return;
         }
-        const updated = await this.store.updateChat(chatId, { title: result.title });
+        const updated = await this.store.updateChat(chatId, {
+          title: result.title,
+          titleSource: 'auto',
+        });
         if (!updated) {
           console.warn('[local-backend] title-gen write failed', { chatId });
           return;
@@ -3054,7 +3098,10 @@ export class LocalBackendRouter {
       };
     }
 
-    const wanted = new Set([path.resolve(target), path.resolve(realPath)]);
+    const wanted = new Set([
+      canonicalFencePath(path.resolve(target)),
+      canonicalFencePath(realPath),
+    ]);
     let allowed = false;
     const teamUserRoot = process.env.DEEPPATH_TEAM_USER_DATA_ROOT?.trim();
     if (teamUserRoot) {
@@ -3073,7 +3120,7 @@ export class LocalBackendRouter {
       const messages = await this.store.listMessages(chatId, 1000);
       for (const message of messages) {
         for (const listed of turnFilePathsFromMetadata(message.messageMetadata)) {
-          if (wanted.has(path.resolve(listed))) {
+          if (wanted.has(canonicalFencePath(path.resolve(listed)))) {
             allowed = true;
             break;
           }
@@ -3148,7 +3195,7 @@ export class LocalBackendRouter {
     chatId: string,
     latestUserMessage: string,
     payload: Record<string, unknown>,
-    turnTools: Array<{ name: string; description: string; inputSchema: unknown }>,
+    turnTools: TurnToolWire[],
     turnAgents: TurnAgents,
     forcedSkillName?: string,
     chatMode: 'agent' | 'plan' = 'agent',
@@ -3347,16 +3394,29 @@ export class LocalBackendRouter {
     const workspaceRoot = chatProject
       ? chatProject.folderPath
       : await this.resolveChatWorkspaceRoot(chatId);
+    // 与本回合发出的 execSandbox.enabled 同一条件。中途改成完整权限
+    // 只更新审批卡，这段提示已经发给模型。
+    const commandSandboxOn =
+      clampExecPolicy(parseExecPolicy(payload.execPolicy), getResolvedHostTools()) !== 'full' &&
+      process.env.STEERABLE_EXEC_SANDBOX !== '0';
     if (chatProject) {
       const sourceFolderLine =
         chatProject.sourceFolders.length > 0
           ? `源文件夹及其子目录也可读写：${chatProject.sourceFolders.join('、')}。`
           : '如确需读写家目录外的目录，可请用户把该目录附加为源文件夹。';
+      const shellFence = commandSandboxOn
+        ? `文件写入（local_write_file / local_edit_file）和命令写入可以落在家目录及其全部子目录内。` +
+          `${sourceFolderLine}` +
+          `这些范围之外的写入会被拒绝。命令未指定 cwd 时在家目录运行。` +
+          `只有 local_exec_shell 的显式 cwd 可以落在这些目录之外：命令仍在沙箱中运行，写入该目录会被拒绝；需要写入时，把它加为源文件夹。`
+        : `文件写入（local_write_file / local_edit_file）可以落在家目录及其全部子目录内。` +
+          `${sourceFolderLine}` +
+          `这些范围之外的文件写入会被拒绝。命令未指定 cwd 时在家目录运行。` +
+          `本回合命令沙箱已关闭：local_exec_shell 的显式 cwd 可以落在这些目录之外，写入该目录不会被沙箱拒绝。`;
       systemPrompt +=
         `\n\n【项目模式】当前对话绑定项目「${chatProject.name}」，家目录：${chatProject.folderPath}\n` +
-        `文件写入（local_write_file / local_edit_file）和命令写入可以落在家目录及其全部子目录内。` +
-        `${sourceFolderLine}` +
-        `这些范围之外的写入会被拒绝。命令未指定 cwd 时在家目录运行；显式 cwd 必须落在上述可写目录（含子目录）内。` +
+        shellFence +
+        `pwsh 与代码片段的 cwd 必须留在这些目录内。` +
         `相对路径按家目录解析。\n` +
         `例外：本会话的用户上传附件目录 ${chatAttachmentsDirPath(chatId)} 只读，不在可写范围内，` +
         `但 local_read_file 可以用绝对路径读取。` +
@@ -3380,11 +3440,15 @@ export class LocalBackendRouter {
         }
       }
     } else {
+      const shellFence = commandSandboxOn
+        ? '只有 local_exec_shell 的显式 cwd 可以在工作区外：命令仍在沙箱中运行，写入该目录会被拒绝。'
+        : '本回合命令沙箱已关闭：local_exec_shell 的显式 cwd 可以在工作区外，写入该目录不会被沙箱拒绝。';
       systemPrompt +=
         `\n\n【对话工作区】当前对话没有绑定项目。工作区：${workspaceRoot}\n` +
-        `你的文件写入（local_write_file）和命令执行（local_exec_shell）都被限制在该目录及其子目录内：` +
-        `写入路径越界会被拒绝；命令默认在工作区下运行，显式指定的 cwd 越界也会被拒绝。` +
-        `请一律使用工作区内的路径（相对路径按工作区解析）。` +
+        `文件写入（local_write_file）被限制在该目录及其子目录内，写入路径越界会被拒绝。` +
+        `命令默认在工作区下运行。${shellFence}` +
+        `pwsh 与代码片段的 cwd 必须留在工作区内。` +
+        `需要保存的文件请放在工作区内（相对路径按工作区解析）。` +
         `用户若要把对话绑到已有项目，可在输入框上方选择项目。`;
     }
 
@@ -3731,7 +3795,7 @@ export class LocalBackendRouter {
   }
 
   private buildToolRealityCheck(
-    turnTools: Array<{ name: string; description: string; inputSchema: unknown }>,
+    turnTools: TurnToolWire[],
     polluted: boolean,
     chatMode: 'agent' | 'plan' = 'agent',
   ): string {
@@ -3868,6 +3932,63 @@ export class LocalBackendRouter {
     };
   }
 
+  private async forkChat(chatId: string): Promise<LocalBackendResponse> {
+    const chat = await this.store.getChat(chatId);
+    if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+    const lease = this.tryChatLock(chatId);
+    if (!lease) return this.chatBusy();
+    let createdId: string | null = null;
+    let attachmentsDst: string | null = null;
+    let workspaceDst: string | null = null;
+    try {
+      const workspaceSrc = chat.projectId ? null : chatWorkspacePath(chatId);
+      const maxBytes = getProductConfig().forkWorkspaceMaxBytes ?? DEFAULT_FORK_WORKSPACE_MAX_BYTES;
+      if (workspaceSrc) {
+        const bytes = directorySizeBytes(workspaceSrc);
+        if (bytes > maxBytes) {
+          return {
+            status: 413,
+            data: {
+              code: 'workspace_too_large',
+              bytes,
+              maxBytes,
+              message: '工作区太大，无法分叉',
+            },
+          };
+        }
+      }
+      const title = `${(chat.title || '新对话').trim() || '新对话'}（分叉）`;
+      const created = await this.store.createChat(title, chat.agentId, chat.projectId);
+      createdId = created.id;
+      await this.store.updateChat(created.id, { forkedFrom: chat.id });
+      attachmentsDst = chatAttachmentsDirPath(created.id);
+      await copyForkDirectory(chatAttachmentsDirPath(chatId), attachmentsDst);
+      if (workspaceSrc) {
+        workspaceDst = chatWorkspacePath(created.id);
+        await copyForkDirectory(workspaceSrc, workspaceDst);
+      }
+      const rewrite = forkPathRewriter(chatId, created.id);
+      for (const write of forkHistory(await this.historyTurns(chatId), rewrite)) {
+        await this.store.addMessage(created.id, write.role, write.content, write.messageMetadata);
+      }
+      return { status: 200, data: { chatId: created.id } };
+    } catch (err) {
+      console.warn('[local-backend] fork failed', { chatId, err });
+      if (createdId) {
+        try {
+          await this.store.deleteChat(createdId);
+        } catch (deleteErr) {
+          console.warn('[local-backend] fork rollback failed', { chatId: createdId, deleteErr });
+        }
+      }
+      if (attachmentsDst) await removeForkDirectory(attachmentsDst);
+      if (workspaceDst) await removeForkDirectory(workspaceDst);
+      return { status: 500, data: { detail: '分叉失败' } };
+    } finally {
+      lease.release();
+    }
+  }
+
   private tryChatLock(chatId: string): HeldWriteLease | null {
     try {
       return acquireChatWriteLock(getUserDataDir(), chatId);
@@ -3919,7 +4040,7 @@ export class LocalBackendRouter {
     systemPrompt: string;
     messages: LlmMessage[];
     skillContext: SkillTurnContext | null;
-    turnTools: Array<{ name: string; description: string; inputSchema: unknown }>;
+    turnTools: TurnToolWire[];
     /** 本轮智能体的工具准入策略；随 toolContext 下发供分发层复检。 */
     toolPolicy: AgentToolPolicy;
     chatMode: 'agent' | 'plan';
@@ -4106,7 +4227,9 @@ export class LocalBackendRouter {
           ...(toolPolicy.mode === 'all' ? {} : { toolPolicy }),
         },
         execSandbox,
-        approval: approval ? { ...approval, writableRoots: turnFileRoots } : undefined,
+        approval: approval
+          ? { ...approval, writableRoots: turnFileRoots, pathBase: workspaceRoot }
+          : undefined,
         // delegate-on-pool 统一:模型的多代理面收敛为单工具
         // delegate_subagent(默认开)。内置画像集(explore/research/coder)
         // 带工具域/轮次/并发/系统提示,模型按画像 description 选委派
@@ -4162,6 +4285,7 @@ export class LocalBackendRouter {
             // W4-2: surface the per-exec sandbox marker on the tool card —
             // enforcement is a value the user can see, not a log line.
             ...(action.sandbox ? { sandbox: action.sandbox } : {}),
+            ...(action.approval ? { approval: action.approval } : {}),
             threw: false,
           };
           if (idx >= 0) executedActions[idx] = row;

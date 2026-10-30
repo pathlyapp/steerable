@@ -189,6 +189,7 @@ export function resolveApprovalMode(value: unknown): ApprovalMode {
 
 /**
  * 产品 `approval: "off"` 或 STEERABLE_APPROVAL=0 时本轮不挂 host 审批。
+ * 环境变量关掉审批层后，破坏性工具由工具路由拒绝。命令行放行用 `--approve allow-all`。
  * 环境变量是调试逃生口；产品字段是装配真源。
  */
 export function isApprovalEnabled(input: {

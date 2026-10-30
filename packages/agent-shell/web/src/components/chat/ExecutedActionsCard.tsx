@@ -60,6 +60,8 @@ export interface ExecutedAction {
    * port-only egress); none = no backend on this platform.
    */
   sandbox?: { backend?: string; enforcement: string };
+  /** Set when a session allow covered this call, so the row can say so. */
+  approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number };
   /**
    * 工具注册时声明的卡片。`declared` 为真时行标题用 `title`，
    * 不再按工具名猜测。旧事件没有这个字段，仍走原来的摘要。
@@ -124,6 +126,13 @@ function sandboxBadge(sandbox: ExecutedAction['sandbox']): string | null {
     default:
       return t('[Not sandboxed]');
   }
+}
+
+function sessionAllowNote(action: ExecutedAction): string | undefined {
+  if (action.approval?.kind === 'allow_for_session' && action.approval.cached === true) {
+    return t('Allowed for this chat');
+  }
+  return undefined;
 }
 
 function actionToTool(action: ExecutedAction, idx: number): ToolExecutionPayload {
@@ -533,6 +542,7 @@ export function ToolsFlow({
               renderOutput={extras.renderOutput ?? renderActionOutput}
               onActivate={inspect.onActivate}
               activateTitle={inspect.activateTitle}
+              note={sessionAllowNote(action)}
               className="rounded-none border-0 border-t border-agent-border first:border-t-0"
             />
           );
@@ -595,6 +605,7 @@ export function ExecutedActionsCard({
               renderOutput={extras.renderOutput ?? renderActionOutput}
               onActivate={inspect.onActivate}
               activateTitle={inspect.activateTitle}
+              note={sessionAllowNote(action)}
               className="rounded-none border-0 border-t border-agent-border first:border-t-0"
             />
           );

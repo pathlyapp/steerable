@@ -1,4 +1,5 @@
 import { applyChildEvent, childLines, type ChildEvent } from './children.js';
+import { cliText } from '../copy.js';
 
 export interface ToolAction {
   id?: string;
@@ -9,6 +10,7 @@ export interface ToolAction {
   success?: boolean;
   error?: unknown;
   durationMs?: number;
+  approval?: { kind?: string; cached?: boolean };
 }
 
 export function formatDuration(ms: number): string {
@@ -18,6 +20,9 @@ export function formatDuration(ms: number): string {
 }
 
 export function toolStatus(action: ToolAction): string {
+  if (action.approval?.kind === 'allow_for_session' && action.approval.cached === true) {
+    return cliText('tui.toolSessionAllow');
+  }
   const settled = typeof action.durationMs === 'number' || typeof action.success === 'boolean' || action.error != null;
   if (!settled) return '…';
   const mark = action.success === false || action.error != null ? '✗' : '✓';

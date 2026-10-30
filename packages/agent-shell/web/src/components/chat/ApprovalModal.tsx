@@ -45,11 +45,28 @@ interface DecisionButton {
   tone: 'allow' | 'deny' | 'abort';
 }
 
-const ALLOW_BUTTONS: DecisionButton[] = [
-  { kind: 'allow_once', label: 'Allow once', tone: 'allow' },
-  { kind: 'allow_for_session', label: 'Allow for this chat', tone: 'allow' },
-  { kind: 'allow_always', label: 'Always allow', tone: 'allow' },
-];
+function categoryName(label: string): string {
+  return t(label);
+}
+
+function allowButtons(request: ApprovalPromptRequest): DecisionButton[] {
+  const category = request.category !== request.toolName && request.categoryLabel
+    ? categoryName(request.categoryLabel)
+    : undefined;
+  return [
+    { kind: 'allow_once', label: 'Allow once', tone: 'allow' },
+    {
+      kind: 'allow_for_session',
+      label: category ? t('Allow {category} for this chat', { category }) : 'Allow for this chat',
+      tone: 'allow',
+    },
+    {
+      kind: 'allow_always',
+      label: category ? t('Always allow {category}', { category }) : 'Always allow',
+      tone: 'allow',
+    },
+  ];
+}
 
 const DENY_BUTTONS: DecisionButton[] = [
   { kind: 'deny_once', label: 'Deny once', tone: 'deny' },
@@ -101,6 +118,15 @@ export function ApprovalPromptMenu({
   // 用户能认出 api.github.com，认不出 cdn.jsdelivr.net.evil.com）。
   const isEgress = current.category === 'network_egress';
   const isSandboxEscalation = current.category === 'sandbox_escalation';
+  const isBrowser = current.category === 'browser';
+  const sandboxOff = current.sandboxEnforced === false;
+  const outsideWorkspace =
+    current.outsideWorkspace === true &&
+    !isEgress &&
+    !isSandboxEscalation &&
+    !isBrowser &&
+    !sandboxOff;
+  const cwd = typeof current.arguments.cwd === 'string' ? current.arguments.cwd : '';
   const egressHost =
     typeof current.arguments.host === 'string' ? current.arguments.host : '';
   const egressPort =
@@ -126,17 +152,31 @@ export function ApprovalPromptMenu({
                     {egressHost}
                     {egressPort !== null ? `:${egressPort}` : ''}
                   </span>
+                  {current.categoryLabel ? (
+                    <span className="text-agent-muted-foreground">
+                      {t('({category})', { category: categoryName(current.categoryLabel) })}
+                    </span>
+                  ) : null}
                 </>
               ) : isSandboxEscalation ? (
-                <>{t('Agent requests to run a command outside the workspace')}</>
+                <>
+                  {t('Agent requests to run a command outside the workspace')}
+                  {current.categoryLabel ? (
+                    <span className="ml-1 text-agent-muted-foreground">
+                      {t('({category})', { category: categoryName(current.categoryLabel) })}
+                    </span>
+                  ) : null}
+                </>
               ) : (
                 <>
                   {t('Agent requests to run')}
                   <span className="mx-1 font-mono">{current.toolName}</span>
                   <span className="text-agent-muted-foreground">
-                    {t('({mode} action)', {
-                      mode: MODE_LABEL[current.mode] ? t(MODE_LABEL[current.mode]) : current.mode,
-                    })}
+                    {current.categoryLabel
+                      ? t('({category})', { category: categoryName(current.categoryLabel) })
+                      : t('({mode} action)', {
+                          mode: MODE_LABEL[current.mode] ? t(MODE_LABEL[current.mode]) : current.mode,
+                        })}
                   </span>
                 </>
               )}
@@ -165,6 +205,32 @@ export function ApprovalPromptMenu({
                 'The workspace sandbox blocked this command. Allowing it retries only this command, without limiting where it can write.',
               )}
             </p>
+          ) : isBrowser ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+              {t(
+                'Opening pages, clicking, filling, and pressing keys act on that site and can send information off this computer. Scrolling, reading, and screenshots do not need approval.',
+              )}
+            </p>
+          ) : outsideWorkspace ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+              {current.outsideWorkspaceKind === 'workspace'
+                ? cwd
+                  ? t(
+                      'The command runs in the sandbox. Working directory {cwd} is outside this chat workspace, so writes there are blocked.',
+                      { cwd },
+                    )
+                  : t(
+                      'The command runs in the sandbox. Its working directory is outside this chat workspace, so writes there are blocked.',
+                    )
+                : cwd
+                  ? t(
+                      'The command runs in the sandbox. Working directory {cwd} is outside the project, so writes there are blocked. Add that directory as a project source folder when a write is required.',
+                      { cwd },
+                    )
+                  : t(
+                      'The command runs in the sandbox. Its working directory is outside the project, so writes there are blocked. Add that directory as a project source folder when a write is required.',
+                    )}
+            </p>
           ) : (
             <>
               {current.category !== current.toolName && (
@@ -175,11 +241,13 @@ export function ApprovalPromptMenu({
                   )}
                 </p>
               )}
-              <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-                {t(
-                  'Runs in the workspace sandbox. Writes outside it are blocked. To write outside, switch the sandbox to "Full access" and try again.',
-                )}
-              </p>
+              {!sandboxOff && (
+                <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+                  {t(
+                    'Runs in the workspace sandbox. Writes outside it are blocked. To write outside, switch the sandbox to "Full access" and try again.',
+                  )}
+                </p>
+              )}
             </>
           )}
         </div>
@@ -188,8 +256,8 @@ export function ApprovalPromptMenu({
           <DecisionRow
             buttons={
               isEgress
-                ? ALLOW_BUTTONS.filter((b) => b.kind !== 'allow_always')
-                : ALLOW_BUTTONS
+                ? allowButtons(current).filter((b) => b.kind !== 'allow_always')
+                : allowButtons(current)
             }
             onPick={onDecide}
           />
@@ -213,12 +281,8 @@ export function ApprovalPromptMenu({
           </div>
           <p className="text-[11px] leading-relaxed text-agent-muted-foreground">
             {isEgress
-              ? t(
-                  '"This chat" decisions are remembered in this chat until the agent process exits. With no action for about 3 minutes, the request is denied.',
-                )
-              : t(
-                  '"This chat" decisions are remembered in this chat. "Always" decisions are written to ~/.steerable/approvals.json on this computer and apply across chats. With no action for about 2 minutes, the request is denied.',
-                )}
+              ? t('With no action for about 3 minutes, the request is denied and that network access fails.')
+              : t('"This chat" applies only to this chat. "Always" is saved on this computer and applies to every chat.')}
           </p>
         </div>
     </div>

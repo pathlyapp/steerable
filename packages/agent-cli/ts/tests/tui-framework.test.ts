@@ -127,6 +127,37 @@ describe('deterministic TUI test framework', () => {
     expect(destroyed).toHaveBeenCalledOnce();
   });
 
+  it('T-UNA-14 bracketed paste through OpenTUI submits and finishes', async () => {
+    const bodies: unknown[] = [];
+    const harness = new TuiHarness({
+      caseId: 'T-UNA-14',
+      stream: async function* (_requestPath, body) {
+        bodies.push(body);
+        yield { type: 'content', content: '写好了' };
+        yield { type: 'done' };
+      },
+    });
+    harnesses.push(harness);
+    const setup = await createTestRenderer({ width: 100, height: 32 });
+    const running = runTui({
+      client: harness.client,
+      product: 'Demo',
+      openRenderer: setup.renderer,
+      approvalPolicy: { policy: 'allow-all', answerAsk: true },
+    });
+    await paintUntil(setup, (frame) => frame.includes('Demo'));
+    await setup.mockInput.pasteBracketedText('创建 hello.txt');
+    const drafted = await paintUntil(setup, (frame) => frame.includes('创建 hello.txt'));
+    expect(drafted).toContain('创建 hello.txt');
+    setup.mockInput.pressEnter();
+    const frame = await paintUntil(setup, (next) => next.includes('写好了'));
+    expect(bodies).toEqual([{ message: '创建 hello.txt' }]);
+    expect(frame).not.toMatch(/审批 \S/);
+    expect(harness.approvals).toEqual([]);
+    setup.mockInput.pressCtrlC();
+    await expect(running).resolves.toBe(0);
+  });
+
   it('TUI-010 TUI-020 TUI-021 exposes intermediate and final user-visible frames', async () => {
     const harness = new TuiHarness({
       caseId: 'TUI-010',
@@ -159,6 +190,22 @@ function streamEvents(events: SSEEvent[]): () => AsyncIterable<SSEEvent> {
   return async function* () {
     for (const event of events) yield event;
   };
+}
+
+async function paintUntil(
+  setup: Awaited<ReturnType<typeof createTestRenderer>>,
+  predicate: (frame: string) => boolean,
+  timeoutMs = 2_000,
+): Promise<string> {
+  const started = Date.now();
+  let frame = '';
+  while (Date.now() - started < timeoutMs) {
+    await setup.renderOnce();
+    frame = setup.captureCharFrame();
+    if (predicate(frame)) return frame;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for a painted frame\n${frame}`);
 }
 
 async function waitForTerminal(

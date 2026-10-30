@@ -145,6 +145,8 @@ class FakeLocalStore {
       systemPrompt: string | null;
       pinnedRefs: unknown[] | null;
       projectId: string | null;
+      titleSource: 'user' | 'auto' | null;
+      forkedFrom: string | null;
     }>,
   ): Promise<ChatSessionRecord | null> {
     const chat = this.state.chats.get(chatId);
@@ -518,6 +520,7 @@ const harness = vi.hoisted(() => {
     parseImageAttachments: vi.fn((value: unknown) => (Array.isArray(value) ? value : [])),
     processImageAttachments: vi.fn(() => ({ images: [], notes: [] as string[] })),
     loadProjectRuleFiles: vi.fn(() => ({ files: [] as string[], content: '' })),
+    listProjectRuleFiles: vi.fn(() => [] as string[]),
     /** matchPackBackendRoute 的每用例返回值。 */
     packRoute: null as null | {
       params: Record<string, string>;
@@ -588,6 +591,23 @@ vi.mock('../../src/sidecar/index.js', () => ({
 vi.mock('../../src/local-backend/coreloop-stream.js', () => ({
   buildWorldState: (input: unknown) => ({ mockedWorldState: true, input }),
   getActiveCoreLoopStreamId: (chatId: string) => h.activeStreamIds.get(chatId),
+  toTurnTool: (schema: {
+    name: string;
+    description: string;
+    inputSchema: unknown;
+    mode?: string;
+    approval?: { category?: string } | null;
+  }) => {
+    const tool: Record<string, unknown> = {
+      name: schema.name,
+      description: schema.description,
+      inputSchema: schema.inputSchema,
+    };
+    if (schema.mode) tool.mode = schema.mode;
+    const category = schema.approval?.category;
+    if (category) tool.approvalCategory = category;
+    return tool;
+  },
   streamCoreLoopTurn: (options: Record<string, unknown>) => {
     if (!h.streamImpl) throw new Error('streamImpl not configured');
     return h.streamImpl(options);
@@ -630,6 +650,7 @@ vi.mock('../../src/image-attachment.js', () => ({
 
 vi.mock('../../src/project-rules.js', () => ({
   loadProjectRuleFiles: h.loadProjectRuleFiles,
+  listProjectRuleFiles: h.listProjectRuleFiles,
 }));
 
 vi.mock('../../src/local-backend/pack-turn-hooks.js', () => ({
@@ -730,6 +751,8 @@ export function resetRouterTestkit(): void {
   h.processImageAttachments.mockReturnValue({ images: [], notes: [] });
   h.loadProjectRuleFiles.mockReset();
   h.loadProjectRuleFiles.mockReturnValue({ files: [], content: '' });
+  h.listProjectRuleFiles.mockReset();
+  h.listProjectRuleFiles.mockReturnValue([]);
   h.recordInsightEvent.mockReset();
   h.recordInsightTurn.mockReset();
   h.recordInsightProfile.mockReset();
@@ -751,7 +774,7 @@ export interface ToolSchemaStub {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  mode: 'read' | 'write';
+  mode: 'read' | 'write' | 'external';
 }
 
 export const DEFAULT_TOOL_SCHEMAS: ToolSchemaStub[] = [

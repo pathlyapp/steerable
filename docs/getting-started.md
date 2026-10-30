@@ -8,7 +8,7 @@
 
 | Tool      | Version | Why                                                              |
 | --------- | ------- | ---------------------------------------------------------------- |
-| Node.js   | ≥ 22    | TypeScript packages, Vitest                                      |
+| Node.js   | ≥ 26.4.0 | TypeScript packages, Vitest, command line                       |
 | pnpm      | ≥ 10    | Workspace + dependency resolution                                |
 | Python    | ≥ 3.10  | Harness, runtime, sidecar packages                               |
 | uv        | latest  | Fast Python dependency manager (replaces pip/virtualenv flow)    |

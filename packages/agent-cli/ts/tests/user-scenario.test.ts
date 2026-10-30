@@ -28,27 +28,52 @@ afterEach(() => {
 
 describe('simulated user', () => {
   it('approves one tool, then a denied approval exits 3', async () => {
-    const kinds: string[] = [];
-    const stdout = capture();
-    const allowed = await createCli({
-      argv: ['run', '列出当前目录', '--approve', 'allow-all', '--data-dir', tempDir()],
-      stdout: stdout.stream,
-      stderr: capture().stream,
-      createClient: async () => scriptedClient(kinds, 'listed the directory'),
-    });
-    expect(allowed).toBe(0);
-    expect(kinds).toEqual(['allow_once']);
-    expect(stdout.text()).toContain('listed the directory');
+    const work = tempDir();
+    const folderPath = fs.realpathSync(work);
+    const projectName = path.basename(folderPath);
+    const previous = process.cwd();
+    process.chdir(work);
+    try {
+      const kinds: string[] = [];
+      const calls: Array<{ path: string; body: unknown }> = [];
+      const stdout = capture();
+      const stderr = capture();
+      const allowed = await createCli({
+        argv: ['run', '列出当前目录', '--approve', 'allow-all', '--data-dir', tempDir()],
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+        createClient: async () => boundClient(kinds, 'listed the directory', folderPath, projectName, calls),
+      });
+      expect(allowed).toBe(0);
+      expect(kinds).toEqual(['allow_once']);
+      expect(stdout.text()).toContain('listed the directory');
+      expect(stderr.text()).toContain(`已绑定项目 ${projectName}：${folderPath}`);
+      expect(calls[0]).toEqual({
+        path: '/api/v2/projects/resolve',
+        body: { folderPath, origin: 'cli' },
+      });
+      expect(calls.find((call) => call.path === '/api/v2/chats/new')).toEqual({
+        path: '/api/v2/chats/new',
+        body: { projectId: 'proj-1' },
+      });
 
-    const deniedKinds: string[] = [];
-    const denied = await createCli({
-      argv: ['run', '删除构建目录', '--data-dir', tempDir()],
-      stdout: capture().stream,
-      stderr: capture().stream,
-      createClient: async () => scriptedClient(deniedKinds, 'should not finish'),
-    });
-    expect(deniedKinds).toEqual(['deny_once']);
-    expect(denied).toBe(3);
+      const deniedKinds: string[] = [];
+      const deniedCalls: Array<{ path: string; body: unknown }> = [];
+      const denied = await createCli({
+        argv: ['run', '删除构建目录', '--data-dir', tempDir()],
+        stdout: capture().stream,
+        stderr: capture().stream,
+        createClient: async () => boundClient(deniedKinds, 'should not finish', folderPath, projectName, deniedCalls),
+      });
+      expect(deniedKinds).toEqual(['deny_once']);
+      expect(denied).toBe(3);
+      expect(deniedCalls[0]).toEqual({
+        path: '/api/v2/projects/resolve',
+        body: { folderPath, origin: 'cli' },
+      });
+    } finally {
+      process.chdir(previous);
+    }
   });
 
   it('stays out of a chat another process is running', async () => {
@@ -154,6 +179,33 @@ process.on('SIGTERM', () => {
 
 function pathToFileUrl(file: string): string {
   return new URL(`file://${file}`).href;
+}
+
+function boundClient(
+  kinds: string[],
+  answer: string,
+  folderPath: string,
+  projectName: string,
+  calls: Array<{ path: string; body: unknown }>,
+): AgentClient {
+  return scriptedClient(kinds, answer, {
+    request: async (method, requestPath, body) => {
+      calls.push({ path: requestPath, body });
+      if (method === 'POST' && requestPath === '/api/v2/projects/resolve') {
+        return {
+          status: 200,
+          data: {
+            created: true,
+            project: { id: 'proj-1', name: projectName, folderPath },
+          },
+        };
+      }
+      if (method === 'POST' && requestPath === '/api/v2/chats/new') {
+        return { status: 200, data: { chatId: 'chat-1' } };
+      }
+      return { status: 200, data: {} };
+    },
+  });
 }
 
 function scriptedClient(

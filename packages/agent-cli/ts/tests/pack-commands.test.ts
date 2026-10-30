@@ -85,6 +85,47 @@ describe('pack commands', () => {
     expect(stdout.text()).toContain('list slide previews');
   });
 
+  it('writes the product command name in pack help and usage', async () => {
+    const stdout = memoryStream();
+    const help = await createCli({
+      argv: ['ppt', '--help'],
+      commandName: 'etown',
+      stdout: stdout.stream,
+      stderr: memoryStream().stream,
+      commands: [{ name: 'ppt', summary: 'list slide previews', run: () => 0 }],
+    });
+    expect(help).toBe(0);
+    expect(stdout.text()).toContain('etown ppt');
+    expect(stdout.text()).not.toContain('<product>');
+
+    const stderr = memoryStream();
+    const code = await createCli({
+      argv: ['ppt'],
+      commandName: 'etown',
+      stdout: memoryStream().stream,
+      stderr: stderr.stream,
+      stdinIsTTY: true,
+      commands: [{
+        name: 'ppt',
+        summary: 'list slide previews',
+        run: (_args, io) => {
+          io.writeError('usage: <product> ppt <chat-id>\n');
+          return 2;
+        },
+      }],
+      createClient: async () => ({
+        request: async () => ({ status: 200, data: [] }),
+        stream: async function* () {},
+        events: async function* () {},
+        decideApproval: async () => undefined,
+        answerAsk: async () => undefined,
+        close: async () => undefined,
+      }) satisfies AgentClient,
+    });
+    expect(code).toBe(2);
+    expect(stderr.text()).toBe('usage: etown ppt <chat-id>\n');
+  });
+
   it('rejects a pack command that takes a built-in name', async () => {
     const stderr = memoryStream();
     const code = await createCli({

@@ -7,8 +7,9 @@
  * WorldState 的一节），我们此前完全没有。
  *
  * 安全前提（W6-5）：这些文件是「项目作者写给 agent 的指令」，属于不可信输入。
- * 本模块只做发现并返回内容；**是否注入由调用方按项目信任状态决定**——未信任
- * 的项目一律不调用本模块。遍历与注入都有硬上限，单个文件与总量都截断。
+ * 本模块只做发现并返回内容。未信任的项目只调用 `listProjectRuleFiles`
+ * （stat，不读正文）；`loadProjectRuleFiles` 读取正文，仅在已信任时调用。
+ * 遍历与注入都有硬上限，单个文件与总量都截断。
  *
  * 「热重载」按回合粒度天然成立：每个回合重新读取磁盘，规则文件保存即生效，
  * 不需要文件 watcher。
@@ -46,12 +47,12 @@ const EMPTY: ProjectRules = { files: [], content: '', truncated: false };
  * 向上遍历在「用户 home 目录」处封顶（若项目不在 home 下则按 MAX_LEVELS
  * 封顶）——不扫 `/`、`/etc` 这类与项目无关的祖先目录。
  */
-export function loadProjectRuleFiles(folderPath: string): ProjectRules {
-  if (!folderPath || !folderPath.trim()) return EMPTY;
+/** Rule-file paths only. Does not read file bodies. */
+export function listProjectRuleFiles(folderPath: string): string[] {
+  if (!folderPath || !folderPath.trim()) return [];
   const start = path.resolve(folderPath);
-  if (!fs.existsSync(start)) return EMPTY;
+  if (!fs.existsSync(start)) return [];
 
-  // 构造 根→…→起始目录 的目录链（根在前，越往后越贴近项目）。
   const home = os.homedir();
   const chain: string[] = [];
   let dir = start;
@@ -59,26 +60,30 @@ export function loadProjectRuleFiles(folderPath: string): ProjectRules {
   while (!seen.has(dir) && chain.length < MAX_LEVELS) {
     seen.add(dir);
     chain.unshift(dir);
-    if (dir === home) break; // 不越过 home 向上
+    if (dir === home) break;
     const parent = path.dirname(dir);
-    if (parent === dir) break; // 已到文件系统根
+    if (parent === dir) break;
     dir = parent;
   }
 
-  // 根→叶收集规则文件；每层内 override 优先。
   const files: string[] = [];
   for (const d of chain) {
     for (const name of RULE_FILE_NAMES) {
-      const p = path.join(d, name);
+      const file = path.join(d, name);
       try {
-        if (fs.statSync(p).isFile()) files.push(p);
+        if (fs.statSync(file).isFile()) files.push(file);
       } catch {
-        // 不存在或不可读——跳过该文件。
+        // missing or unreadable
       }
       if (files.length >= MAX_RULE_FILES) break;
     }
     if (files.length >= MAX_RULE_FILES) break;
   }
+  return files;
+}
+
+export function loadProjectRuleFiles(folderPath: string): ProjectRules {
+  const files = listProjectRuleFiles(folderPath);
   if (files.length === 0) return EMPTY;
 
   // 拼接并施加总量上限。

@@ -40,6 +40,17 @@ export type ToolMode =
 export type ToolExposure = 'direct' | 'deferred' | 'hidden';
 
 /**
+ * 会话与本机审批记录的分组。同一 `category` 共享「本会话」「始终」决定。
+ * `category` 匹配 `^[a-z][a-z0-9_]{0,63}$`，且不得与内置类别
+ * `network_egress`、`sandbox_escalation` 同名；宿主在装配时校验。
+ */
+export interface ToolApprovalSpec {
+  readonly category: string;
+  /** 审批卡上的类别显示名，由包提供本地化文本。 */
+  readonly label: Readonly<Record<string, string>>;
+}
+
+/**
  * 工具执行上下文（与宿主 ToolExecContext 结构对齐的最小声明）。
  * 宿主在分发时注入；包不应假设字段以外的任何宿主状态。
  */
@@ -64,6 +75,8 @@ export interface ToolContribution {
   readonly mode: ToolMode;
   /** 缺省 'direct'。 */
   readonly exposure?: ToolExposure;
+  /** 缺省时审批类别等于工具名。 */
+  readonly approval?: ToolApprovalSpec;
   readonly handler: PackToolHandler;
 }
 

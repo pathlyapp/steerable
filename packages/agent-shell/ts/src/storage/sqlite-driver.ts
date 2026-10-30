@@ -15,6 +15,7 @@ import { LOCAL_SCOPE } from './driver.js';
 import { SqliteScopedStore } from './index.js';
 import {
   HOST_SCHEMA_VERSION,
+  LEGACY_LOCK_PROBE_MS,
   OPEN_LOCK_WAIT_MS,
   StorageUpgradeBlockedError,
   openLockPath,
@@ -142,11 +143,12 @@ export class SqliteStorageDriver implements StorageDriver {
       getUserDataDir(),
       getProductConfig().dbFileName ?? 'agent-shell.db',
     );
-    // A previous build held this lock for the whole process. If it is still
-    // held, that process cannot share the database, so refuse to migrate
-    // or to open alongside it.
+    // A previous build held this lock for the whole process. A current
+    // process only holds it for this probe, so wait briefly for a peer
+    // probe to finish. If the lock is still held, that process cannot
+    // share the database.
     acquireWriteLeaseOrExit(() => {
-      const legacy = acquireWriteLease(lockPathForDb(dbPath));
+      const legacy = acquireWriteLease(lockPathForDb(dbPath), LEGACY_LOCK_PROBE_MS);
       legacy.release();
     });
 

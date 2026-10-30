@@ -95,6 +95,24 @@ export function createTauriBridge(): HostBridge {
     offMenuPaste: pasteMenu.off,
     readClipboard: () => invoke<HostClipboard>('host_read_clipboard'),
     readClipboardText: () => invoke<string>('host_read_clipboard_text'),
+    getZoom: () => invoke<number>('ui_get_zoom'),
+    setZoom: (scale) => invoke<number>('ui_set_zoom', { scale }),
+    onZoomChanged(callback) {
+      let unlisten: UnlistenFn | undefined;
+      let cancelled = false;
+      const pending = listen<{ scale: number }>('ui:zoom-changed', (event) => {
+        callback(event.payload);
+      });
+      void pending.then((stop) => {
+        if (cancelled) stop();
+        else unlisten = stop;
+      });
+      return () => {
+        cancelled = true;
+        if (unlisten) unlisten();
+        else void pending.then((stop) => stop());
+      };
+    },
     app: {
       snapshot: () => invoke<AppReleaseSnapshot>('app_release_snapshot'),
       check: () => invoke<AppReleaseSnapshot>('app_release_check'),

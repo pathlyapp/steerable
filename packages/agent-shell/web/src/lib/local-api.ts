@@ -466,6 +466,8 @@ export interface LocalProject {
   trusted?: boolean;
   /** 侧边栏顺序，越小越靠前。缺省时列表顺序由服务端决定。 */
   sortOrder?: number;
+  /** 命令行创建的项目。桌面创建的记录没有该字段。 */
+  origin?: 'cli';
   createdAt: string;
   updatedAt: string;
 }
@@ -616,6 +618,35 @@ export async function updateChatProject(chatId: string, projectId: string | null
     method: 'PATCH',
     path: `/api/v2/chats/${encodeURIComponent(chatId)}/settings`,
     body: { projectId },
+  });
+}
+
+export async function getChat(chatId: string) {
+  return bridge().localBackend.request<{
+    id: string;
+    title: string;
+    forkedFrom: { chatId: string; title: string } | null;
+  }>({
+    method: 'GET',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}`,
+  });
+}
+
+/** 复制会话。409 表示原会话正被占用，413 表示工作区超过复制上限。 */
+export async function forkChat(chatId: string) {
+  return bridge().localBackend.request<{ chatId: string }>({
+    method: 'POST',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/fork`,
+    body: {},
+  });
+}
+
+/** 用户重命名。409 表示会话锁被占用，调用方恢复旧名。 */
+export async function updateChatTitle(chatId: string, title: string) {
+  return bridge().localBackend.request<{ id: string; title: string }>({
+    method: 'PATCH',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/settings`,
+    body: { title },
   });
 }
 

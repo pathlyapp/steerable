@@ -66,6 +66,13 @@ export interface ChatSessionRecord {
   isPinned: boolean;
   systemPrompt: string | null;
   pinnedRefs: unknown[] | null;
+  /**
+   * 标题从哪来。`user` 表示用户改过名，自动标题不再覆盖（即使用户把标题改回「新对话」）。
+   * `auto` 表示上次由标题生成写入。缺省是旧库，仍按标题文本是否还是「新对话」判断。
+   */
+  titleSource?: 'user' | 'auto' | null;
+  /** 分叉来源会话 id。原会话已删除时仍保留 id，读取接口再决定是否展示。 */
+  forkedFrom?: string | null;
 }
 
 export interface ChatMessageRecord {
@@ -507,6 +514,9 @@ export class SqliteScopedStore implements ScopedStore {
     // 项目记录本身存在 json-store（agent-projects.json），这里只存外键；
     // 删项目时由路由层把本列置 NULL（会话降级为无项目对话）。
     this.ensureColumn('chat_sessions', 'project_id', 'TEXT');
+    // 用户改名后自动标题不再覆盖。NULL 保持旧规则：标题不是「新对话」就跳过。
+    this.ensureColumn('chat_sessions', 'title_source', 'TEXT');
+    this.ensureColumn('chat_sessions', 'forked_from', 'TEXT');
 
     // 任务编排（增量迁移）：depends_on 存 JSON string[]——本任务等待的
     // 依赖 taskId 列表；NULL = 无依赖。依赖必须指向建任务时已存在的
@@ -941,7 +951,7 @@ export class SqliteScopedStore implements ScopedStore {
 
   async updateChat(
     chatId: string,
-    updates: Partial<Pick<ChatSessionRecord, 'title' | 'systemPrompt' | 'pinnedRefs' | 'isPinned' | 'projectId'>>
+    updates: Partial<Pick<ChatSessionRecord, 'title' | 'systemPrompt' | 'pinnedRefs' | 'isPinned' | 'projectId' | 'titleSource' | 'forkedFrom'>>
   ): Promise<ChatSessionRecord | null> {
     const existing = await this.getChat(chatId);
     if (!existing) return null;
@@ -958,7 +968,7 @@ export class SqliteScopedStore implements ScopedStore {
     };
     this.db.prepare(`
       UPDATE chat_sessions
-      SET title = ?, system_prompt = ?, pinned_refs = ?, is_pinned = ?, project_id = ?, updated_at = ?
+      SET title = ?, system_prompt = ?, pinned_refs = ?, is_pinned = ?, project_id = ?, title_source = ?, forked_from = ?, updated_at = ?
       WHERE tenant_id = ? AND user_id = ? AND id = ?
     `).run(
       next.title,
@@ -966,6 +976,8 @@ export class SqliteScopedStore implements ScopedStore {
       JSON.stringify(next.pinnedRefs ?? null),
       next.isPinned ? 1 : 0,
       next.projectId ?? null,
+      next.titleSource ?? null,
+      next.forkedFrom ?? null,
       next.updatedAt,
       this.scope.tenantId,
       this.scope.userId,
@@ -1867,6 +1879,8 @@ export class SqliteScopedStore implements ScopedStore {
       isPinned: Number(row.is_pinned ?? 0) === 1,
       systemPrompt: row.system_prompt ? String(row.system_prompt) : null,
       pinnedRefs: row.pinned_refs ? this.safeJson(row.pinned_refs) : null,
+      titleSource: row.title_source === 'user' || row.title_source === 'auto' ? row.title_source : null,
+      forkedFrom: row.forked_from ? String(row.forked_from) : null,
     };
   }
 

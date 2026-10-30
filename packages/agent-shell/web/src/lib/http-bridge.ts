@@ -65,8 +65,9 @@ async function http<T>(method: string, path: string, body?: unknown): Promise<T>
   });
   const data = (await res.json().catch(() => null)) as T;
   if (!res.ok) {
-    const err = new Error(httpErrorMessage(data, res.status)) as Error & { status?: number };
+    const err = new Error(httpErrorMessage(data, res.status)) as Error & { status?: number; data?: unknown };
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return data;

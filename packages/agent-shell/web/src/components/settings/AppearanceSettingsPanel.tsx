@@ -1,9 +1,95 @@
+import { useEffect, useState } from 'react';
 import {
   THINKING_DISPLAY_OPTIONS,
   persistThinkingDisplay,
   useThinkingDisplay,
 } from '@/lib/show-thinking-content';
+import { getHostBridge } from '@/lib/host-bridge';
 import { localeEndonym, supportedLocales, useI18n } from '@/i18n';
+
+function stepZoom(scale: number, direction: -1 | 1): number {
+  const snapped = Math.round(scale * 10) / 10;
+  const next = Math.round((snapped + direction * 0.1) * 10) / 10;
+  return Math.min(2, Math.max(0.8, next));
+}
+
+function InterfaceZoomRow() {
+  const { t } = useI18n();
+  const [scale, setScale] = useState<number | null>(null);
+  const [available, setAvailable] = useState(false);
+
+  useEffect(() => {
+    const zoom = getHostBridge();
+    if (!zoom?.getZoom) return;
+    setAvailable(true);
+    let active = true;
+    void zoom.getZoom().then((next) => {
+      if (active) setScale(next);
+    });
+    const off = zoom.onZoomChanged?.((payload) => setScale(payload.scale));
+    return () => {
+      active = false;
+      off?.();
+    };
+  }, []);
+
+  if (!available || scale == null) return null;
+  const percent = Math.round(scale * 100);
+  return (
+    <div
+      className="flex items-center justify-between gap-3 rounded-agent-md border border-agent-border bg-agent-card p-2.5"
+      data-testid="interface-zoom"
+    >
+      <div>
+        <p className="text-xs font-medium text-agent-foreground">{t('Interface zoom')}</p>
+        <p className="mt-1 text-xs text-agent-muted-foreground" data-testid="interface-zoom-level">
+          {percent}%
+        </p>
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          className="h-7 w-7 rounded-full border border-agent-border text-sm text-agent-foreground disabled:opacity-30"
+          aria-label={t('Zoom out')}
+          data-testid="interface-zoom-out"
+          disabled={percent <= 80}
+          onClick={() => {
+            const next = stepZoom(scale, -1);
+            setScale(next);
+            void getHostBridge()?.setZoom?.(next);
+          }}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          className="h-7 w-7 rounded-full border border-agent-border text-sm text-agent-foreground disabled:opacity-30"
+          aria-label={t('Zoom in')}
+          data-testid="interface-zoom-in"
+          disabled={percent >= 200}
+          onClick={() => {
+            const next = stepZoom(scale, 1);
+            setScale(next);
+            void getHostBridge()?.setZoom?.(next);
+          }}
+        >
+          +
+        </button>
+        <button
+          type="button"
+          className="h-7 rounded-full border border-agent-border px-2 text-xs text-agent-foreground"
+          data-testid="interface-zoom-reset"
+          onClick={() => {
+            setScale(1);
+            void getHostBridge()?.setZoom?.(1);
+          }}
+        >
+          {t('Reset')}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /**
  * 界面偏好：思考过程正文按「隐藏 / 显示5行 / 完整显示」三档。
@@ -96,6 +182,7 @@ export function AppearanceSettingsPanel() {
           })}
         </div>
       </div>
+      <InterfaceZoomRow />
     </div>
   );
 }

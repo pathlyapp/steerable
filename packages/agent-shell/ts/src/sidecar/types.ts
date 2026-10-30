@@ -474,6 +474,13 @@ export interface SidecarChatStreamRequest {
      * host prompt. Independent of whether the OS exec sandbox is on.
      */
     writableRoots?: string[];
+    /**
+     * Directory relative tool paths are joined to before the inside-root
+     * check. This is the project home, or the conversation workspace when
+     * the chat has no project. Absent, a relative path is inside unless it
+     * starts with `..`.
+     */
+    pathBase?: string;
   };
 }
 
@@ -519,6 +526,8 @@ export interface SidecarStreamChunk {
     resultPreview?: string;
     /** W4-2: `data._sandbox` marker lifted out of the result for the card. */
     sandbox?: { backend?: string; enforcement: string };
+    /** Session-allow reuse. `cached` means this call did not show a card. */
+    approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number };
   };
   /** CoreLoop notices: soft_timeout / budget_exhausted / round_end / hook_action. */
   notice?: { kind: string; [key: string]: unknown };

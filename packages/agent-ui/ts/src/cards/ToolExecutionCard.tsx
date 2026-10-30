@@ -51,6 +51,8 @@ export interface ToolExecutionCardProps {
   /** Header body click (chevron still toggles expand). */
   onActivate?: () => void;
   activateTitle?: string;
+  /** Short status suffix, such as a session-allow mark. */
+  note?: string;
 }
 
 function StatusIcon({ status }: { status: Status }) {
@@ -94,6 +96,7 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
   renderOutput,
   onActivate,
   activateTitle,
+  note,
 }) => {
   const expandable = payload.expandable !== false;
   const [expanded, setExpanded] = React.useState(defaultExpanded);
@@ -149,6 +152,9 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
             <span className="ml-auto inline-flex shrink-0 items-center gap-1 whitespace-nowrap">
               <StatusIcon status={status} />
               <span className={STATUS_TONE[status]}>{STATUS_LABEL[status]}</span>
+              {note && (
+                <span className="text-[var(--agent-muted-foreground,#6b7280)]">{note}</span>
+              )}
               {typeof payload.durationMs === 'number' && (
                 <span className="text-[var(--agent-muted-foreground,#9ca3af)]">· {payload.durationMs}ms</span>
               )}

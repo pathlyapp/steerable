@@ -17,6 +17,7 @@ const COMMANDS = [
   { name: 'tasks', hint: '后台任务' },
   { name: 'fork', hint: '分叉' },
   { name: 'rewind', hint: '回退' },
+  { name: 'rules', hint: '项目规则' },
   { name: 'permissions', hint: '会话权限' },
   { name: 'copy', hint: '复制回答' },
   { name: 'editor', hint: '外部编辑器' },

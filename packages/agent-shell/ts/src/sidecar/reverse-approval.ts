@@ -44,6 +44,20 @@ export interface ApprovalPromptRequest {
   round: number;
   /** Chat that asked. The renderer only shows the card in that composer. */
   chatId?: string;
+  /** Localized category name. Absent when the category is the tool name. */
+  categoryLabel?: string;
+  /** Shell cwd is outside the chat project's writable folders. */
+  outsideWorkspace?: boolean;
+  /**
+   * `workspace` when the chat has no project and the cwd is outside the
+   * conversation workspace. Absent means the project sentence.
+   */
+  outsideWorkspaceKind?: 'workspace';
+  /**
+   * Live command sandbox. `false` means the card must not say writes are
+   * blocked. Absent keeps that sentence for an older sidecar.
+   */
+  sandboxEnforced?: boolean;
 }
 
 interface PendingApproval {
@@ -61,6 +75,18 @@ export interface ApprovalBridgeDeps {
   /** True when at least one renderer window can receive the prompt. */
   hasWindow: () => boolean;
   onLog?: (line: string) => void;
+  /** Localized category name from the tool declaration or the shell dictionary. */
+  categoryLabel?: (toolName: string, category: string) => string | undefined;
+  /**
+   * Whether a shell cwd sits outside the writable root.
+   * `true` and `'project'` use the project sentence. `'workspace'` uses the
+   * conversation-workspace sentence. `false` adds no outside-cwd sentence.
+   */
+  outsideWorkspace?: (input: {
+    toolName: string;
+    arguments: Record<string, unknown>;
+    chatId?: string;
+  }) => boolean | 'project' | 'workspace' | Promise<boolean | 'project' | 'workspace'>;
 }
 
 export interface ApprovalBridge {
@@ -94,17 +120,28 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps): ApprovalBridge {
       }
       const requestId = randomUUID();
       const chatId = typeof p.chatId === 'string' && p.chatId ? p.chatId : undefined;
+      const args =
+        p.arguments && typeof p.arguments === 'object'
+          ? (p.arguments as Record<string, unknown>)
+          : {};
+      const category = typeof p.category === 'string' ? p.category : toolName;
+      const categoryLabel = deps.categoryLabel?.(toolName, category);
+      const fence = deps.outsideWorkspace
+        ? await deps.outsideWorkspace({ toolName, arguments: args, ...(chatId ? { chatId } : {}) })
+        : false;
+      const outsideWorkspace = fence === true || fence === 'project' || fence === 'workspace';
       const prompt: ApprovalPromptRequest = {
         requestId,
         toolName,
-        arguments:
-          p.arguments && typeof p.arguments === 'object'
-            ? (p.arguments as Record<string, unknown>)
-            : {},
+        arguments: args,
         mode: typeof p.mode === 'string' ? p.mode : 'other',
-        category: typeof p.category === 'string' ? p.category : toolName,
+        category,
         round: typeof p.round === 'number' ? p.round : 0,
         ...(chatId ? { chatId } : {}),
+        ...(categoryLabel ? { categoryLabel } : {}),
+        ...(outsideWorkspace ? { outsideWorkspace: true } : {}),
+        ...(fence === 'workspace' ? { outsideWorkspaceKind: 'workspace' as const } : {}),
+        ...(typeof p.sandboxEnforced === 'boolean' ? { sandboxEnforced: p.sandboxEnforced } : {}),
       };
       deps.onLog?.(`approval: prompting for ${toolName} (${prompt.mode}/${prompt.category})`);
       return await new Promise((resolve) => {

@@ -19,6 +19,8 @@ import {
 } from '@/hooks/useChatsAndAgents';
 import { hostToolChrome, sanitizeRightPanelKind, settingsChrome } from '@/lib/host-tools';
 import { t } from '@/i18n';
+import { BRAND_NAME } from '@/brand';
+import { chatWindowTitle } from '@/lib/chat-row-keys';
 import {
   closeRightPanelTab,
   collapseRightPanel,
@@ -139,6 +141,12 @@ export type AgentOutletContext = UseChatsAndAgentsResult & {
 function AgentLayoutContent() {
   const data = useChatsAndAgents();
   const { chatId } = useParams<{ chatId?: string }>();
+  const currentChatTitle = chatId
+    ? data.chats.find((chat) => chat.id === chatId)?.title
+    : undefined;
+  useEffect(() => {
+    document.title = chatWindowTitle(currentChatTitle, BRAND_NAME);
+  }, [currentChatTitle]);
 
   // ── 包槽位 fallback 发送通道：AgentPage 注册 handleSubmit，包面板（如
   // PPT 单页修改在 sidecar 未就绪时）经 sendChatMessage 退回主聊天发送。

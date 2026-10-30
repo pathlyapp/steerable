@@ -156,6 +156,13 @@ describe('isApprovalEnabled', () => {
       mode: 'host',
       storePath: '/tmp/a.json',
     });
+    expect(
+      buildHostApproval({ productApproval: 'host', storePath: '/tmp/a.json', timeoutMs: 180_000 }),
+    ).toEqual({
+      mode: 'host',
+      timeoutMs: 180_000,
+      storePath: '/tmp/a.json',
+    });
   });
 });
 

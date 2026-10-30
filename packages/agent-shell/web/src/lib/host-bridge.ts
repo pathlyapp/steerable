@@ -44,6 +44,20 @@ export interface ApprovalPromptRequest {
   round: number;
   /** 发起审批的对话。缺省时卡片不绑定会话（旧请求）。 */
   chatId?: string;
+  /** 已按当前语言解析的类别名。缺省时类别就是工具名。 */
+  categoryLabel?: string;
+  /** shell 的 cwd 在该对话可写目录之外。 */
+  outsideWorkspace?: boolean;
+  /**
+   * `workspace`：没有绑定项目，cwd 在对话工作区外。
+   * 缺省时用项目外的说明（可加为源文件夹）。
+   */
+  outsideWorkspaceKind?: 'workspace';
+  /**
+   * 命令沙箱是否还在。`false` 时不说写入会被拒绝。
+   * 缺省保持旧 sidecar 的说明。
+   */
+  sandboxEnforced?: boolean;
 }
 
 /**
@@ -222,6 +236,13 @@ export interface HostBridge {
   readClipboard?: () => Promise<HostClipboard>;
   /** Plain text from the OS pasteboard. Empty when the clipboard has no text. */
   readClipboardText?: () => Promise<string>;
+  /**
+   * Desktop webview zoom, 0.8–2 in steps of 0.1. Absent in the browser,
+   * where the page must not register zoom shortcuts or show the setting.
+   */
+  getZoom?: () => Promise<number>;
+  setZoom?: (scale: number) => Promise<number>;
+  onZoomChanged?: (callback: (payload: { scale: number }) => void) => () => void;
   /**
    * 异步 AI 标题就绪通知。Backend 在每条 chat 首条助手回复完成后 fire-and-forget
    * 跑 LLM 生成标题；完成时通过这个通道把 `{chatId, title}` 推过来。返回的函数

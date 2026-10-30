@@ -18,6 +18,13 @@ export const HOST_SCHEMA_VERSION = 1;
 /** How long a starting host waits for another host to finish migrating. */
 export const OPEN_LOCK_WAIT_MS = 15_000;
 
+/**
+ * How long a new process waits while probing the old exclusive database lock.
+ * A current process releases that lock immediately. An older build holds it
+ * until it exits, so the wait still fails closed.
+ */
+export const LEGACY_LOCK_PROBE_MS = 2_000;
+
 export class ChatBusyError extends Error {
   readonly code = 'chat_busy';
 

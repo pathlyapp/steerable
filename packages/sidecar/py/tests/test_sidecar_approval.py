@@ -24,11 +24,13 @@ class _ScriptedProvider:
     def __init__(self, script: list[list[LLMStreamChunk]]):
         self._script = script
         self._round = 0
+        self.seen_tools: list[object] = []
 
     async def complete(self, *args, **kwargs):
         raise NotImplementedError
 
     def stream(self, messages, **kwargs):
+        self.seen_tools.append(kwargs.get("tools"))
         chunks = self._script[min(self._round, len(self._script) - 1)]
         self._round += 1
 
@@ -289,6 +291,52 @@ async def test_host_mode_still_asks_for_files_outside_writable_roots(tmp_path) -
 
     assert len(host.approval_requests) == 1
     assert host.approval_requests[0]["toolName"] == "present_files"
+    assert host.approval_requests[0]["sandboxEnforced"] is True
+    assert [c["name"] for c in host.reverse_calls] == ["present_files"]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_asks_when_a_relative_symlink_leaves_path_base(tmp_path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    outside = tmp_path / "other"
+    outside.mkdir()
+    (project / "escape").symlink_to(outside, target_is_directory=True)
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="c1",
+                    name="present_files",
+                    arguments={"files": [{"path": "escape/secret.txt"}]},
+                )
+            ),
+            _text_round("shown"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"present_files": {"success": True, "data": {"files": []}}},
+        approvals={"kind": "allow_once"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={
+                "mode": "host",
+                "writableRoots": [str(project)],
+                "pathBase": str(project),
+            },
+            execSandbox={"enabled": True, "writableRoots": [str(project)]},
+        ),
+    )
+
+    assert len(host.approval_requests) == 1
+    assert host.approval_requests[0]["toolName"] == "present_files"
     assert [c["name"] for c in host.reverse_calls] == ["present_files"]
 
 
@@ -401,7 +449,90 @@ async def test_host_mode_still_asks_for_shell_when_exec_sandbox_is_off(tmp_path)
 
     assert len(host.approval_requests) == 1
     assert host.approval_requests[0]["toolName"] == "local_exec_shell"
+    assert host.approval_requests[0]["sandboxEnforced"] is False
     assert [c["name"] for c in host.reverse_calls] == ["local_exec_shell"]
+
+
+@pytest.mark.asyncio
+async def test_steer_to_full_clears_sandbox_enforced_on_the_next_approval(tmp_path) -> None:
+    """A mid-turn switch to full access is on the next card, not the one already sent."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="delete_file", arguments={"path": "/x"})),
+            _tool_round(ToolCall(id="c2", name="delete_file", arguments={"path": "/y"})),
+            _text_round("done"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+
+    class _GateWriter(_HostWriter):
+        def __init__(self) -> None:
+            super().__init__(
+                sidecar.server,
+                {"delete_file": {"success": True}},
+                approvals={"kind": "allow_once"},
+            )
+            self._held = False
+
+        def write(self, data: bytes):
+            payload = json.loads(data)
+            if (
+                not self._held
+                and payload.get("method") == "tool.invoke"
+                and isinstance(payload.get("id"), str)
+            ):
+                self._held = True
+                self.reverse_calls.append(payload["params"])
+                started.set()
+
+                async def _later() -> None:
+                    await release.wait()
+                    await self._server.handle_frame(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": payload["id"],
+                                "result": {"success": True},
+                            }
+                        )
+                    )
+
+                asyncio.ensure_future(_later())
+                return len(data)
+            return super().write(data)
+
+    host = _GateWriter()
+    sidecar.server.attach_writer(host)
+    project = tmp_path / "proj"
+    project.mkdir()
+    response = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.stream",
+            _base_params(
+                approval={"mode": "host", "writableRoots": [str(project)]},
+                execSandbox={"enabled": True, "writableRoots": [str(project)]},
+            ),
+        )
+    )
+    assert "error" not in response, response
+    stream_id = response["result"]["streamId"]
+    task = sidecar._streams.get(stream_id)
+    assert task is not None
+    await asyncio.wait_for(started.wait(), timeout=2)
+    assert host.approval_requests[0]["sandboxEnforced"] is True
+    steer = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.steer",
+            {"streamId": stream_id, "content": "改成完整权限", "execPolicy": "full"},
+        )
+    )
+    assert steer["result"] == {"ok": True}
+    release.set()
+    await task
+    assert [item["sandboxEnforced"] for item in host.approval_requests] == [True, False]
 
 
 @pytest.mark.asyncio
@@ -433,7 +564,7 @@ async def test_host_mode_denial_skips_execution() -> None:
 async def test_host_mode_unreachable_host_fails_closed() -> None:
     provider = _ScriptedProvider(
         [
-            _tool_round(ToolCall(id="c1", name="read_file", arguments={"path": "/a"})),
+            _tool_round(ToolCall(id="c1", name="delete_file", arguments={"path": "/a"})),
             _text_round("denied anyway"),
         ]
     )
@@ -441,7 +572,7 @@ async def test_host_mode_unreachable_host_fails_closed() -> None:
     sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
     # No approval handler on the host → the request is never answered.
     host = _HostWriter(
-        sidecar.server, {"read_file": {"success": True}}, approvals=None
+        sidecar.server, {"delete_file": {"success": True}}, approvals=None
     )
     sidecar.server.attach_writer(host)
 
@@ -450,7 +581,8 @@ async def test_host_mode_unreachable_host_fails_closed() -> None:
         _base_params(approval={"mode": "host", "timeoutMs": 100}),
     )
 
-    # Fail closed: even a read tool is denied when the host can't answer.
+    # A call that still prompts fails closed when the host never answers.
+    # Declared or name-inferred read tools do not ask, so they are not this case.
     assert host.reverse_calls == []
     events = sidecar._transport.events  # type: ignore[attr-defined]
     results = [p for m, p in events if m == "stream.chunk" and "toolResult" in p]
@@ -632,3 +764,214 @@ async def test_host_amendment_persists_and_applies_within_the_run(tmp_path) -> N
     assert persisted["rules"] == [
         {"tool": "shell", "decision": "allow", "commandPrefix": ["echo"]}
     ]
+
+
+def _browser_tools() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {"name": "browser_navigate", "parameters": {}},
+            "mode": "external",
+            "approvalCategory": "browser",
+        },
+        {
+            "type": "function",
+            "function": {"name": "browser_click", "parameters": {}},
+            "mode": "external",
+            "approvalCategory": "browser",
+        },
+        {
+            "type": "function",
+            "function": {"name": "browser_scroll", "parameters": {}},
+            "mode": "read",
+            "approvalCategory": "browser",
+        },
+        {
+            "type": "function",
+            "function": {"name": "local_read_file", "parameters": {}},
+            "mode": "read",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_shares_declared_category_and_skips_read(tmp_path) -> None:
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="browser_scroll", arguments={})),
+            _tool_round(ToolCall(id="c2", name="browser_navigate", arguments={"url": "https://example.com"})),
+            _tool_round(ToolCall(id="c3", name="browser_click", arguments={})),
+            _tool_round(ToolCall(id="c4", name="mystery_tool", arguments={})),
+            _tool_round(
+                ToolCall(id="c5", name="local_read_file", arguments={"path": str(tmp_path / "id_rsa")})
+            ),
+            _text_round("done"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {
+            "browser_scroll": {"success": True},
+            "browser_navigate": {"success": True},
+            "browser_click": {"success": True},
+            "mystery_tool": {"success": True},
+            "local_read_file": {"success": True},
+        },
+        approvals={"kind": "allow_for_session", "reason": "ok"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host", "writableRoots": [str(tmp_path / "repo")]},
+            tools=_browser_tools(),
+            chatId="chat-declared",
+        ),
+    )
+
+    assert [item["toolName"] for item in host.approval_requests] == [
+        "browser_navigate",
+        "mystery_tool",
+        "local_read_file",
+    ]
+    assert host.approval_requests[0]["mode"] == "external"
+    assert host.approval_requests[0]["category"] == "browser"
+    assert host.approval_requests[1]["mode"] == "other"
+    assert host.approval_requests[1]["category"] == "mystery_tool"
+    assert host.approval_requests[2]["mode"] == "read"
+    assert host.approval_requests[2]["category"] == "local_read_file"
+    assert [call["name"] for call in host.reverse_calls] == [
+        "browser_scroll",
+        "browser_navigate",
+        "browser_click",
+        "mystery_tool",
+        "local_read_file",
+    ]
+    sent = provider.seen_tools[0]
+    assert isinstance(sent, list)
+    assert all("mode" not in tool and "approvalCategory" not in tool for tool in sent)
+
+
+@pytest.mark.asyncio
+async def test_listed_tools_without_fields_keep_name_inference() -> None:
+    """An old host omits ``mode`` and ``approvalCategory``.
+
+    ``read_`` still skips the card. ``delete_file`` asks as destructive under
+    its own name. A declared ``external`` mode without a category uses the
+    tool name. The model does not see those fields.
+    """
+    tools = [
+        {"type": "function", "function": {"name": "read_notes", "parameters": {}}},
+        {"type": "function", "function": {"name": "delete_file", "parameters": {}}},
+        {
+            "type": "function",
+            "function": {"name": "get_secret", "parameters": {}},
+            "mode": "external",
+        },
+    ]
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="read_notes", arguments={})),
+            _tool_round(ToolCall(id="c2", name="delete_file", arguments={})),
+            _tool_round(ToolCall(id="c3", name="get_secret", arguments={})),
+            _text_round("done"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {
+            "read_notes": {"success": True},
+            "delete_file": {"success": True},
+            "get_secret": {"success": True},
+        },
+        approvals={"kind": "allow_once", "reason": "ok"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(approval={"mode": "host"}, tools=tools, chatId="chat-legacy-tools"),
+    )
+
+    assert [(item["toolName"], item["mode"], item["category"]) for item in host.approval_requests] == [
+        ("delete_file", "destructive", "delete_file"),
+        ("get_secret", "external", "get_secret"),
+    ]
+    assert [call["name"] for call in host.reverse_calls] == [
+        "read_notes",
+        "delete_file",
+        "get_secret",
+    ]
+    sent = provider.seen_tools[0]
+    assert isinstance(sent, list)
+    assert all("mode" not in tool and "approvalCategory" not in tool for tool in sent)
+
+
+@pytest.mark.asyncio
+async def test_subagent_scroll_skips_the_card_and_navigate_asks() -> None:
+    """A child loop uses the same approval executor as the parent.
+
+    ``browser_scroll`` is a declared read with no path, so it runs without a
+    card. ``browser_navigate`` is external and still asks. The child model
+    sees the tools with the approval fields already removed.
+    """
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(id="d1", name="delegate_subagent", arguments={"task": "看页面"})
+            ),
+            _tool_round(ToolCall(id="c1", name="browser_scroll", arguments={})),
+            _tool_round(
+                ToolCall(
+                    id="c2",
+                    name="browser_navigate",
+                    arguments={"url": "https://example.com"},
+                )
+            ),
+            _text_round("child done"),
+            _text_round("parent done"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {
+            "browser_scroll": {"success": True},
+            "browser_navigate": {"success": True},
+        },
+        approvals={"kind": "allow_once", "reason": "ok"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host"},
+            tools=_browser_tools(),
+            chatId="chat-child-browser",
+            subagent=True,
+        ),
+    )
+
+    assert [item["toolName"] for item in host.approval_requests] == ["browser_navigate"]
+    assert host.approval_requests[0]["mode"] == "external"
+    assert host.approval_requests[0]["category"] == "browser"
+    assert [call["name"] for call in host.reverse_calls] == [
+        "browser_scroll",
+        "browser_navigate",
+    ]
+    child_tools = provider.seen_tools[1]
+    assert isinstance(child_tools, list)
+    names = [tool["function"]["name"] for tool in child_tools]
+    assert "browser_scroll" in names
+    assert "browser_navigate" in names
+    assert "delegate_subagent" not in names
+    assert all(
+        "mode" not in tool and "approvalCategory" not in tool for tool in child_tools
+    )

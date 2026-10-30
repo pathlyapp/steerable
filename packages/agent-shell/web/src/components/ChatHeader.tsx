@@ -30,6 +30,8 @@ import type { LocalChat, LocalProject, LocalTask } from '@/lib/local-api';
 import {
   activateChatBranch,
   discardTaskWorktree,
+  forkChat,
+  getChat,
   getChatBranches,
   mergeTaskWorktree,
   openLocalPath,
@@ -49,6 +51,7 @@ import {
 import { hostToolChrome } from '@/lib/host-tools';
 import { PanelToggleButton } from '@/layouts/PanelToggleButton';
 import { t } from '@/i18n';
+import { forkSourceTime } from './chat/timestamp';
 import {
   getTurnFileCategory,
   isIgnoredTurnFile,
@@ -127,6 +130,9 @@ export function ChatHeader({
   const [exportError, setExportError] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
   const [pinning, setPinning] = useState(false);
+  const [forking, setForking] = useState(false);
+  const [forkError, setForkError] = useState<string | null>(null);
+  const [forkedFrom, setForkedFrom] = useState<{ chatId: string; title: string } | null>(null);
   const [openingPath, setOpeningPath] = useState<string | null>(null);
   const [menuBox, setMenuBox] = useState<{ top: number; left: number; width: number } | null>(
     null,
@@ -134,6 +140,52 @@ export function ChatHeader({
   const menuButtonRef = useRef<HTMLButtonElement | null>(null);
   const summaryButtonRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!chat?.id) {
+      setForkedFrom(null);
+      return;
+    }
+    let cancelled = false;
+    getChat(chat.id)
+      .then((doc) => {
+        if (!cancelled) setForkedFrom(doc.forkedFrom);
+      })
+      .catch(() => {
+        if (!cancelled) setForkedFrom(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [chat?.id]);
+
+  const forkThisChat = async () => {
+    if (!chat || forking) return;
+    setForking(true);
+    setForkError(null);
+    try {
+      const created = await forkChat(chat.id);
+      await onChatChanged?.();
+      window.location.hash = `#/agent/${created.chatId}`;
+      setPopover(null);
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      const bytes = (err as { data?: { bytes?: number } }).data?.bytes;
+      setForkError(
+        status === 409
+          ? t('This chat is still generating. Fork it after this turn finishes.')
+          : status === 413
+            ? t('This workspace is too large to fork ({size}).', {
+                size: typeof bytes === 'number' ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : '',
+              })
+            : err instanceof Error
+              ? err.message
+              : String(err),
+      );
+    } finally {
+      setForking(false);
+    }
+  };
 
   const showTerminalChrome = hostToolChrome('terminal');
   const allowOpenPath = hostToolChrome('local-fs');
@@ -306,6 +358,9 @@ export function ChatHeader({
                   onShare={shareChat}
                   showBranches={Boolean(onBranchSwitched)}
                   onOpenBranches={() => void openBranchPage()}
+                  forking={forking}
+                  forkError={forkError}
+                  onFork={() => void forkThisChat()}
                 />
               ))}
             {popover === 'summary' && (
@@ -337,6 +392,26 @@ export function ChatHeader({
         >
           {chat?.title ?? t('No chat selected')}
         </span>
+        {forkedFrom ? (
+          <span
+            className="inline-flex min-w-0 items-center gap-1 text-[10px] text-agent-muted-foreground"
+            data-testid="chat-fork-source"
+          >
+            <span className="min-w-0 truncate">
+              {t('Forked from "{title}" · {time}', {
+                title: forkedFrom.title,
+                time: forkSourceTime(chat?.createdAt),
+              })}
+            </span>
+            <a
+              href={`#/agent/${forkedFrom.chatId}`}
+              className="shrink-0 hover:underline"
+              data-testid="chat-fork-open-source"
+            >
+              {t('Open the original chat')}
+            </a>
+          </span>
+        ) : null}
       </div>
       {chat && (
         <button
@@ -404,6 +479,9 @@ function ChatActionsMenu({
   onShare,
   showBranches,
   onOpenBranches,
+  forking,
+  forkError,
+  onFork,
 }: {
   pinned: boolean;
   pinning: boolean;
@@ -417,6 +495,9 @@ function ChatActionsMenu({
   onShare: () => void;
   showBranches: boolean;
   onOpenBranches: () => void;
+  forking: boolean;
+  forkError: string | null;
+  onFork: () => void;
 }) {
   return (
     <>
@@ -466,6 +547,14 @@ function ChatActionsMenu({
           data-action="share"
         />
       )}
+      <MenuRow
+        icon={forking ? <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <LuGitBranch className="h-3.5 w-3.5" />}
+        label={t('Fork')}
+        title={forkError ?? t('Fork')}
+        disabled={forking}
+        onClick={onFork}
+        data-testid="header-fork-chat"
+      />
       {showBranches && (
         <MenuRow
           icon={<LuGitBranch className="h-3.5 w-3.5" />}

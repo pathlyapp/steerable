@@ -20,8 +20,8 @@ export function rootHelp(commands: readonly { name: string; summary: string }[] 
   return `
 Usage:
   <product> run "<task>" [--chat <id>] [--approve deny|allow-read|allow-all]
-                         [--json | --stream-json] [--cwd <dir>] [--timeout <dur>]
-                         [--data-dir <dir>] [--agent <id>] [--file <path>...]
+                         [--json | --stream-json] [--project <dir> | --cwd <dir> | --no-project] [--trust]
+                         [--timeout <dur>] [--data-dir <dir>] [--agent <id>] [--file <path>...]
   <product> chat list | show <id> | rm <id> | export <id> [--format md|json]
   <product> skills list
   <product> mcp list | add <name> -- <cmd...> | rm <name>
@@ -37,9 +37,15 @@ export function runHelp(): string {
   return `
 Usage:
   <product> run "<task>" [--chat <id>] [--approve deny|allow-read|allow-all]
-                         [--json | --stream-json] [--data-dir <dir>]
+                         [--json | --stream-json] [--project <dir> | --cwd <dir> | --no-project] [--trust]
+                         [--data-dir <dir>]
 
 --approve deny is the default. A denied approval exits 3. A busy chat exits 6.
+run binds the current directory as a project. --project and --cwd name that directory.
+--no-project keeps a workspace per chat.
+--trust marks that project trusted and loads its rule files. It cannot be combined with --no-project.
+STEERABLE_APPROVAL=0 turns the approval layer off for this process. A destructive tool
+is then rejected by the tool router. Use --approve allow-all to allow those tools instead.
 
 ${EXAMPLES}
 `.trim();
@@ -103,9 +109,15 @@ Examples:
 export function tuiHelp(): string {
   return `
 Usage:
-  <product> tui [--data-dir <dir>]
+  <product> tui [--project <dir> | --cwd <dir> | --no-project] [--trust]
+               [--approve deny|allow-read|allow-all] [--data-dir <dir>]
 
-Starts the terminal interface. When stdin is not a terminal, use run instead.
+Starts the terminal interface in the current directory's project.
+--no-project keeps a workspace per chat.
+--trust marks that project trusted and loads its rule files. It cannot be combined with --no-project.
+STEERABLE_APPROVAL=0 turns the approval layer off for this process. A destructive tool
+is then rejected by the tool router. Use --approve allow-all to allow those tools instead.
+When stdin is not a terminal, use run instead.
 
 /new  /model  /clear  /help
 Ctrl+C interrupts the current turn. Ctrl+L lists chats.
@@ -123,4 +135,22 @@ Usage:
 Examples:
   <product> doctor
 `.trim();
+}
+
+/** Placeholder left in help text until a product bin supplies its command name. */
+export const COMMAND_NAME_TOKEN = '<product>';
+
+/**
+ * Replaces {@link COMMAND_NAME_TOKEN} with the running bin name.
+ * A blank name, the token itself, or a name that is not a command token is left unchanged.
+ *
+ * @param text Help or protected-directory text.
+ * @param commandName Bin name such as `aroli` or `steerable-cli`.
+ * @returns Text with the placeholder replaced when the name is usable.
+ */
+export function renderCommandName(text: string, commandName: string | undefined): string {
+  const name = commandName?.trim() ?? '';
+  if (!name || name === COMMAND_NAME_TOKEN) return text;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return text;
+  return text.replaceAll(COMMAND_NAME_TOKEN, name);
 }

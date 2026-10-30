@@ -62,6 +62,25 @@ describe('project-registry / 信任门控（W6-5）', () => {
     const registry = new ProjectRegistry(makeMemoryStore());
     expect(() => registry.setTrusted('nope', true)).toThrow(/不存在/);
   });
+
+  it('setTrusted 保留锁内才出现的项目', () => {
+    let data: ProjectRecord[] = [record('a', '2026-01-01T00:00:00.000Z')];
+    const arrived = record('b', '2026-01-02T00:00:00.000Z');
+    const registry = new ProjectRegistry({
+      get: () => data,
+      set: (_key, value) => {
+        data = value;
+      },
+      mutate: (_key, update) => {
+        data = [...data, arrived];
+        data = update(data);
+        return data;
+      },
+    });
+    registry.setTrusted('a', true);
+    expect(data.map((project) => project.id)).toEqual(['a', 'b']);
+    expect(data[0]?.trusted).toBe(true);
+  });
 });
 
 describe('project-registry / 侧边栏顺序', () => {

@@ -118,6 +118,89 @@ describe('createApprovalBridge', () => {
     expect(bridge.pending()[0]?.chatId).toBe('chat-a');
   });
 
+  it('adds the category label and an out-of-project shell flag', async () => {
+    const sent: ApprovalPromptRequest[] = [];
+    const labeled = createApprovalBridge({
+      hasWindow: () => true,
+      broadcast: (_channel, payload) => {
+        sent.push(payload);
+      },
+      categoryLabel: (toolName, category) => (category === 'browser' ? `label:${toolName}` : undefined),
+      outsideWorkspace: async (input) => input.arguments.cwd === '~/Downloads',
+    });
+    void labeled.handler({
+      toolName: 'browser_navigate',
+      arguments: { url: 'https://example.com' },
+      mode: 'external',
+      category: 'browser',
+      round: 0,
+    });
+    void labeled.handler({
+      toolName: 'local_exec_shell',
+      arguments: { cwd: '~/Downloads' },
+      mode: 'destructive',
+      category: 'local_exec_shell',
+      round: 0,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent[0]?.categoryLabel).toBe('label:browser_navigate');
+    expect(sent[0]?.outsideWorkspace).toBeUndefined();
+    expect(sent[1]?.categoryLabel).toBeUndefined();
+    expect(sent[1]?.outsideWorkspace).toBe(true);
+    expect(sent[1]?.outsideWorkspaceKind).toBeUndefined();
+  });
+
+  it('marks a chat workspace cwd so the card does not mention a project source folder', async () => {
+    const sent: ApprovalPromptRequest[] = [];
+    const labeled = createApprovalBridge({
+      hasWindow: () => true,
+      broadcast: (_channel, payload) => {
+        sent.push(payload);
+      },
+      outsideWorkspace: async () => 'workspace',
+    });
+    void labeled.handler({
+      toolName: 'local_exec_shell',
+      arguments: { cwd: '~/Downloads' },
+      mode: 'destructive',
+      category: 'local_exec_shell',
+      round: 0,
+      chatId: 'chat-loose',
+    });
+    await Promise.resolve();
+    expect(sent[0]?.outsideWorkspace).toBe(true);
+    expect(sent[0]?.outsideWorkspaceKind).toBe('workspace');
+  });
+
+  it('forwards sandboxEnforced only when the sidecar sends a boolean', async () => {
+    const sent: ApprovalPromptRequest[] = [];
+    const bridge = createApprovalBridge({
+      hasWindow: () => true,
+      broadcast: (_channel, payload) => {
+        sent.push(payload);
+      },
+    });
+    void bridge.handler({
+      toolName: 'local_exec_shell',
+      arguments: { command: 'pwd' },
+      mode: 'destructive',
+      category: 'local_exec_shell',
+      round: 0,
+      sandboxEnforced: false,
+    });
+    void bridge.handler({
+      toolName: 'local_write_file',
+      arguments: { path: '/tmp/a' },
+      mode: 'destructive',
+      category: 'local_write_file',
+      round: 0,
+    });
+    await Promise.resolve();
+    expect(sent[0]?.sandboxEnforced).toBe(false);
+    expect(sent[1]?.sandboxEnforced).toBeUndefined();
+  });
+
   it('covers exactly the 7 UI-decidable variants', () => {
     expect(APPROVAL_DECISION_KINDS).toEqual([
       'allow_once',

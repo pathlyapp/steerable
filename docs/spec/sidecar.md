@@ -127,10 +127,22 @@ Notifications emitted by the sidecar:
     "apiKey":"sk-…",
     "temperature":0.7,
     "messages":[{"role":"user","content":"Say hi"}],
-    "tools":[{"type":"function","function":{"name":"echo","parameters":{}}}]
+    "tools":[{"type":"function","function":{"name":"echo","parameters":{}},"mode":"read","approvalCategory":"browser"}]
   }
 }
 ```
+
+`tools[]` items are OpenAI function tools. Two optional fields sit beside
+`type` / `function` (or inside `function`): `mode` and `approvalCategory`.
+`mode` is the tool's declared mode (`read`, `safe_write`, `destructive`,
+`external`, and the other host modes). `approvalCategory` is the session and
+durable approval key; tools that share it share one "this session" or
+"always" decision. The sidecar strips both fields before the provider
+request. When either field is absent, the sidecar infers `mode` from the
+tool name and uses the tool name as the category — an old host that omits
+the fields keeps that behavior. A declared `mode` of `read` with no
+filesystem target is allowed without a host prompt. Path-scoped tools still
+follow the writable-root check.
 
 The sidecar replies with `{"streamId":"s_42"}` immediately, then pushes
 `stream.chunk` notifications until `stream.done`.
@@ -172,7 +184,11 @@ no result within the budget is cancelled and returns a failed
 `ToolResult` (`error: "tool_timeout"`) instead of hanging the turn — the
 consecutive-error breaker treats it like any other tool failure. It
 applies to every executor, in-process or remote (reverse channel, future
-MCP). Default 300000 (5 min); the default is a hung-tool backstop, not a
+MCP). A host tool-approval wait is not part of that budget when the
+approval config omits `timeoutMs`: the card stays until the user answers,
+and the cap resumes for the tool body after the decision. An explicit
+`timeoutMs` still fails closed as `timed_out` and stays inside the tool
+cap. Default 300000 (5 min); the default is a hung-tool backstop, not a
 budget — set a tighter value for fast tools.
 
 `maxRounds` and `maxToolErrors` are optional walls. Unset, the turn has

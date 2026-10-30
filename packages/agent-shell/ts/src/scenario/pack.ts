@@ -11,6 +11,7 @@ export type {
   ToolExposure,
   PackToolContext,
   PackToolHandler,
+  ToolApprovalSpec,
   ToolContribution,
   ServiceFactory,
   ServiceCreateContext,

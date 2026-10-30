@@ -1826,6 +1826,11 @@ class Sidecar:
         # the reverse channel, so there is no in-process ToolRouter to bind
         # — and must fail loud rather than offer a dead descriptor.
         tools = params.get("tools")
+        from steerable_agent_runtime.approval import declared_resolver as _declared_resolver
+
+        approval_resolve = _declared_resolver(tools if isinstance(tools, list) else None)
+        if isinstance(tools, list):
+            tools = [_model_tool(tool) for tool in tools]
         if tools is not None and tool_selection is not None:
             try:
                 tools = tool_selection.select(list(tools))
@@ -1977,12 +1982,21 @@ class Sidecar:
                 if approval["mode"] == "host"
                 else []
             )
+            raw_base = approval.get("pathBase")
+            path_base = str(raw_base) if isinstance(raw_base, str) and raw_base.strip() else None
+
+            def _sandbox_enforced() -> bool:
+                # The wrapper is installed before the first approve call, and
+                # steer updates this flag for the next shell call.
+                approver = exec_control.approver
+                return bool(getattr(approver, "_sandbox_enforced", False))
 
             def _host_approver(amendment_sink: Any | None = None) -> Any:
                 host = HostApprover(
                     self.server,
                     amendment_sink=amendment_sink,
                     chat_id=approval_chat_id,
+                    sandbox_enforced=_sandbox_enforced,
                 )
                 from steerable_agent_runtime.approval import WorkspaceAutoApprover
 
@@ -1993,6 +2007,7 @@ class Sidecar:
                         isinstance(exec_sandbox, dict) and exec_sandbox.get("enabled")
                     ),
                     auto_allow_tools=_AUTO_APPROVED_HOST_CONTROL_TOOLS,
+                    path_base=path_base,
                 )
                 exec_control.approver = approver
                 return approver
@@ -2026,6 +2041,7 @@ class Sidecar:
                 session=self._approval_session(params.get("chatId")),
                 store=JsonApprovalStore(store_path) if store_path else None,
                 timeout_s=(float(timeout_ms) / 1000.0) if timeout_ms else None,
+                resolve=approval_resolve,
             )
         # Child-safe sidecar-local tools must be visible and dispatchable
         # before SubagentExecutor snapshots its tool domain. User interaction
@@ -2567,6 +2583,8 @@ class Sidecar:
             if "sandbox" in data:
                 # W4-2: per-exec sandbox marker for the host's tool card.
                 payload["sandbox"] = data["sandbox"]
+            if "approval" in data:
+                payload["approval"] = data["approval"]
             await transport.emit_notification(
                 "stream.chunk", {"streamId": stream_id, "toolResult": payload}
             )
@@ -2972,10 +2990,35 @@ def _coerce_tool_calls(items: Any) -> list[ToolCall] | None:
     return out or None
 
 
+def _model_tool(tool: Any) -> Any:
+    """Drop approval metadata before the provider sees the tool list.
+
+    ``mode`` and ``approvalCategory`` are host-to-sidecar fields. Provider
+    APIs reject unknown tool keys.
+    """
+    if not isinstance(tool, dict):
+        return tool
+    cleaned = {
+        key: value
+        for key, value in tool.items()
+        if key not in ("mode", "approvalCategory")
+    }
+    function = cleaned.get("function")
+    if isinstance(function, dict):
+        cleaned["function"] = {
+            key: value
+            for key, value in function.items()
+            if key not in ("mode", "approvalCategory")
+        }
+    return cleaned
+
+
 def _build_provider_kwargs(params: dict[str, Any]) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
     if (tools := params.get("tools")) is not None:
-        kwargs["tools"] = tools
+        kwargs["tools"] = (
+            [_model_tool(tool) for tool in tools] if isinstance(tools, list) else tools
+        )
     if (temp := params.get("temperature")) is not None:
         kwargs["temperature"] = float(temp)
     if (max_tokens := params.get("maxTokens")) is not None:

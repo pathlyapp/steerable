@@ -34,6 +34,13 @@ vi.mock('../../src/sidecar/egress-proxy.js', () => ({
 }));
 vi.mock('../../src/local-backend/coreloop-stream.js', () => ({
   buildWorldState: () => ({ mocked: true }),
+  toTurnTool: (schema: { name: string; description: string; inputSchema: unknown; mode?: string; approval?: { category?: string } | null }) => ({
+    name: schema.name,
+    description: schema.description,
+    inputSchema: schema.inputSchema,
+    ...(schema.mode ? { mode: schema.mode } : {}),
+    ...(schema.approval?.category ? { approvalCategory: schema.approval.category } : {}),
+  }),
   streamCoreLoopTurn: async () => ({ status: 'completed' }),
 }));
 

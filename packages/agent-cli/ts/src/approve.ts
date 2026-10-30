@@ -1,31 +1,58 @@
 import type { ApprovalDecisionKind } from '@steerable/agent-client';
 
+import { cliText } from './copy.js';
+
 export type ApprovePolicy = 'deny' | 'allow-read' | 'allow-all';
+export type ApprovalSurface = 'run' | 'tui';
 
-const READ_TOOLS = new Set([
-  'local_read_file',
-  'local_list_scripts',
-  'web_search',
-  'web_fetch',
-]);
-
-export function parseApprovePolicy(raw: string | undefined): ApprovePolicy | null {
-  if (raw === undefined || raw === 'deny' || raw === 'allow-read' || raw === 'allow-all') {
-    return raw ?? 'deny';
-  }
-  return null;
+export interface ApprovalSpec {
+  policy: ApprovePolicy | 'ask';
+  answerAsk: boolean;
 }
 
-/** Headless answer for one approval prompt. Denied read-policy calls still exit 3. */
+export function resolveApprovalRequest(
+  raw: string | undefined,
+  surface: ApprovalSurface,
+): ApprovalSpec | null {
+  if (raw === undefined) {
+    return surface === 'tui'
+      ? { policy: 'ask', answerAsk: false }
+      : { policy: 'deny', answerAsk: false };
+  }
+  if (raw !== 'deny' && raw !== 'allow-read' && raw !== 'allow-all') return null;
+  return { policy: raw, answerAsk: raw === 'allow-all' };
+}
+
+export function parseApprovePolicy(raw: string | undefined): ApprovePolicy | null {
+  const spec = resolveApprovalRequest(raw, 'run');
+  if (!spec || spec.policy === 'ask') return null;
+  return spec.policy;
+}
+
+/**
+ * `mode` is the declared tool mode. A missing mode is not treated as read.
+ * `prompt` means the TUI should show the card.
+ */
 export function decisionFor(
-  policy: ApprovePolicy,
-  prompt: { toolName?: string; category?: string },
-): ApprovalDecisionKind {
-  if (policy === 'allow-all') return 'allow_once';
-  const toolName = prompt.toolName ?? '';
-  const category = prompt.category ?? '';
-  if (policy === 'allow-read' && (category === 'read' || READ_TOOLS.has(toolName))) return 'allow_once';
+  spec: ApprovalSpec,
+  prompt: { mode?: string },
+  surface: ApprovalSurface,
+): ApprovalDecisionKind | 'prompt' {
+  if (spec.policy === 'allow-all') return 'allow_once';
+  if (spec.policy === 'ask') return 'prompt';
+  if (spec.policy === 'allow-read' && prompt.mode === 'read') return 'allow_once';
+  if (spec.policy === 'allow-read' && surface === 'tui') return 'prompt';
   return 'deny_once';
+}
+
+export function unattendedAskText(): string {
+  return cliText('ask.unattended');
+}
+
+export function autoAnswer(questions: { id: string }[], text = unattendedAskText()): Record<string, string> {
+  const answers: Record<string, string> = {};
+  for (const question of questions) answers[question.id] = text;
+  return answers;
 }
 
 export function denied(kind: ApprovalDecisionKind): boolean {

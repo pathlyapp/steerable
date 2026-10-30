@@ -18,11 +18,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { HostBridge } from '@/lib/host-bridge';
+import type { ApprovalPromptRequest, HostBridge } from '@/lib/host-bridge';
+import { ApprovalPromptProvider } from './chat/ApprovalPromptProvider';
 import type { UseChatsAndAgentsResult } from '@/hooks/useChatsAndAgents';
 import type { LocalChat, LocalChatAgent, LocalProject } from '@/lib/local-api';
 import type { RightPanelState } from '@/layouts/AgentLayout';
 import { resetProjectsStoreForTests } from '@/hooks/useProjects';
+import { chatRowKeys } from '@/lib/chat-row-keys';
 
 // 可控桥桩：bridgeStub 为 null 时 hasHostBridge() = false（纯浏览器预览路径），
 // 项目模式用例经 enterElectron() 装上带 selectDirectory 的桥。
@@ -40,6 +42,8 @@ const reorderProjects = vi.fn();
 const deleteProject = vi.fn();
 const openLocalPath = vi.fn();
 const setChatPinned = vi.fn();
+const updateChatTitle = vi.fn();
+const forkChat = vi.fn();
 const getChatLiveStream = vi.fn();
 
 vi.mock('@/lib/local-api', () => ({
@@ -51,6 +55,8 @@ vi.mock('@/lib/local-api', () => ({
   deleteProject: (...args: unknown[]) => deleteProject(...args),
   openLocalPath: (...args: unknown[]) => openLocalPath(...args),
   setChatPinned: (...args: unknown[]) => setChatPinned(...args),
+  updateChatTitle: (...args: unknown[]) => updateChatTitle(...args),
+  forkChat: (...args: unknown[]) => forkChat(...args),
   getChatLiveStream: (chatId: string) => getChatLiveStream(chatId),
   getLlmAccount: async () => ({
     status: 'unsupported',
@@ -87,6 +93,8 @@ beforeEach(() => {
   deleteProject.mockReset();
   openLocalPath.mockReset();
   setChatPinned.mockReset();
+  updateChatTitle.mockReset();
+  forkChat.mockReset();
   getChatLiveStream.mockReset();
   listProjects.mockResolvedValue({ projects: [] });
   getChatLiveStream.mockResolvedValue({ active: false });
@@ -234,6 +242,7 @@ interface RenderSidebarOptions {
   rightPanel?: RightPanelState;
   onToggleRightPanel?: (kind: string) => void;
   onCollapse?: () => void;
+  withApprovalProvider?: boolean;
 }
 
 function renderSidebar(
@@ -245,22 +254,23 @@ function renderSidebar(
   const onToggleRightPanel = options.onToggleRightPanel ?? vi.fn();
   const onCollapse = options.onCollapse ?? vi.fn();
 
+  const shell = (
+    <>
+      <AgentSidebar
+        data={data}
+        rightPanel={options.rightPanel ?? null}
+        onToggleRightPanel={onToggleRightPanel}
+        onCollapse={onCollapse}
+      />
+      <LocationProbe />
+      <Outlet />
+    </>
+  );
   const utils = render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
         <Route
-          element={
-            <>
-              <AgentSidebar
-                data={data}
-                rightPanel={options.rightPanel ?? null}
-                onToggleRightPanel={onToggleRightPanel}
-                onCollapse={onCollapse}
-              />
-              <LocationProbe />
-              <Outlet />
-            </>
-          }
+          element={options.withApprovalProvider ? <ApprovalPromptProvider>{shell}</ApprovalPromptProvider> : shell}
         >
           <Route path="/" element={<div />} />
           <Route path="/agent" element={<div />} />
@@ -509,6 +519,10 @@ describe('AgentSidebar 会话列表渲染', () => {
   });
 });
 
+function openChatMenu() {
+  fireEvent.click(screen.getByTestId('sidebar-chat-more'));
+}
+
 describe('AgentSidebar 会话行交互', () => {
   it('点击会话行导航到对应会话', () => {
     renderSidebar('/agent');
@@ -520,6 +534,7 @@ describe('AgentSidebar 会话行交互', () => {
     const deleteChat = vi.fn(async () => true);
     renderSidebar('/agent', vi.fn(), { data: { deleteChat } });
 
+    openChatMenu();
     fireEvent.click(screen.getByTestId('sidebar-chat-delete'));
     expect(deleteChat).not.toHaveBeenCalled();
     expect(screen.getByTestId('sidebar-delete-chat-dialog').textContent).toContain(
@@ -530,6 +545,7 @@ describe('AgentSidebar 会话行交互', () => {
     expect(deleteChat).not.toHaveBeenCalled();
     expect(screen.queryByTestId('sidebar-delete-chat-dialog')).toBeNull();
 
+    openChatMenu();
     fireEvent.click(screen.getByTestId('sidebar-chat-delete'));
     fireEvent.click(screen.getByTestId('sidebar-delete-chat-dialog-confirm'));
     await waitFor(() => expect(deleteChat).toHaveBeenCalledWith('chat-with-content'));
@@ -539,6 +555,7 @@ describe('AgentSidebar 会话行交互', () => {
     const deleteChat = vi.fn(async () => true);
     renderSidebar('/agent/chat-with-content', vi.fn(), { data: { deleteChat } });
 
+    openChatMenu();
     fireEvent.click(screen.getByTestId('sidebar-chat-delete'));
     fireEvent.click(screen.getByTestId('sidebar-delete-chat-dialog-confirm'));
     await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/agent'));
@@ -548,6 +565,7 @@ describe('AgentSidebar 会话行交互', () => {
     const deleteChat = vi.fn(async () => false);
     renderSidebar('/agent/chat-with-content', vi.fn(), { data: { deleteChat } });
 
+    openChatMenu();
     fireEvent.click(screen.getByTestId('sidebar-chat-delete'));
     fireEvent.click(screen.getByTestId('sidebar-delete-chat-dialog-confirm'));
     await waitFor(() => expect(deleteChat).toHaveBeenCalled());
@@ -557,12 +575,181 @@ describe('AgentSidebar 会话行交互', () => {
 
   it('取消删除后点击会话行正常导航', () => {
     renderSidebar('/agent');
+    openChatMenu();
     fireEvent.click(screen.getByTestId('sidebar-chat-delete'));
     fireEvent.click(screen.getByTestId('sidebar-delete-chat-dialog-cancel'));
 
     fireEvent.click(screen.getByText('已经聊过的对话'));
     expect(screen.getByTestId('loc').textContent).toBe('/agent/chat-with-content');
+    openChatMenu();
     expect(screen.getByTestId('sidebar-chat-delete').getAttribute('aria-label')).toBe('Delete chat');
+    expect(screen.getByTestId('sidebar-chat-fork').textContent).toContain('Fork');
+  });
+
+  it('菜单重命名成功后改本地标题', async () => {
+    updateChatTitle.mockResolvedValue({ id: 'chat-with-content', title: '周报' });
+    const patchChatTitle = vi.fn();
+    renderSidebar('/agent', vi.fn(), { data: { patchChatTitle } });
+    openChatMenu();
+    fireEvent.click(screen.getByTestId('sidebar-chat-rename'));
+    const input = screen.getByTestId('sidebar-chat-rename-input');
+    fireEvent.change(input, { target: { value: '周报' } });
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => {
+      expect(updateChatTitle).toHaveBeenCalledWith('chat-with-content', '周报');
+    });
+    expect(patchChatTitle).toHaveBeenCalledWith('chat-with-content', '周报');
+    expect(screen.queryByTestId('sidebar-chat-rename-input')).toBeNull();
+  });
+
+  it('保存中输入框只读并显示加载图标', async () => {
+    let finish: (value: { id: string; title: string }) => void = () => {};
+    updateChatTitle.mockReturnValue(new Promise((resolve) => {
+      finish = resolve;
+    }));
+    renderSidebar('/agent');
+    openChatMenu();
+    fireEvent.click(screen.getByTestId('sidebar-chat-rename'));
+    const input = screen.getByTestId('sidebar-chat-rename-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '周报' } });
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-chat-rename-busy')).toBeTruthy();
+    });
+    const locked = screen.getByTestId('sidebar-chat-rename-input') as HTMLInputElement;
+    expect(locked.readOnly).toBe(true);
+    expect(locked.value).toBe('周报');
+    fireEvent.keyDown(locked, { key: 'Escape' });
+    expect(screen.getByTestId('sidebar-chat-rename-input')).toBeTruthy();
+    finish({ id: 'chat-with-content', title: '周报' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('sidebar-chat-rename-input')).toBeNull();
+    });
+  });
+
+  it('409 退出编辑并提示稍后再改名', async () => {
+    updateChatTitle.mockRejectedValue(Object.assign(new Error('busy'), { status: 409 }));
+    const patchChatTitle = vi.fn();
+    renderSidebar('/agent', vi.fn(), { data: { patchChatTitle } });
+    openChatMenu();
+    fireEvent.click(screen.getByTestId('sidebar-chat-rename'));
+    const input = screen.getByTestId('sidebar-chat-rename-input');
+    fireEvent.change(input, { target: { value: '周报' } });
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-chat-rename-hint').textContent).toContain(
+        'running in another process',
+      );
+    });
+    expect(screen.queryByTestId('sidebar-chat-rename-input')).toBeNull();
+    expect(screen.getByText('已经聊过的对话')).toBeTruthy();
+    expect(patchChatTitle).not.toHaveBeenCalled();
+  });
+
+  it('其它错误留在输入框里', async () => {
+    updateChatTitle.mockRejectedValue(new Error('disk full'));
+    renderSidebar('/agent');
+    openChatMenu();
+    fireEvent.click(screen.getByTestId('sidebar-chat-rename'));
+    const input = screen.getByTestId('sidebar-chat-rename-input');
+    fireEvent.change(input, { target: { value: '周报' } });
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-chat-rename-error').textContent).toBe('disk full');
+    });
+    expect(screen.getByTestId('sidebar-chat-rename-input')).toBeTruthy();
+  });
+
+  it('会话行获得焦点时按重命名快捷键进入编辑，原名全选', () => {
+    renderSidebar('/agent');
+    const rowButton = screen.getByTestId('sidebar-chat-row').querySelector('button');
+    fireEvent.keyDown(rowButton!, { key: chatRowKeys.rename });
+    const input = screen.getByTestId('sidebar-chat-rename-input') as HTMLInputElement;
+    expect(input.value).toBe('已经聊过的对话');
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+  });
+
+  it('Escape 与空白名都不发改名请求', () => {
+    renderSidebar('/agent');
+    openChatMenu();
+    fireEvent.click(screen.getByTestId('sidebar-chat-rename'));
+    const input = screen.getByTestId('sidebar-chat-rename-input');
+    fireEvent.change(input, { target: { value: '临时' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(updateChatTitle).not.toHaveBeenCalled();
+    expect(screen.getByText('已经聊过的对话')).toBeTruthy();
+
+    openChatMenu();
+    fireEvent.click(screen.getByTestId('sidebar-chat-rename'));
+    const again = screen.getByTestId('sidebar-chat-rename-input');
+    fireEvent.change(again, { target: { value: '   ' } });
+    fireEvent.submit(again.closest('form')!);
+    expect(updateChatTitle).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('sidebar-chat-rename-input')).toBeNull();
+  });
+
+  it('分叉成功后打开新会话，占用时留在原行', async () => {
+    forkChat.mockResolvedValueOnce({ chatId: 'chat-fork' });
+    const refreshChats = vi.fn(async () => {});
+    renderSidebar('/agent', vi.fn(), { data: { refreshChats } });
+    openChatMenu();
+    fireEvent.click(screen.getByTestId('sidebar-chat-fork'));
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/agent/chat-fork'));
+    expect(forkChat).toHaveBeenCalledWith('chat-with-content');
+    expect(refreshChats).toHaveBeenCalled();
+
+    forkChat.mockRejectedValueOnce(Object.assign(new Error('busy'), { status: 409 }));
+    openChatMenu();
+    fireEvent.click(screen.getByTestId('sidebar-chat-fork'));
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-chat-rename-hint').textContent).toContain('still generating');
+    });
+    expect(screen.getByTestId('loc').textContent).toBe('/agent/chat-fork');
+  });
+
+  it('分叉请求进行时该行显示分叉中', async () => {
+    let finish: (value: { chatId: string }) => void = () => {};
+    forkChat.mockReturnValue(new Promise((resolve) => {
+      finish = resolve;
+    }));
+    renderSidebar('/agent');
+    openChatMenu();
+    fireEvent.click(screen.getByTestId('sidebar-chat-fork'));
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-chat-forking').textContent).toBe('Forking…');
+    });
+    expect(screen.queryByTestId('sidebar-chat-menu')).toBeNull();
+    finish({ chatId: 'chat-fork' });
+    await waitFor(() => expect(screen.getByTestId('loc').textContent).toBe('/agent/chat-fork'));
+    expect(screen.queryByTestId('sidebar-chat-forking')).toBeNull();
+  });
+
+  it('更多菜单用方向键移动焦点，Esc 关闭', async () => {
+    renderSidebar('/agent');
+    openChatMenu();
+    const items = screen.getAllByRole('menuitem');
+    expect(items).toHaveLength(3);
+    expect(items[0].textContent).toContain('Rename');
+    expect(items[1].textContent).toContain('Fork');
+    expect(items[2].textContent).toContain('Delete');
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByTestId('sidebar-chat-delete'));
+    });
+    fireEvent.keyDown(screen.getByTestId('sidebar-chat-delete'), { key: 'Enter' });
+    expect(screen.getByTestId('sidebar-delete-chat-dialog')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('sidebar-delete-chat-dialog-cancel'));
+
+    openChatMenu();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('sidebar-chat-menu')).toBeNull();
+      expect(document.activeElement).toBe(
+        screen.getByTestId('sidebar-chat-row').querySelector('button'),
+      );
+    });
   });
 
   it('会话区（最近）可折叠再展开', () => {
@@ -732,6 +919,51 @@ describe('AgentSidebar 会话行交互', () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
     expect(screen.getByLabelText('Generating')).toBeTruthy();
+  });
+
+  it('工具审批等待时，侧栏显示等待输入标记', async () => {
+    enterElectron([]);
+    const listeners = new Set<(request: ApprovalPromptRequest) => void>();
+    bridgeStub = {
+      ...bridgeStub!,
+      approval: {
+        onRequest: (callback) => {
+          listeners.add(callback);
+          return () => listeners.delete(callback);
+        },
+        decide: vi.fn(async () => undefined),
+        pending: vi.fn(async () => []),
+      },
+    };
+    renderSidebar('/agent/c-other', vi.fn(), {
+      withApprovalProvider: true,
+      data: {
+        chats: [
+          makeChat({ id: 'c-wait', title: '等审批' }),
+          makeChat({ id: 'c-other', title: '另一会话' }),
+        ],
+      },
+    });
+    expect(screen.queryByLabelText('Waiting for user input')).toBeNull();
+
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          requestId: 'approval-1',
+          chatId: 'c-wait',
+          toolName: 'browser_navigate',
+          arguments: { url: 'https://example.com' },
+          mode: 'external',
+          category: 'browser',
+          round: 1,
+        });
+      }
+    });
+
+    const row = screen.getByText('等审批').closest('[data-testid="sidebar-chat-row"]');
+    expect(row?.querySelector('[aria-label="Waiting for user input"]')).toBeTruthy();
+    const other = screen.getByText('另一会话').closest('[data-testid="sidebar-chat-row"]');
+    expect(other?.querySelector('[aria-label="Waiting for user input"]')).toBeNull();
   });
 
   it('当前打开的会话不因 live-stream 暂时 inactive 丢掉正在生成指示', async () => {
@@ -922,6 +1154,38 @@ describe('AgentSidebar 副作用', () => {
 });
 
 describe('AgentSidebar 项目模式（Electron）', () => {
+  it('命令行创建的项目显示终端图标，并且默认展开', async () => {
+    enterElectron([makeProject({ id: 'proj-cli', name: 'repo-a', origin: 'cli' })]);
+    renderSidebar('/agent', vi.fn(), {
+      data: {
+        chats: [makeChat({
+          id: 'cli-chat',
+          projectId: 'proj-cli',
+          title: '命令行里的会话',
+        })],
+      },
+    });
+    await screen.findByText('repo-a');
+    expect(screen.getByTestId('sidebar-project-cli-origin').getAttribute('title')).toBe('Created from the command line');
+    expect(screen.getByText('命令行里的会话')).toBeTruthy();
+  });
+
+  it('最窄侧栏悬停时，前 6 个字不被置顶和更多挡住', () => {
+    renderSidebar('/agent');
+    const title = screen.getByText('已经聊过的对话');
+    const match = title.className.match(/group-hover\/item:pr-(\d+)/);
+    const paddingPx = Number(match?.[1]) * 4;
+    // 侧栏 180、右边框 1、列表 px-2.5、项目内 pl-2、行 px-2.5 之后，标题盒宽 131。
+    // 12px 中文下 6 个字是 72px。操作按钮从行右缘占 54px，扣掉行右内边距 10px 后还要留 44px。
+    const narrowTitleWidth = 131;
+    const sixCharacters = 72;
+    const clearanceBeforeButtons = 44;
+    expect(title.className).toContain('group-focus-within/item:pr-14');
+    expect(title.className).toContain('truncate');
+    expect(narrowTitleWidth - paddingPx).toBeGreaterThanOrEqual(sixCharacters);
+    expect(paddingPx).toBeGreaterThanOrEqual(clearanceBeforeButtons);
+  });
+
   it('项目分组主动加载后续页，避免较旧会话被误报为空', async () => {
     const scrollHeight = Object.getOwnPropertyDescriptor(
       HTMLElement.prototype,

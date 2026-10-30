@@ -6,7 +6,7 @@ import { mkdtempSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { describe, expect, it } from 'vitest';
-import { LocalExecutor, type LocalExecRequest } from '../src/local-executor.js';
+import { expandFencePath, LocalExecutor, type LocalExecRequest } from '../src/local-executor.js';
 import { ToolRouter } from '../src/tool-router.js';
 import {
   evaluateExecPolicy,
@@ -310,6 +310,64 @@ describe('LocalExecutor shell policy and transport', () => {
     expect(calls[0].args).toContain('-tt');
     expect(calls[0].args.join(' ')).not.toContain('SECRET_TOKEN');
     expect(calls[0].env?.SECRET_TOKEN).toBeUndefined();
+  });
+});
+
+describe('local_exec_shell cwd', () => {
+  it('starts outside the project and still rejects an outside snippet cwd', async () => {
+    const seen: Array<string | undefined> = [];
+    const router = new ToolRouter(
+      {} as never,
+      { list: () => [] } as never,
+      async (request) => {
+        seen.push(request.cwd);
+        return { success: true };
+      },
+    );
+    const root = process.platform === 'win32' ? 'C:\\proj\\a' : '/tmp/proj-a';
+    const outside = process.platform === 'win32' ? 'C:\\Users\\me\\Downloads' : '/tmp/Downloads';
+    const shell = await router.execute(
+      { name: 'local_exec_shell', arguments: { command: 'pwd', cwd: outside } },
+      { projectRoot: root },
+    );
+    const omitted = await router.execute(
+      { name: 'local_exec_shell', arguments: { command: 'pwd' } },
+      { projectRoot: root },
+    );
+    const tilde = await router.execute(
+      { name: 'local_exec_shell', arguments: { command: 'pwd', cwd: '~/Downloads' } },
+      { projectRoot: root },
+    );
+    expect(shell).toMatchObject({ success: true });
+    expect(omitted).toMatchObject({ success: true });
+    expect(tilde).toMatchObject({ success: true });
+    expect(seen).toEqual([
+      expandFencePath(outside),
+      expandFencePath(root),
+      expandFencePath('~/Downloads'),
+    ]);
+
+    const pwsh = await router.execute(
+      { name: 'pwsh', arguments: { command: 'Get-Date', cwd: outside } },
+      { projectRoot: root },
+    );
+    expect(pwsh).toMatchObject({ success: false });
+    expect((pwsh as { error: string }).error).toContain('路径越界');
+    expect(seen).toEqual([
+      expandFencePath(outside),
+      expandFencePath(root),
+      expandFencePath('~/Downloads'),
+    ]);
+
+    const snippet = await router.execute(
+      {
+        name: 'local_run_snippet',
+        arguments: { language: 'node', code: '1', cwd: outside },
+      },
+      { projectRoot: root },
+    );
+    expect(snippet).toMatchObject({ success: false });
+    expect((snippet as { error: string }).error).toContain('路径越界');
   });
 });
 

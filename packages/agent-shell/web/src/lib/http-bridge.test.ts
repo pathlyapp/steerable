@@ -329,4 +329,11 @@ describe('浏览器形态的 local.* 降级', () => {
     const res = await bridge.local!.captureScreenshot();
     expect(res.success).toBe(false);
   });
+
+  it('浏览器桥不提供界面缩放', () => {
+    const bridge = createHttpBridge();
+    expect(bridge.getZoom).toBeUndefined();
+    expect(bridge.setZoom).toBeUndefined();
+    expect(bridge.onZoomChanged).toBeUndefined();
+  });
 });

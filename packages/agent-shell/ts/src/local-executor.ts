@@ -6,6 +6,7 @@ import { createHash } from 'crypto';
 import { spawn, execSync } from 'child_process';
 import { log } from './log.js';
 import { constants as fsConstants } from 'fs';
+import { expandFencePath, resolveFencePath } from './fence-path.js';
 import { adaptCommandForPowerShell } from './shell-adapt.js';
 import {
   evaluateExecPolicy,
@@ -357,13 +358,7 @@ export function isPathWithinRoot(resolvedPath: string, resolvedRoot: string): bo
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-/** `~` 展开后 resolve。围栏比较前路径与根都要过这一步。 */
-export function expandFencePath(inputPath: string): string {
-  const expanded = inputPath.startsWith('~')
-    ? path.join(os.homedir(), inputPath.slice(1))
-    : inputPath;
-  return path.resolve(expanded);
-}
+export { canonicalFencePath, expandFencePath, resolveFencePath } from './fence-path.js';
 
 /**
  * 可写根：项目家目录（或对话工作区）加上额外可写根（源文件夹）。
@@ -879,7 +874,7 @@ export class LocalExecutor {
     additionalReadRoots?: string[] | null,
   ): Promise<LocalFileReadResult> {
     try {
-      const filePath = this.resolvePath(request.path);
+      const filePath = this.resolvePath(request.path, projectRoot);
       if (projectRoot) {
         const root = this.resolvePath(projectRoot);
         const inAdditionalRoot = (additionalReadRoots ?? []).some((r) =>
@@ -919,7 +914,7 @@ export class LocalExecutor {
     projectRoot?: string | null,
     additionalWriteRoots?: string[] | null,
   ): Promise<LocalFileWriteResult> {
-    const filePath = this.resolvePath(request.path);
+    const filePath = this.resolvePath(request.path, projectRoot);
     const violation = writableFenceViolation(
       filePath,
       writableFenceRoots(projectRoot, additionalWriteRoots),
@@ -986,7 +981,7 @@ export class LocalExecutor {
     projectRoot?: string | null,
     additionalWriteRoots?: string[] | null,
   ): Promise<LocalFileEditResult> {
-    const filePath = this.resolvePath(request.path);
+    const filePath = this.resolvePath(request.path, projectRoot);
     const violation = writableFenceViolation(
       filePath,
       writableFenceRoots(projectRoot, additionalWriteRoots),
@@ -1382,8 +1377,8 @@ export class LocalExecutor {
     });
   }
 
-  private resolvePath(inputPath: string): string {
-    return expandFencePath(inputPath);
+  private resolvePath(inputPath: string, baseDir?: string | null): string {
+    return resolveFencePath(inputPath, baseDir);
   }
 
   private resolveCwd(cwd: string | undefined, shellType: ShellType): string {

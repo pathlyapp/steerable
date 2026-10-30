@@ -5,11 +5,15 @@ import type { AgentClient } from '@steerable/agent-client';
 import { installAgentKeybindings } from './keys.js';
 import { transcriptPage } from './scroll.js';
 import { AgentTui } from './session.js';
+import type { ApprovalSpec } from '../approve.js';
 
 export interface RunTuiOptions {
   client: AgentClient;
   product: string;
   dataDir?: string;
+  projectId?: string;
+  projectLabel?: string;
+  approvalPolicy?: ApprovalSpec;
   terminal?: Terminal;
   fallbackTerminal?: Terminal;
   openRenderer?: CliRenderer;
@@ -29,12 +33,7 @@ export async function runTui(options: RunTuiOptions): Promise<number> {
   }
 }
 
-async function runOpenTui(options: {
-  client: AgentClient;
-  product: string;
-  dataDir?: string;
-  openRenderer?: CliRenderer;
-}): Promise<number> {
+async function runOpenTui(options: RunTuiOptions): Promise<number> {
   const createCliRenderer = options.openRenderer
     ? null
     : (await import('@opentui/core')).createCliRenderer;
@@ -52,15 +51,27 @@ async function runOpenTui(options: {
     const session = new AgentTui(options.client, {
       product: options.product,
       ...(options.dataDir ? { dataDir: options.dataDir } : {}),
+      ...(options.projectId ? { projectId: options.projectId } : {}),
+      ...(options.projectLabel ? { projectLabel: options.projectLabel } : {}),
+      ...(options.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
       onChange() {
         view.apply(session.snapshot());
       },
       onExit() {
-        renderer.destroy();
+        stop();
         resolve(0);
       },
     });
     const view = new OpenTuiView(renderer);
+    const onPaste = (event: { bytes: Uint8Array; stopPropagation: () => void }): void => {
+      event.stopPropagation();
+      session.acceptDecodedPaste(new TextDecoder().decode(event.bytes));
+    };
+    renderer.keyInput.on('paste', onPaste);
+    const stop = (): void => {
+      renderer.keyInput.off('paste', onPaste);
+      renderer.destroy();
+    };
     renderer.prependInputHandler((sequence) => {
       if (yieldsToRenderer(sequence)) return false;
       const page = transcriptPage(sequence);
@@ -74,25 +85,23 @@ async function runOpenTui(options: {
     void session.open().then(
       () => view.apply(session.snapshot()),
       (error: unknown) => {
-        renderer.destroy();
+        stop();
         reject(error);
       },
     );
   });
 }
 
-function runPlainTui(options: {
-  client: AgentClient;
-  product: string;
-  dataDir?: string;
-  terminal?: Terminal;
-}): Promise<number> {
+function runPlainTui(options: RunTuiOptions): Promise<number> {
   const terminal = options.terminal ?? new ProcessTerminal();
   const tui = new TuiAltScreen(terminal);
   return new Promise((resolve, reject) => {
     const session = new AgentTui(options.client, {
       product: options.product,
       ...(options.dataDir ? { dataDir: options.dataDir } : {}),
+      ...(options.projectId ? { projectId: options.projectId } : {}),
+      ...(options.projectLabel ? { projectLabel: options.projectLabel } : {}),
+      ...(options.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
       onChange() {
         tui.requestRender();
       },

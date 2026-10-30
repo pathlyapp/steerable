@@ -9,6 +9,7 @@ sandbox-exec smoke tests on macOS (skipped elsewhere).
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -121,6 +122,87 @@ def test_profile_actually_confines_a_child_process() -> None:
         check=False,
     )
     assert denied.returncode != 0
+
+
+@pytest.mark.skipif(not seatbelt_available(), reason="macOS sandbox-exec only")
+def test_project_writable_root_still_denies_bashrc_and_hosts(tmp_path: Path) -> None:
+    """allow-all only answers approval. A project writable root does not open these files."""
+    targets = [Path.home() / ".bashrc", Path("/etc/hosts")]
+    snapshots: dict[Path, bytes | None] = {
+        target: target.read_bytes() if target.exists() else None for target in targets
+    }
+    profile = build_seatbelt_profile(writable_roots=[str(tmp_path)], network=False)
+    assert str(Path.home() / ".bashrc") not in profile
+    assert "/etc/hosts" not in profile
+    script = (
+        "import pathlib,sys\n"
+        "targets=[pathlib.Path.home()/'.bashrc', pathlib.Path('/etc/hosts')]\n"
+        "failed=0\n"
+        "for target in targets:\n"
+        "    try:\n"
+        "        target.open('a').write('\\n# phase1-should-not-land\\n')\n"
+        "    except OSError:\n"
+        "        failed += 1\n"
+        "sys.exit(0 if failed == len(targets) else 2)\n"
+    )
+    try:
+        denied = subprocess.run(
+            seatbelt_argv(profile, [sys.executable, "-c", script]),
+            capture_output=True,
+            check=False,
+        )
+        assert denied.returncode == 0, denied.stderr.decode()
+        for target, snapshot in snapshots.items():
+            if snapshot is None:
+                assert not target.exists()
+            else:
+                assert target.read_bytes() == snapshot
+    finally:
+        for target, snapshot in snapshots.items():
+            if snapshot is None:
+                if target.exists():
+                    target.unlink()
+                continue
+            if target.exists() and target.read_bytes() != snapshot:
+                target.write_bytes(snapshot)
+
+
+@pytest.mark.skipif(not seatbelt_available(), reason="macOS sandbox-exec only")
+def test_outside_cwd_cannot_create_a_file(tmp_path: Path) -> None:
+    """A shell whose cwd is outside the project still runs, and the write fails."""
+    outside = Path.home() / f".phase1-cwd-deny-{os.getpid()}"
+    outside.mkdir()
+    planted = outside / "planted.txt"
+    planted.write_text("keep\n", encoding="utf-8")
+    created = outside / "new.txt"
+    inside = tmp_path / "ok.txt"
+    profile = build_seatbelt_profile(writable_roots=[str(tmp_path)], network=False)
+    try:
+        denied = subprocess.run(
+            seatbelt_argv(
+                profile,
+                [sys.executable, "-c", "open('new.txt','w').write('no\\n')"],
+            ),
+            cwd=outside,
+            capture_output=True,
+            check=False,
+        )
+        assert denied.returncode != 0, denied.stderr.decode()
+        assert not created.exists()
+        assert planted.read_text(encoding="utf-8") == "keep\n"
+        allowed = subprocess.run(
+            seatbelt_argv(
+                profile,
+                [sys.executable, "-c", "open('ok.txt','w').write('yes\\n')"],
+            ),
+            cwd=tmp_path,
+            capture_output=True,
+            check=False,
+        )
+        assert allowed.returncode == 0, allowed.stderr.decode()
+        assert inside.read_text(encoding="utf-8") == "yes\n"
+    finally:
+        shutil.rmtree(outside, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------

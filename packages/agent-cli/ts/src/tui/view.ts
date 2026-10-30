@@ -211,8 +211,10 @@ export class OpenTuiView {
     this.readOnly.visible = screen.readOnly;
     this.draft.content = draftContent(screen.draft, screen.cursor);
     this.composer.height = composerRows(screen.draft, Math.max(1, this.renderer.width - 2));
-    this.status.content = screen.status;
-    this.status.visible = screen.status.length > 0;
+    const project = [screen.projectLabel, screen.ruleLabel].filter((line) => line && line.length > 0).join(' │ ');
+    const status = [project, screen.status].filter((line) => line && line.length > 0).join('\n');
+    this.status.content = status;
+    this.status.visible = status.length > 0;
     this.footer.content = footerText();
     const attached = attachmentText(screen.attachments ?? []);
     this.attached.content = attached;

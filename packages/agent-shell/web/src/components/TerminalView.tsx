@@ -197,10 +197,15 @@ export function TerminalView({
     window.addEventListener('resize', handleResize);
     const ro = new ResizeObserver(handleResize);
     ro.observe(containerRef.current);
+    // Webview zoom changes CSS pixel size without a window resize on WKWebView.
+    const offZoom = bridge.onZoomChanged?.(() => {
+      requestAnimationFrame(() => handleResize());
+    });
 
     const containerEl = containerRef.current;
     return () => {
       cancelled = true;
+      offZoom?.();
       window.removeEventListener('resize', handleResize);
       containerEl?.removeEventListener('contextmenu', onContextMenu);
       ro.disconnect();

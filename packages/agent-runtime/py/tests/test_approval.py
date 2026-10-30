@@ -208,6 +208,9 @@ async def test_session_scope_caches_per_category() -> None:
     assert calls["delete_file"] == 2
     # The second call in the same category was decided by the cache.
     assert len(approver.requests) == 1
+    assert second.data["_approval"]["cached"] is True
+    assert second.data["_approval"]["kind"] == "allow_for_session"
+    assert first.data["_approval"].get("cached") is not True
 
 
 @pytest.mark.asyncio
@@ -641,3 +644,323 @@ async def test_workspace_auto_approver_asks_for_shell_that_leaves_the_sandbox(tm
 
     assert [item.kind for item in (outside, climbed, unsandboxed)] == ["allow_once"] * 3
     assert [item.tool_name for item in inner.requests] == ["local_exec_shell"] * 3
+
+
+def test_symlink_into_the_project_is_inside_and_a_link_out_is_not(tmp_path) -> None:
+    from steerable_agent_runtime.approval import path_inside_writable_roots
+
+    project = tmp_path / "repo"
+    project.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(project, target_is_directory=True)
+    outside = tmp_path / "other"
+    outside.mkdir()
+    escape = project / "escape"
+    escape.symlink_to(outside, target_is_directory=True)
+    assert path_inside_writable_roots(str(link / "a.txt"), [str(project)])
+    assert not path_inside_writable_roots(str(escape / "x.txt"), [str(project)])
+    assert path_inside_writable_roots("a.txt", [str(project)], base=str(project))
+    assert not path_inside_writable_roots("escape/x.txt", [str(project)], base=str(project))
+
+
+@pytest.mark.asyncio
+async def test_relative_symlink_out_of_the_project_asks(tmp_path) -> None:
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover
+
+    project = tmp_path / "repo"
+    project.mkdir()
+    outside = tmp_path / "other"
+    outside.mkdir()
+    (project / "escape").symlink_to(outside, target_is_directory=True)
+    inner = _ScriptedApprover([ApprovalDecision("allow_once", "user allowed")] * 2)
+    approver = WorkspaceAutoApprover(
+        inner,
+        [str(project)],
+        sandbox_enforced=True,
+        path_base=str(project),
+    )
+
+    read = await approver.approve(_request("local_read_file", {"path": "escape/secret"}))
+    shell = await approver.approve(
+        _request("local_exec_shell", {"command": "ls", "cwd": "escape"})
+    )
+
+    assert read.kind == "allow_once"
+    assert shell.kind == "allow_once"
+    assert [item.tool_name for item in inner.requests] == [
+        "local_read_file",
+        "local_exec_shell",
+    ]
+
+
+def test_windows_project_path_ignores_letter_case() -> None:
+    import ntpath
+
+    from steerable_agent_runtime.approval import path_inside_writable_roots
+
+    assert path_inside_writable_roots(
+        r"c:\work\repo\a.txt",
+        [r"C:\Work\Repo"],
+        pathmod=ntpath,
+    )
+    assert path_inside_writable_roots(r"src\a.txt", [r"C:\Work\Repo"], pathmod=ntpath)
+    assert not path_inside_writable_roots(
+        r"C:\Work\Repo-extra\a.txt",
+        [r"C:\Work\Repo"],
+        pathmod=ntpath,
+    )
+    assert not path_inside_writable_roots(
+        r"D:\Work\Repo\a.txt",
+        [r"C:\Work\Repo"],
+        pathmod=ntpath,
+    )
+    assert not path_inside_writable_roots(r"..\secret", [r"C:\Work\Repo"], pathmod=ntpath)
+
+
+@pytest.mark.asyncio
+async def test_workspace_auto_approver_allows_declared_read_without_a_path() -> None:
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover
+
+    inner = _ScriptedApprover([ApprovalDecision("deny_once", "should not ask")])
+    approver = WorkspaceAutoApprover(inner, ["/proj"])
+    decision = await approver.approve(
+        ApprovalRequest(
+            tool_name="browser_scroll",
+            arguments={},
+            mode="read",
+            category="browser",
+        )
+    )
+    assert decision.kind == "allow_once"
+    assert decision.reason == "declared read-only tool"
+    assert inner.requests == []
+
+
+@pytest.mark.asyncio
+async def test_workspace_auto_approver_does_not_allow_read_outside_project(tmp_path) -> None:
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover
+
+    project = tmp_path / "repo"
+    project.mkdir()
+    inner = _ScriptedApprover([ApprovalDecision("deny_once", "ask")])
+    approver = WorkspaceAutoApprover(inner, [str(project)])
+    decision = await approver.approve(
+        ApprovalRequest(
+            tool_name="local_read_file",
+            arguments={"path": str(tmp_path / "id_rsa")},
+            mode="read",
+            category="local_read_file",
+        )
+    )
+    assert decision.kind == "deny_once"
+    assert [item.tool_name for item in inner.requests] == ["local_read_file"]
+
+
+def test_declared_resolver_keeps_declaration_and_infers_the_rest() -> None:
+    from steerable_agent_runtime.approval import declared_resolver
+
+    resolve = declared_resolver(
+        [
+            {
+                "type": "function",
+                "function": {"name": "browser_scroll", "parameters": {}},
+                "mode": "read",
+                "approvalCategory": "browser",
+            },
+            {
+                "type": "function",
+                "function": {"name": "get_secret", "parameters": {}},
+                "mode": "external",
+            },
+            {"type": "function", "function": {"name": "delete_file", "parameters": {}}},
+        ]
+    )
+    ctx = LoopContext()
+    scroll = resolve(ToolCall(id="c1", name="browser_scroll", arguments={}), ctx)
+    secret = resolve(ToolCall(id="c2", name="get_secret", arguments={}), ctx)
+    delete = resolve(ToolCall(id="c3", name="delete_file", arguments={}), ctx)
+    missing = resolve(ToolCall(id="c4", name="mystery_tool", arguments={}), ctx)
+    assert (scroll.mode, scroll.category) == ("read", "browser")
+    assert (secret.mode, secret.category) == ("external", "get_secret")
+    assert (delete.mode, delete.category) == ("destructive", "delete_file")
+    assert (missing.mode, missing.category) == ("other", "mystery_tool")
+
+
+def test_declared_resolver_without_fields_matches_name_inference() -> None:
+    from steerable_agent_runtime.approval import declared_resolver
+
+    resolve = declared_resolver(None)
+    ctx = LoopContext()
+    delete = resolve(ToolCall(id="c1", name="delete_file", arguments={}), ctx)
+    read = resolve(ToolCall(id="c2", name="read_notes", arguments={}), ctx)
+    assert (delete.mode, delete.category) == ("destructive", "delete_file")
+    assert (read.mode, read.category) == ("read", "read_notes")
+
+
+@pytest.mark.asyncio
+async def test_browser_scroll_skips_and_one_session_allow_covers_the_category() -> None:
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover, declared_resolver
+
+    router = ToolRouter()
+    calls = {"browser_scroll": 0, "browser_navigate": 0, "browser_click": 0, "mystery_tool": 0}
+
+    @tool(router=router, name="browser_scroll", description="scroll", mode="read")
+    async def browser_scroll() -> dict[str, bool]:
+        calls["browser_scroll"] += 1
+        return {"ok": True}
+
+    @tool(router=router, name="browser_navigate", description="open", mode="external")
+    async def browser_navigate() -> dict[str, bool]:
+        calls["browser_navigate"] += 1
+        return {"ok": True}
+
+    @tool(router=router, name="browser_click", description="click", mode="external")
+    async def browser_click() -> dict[str, bool]:
+        calls["browser_click"] += 1
+        return {"ok": True}
+
+    @tool(router=router, name="mystery_tool", description="mystery", mode="other")
+    async def mystery_tool() -> dict[str, bool]:
+        calls["mystery_tool"] += 1
+        return {"ok": True}
+
+    inner = _ScriptedApprover([
+        ApprovalDecision("allow_for_session", "ok"),
+        ApprovalDecision("allow_once", "ok"),
+    ])
+    executor = ApprovalExecutor(
+        RouterToolExecutor(router),
+        WorkspaceAutoApprover(inner, ["/proj"]),
+        session=SessionApprovalCache(),
+        resolve=declared_resolver([
+            {
+                "type": "function",
+                "function": {"name": "browser_scroll", "parameters": {}},
+                "mode": "read",
+                "approvalCategory": "browser",
+            },
+            {
+                "type": "function",
+                "function": {"name": "browser_navigate", "parameters": {}},
+                "mode": "external",
+                "approvalCategory": "browser",
+            },
+            {
+                "type": "function",
+                "function": {"name": "browser_click", "parameters": {}},
+                "mode": "external",
+                "approvalCategory": "browser",
+            },
+        ]),
+    )
+    ctx = LoopContext()
+    scroll = await executor.execute(ToolCall(id="c1", name="browser_scroll", arguments={}), ctx)
+    navigate = await executor.execute(ToolCall(id="c2", name="browser_navigate", arguments={}), ctx)
+    click = await executor.execute(ToolCall(id="c3", name="browser_click", arguments={}), ctx)
+    mystery = await executor.execute(ToolCall(id="c4", name="mystery_tool", arguments={}), ctx)
+
+    assert scroll.success and navigate.success and click.success and mystery.success
+    assert calls == {"browser_scroll": 1, "browser_navigate": 1, "browser_click": 1, "mystery_tool": 1}
+    assert [item.tool_name for item in inner.requests] == ["browser_navigate", "mystery_tool"]
+    assert (inner.requests[1].mode, inner.requests[1].category) == ("other", "mystery_tool")
+    assert navigate.data["_approval"]["kind"] == "allow_for_session"
+    assert navigate.data["_approval"].get("cached") is not True
+    assert click.data["_approval"] == {
+        "kind": "allow_for_session",
+        "category": "browser",
+        "cached": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_old_browser_navigate_allow_always_does_not_cover_browser(tmp_path) -> None:
+    """v0.2.31 stored the tool name. The declared category is `browser`, so that entry does not apply."""
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover, declared_resolver
+
+    router = ToolRouter()
+    calls = {"browser_navigate": 0}
+
+    @tool(router=router, name="browser_navigate", description="open", mode="external")
+    async def browser_navigate() -> dict[str, bool]:
+        calls["browser_navigate"] += 1
+        return {"ok": True}
+
+    tools = [{
+        "type": "function",
+        "function": {"name": "browser_navigate", "parameters": {}},
+        "mode": "external",
+        "approvalCategory": "browser",
+    }]
+    legacy = JsonApprovalStore(tmp_path / "approvals.json")
+    legacy.put("browser_navigate", "allow_always")
+    inner = _ScriptedApprover([ApprovalDecision("allow_always", "keep")])
+    executor = ApprovalExecutor(
+        RouterToolExecutor(router),
+        WorkspaceAutoApprover(inner, ["/proj"]),
+        session=SessionApprovalCache(),
+        store=legacy,
+        resolve=declared_resolver(tools),
+    )
+    result = await executor.execute(
+        ToolCall(id="c1", name="browser_navigate", arguments={}),
+        LoopContext(),
+    )
+    assert result.success
+    assert calls["browser_navigate"] == 1
+    assert [item.category for item in inner.requests] == ["browser"]
+    assert legacy.load() == {
+        "browser_navigate": "allow_always",
+        "browser": "allow_always",
+    }
+    again = await executor.execute(
+        ToolCall(id="c2", name="browser_navigate", arguments={}),
+        LoopContext(),
+    )
+    assert again.success
+    assert calls["browser_navigate"] == 2
+    assert len(inner.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_subagent_child_reuses_the_parent_approval_session() -> None:
+    from steerable_agent_runtime import SubagentConfig, SubagentExecutor
+    from steerable_agent_runtime.approval import WorkspaceAutoApprover, declared_resolver
+
+    router = ToolRouter()
+
+    @tool(router=router, name="browser_navigate", description="open", mode="external")
+    async def browser_navigate() -> dict[str, bool]:
+        return {"ok": True}
+
+    @tool(router=router, name="browser_click", description="click", mode="external")
+    async def browser_click() -> dict[str, bool]:
+        return {"ok": True}
+
+    inner = _ScriptedApprover([ApprovalDecision("allow_for_session", "ok")])
+    parent = ApprovalExecutor(
+        RouterToolExecutor(router),
+        WorkspaceAutoApprover(inner, ["/proj"]),
+        session=SessionApprovalCache(),
+        resolve=declared_resolver([
+            {
+                "type": "function",
+                "function": {"name": "browser_navigate", "parameters": {}},
+                "mode": "external",
+                "approvalCategory": "browser",
+            },
+            {
+                "type": "function",
+                "function": {"name": "browser_click", "parameters": {}},
+                "mode": "external",
+                "approvalCategory": "browser",
+            },
+        ]),
+    )
+    child = SubagentExecutor(parent, object())._child_executor(SubagentConfig())
+    assert child is parent
+    ctx = LoopContext()
+    await parent.execute(ToolCall(id="c1", name="browser_navigate", arguments={}), ctx)
+    click = await child.execute(ToolCall(id="c2", name="browser_click", arguments={}), ctx)
+    assert click.success
+    assert [item.tool_name for item in inner.requests] == ["browser_navigate"]
+    assert click.data["_approval"]["cached"] is True
