@@ -55,6 +55,125 @@ describe('ToolsFlow / declared view', () => {
     expect(row.indexOf('0.1s')).toBeGreaterThan(row.indexOf('已完成'));
     expect(row.indexOf('Allowed for this chat')).toBeGreaterThan(row.indexOf('0.1s'));
   });
+
+  it('marks an unattended allow after the duration', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'shell',
+            arguments: { command: 'npm test' },
+            result: { success: true },
+            durationMs: 120,
+            approval: { kind: 'allow_once', auto: true },
+          },
+        ]}
+      />,
+    );
+    const row = screen.getByText('Auto').parentElement?.textContent ?? '';
+    expect(row.indexOf('Auto')).toBeGreaterThan(row.indexOf('0.1s'));
+  });
+
+  it('shows an unattended ask as questions and answers', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'ask_user',
+            arguments: { intro: '继续吗' },
+            result: {
+              intro: '继续吗',
+              questions: [{ id: 'q1', text: '要不要同时改重试次数？' }],
+              answers: { q1: '无人可答，请按最合理的默认继续。' },
+              unattended: true,
+            },
+            durationMs: 120,
+          },
+        ]}
+        defaultExpanded
+      />,
+    );
+    expect(screen.getByText('Answered automatically')).toBeTruthy();
+    expect(screen.getByText('Question 要不要同时改重试次数？')).toBeTruthy();
+    expect(screen.getByText('Answer 无人可答，请按最合理的默认继续。')).toBeTruthy();
+  });
+
+  it('titles an egress row with the host and drops ports 80 and 443', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'network_egress',
+            view: { card: 'generic', kind: 'other', title: 'network_egress', declared: true },
+            arguments: { host: 'registry.example.org', port: 443 },
+            result: { success: true },
+            approval: { kind: 'allow_once', auto: true },
+          },
+          {
+            tool: 'network_egress',
+            arguments: { host: 'pypi.example.org', port: 8443 },
+            result: { success: true },
+          },
+          {
+            tool: 'browser_navigate',
+            arguments: { url: 'https://www.example.com/about' },
+            result: { success: true },
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText('registry.example.org')).toBeTruthy();
+    expect(screen.queryByText('registry.example.org:443')).toBeNull();
+    expect(screen.getByText('pypi.example.org:8443')).toBeTruthy();
+    expect(screen.getByText('https://www.example.com/about')).toBeTruthy();
+    expect(screen.getByText('Auto')).toBeTruthy();
+  });
+
+  it('titles the ask row with the question and shares one answer', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'ask_user',
+            view: { card: 'generic', kind: 'other', title: '继续吗', declared: true },
+            arguments: { intro: '继续吗' },
+            result: {
+              questions: [
+                { id: 'q1', text: '要不要同时改重试次数？' },
+                { id: 'q2', text: '要不要记一条说明？' },
+              ],
+              answers: {
+                q1: '无人可答，请按最合理的默认继续。',
+                q2: '无人可答，请按最合理的默认继续。',
+              },
+              unattended: true,
+            },
+          },
+        ]}
+        defaultExpanded
+      />,
+    );
+    expect(screen.getByText('要不要同时改重试次数？')).toBeTruthy();
+    expect(screen.getAllByText('Answer 无人可答，请按最合理的默认继续。')).toHaveLength(1);
+    expect(screen.getByText('Question 要不要记一条说明？')).toBeTruthy();
+  });
+
+  it('does not mark a failed unattended call', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'shell',
+            arguments: { command: 'npm test' },
+            result: { success: false, error: 'exit 1' },
+            durationMs: 120,
+            approval: { kind: 'allow_once', auto: true },
+          },
+        ]}
+      />,
+    );
+    expect(screen.queryByText('Auto')).toBeNull();
+  });
 });
 
 describe('ToolsFlow / todo_write', () => {

@@ -167,6 +167,16 @@ export function ApprovalPromptMenu({
                     </span>
                   ) : null}
                 </>
+              ) : isBrowser && current.toolName === 'browser_navigate' ? (
+                <>
+                  {t('Agent requests to open a page')}
+                  <span className="mx-1 font-mono">{current.toolName}</span>
+                  {current.categoryLabel ? (
+                    <span className="text-agent-muted-foreground">
+                      {t('({category})', { category: categoryName(current.categoryLabel) })}
+                    </span>
+                  ) : null}
+                </>
               ) : (
                 <>
                   {t('Agent requests to run')}

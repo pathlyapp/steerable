@@ -109,6 +109,8 @@ describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
       />,
     );
 
+    expect(screen.getByText('Agent requests to open a page')).toBeTruthy();
+    expect(screen.getByText('browser_navigate')).toBeTruthy();
     expect(screen.getByText('(Browser actions)')).toBeTruthy();
     expect(screen.getByText('Allow Browser actions for this chat')).toBeTruthy();
     expect(screen.getByText('Always allow Browser actions')).toBeTruthy();
@@ -125,6 +127,7 @@ describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
       'Always allow {category}': '始终允许{category}',
       'Allow once': '允许一次',
       'Agent requests to run': 'Agent 请求执行',
+      'Agent requests to open a page': 'Agent 请求打开网页',
     });
     configureI18n({
       locales: ['en', 'zh'],
@@ -147,6 +150,7 @@ describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
         onDecide={vi.fn()}
       />,
     );
+    expect(screen.getByText('Agent 请求打开网页')).toBeTruthy();
     expect(screen.getByText('（浏览器操作）')).toBeTruthy();
     expect(screen.getByText('本会话允许浏览器操作')).toBeTruthy();
     expect(screen.getByText('始终允许浏览器操作')).toBeTruthy();

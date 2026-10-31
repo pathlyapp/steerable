@@ -127,7 +127,7 @@ export interface CoreLoopToolAction {
    */
   sandbox?: { backend?: string; enforcement: string };
   /** Session-allow reuse lifted onto the stream chunk. */
-  approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number };
+  approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number; auto?: boolean };
 }
 
 export interface CoreLoopTurnOutcome {

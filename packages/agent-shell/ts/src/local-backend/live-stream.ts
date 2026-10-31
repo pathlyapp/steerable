@@ -12,7 +12,7 @@
  * 活数组引用（appendTimelineDelta / syncTimelineTools / onToolAction 都
  * 原地 mutate），因此 GET 序列化时自然读到最新状态，无需逐事件拷贝。
  */
-import type { PersistedTurnBlock } from './turn-timeline.js';
+import { syncTimelineTools, type PersistedTurnBlock } from './turn-timeline.js';
 
 export interface LiveStreamState {
   chatId: string;
@@ -25,9 +25,35 @@ export interface LiveStreamState {
   timeline: PersistedTurnBlock[];
   /** 编排子代理生命周期事件（按到达顺序累积）。 */
   children: Array<Record<string, unknown>>;
+  /** 出网放行写入 executedActions 后通知正在看这一轮的界面。 */
+  notify?: () => void;
 }
 
 const liveStreams = new Map<string, LiveStreamState>();
+
+/** 把一次已允许的出网放行记进正在运行的回合。这不是工具结果，模型看不到。 */
+export function recordGrantedEgress(
+  live: LiveStreamState,
+  grant: {
+    requestId: string;
+    arguments: Record<string, unknown>;
+    kind: string;
+    reason: string;
+  },
+): void {
+  live.executedActions.push({
+    id: `egress-${grant.requestId}`,
+    tool: 'network_egress',
+    arguments: grant.arguments,
+    success: true,
+    approval: {
+      kind: grant.kind,
+      ...(grant.reason === 'unattended' ? { auto: true } : {}),
+    },
+  });
+  syncTimelineTools(live.timeline, live.executedActions);
+  live.notify?.();
+}
 
 export function registerLiveStream(
   chatId: string,

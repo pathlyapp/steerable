@@ -26,7 +26,9 @@ async def _call(router: ToolRouter, name: str, arguments: dict) -> Any:
 from steerable_sidecar.egress_ask import (
     EgressApprovalAsker,
     asker_from_environ,
+    bind_turn_chat_id,
     parse_egress_denied,
+    reset_turn_chat_id,
 )
 from steerable_sidecar.web_tools import register_web_tools
 
@@ -81,6 +83,22 @@ class TestAsker:
             assert params["arguments"]["port"] == 443
         finally:
             proxy.stop()
+
+    @pytest.mark.asyncio
+    async def test_prompt_names_the_turn_chat(self, monkeypatch) -> None:
+        stub = _StubServer("allow_once")
+        asker = EgressApprovalAsker(
+            stub, control_port=1, control_token="t"  # type: ignore[arg-type]
+        )
+        monkeypatch.setattr(asker, "_relay_allow", AsyncMock(return_value=True))
+        assert await asker.ask_and_allow("example.com", 443, "https://example.com/") is True
+        assert "chatId" not in stub.calls[0]["params"]
+        token = bind_turn_chat_id("chat-1")
+        try:
+            assert await asker.ask_and_allow("example.com", 443, "https://example.com/") is True
+        finally:
+            reset_turn_chat_id(token)
+        assert stub.calls[1]["params"]["chatId"] == "chat-1"
 
     @pytest.mark.asyncio
     async def test_approval_off_relays_without_prompting(self, monkeypatch) -> None:

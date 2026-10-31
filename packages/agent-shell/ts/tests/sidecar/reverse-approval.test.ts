@@ -53,6 +53,28 @@ describe('createApprovalBridge', () => {
     });
   });
 
+  it('does not prompt when the dangerous-command list will block the command', async () => {
+    const sent: ApprovalPromptRequest[] = [];
+    const bridge = createApprovalBridge({
+      hasWindow: () => true,
+      broadcast: (_channel, payload) => {
+        sent.push(payload);
+      },
+      blockedCommand: (toolName, args) =>
+        toolName === 'local_exec_shell' && args.command === 'sudo reboot' ? '\\bsudo\\s' : null,
+    });
+    const decision = await bridge.handler({
+      toolName: 'local_exec_shell',
+      arguments: { command: 'sudo reboot' },
+      mode: 'destructive',
+      category: 'shell',
+      round: 0,
+    });
+    expect(decision).toEqual({ kind: 'allow_once', reason: '' });
+    expect(sent).toEqual([]);
+    expect(bridge.pending()).toEqual([]);
+  });
+
   it('fails closed (deny_once) when no renderer window exists', async () => {
     const { bridge, sent } = makeBridge({ hasWindow: false });
     const decision = (await bridge.handler({
@@ -102,6 +124,53 @@ describe('createApprovalBridge', () => {
     bridge.decide({ requestId: sent[1].requestId, kind: 'deny_once' });
     await expect(first).resolves.toMatchObject({ kind: 'allow_once' });
     await expect(second).resolves.toMatchObject({ kind: 'deny_once' });
+  });
+
+  it('stores an allowed egress grant and ignores other decisions', async () => {
+    const granted: Array<{ toolName: string; kind: string; reason: string }> = [];
+    const sent: ApprovalPromptRequest[] = [];
+    const bridge = createApprovalBridge({
+      hasWindow: () => true,
+      broadcast: (_channel, payload) => {
+        sent.push(payload);
+      },
+      recordEgressGrant: (prompt, decision) => {
+        granted.push({ toolName: prompt.toolName, kind: decision.kind, reason: decision.reason });
+      },
+    });
+    const allow = bridge.handler({
+      toolName: 'network_egress',
+      arguments: { host: 'registry.example.org', port: 443 },
+      mode: 'other',
+      category: 'network_egress',
+      round: 0,
+      chatId: 'chat-1',
+    });
+    bridge.decide({ requestId: sent[0]?.requestId, kind: 'allow_once', reason: 'unattended' });
+    await allow;
+    const deny = bridge.handler({
+      toolName: 'network_egress',
+      arguments: { host: 'no.example', port: 443 },
+      mode: 'other',
+      category: 'network_egress',
+      round: 0,
+      chatId: 'chat-1',
+    });
+    bridge.decide({ requestId: sent[1]?.requestId, kind: 'deny_once', reason: '' });
+    await deny;
+    const shell = bridge.handler({
+      toolName: 'local_exec_shell',
+      arguments: { command: 'ls' },
+      mode: 'destructive',
+      category: 'local_exec_shell',
+      round: 0,
+      chatId: 'chat-1',
+    });
+    bridge.decide({ requestId: sent[2]?.requestId, kind: 'allow_once', reason: 'unattended' });
+    await shell;
+    expect(granted).toEqual([
+      { toolName: 'network_egress', kind: 'allow_once', reason: 'unattended' },
+    ]);
   });
 
   it('forwards chatId so the card stays on the chat that asked', () => {

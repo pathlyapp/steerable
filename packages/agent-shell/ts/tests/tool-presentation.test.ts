@@ -22,6 +22,21 @@ describe('tool presentation', () => {
     }
   });
 
+  it('titles an ask with the first question, then the intro', () => {
+    expect(presentToolCall('ask_user', {
+      intro: '继续吗',
+      questions: [
+        { id: 'q1', text: '要不要同时改重试次数？' },
+        { id: 'q2', text: '要不要记一条说明？' },
+      ],
+    })).toMatchObject({
+      title: '要不要同时改重试次数？',
+      declared: true,
+    });
+    expect(presentToolCall('ask_user', { intro: '继续吗' }).title).toBe('继续吗');
+    expect(presentToolCall('ask_user', {}).title).toBe('提问');
+  });
+
   it('does not infer a card for an undeclared name', () => {
     expect(presentToolCall('get_weather', {})).toEqual({
       card: 'generic',

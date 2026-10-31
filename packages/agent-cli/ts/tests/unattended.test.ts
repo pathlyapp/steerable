@@ -4,14 +4,14 @@ import { describe, expect, it } from 'vitest';
 import type { AgentClient } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
 
-import { autoAnswer, decisionFor, resolveApprovalRequest } from '../src/approve.js';
+import { autoAnswer, decisionFor, resolveApprovalRequest, UNATTENDED_APPROVAL_REASON } from '../src/approve.js';
 import { createCli } from '../src/cli.js';
 import { runTurn } from '../src/run.js';
 import { cliText } from '../src/copy.js';
 import { runHelp, tuiHelp } from '../src/help.js';
 import { visibleText } from '../src/tui/screen.js';
 import { AgentTui } from '../src/tui/session.js';
-import { toolStatus } from '../src/tui/transcript.js';
+import { toolOutput, toolStatus } from '../src/tui/transcript.js';
 
 describe('decisionFor', () => {
   const read = { policy: 'allow-read' as const, answerAsk: false };
@@ -62,7 +62,7 @@ describe('run unattended output', () => {
       createClient: async () => client({
         events: async function* () {
           yield approval('delete_file', 'files', 'destructive');
-          yield ask('继续吗', [{ id: 'q1' }]);
+          yield ask('继续吗', [{ id: 'q1', text: '要不要同时改重试次数？' }]);
         },
         decideApproval: async () => {
           finish();
@@ -86,9 +86,9 @@ describe('run unattended output', () => {
     };
     expect(result.autoAnswered).toEqual([
       { kind: 'approval', toolName: 'delete_file', category: 'files', decision: 'allow_once' },
-      { kind: 'ask_user', prompt: '继续吗' },
+      { kind: 'ask_user', prompt: '要不要同时改重试次数？' },
     ]);
-    expect(answers).toEqual([{ answers: { q1: cliText('ask.unattended') } }]);
+    expect(answers).toEqual([{ answers: { q1: cliText('ask.unattended') }, unattended: true }]);
   });
 
   it('records a shell, egress, an external tool, and an ask for allow-all', async () => {
@@ -183,6 +183,7 @@ describe('run unattended output', () => {
       if (remaining === 0) gate.resolve();
     };
     const stdout = capture();
+    const decisions: Array<{ kind: string; reason?: string }> = [];
     const code = await createCli({
       argv: ['run', 'go', '--approve', 'allow-read', '--json', '--no-project'],
       stdout: stdout.stream,
@@ -193,7 +194,8 @@ describe('run unattended output', () => {
           yield approval('read_file', 'files', 'read');
           yield outsideShell();
         },
-        decideApproval: async () => {
+        decideApproval: async (_id, kind, reason) => {
+          decisions.push({ kind, reason });
           finish();
           return true;
         },
@@ -205,6 +207,10 @@ describe('run unattended output', () => {
       }),
     });
     expect(code).toBe(3);
+    expect(decisions).toEqual([
+      { kind: 'allow_once', reason: UNATTENDED_APPROVAL_REASON },
+      { kind: 'deny_once', reason: undefined },
+    ]);
     const result = JSON.parse(stdout.text()) as {
       autoAnswered: Array<{ toolName?: string; decision?: string }>;
     };
@@ -453,6 +459,16 @@ describe('run unattended output', () => {
       },
       stream: async function* () {
         await seen.promise;
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'egress-1',
+            tool: 'network_egress',
+            arguments: { host: 'registry.example.org', port: 443, url: 'https://registry.example.org/pkg' },
+            success: true,
+            approval: { kind: 'allow_once', auto: true },
+          }],
+        } as SSEEvent;
         yield { type: 'content', content: 'ok' } as SSEEvent;
         yield { type: 'done' } as SSEEvent;
       },
@@ -466,6 +482,8 @@ describe('run unattended output', () => {
     }, stdout.stream, stderr.stream, new AbortController().signal);
     expect(code).toBe(0);
     expect(stderr.text()).toContain('▸ network_egress  registry.example.org  ✓ 自动\n');
+    expect(stderr.text().match(/network_egress/g)).toHaveLength(1);
+    expect(stderr.text()).not.toContain('https://registry.example.org');
     expect(stdout.text()).toBe('ok');
   });
 
@@ -642,6 +660,63 @@ describe('tui unattended status', () => {
     expect(visibleText(session.render(90))).toContain('▸ local_exec_shell  npm test  ✓ 8.2s 自动');
   });
 
+  it('shows a failed auto-approved command as a failure', async () => {
+    const gate = deferred();
+    const events = queue();
+    const session = new AgentTui(client({
+      events: events.stream,
+      decideApproval: async () => {
+        gate.resolve();
+        return true;
+      },
+      stream: async function* () {
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'call-1',
+            tool: 'local_exec_shell',
+            arguments: { command: 'sudo reboot' },
+            view: { title: 'sudo reboot' },
+          }],
+        } as SSEEvent;
+        await gate.promise;
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'call-1',
+            tool: 'local_exec_shell',
+            arguments: { command: 'sudo reboot' },
+            view: { title: 'sudo reboot' },
+            success: false,
+            error: 'Blocked dangerous command: \\bsudo\\s',
+            durationMs: 100,
+          }],
+        } as SSEEvent;
+        yield { type: 'done' } as SSEEvent;
+      },
+    }), {
+      product: 'Demo',
+      approvalPolicy: { policy: 'allow-all', answerAsk: true },
+      onExit() {},
+    });
+    await session.open();
+    const sending = (async () => {
+      for (const char of 'go') session.handleInput(char);
+      session.handleInput('\r');
+      await session.settled();
+    })();
+    await waitFor(() => visibleText(session.render(90)).includes('…'));
+    events.push(approval('local_exec_shell', 'shell', 'destructive', {
+      arguments: { command: 'sudo reboot' },
+    }));
+    await sending;
+    const folded = visibleText(session.render(90));
+    expect(folded).toContain('▸ local_exec_shell  sudo reboot  ✗ 0.1s');
+    expect(folded).not.toContain(cliText('tui.toolAuto'));
+    session.handleInput('\x0f');
+    expect(visibleText(session.render(90))).toContain('Blocked dangerous command');
+  });
+
   it('submits a bracketed paste and finishes without an approval row', async () => {
     const bodies: unknown[] = [];
     const decisions: string[] = [];
@@ -745,15 +820,15 @@ describe('tui unattended status', () => {
     });
     await waitFor(() => visibleText(session.render(80)).includes(cliText('tui.toolAutoAnswer')));
     const folded = visibleText(session.render(80));
-    expect(folded).toContain('继续吗');
-    expect(folded).not.toContain('要不要同时改重试次数？');
+    expect(folded).toContain('要不要同时改重试次数？');
+    expect(folded).not.toContain('要不要记一条说明？');
     expect(folded).not.toContain(cliText('ask.unattended'));
     session.handleInput('\x0f');
     const screen = visibleText(session.render(80));
     expect(screen).toContain('问 要不要同时改重试次数？');
     expect(screen).toContain('问 要不要记一条说明？');
     expect(screen).toContain(`答 ${cliText('ask.unattended')}`);
-    expect(answers).toEqual([{ answers: { q1: cliText('ask.unattended'), q2: cliText('ask.unattended') } }]);
+    expect(answers).toEqual([{ answers: { q1: cliText('ask.unattended'), q2: cliText('ask.unattended') }, unattended: true }]);
   });
 
   it('keeps one expandable ask line after the tool row settles', async () => {
@@ -808,7 +883,7 @@ describe('tui unattended status', () => {
     const folded = visibleText(session.render(80));
     expect(folded.match(/▸ ask_user/g)).toHaveLength(1);
     expect(folded).toContain(`✓ ${cliText('tui.toolAutoAnswer')}`);
-    expect(folded).not.toContain('要不要同时改重试次数？');
+    expect(folded).toContain('要不要同时改重试次数？');
     expect(folded).not.toContain(cliText('ask.unattended'));
     session.handleInput('\x0f');
     const open = visibleText(session.render(80));
@@ -817,15 +892,86 @@ describe('tui unattended status', () => {
     expect(open).toContain(`答 ${cliText('ask.unattended')}`);
   });
 
+  it('restores the unattended ask when the chat is opened again', async () => {
+    const phrase = cliText('ask.unattended');
+    const session = new AgentTui(client({
+      request: async (method, requestPath) => {
+        if (method === 'GET' && requestPath === '/api/v2/chats') {
+          return { status: 200, data: { chats: [{ id: 'chat-1', title: '修复登录超时' }] } };
+        }
+        if (requestPath === '/api/v2/chats/chat-1/messages') {
+          return {
+            status: 200,
+            data: {
+              messages: [{
+                role: 'assistant',
+                content: '好',
+                createdAt: '2026-10-31T01:00:00.000Z',
+                messageMetadata: JSON.stringify({
+                  timeline: [{
+                    type: 'tools',
+                    actions: [{
+                      id: 'shell-1',
+                      tool: 'local_exec_shell',
+                      arguments: { command: 'npm test' },
+                      success: true,
+                      durationMs: 8200,
+                      approval: { kind: 'allow_once', auto: true },
+                    }, {
+                      id: 'ask-1',
+                      tool: 'ask_user',
+                      view: { title: '继续吗' },
+                      success: true,
+                      durationMs: 120,
+                      result: {
+                        intro: '继续吗',
+                        questions: [
+                          { id: 'q1', text: '要不要同时改重试次数？' },
+                          { id: 'q2', text: '要不要记一条说明？' },
+                        ],
+                        answers: { q1: phrase, q2: phrase },
+                      },
+                    }],
+                  }],
+                }),
+              }],
+            },
+          };
+        }
+        if (requestPath.startsWith('/api/v2/chats/')) {
+          return { status: 200, data: { id: 'chat-1', title: '修复登录超时' } };
+        }
+        return { status: 200, data: { model: 'demo' } };
+      },
+    }), {
+      product: 'Demo',
+      onExit() {},
+    });
+    await session.open();
+    const folded = visibleText(session.render(80));
+    expect(folded).toContain('▸ ask_user');
+    expect(folded).toContain('npm test');
+    expect(folded).toContain(`✓ 8.2s ${cliText('tui.toolAuto')}`);
+    expect(folded).toContain('要不要同时改重试次数？');
+    expect(folded).not.toContain('要不要记一条说明？');
+    expect(folded).toContain(`✓ ${cliText('tui.toolAutoAnswer')}`);
+    expect(folded).not.toContain(phrase);
+    session.handleInput('\x0f');
+    const open = visibleText(session.render(80));
+    expect(open).toContain('问 要不要同时改重试次数？');
+    expect(open).toContain('问 要不要记一条说明？');
+    expect(open).toContain(`答 ${phrase}`);
+  });
+
   it('answers a shell, egress, an external tool, and an ask without an approval row', async () => {
-    const decisions: string[] = [];
+    const decisions: Array<{ kind: string; reason?: string }> = [];
     const answers: unknown[] = [];
     const gate = deferred();
     const events = queue();
     const session = new AgentTui(client({
       events: events.stream,
-      decideApproval: async (_id, kind) => {
-        decisions.push(kind);
+      decideApproval: async (_id, kind, reason) => {
+        decisions.push({ kind, reason });
         if (decisions.length === 3) gate.resolve();
         return true;
       },
@@ -859,8 +1005,273 @@ describe('tui unattended status', () => {
     expect(screen).not.toContain('审批 browser_navigate');
     expect(screen).toContain(cliText('tui.toolAutoAnswer'));
     expect(screen).toContain('继续吗');
-    expect(decisions).toEqual(['allow_once', 'allow_once', 'allow_once']);
-    expect(answers).toEqual([{ answers: { q1: cliText('ask.unattended') } }]);
+    expect(decisions).toEqual([
+      { kind: 'allow_once', reason: UNATTENDED_APPROVAL_REASON },
+      { kind: 'allow_once', reason: UNATTENDED_APPROVAL_REASON },
+      { kind: 'allow_once', reason: UNATTENDED_APPROVAL_REASON },
+    ]);
+    expect(answers).toEqual([{ answers: { q1: cliText('ask.unattended') }, unattended: true }]);
+  });
+
+  it('keeps the auto mark after the turn is reloaded from history', async () => {
+    const phrase = cliText('ask.unattended');
+    const events = queue();
+    const decisions: string[] = [];
+    const session = new AgentTui(client({
+      events: events.stream,
+      decideApproval: async (_id, kind) => {
+        decisions.push(kind);
+        return true;
+      },
+      answerAsk: async () => true,
+      request: async (_method, requestPath) => {
+        if (requestPath === '/api/v2/chats/chat-1/messages') {
+          return {
+            status: 200,
+            data: {
+              messages: [{
+                role: 'assistant',
+                content: '好',
+                createdAt: '2026-10-31T01:00:00.000Z',
+                messageMetadata: JSON.stringify({
+                  timeline: [
+                    {
+                      type: 'tools',
+                      actions: [
+                        {
+                          id: 'shell-1',
+                          tool: 'local_exec_shell',
+                          arguments: { command: 'npm test' },
+                          success: true,
+                          durationMs: 8200,
+                        },
+                        {
+                          id: 'egress-1',
+                          tool: 'network_egress',
+                          arguments: { host: 'registry.example.org', port: 443 },
+                          success: true,
+                          durationMs: 100,
+                        },
+                        {
+                          id: 'egress-2',
+                          tool: 'network_egress',
+                          arguments: { host: 'pypi.example.org', port: 8443 },
+                          success: true,
+                          durationMs: 100,
+                        },
+                        {
+                          id: 'browser-1',
+                          tool: 'browser_navigate',
+                          success: true,
+                          durationMs: 200,
+                        },
+                        {
+                          id: 'ask-1',
+                          tool: 'ask_user',
+                          view: { title: '继续吗' },
+                          success: true,
+                          durationMs: 50,
+                          result: {
+                            questions: [{ id: 'q1', text: '要不要同时改重试次数？' }],
+                            answers: { q1: phrase },
+                          },
+                        },
+                      ],
+                    },
+                    { type: 'text', content: '好' },
+                  ],
+                }),
+              }],
+            },
+          };
+        }
+        return { status: 200, data: { chatId: 'chat-1', chats: [], model: 'demo' } };
+      },
+      stream: async function* () {
+        for (const name of ['local_exec_shell', 'network_egress', 'browser_navigate']) {
+          yield { type: 'tool_call', payload: { name, arguments: {} } } as SSEEvent;
+        }
+        yield { type: 'done' } as SSEEvent;
+      },
+    }), {
+      product: 'Demo',
+      approvalPolicy: { policy: 'allow-all', answerAsk: true },
+      onExit() {},
+    });
+    await session.open();
+    for (const event of fourRequests()) events.push(event);
+    await waitFor(() => decisions.length === 3);
+    for (const char of 'go') session.handleInput(char);
+    session.handleInput('\r');
+    await session.settled();
+    await waitFor(() => visibleText(session.render(100)).split(cliText('tui.toolAuto')).length >= 4);
+    events.push({ channel: 'chat-turn-finished', payload: { chatId: 'chat-1' } });
+    await waitFor(() => visibleText(session.render(100)).includes('npm test'));
+    const screen = visibleText(session.render(100));
+    expect(screen.split(cliText('tui.toolAuto')).length).toBeGreaterThanOrEqual(4);
+    expect(screen).toContain('▸ local_exec_shell');
+    expect(screen).toContain('▸ network_egress  registry.example.org');
+    expect(screen).toContain('pypi.example.org:8443');
+    expect(screen).not.toContain(':443');
+    expect(screen).toContain(`✓ 8.2s ${cliText('tui.toolAuto')}`);
+    expect(screen).toContain(cliText('tui.toolAutoAnswer'));
+    expect(screen).toContain('要不要同时改重试次数？');
+    session.handleInput('\x0f');
+    expect(visibleText(session.render(100))).toContain(`答 ${phrase}`);
+  });
+
+  it('keeps an egress grant that history does not store', async () => {
+    const events = queue();
+    const session = new AgentTui(client({
+      events: events.stream,
+      decideApproval: async () => true,
+      request: async (method, requestPath) => {
+        if (method === 'GET' && requestPath === '/api/v2/chats') {
+          return { status: 200, data: { chats: [{ id: 'chat-1', title: '修复登录超时' }] } };
+        }
+        if (requestPath === '/api/v2/chats/chat-1/messages') {
+          return {
+            status: 200,
+            data: {
+              messages: [{
+                role: 'assistant',
+                content: '好',
+                createdAt: '2026-10-31T01:00:00.000Z',
+                messageMetadata: JSON.stringify({
+                  timeline: [{
+                    type: 'tools',
+                    actions: [{
+                      id: 'shell-1',
+                      tool: 'local_exec_shell',
+                      arguments: { command: 'npm test' },
+                      success: true,
+                      durationMs: 8200,
+                      approval: { kind: 'allow_once', auto: true },
+                    }],
+                  }],
+                }),
+              }],
+            },
+          };
+        }
+        if (requestPath.startsWith('/api/v2/chats/')) {
+          return { status: 200, data: { id: 'chat-1', title: '修复登录超时' } };
+        }
+        return { status: 200, data: { model: 'demo' } };
+      },
+    }), {
+      product: 'Demo',
+      approvalPolicy: { policy: 'allow-all', answerAsk: true },
+      onExit() {},
+    });
+    await session.open();
+    events.push(approval('network_egress', 'network_egress', 'other', {
+      arguments: { host: 'registry.example.org', port: 443 },
+    }));
+    await waitFor(() => visibleText(session.render(100)).includes('registry.example.org'));
+    events.push({ channel: 'chat-turn-finished', payload: { chatId: 'chat-1' } });
+    await waitFor(() => visibleText(session.render(100)).includes('npm test'));
+    const screen = visibleText(session.render(100));
+    expect(screen).toContain('▸ network_egress  registry.example.org');
+    expect(screen).toContain('✓ 自动');
+    expect(screen).not.toContain(':443');
+    expect(screen.match(/▸ network_egress/g)).toHaveLength(1);
+  });
+
+  it('shows a stored egress grant when the chat is opened again', async () => {
+    const session = new AgentTui(client({
+      request: async (method, requestPath) => {
+        if (method === 'GET' && requestPath === '/api/v2/chats') {
+          return { status: 200, data: { chats: [{ id: 'chat-1', title: '修复登录超时' }] } };
+        }
+        if (requestPath === '/api/v2/chats/chat-1/messages') {
+          return {
+            status: 200,
+            data: {
+              messages: [{
+                role: 'assistant',
+                content: '好',
+                createdAt: '2026-10-31T01:00:00.000Z',
+                messageMetadata: JSON.stringify({
+                  timeline: [{
+                    type: 'tools',
+                    actions: [{
+                      id: 'egress-1',
+                      tool: 'network_egress',
+                      arguments: { host: 'registry.example.org', port: 443 },
+                      success: true,
+                      approval: { kind: 'allow_once', auto: true },
+                    }],
+                  }],
+                }),
+              }],
+            },
+          };
+        }
+        if (requestPath.startsWith('/api/v2/chats/')) {
+          return { status: 200, data: { id: 'chat-1', title: '修复登录超时' } };
+        }
+        return { status: 200, data: { model: 'demo' } };
+      },
+    }), { product: 'Demo', onExit() {} });
+    await session.open();
+    const screen = visibleText(session.render(100));
+    expect(screen).toContain('▸ network_egress  registry.example.org');
+    expect(screen).toContain('✓ 自动');
+    expect(screen).not.toContain(':443');
+    expect(screen.match(/▸ network_egress/g)).toHaveLength(1);
+  });
+
+  it('keeps one egress row when the saved snapshot arrives', async () => {
+    const events = queue();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const session = new AgentTui(client({
+      events: events.stream,
+      decideApproval: async () => true,
+      request: async (method, requestPath) => {
+        if (method === 'GET' && requestPath === '/api/v2/chats') {
+          return { status: 200, data: { chats: [{ id: 'chat-1', title: '修复登录超时' }] } };
+        }
+        if (requestPath.startsWith('/api/v2/chats/')) {
+          return { status: 200, data: { id: 'chat-1', title: '修复登录超时' } };
+        }
+        return { status: 200, data: { model: 'demo', chatId: 'chat-1' } };
+      },
+      stream: async function* () {
+        await gate;
+        yield {
+          type: 'executed_actions',
+          actions: [{
+            id: 'egress-1',
+            tool: 'network_egress',
+            arguments: { host: 'registry.example.org', port: 443 },
+            success: true,
+            approval: { kind: 'allow_once', auto: true },
+          }],
+        } as SSEEvent;
+        yield { type: 'done' } as SSEEvent;
+      },
+    }), {
+      product: 'Demo',
+      approvalPolicy: { policy: 'allow-all', answerAsk: true },
+      onExit() {},
+    });
+    await session.open();
+    for (const char of 'go') session.handleInput(char);
+    session.handleInput('\r');
+    events.push(approval('network_egress', 'network_egress', 'other', {
+      arguments: { host: 'registry.example.org', port: 443 },
+    }));
+    await waitFor(() => visibleText(session.render(100)).includes('registry.example.org'));
+    release();
+    await session.settled();
+    const screen = visibleText(session.render(100));
+    expect(screen.match(/▸ network_egress/g)).toHaveLength(1);
+    expect(screen).toContain('✓ 自动');
+    expect(screen).not.toContain(':443');
   });
 
   it('shows the egress host on an auto-allowed row', async () => {
@@ -892,6 +1303,104 @@ describe('tui unattended status', () => {
     expect(both.match(/▸ network_egress/g)).toHaveLength(2);
     expect(both).toContain('registry.example.org');
     expect(both).toContain('pypi.example.org:8443');
+  });
+
+  it('shows the approval target instead of the argument JSON', async () => {
+    const events = queue();
+    const session = new AgentTui(client({ events: events.stream }), {
+      product: 'Demo',
+      onExit() {},
+    });
+    await session.open();
+    events.push(approval('network_egress', 'network_egress', 'other', {
+      arguments: { host: 'registry.example.org', port: 443 },
+    }));
+    await waitFor(() => visibleText(session.render(100)).includes('审批 network_egress registry.example.org:443'));
+    const screen = visibleText(session.render(100));
+    expect(screen).not.toContain('"host"');
+    events.push(approval('network_egress', 'network_egress', 'other', {
+      requestId: 'network_egress-2',
+      arguments: { host: 'pypi.example.org', port: 8443 },
+    }));
+    await waitFor(() => visibleText(session.render(100)).includes('审批 network_egress pypi.example.org:8443'));
+    events.push(approval('browser_navigate', 'browser', 'external', {
+      requestId: 'browser-1',
+      arguments: { url: 'https://www.example.com/about' },
+    }));
+    await waitFor(() => visibleText(session.render(100)).includes('审批 browser_navigate https://www.example.com/about'));
+    expect(visibleText(session.render(100))).not.toContain('"url"');
+  });
+
+  it('rebuilds ask lines from a stored result', () => {
+    const phrase = cliText('ask.unattended');
+    const unattended = {
+      tool: 'ask_user',
+      success: true,
+      durationMs: 120,
+      result: {
+        questions: [
+          { id: 'q1', text: '要不要同时改重试次数？' },
+          { id: 'q2', text: '要不要记一条说明？' },
+        ],
+        answers: { q1: phrase, q2: phrase },
+      },
+    };
+    expect(toolStatus(unattended)).toBe(`✓ ${cliText('tui.toolAutoAnswer')}`);
+    expect(toolOutput(unattended)).toBe(`问 要不要同时改重试次数？\n问 要不要记一条说明？\n答 ${phrase}`);
+    const answered = {
+      tool: 'ask_user',
+      success: true,
+      result: {
+        questions: [
+          { id: 'q1', text: '哪一个？' },
+          { id: 'q2', text: '记下来吗？' },
+        ],
+        answers: { q1: '蓝', q2: ['甲', '乙'] },
+      },
+    };
+    expect(toolStatus(answered)).toBe('✓');
+    expect(toolOutput(answered)).toBe('问 哪一个？\n答 蓝\n问 记下来吗？\n答 甲、乙');
+    const failed = {
+      tool: 'ask_user',
+      success: false,
+      error: 'cancelled',
+      result: {
+        questions: [{ id: 'q1', text: '继续？' }],
+        answers: { q1: phrase },
+      },
+    };
+    expect(toolStatus(failed)).toBe('✗');
+    expect(toolOutput(failed)).toBe('cancelled');
+    const preview = JSON.stringify({
+      success: true,
+      data: {
+        value: {
+          intro: '继续吗',
+          questions: [{ id: 'q1', text: '要不要同时改重试次数？' }],
+          answers: { q1: phrase },
+        },
+      },
+    });
+    expect(toolOutput({ tool: 'ask_user', success: true, result: preview })).toBe(
+      `问 要不要同时改重试次数？\n答 ${phrase}`,
+    );
+    expect(toolStatus({
+      tool: 'ask_user',
+      success: true,
+      result: { questions: [{ id: 'q1', text: '继续？' }], answers: { q1: '自己决定' }, unattended: true },
+    })).toBe(`✓ ${cliText('tui.toolAutoAnswer')}`);
+    expect(toolStatus({
+      tool: 'local_exec_shell',
+      success: true,
+      durationMs: 8200,
+      approval: { kind: 'allow_once', auto: true },
+    })).toBe(`✓ 8.2s ${cliText('tui.toolAuto')}`);
+    expect(toolStatus({
+      tool: 'local_exec_shell',
+      success: false,
+      error: 'failed',
+      approval: { kind: 'allow_once', auto: true },
+    })).toBe('✗');
   });
 
   it('labels a tool covered by a session allow', () => {
@@ -938,7 +1447,7 @@ function fourRequests(): Array<{ channel: string; payload: unknown }> {
 }
 
 function ask(prompt: string, questions: Array<{ id: string; text?: string }>): { channel: string; payload: unknown } {
-  return { channel: 'ask-user:request', payload: { requestId: 'ask-1', prompt, questions } };
+  return { channel: 'ask-user:request', payload: { requestId: 'ask-1', intro: prompt, questions } };
 }
 
 function client(overrides: Partial<AgentClient> = {}): AgentClient {

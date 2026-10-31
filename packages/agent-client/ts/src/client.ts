@@ -63,6 +63,27 @@ function queue<T>(): Queued<T> & {
   };
 }
 
+/**
+ * The CLI passes `{ answers, unattended }` while a typed reply is already the
+ * answer map. Unwrap one level so question ids stay the keys the tool stores.
+ */
+export function normalizeAskReply(answer: unknown): {
+  answers: Record<string, unknown>;
+  unattended?: boolean;
+} {
+  const body = answer && typeof answer === 'object' && !Array.isArray(answer)
+    ? answer as Record<string, unknown>
+    : {};
+  const nested = body.answers;
+  const answers = nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : body;
+  return {
+    answers,
+    ...(body.unattended === true ? { unattended: true } : {}),
+  };
+}
+
 /** Opens one in-process host and exposes it as the CLI/TUI client. */
 export async function createLocalClient(options: LocalClientOptions = {}): Promise<AgentClient> {
   const env = options.env ?? process.env;
@@ -96,8 +117,12 @@ export async function createLocalClient(options: LocalClientOptions = {}): Promi
       return runtime.approvalBridge.decide({ requestId, kind, reason: reason ?? '' }).ok;
     },
     async answerAsk(requestId, answer) {
-      const answers = answer && typeof answer === 'object' ? answer : {};
-      return runtime.askUserBridge.answer({ requestId, answers }).ok;
+      const reply = normalizeAskReply(answer);
+      return runtime.askUserBridge.answer({
+        requestId,
+        answers: reply.answers,
+        ...(reply.unattended ? { unattended: true } : {}),
+      }).ok;
     },
     async close() {
       events.close();

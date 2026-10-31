@@ -316,8 +316,9 @@ describe('tui session', () => {
         events.push(await queued);
         yield events[0];
       },
-      async decideApproval(_id, kind) {
+      async decideApproval(_id, kind, reason) {
         decisions.push(kind);
+        expect(reason).toBeUndefined();
         releaseApproval(kind);
         return true;
       },

@@ -1,5 +1,15 @@
 # @steerable/agent-cli
 
+## [0.7.3]
+
+### Fixed
+
+* An unattended `allow_once` marks the tool row, and that mark stays after the turn is reloaded. A failed tool does not get the mark.
+* An allowed network egress grant shows the host, omits ports 80 and 443, and remains when the chat is opened again.
+* The ask row title is the first question. An unattended answer is stored with the tool call.
+* A shell command the executor will block does not open an approval card.
+* The approval card for opening a page says so.
+
 ## [0.7.2]
 
 ### Changed

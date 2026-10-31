@@ -214,6 +214,27 @@ async def test_session_scope_caches_per_category() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unattended_allow_marks_the_tool_row() -> None:
+    router, calls = _router_with_tools()
+    executor = ApprovalExecutor(
+        RouterToolExecutor(router),
+        _ScriptedApprover(
+            [
+                ApprovalDecision("allow_once", "unattended"),
+                ApprovalDecision("allow_once", "ok"),
+            ]
+        ),
+    )
+    marked = await executor.execute(_call("delete_file", path="/tmp/x"), LoopContext())
+    plain = await executor.execute(_call("delete_file", path="/tmp/y"), LoopContext())
+    assert marked.success and plain.success
+    assert calls["delete_file"] == 2
+    assert marked.data["_approval"]["auto"] is True
+    assert marked.data["_approval"]["kind"] == "allow_once"
+    assert plain.data["_approval"].get("auto") is not True
+
+
+@pytest.mark.asyncio
 async def test_session_allow_marker_precedes_a_large_result() -> None:
     class _Blob:
         async def execute(self, _call: ToolCall, _ctx: object) -> ToolResult:

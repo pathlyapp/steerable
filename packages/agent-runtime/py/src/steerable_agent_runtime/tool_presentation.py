@@ -73,6 +73,24 @@ _CARDS = frozenset({"generic", "terminal", "diff", "search", "read", "web"})
 _KINDS = frozenset({"read", "edit", "delete", "move", "search", "execute", "fetch", "other"})
 
 
+def _ask_title(arguments: dict[str, Any] | None) -> str | None:
+    """The folded ask row shows the first question. The intro is only a fallback."""
+    if not isinstance(arguments, dict):
+        return None
+    questions = arguments.get("questions")
+    if isinstance(questions, list):
+        for question in questions:
+            if not isinstance(question, dict):
+                continue
+            text = question.get("text")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    intro = arguments.get("intro")
+    if isinstance(intro, str) and intro.strip():
+        return intro.strip()
+    return None
+
+
 def builtin_presentation(name: str) -> dict[str, Any] | None:
     """Return the declared view spec for ``name``, or None when undeclared."""
     spec = BUILTIN_PRESENTATIONS.get(name)
@@ -97,9 +115,13 @@ def present_call(
         spec = builtin_presentation(name)
     if not spec:
         return {"card": "generic", "kind": "other", "title": name, "declared": False}
-    key = spec.get("title_from")
-    raw = arguments.get(key) if isinstance(key, str) and key and isinstance(arguments, dict) else None
-    title = raw.strip() if isinstance(raw, str) and raw.strip() else name
+    if name == "ask_user":
+        asked = _ask_title(arguments)
+        title = asked if asked else name
+    else:
+        key = spec.get("title_from")
+        raw = arguments.get(key) if isinstance(key, str) and key and isinstance(arguments, dict) else None
+        title = raw.strip() if isinstance(raw, str) and raw.strip() else name
     if len(title) > 80:
         title = title[:79] + "…"
     return {

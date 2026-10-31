@@ -10,7 +10,7 @@ import type { ApprovalDecisionKind } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import { saveAttachmentFiles } from '@steerable/agent-shell/attachments';
 
-import { autoAnswer, decisionFor, type ApprovalSpec } from '../approve.js';
+import { autoAnswer, decisionFor, UNATTENDED_APPROVAL_REASON, type ApprovalSpec } from '../approve.js';
 import { cliText } from '../copy.js';
 import { applyChildEvent, childLines, type ChildRow } from './children.js';
 import { readSystemClipboard, saveClipboardImage, writeSystemClipboard, type ClipboardRead } from './clipboard.js';
@@ -40,7 +40,7 @@ import { searchHits, searchLabel } from './search.js';
 import { ruleStatusLine, type RuleContext } from '../rules.js';
 import { transcriptEdge } from './scroll.js';
 import { todosFromAction, type SessionTodo } from './todos.js';
-import { formatDuration, historyRows, toolOutput, toolStatus, type ToolAction } from './transcript.js';
+import { askRowSummary, formatDuration, historyRows, toolOutput, toolStatus, type ToolAction } from './transcript.js';
 import { formatUsage } from './usage.js';
 
 export interface AgentTuiOptions {
@@ -119,6 +119,7 @@ export class AgentTui implements Component {
   private ensureEgressLine(args: unknown): void {
     const target = egressTarget(args);
     const existing = [...this.lines].reverse().find((line) => line.kind === 'tool' && line.name === 'network_egress');
+    // Egress is an approval, not a tool result. The row is this grant.
     if (existing && !existing.auto) {
       if (!existing.args && target) existing.args = target;
       if (!existing.status || existing.status === '…') existing.status = '✓';
@@ -641,13 +642,7 @@ export class AgentTui implements Component {
     const records = messages.status === 200
       ? ((messages.data as { messages?: Parameters<typeof historyRows>[0] }).messages ?? [])
       : [];
-    this.todos = [];
-    this.lines = historyRows(records).map((row) => {
-      if (row.kind !== 'tool') return { kind: row.kind, text: row.text };
-      const next = todosFromAction(row.action.tool, row.action.arguments, row.action.result);
-      if (next) this.todos = next;
-      return toolLine(row.action);
-    });
+    this.lines = this.transcriptFrom(records);
     this.help = false;
     this.search = null;
     this.panel = null;
@@ -1097,7 +1092,8 @@ export class AgentTui implements Component {
       const duration = typeof payload.durationMs === 'number' ? formatDuration(payload.durationMs) : '';
       const mark = failed ? '✗' : '✓';
       const base = duration ? `${mark} ${duration}` : mark;
-      tool.status = tool.auto ? appendAuto(base) : base;
+      tool.status = !failed && tool.auto ? appendAuto(base) : base;
+      if (failed) tool.auto = false;
       return;
     }
     if (String(event.type) === 'reasoning' && typeof event.content === 'string') {
@@ -1140,14 +1136,21 @@ export class AgentTui implements Component {
             this.ensureEgressLine(payload.arguments);
           }
           if (decision === 'allow_once' && payload.toolName) this.markAutoTool(payload.toolName);
-          void this.client.decideApproval(payload.requestId, decision);
+          void this.client.decideApproval(
+            payload.requestId,
+            decision,
+            decision === 'allow_once' ? UNATTENDED_APPROVAL_REASON : undefined,
+          );
           this.touch();
           continue;
         }
+        const toolName = payload.toolName || 'tool';
         this.approval = {
           requestId: payload.requestId,
-          toolName: payload.toolName || 'tool',
-          summary: toolArgs(payload.arguments),
+          toolName,
+          summary: toolName === 'network_egress'
+            ? (egressApprovalTarget(payload.arguments) || toolArgs(payload.arguments))
+            : toolArgs(payload.arguments),
         };
       } else if (event.channel === 'ask-user:request') {
         const payload = event.payload as {
@@ -1162,16 +1165,17 @@ export class AgentTui implements Component {
           const questions = payload.questions?.length ? payload.questions : [{ id: 'answer' }];
           void this.client.answerAsk(payload.requestId, {
             answers: autoAnswer(questions.flatMap((question) => question.id ? [{ id: question.id }] : [])),
+            unattended: true,
           });
           const asked = questions
             .map((question) => question.text?.trim() ?? '')
             .filter((text) => text.length > 0);
           const answer = cliText('ask.unattended');
-          const args = intro || asked[0] || '';
+          const args = asked[0] || intro || '';
           const output = [...asked.map((text) => `问 ${text}`), `答 ${answer}`].join('\n');
           const line = this.latestAskLine();
           if (line && !autoAnswerStatus(line.status)) {
-            if (!line.args) line.args = args;
+            if (args) line.args = args;
             line.status = autoAnswerMark();
             line.output = output;
           } else {
@@ -1222,19 +1226,29 @@ export class AgentTui implements Component {
         ? this.lines.findIndex((line) => line.kind === 'tool' && line.id === next.id)
         : -1;
       if (index < 0 && next.name === 'ask_user') index = this.unboundAskLine();
+      if (index < 0 && next.name === 'network_egress') {
+        index = this.lines.findIndex((line) =>
+          line.kind === 'tool'
+          && line.name === 'network_egress'
+          && !line.id
+          && (line.args ?? '') === (next.args ?? ''),
+        );
+      }
       const prior = index >= 0 ? this.lines[index] : undefined;
       const keepAnswer = autoAnswerStatus(prior?.status);
+      const failed = next.status.startsWith('✗');
       const auto = prior?.auto === true || (!keepAnswer && this.takePendingAuto(next.name ?? ''));
-      if (auto) {
+      if (auto && !failed) {
         next.auto = true;
         next.status = appendAuto(next.status);
       }
       if (index >= 0) {
         next.open = prior?.open;
-        if (keepAnswer && prior) {
+        if (keepAnswer && prior && !failed) {
           next.status = autoAnswerMark();
           if (prior.output) next.output = prior.output;
-          if (!next.args && prior.args) next.args = prior.args;
+          if (prior.args && !askRowSummary(action)) next.args = prior.args;
+          else if (!next.args && prior.args) next.args = prior.args;
         } else if (prior?.output && !next.output) {
           next.output = prior.output;
         }
@@ -1336,14 +1350,19 @@ export class AgentTui implements Component {
     const records = (response.data as {
       messages?: Parameters<typeof historyRows>[0];
     }).messages ?? [];
+    const prior = this.lines;
+    this.lines = retainMissingEgress(prior, keepAutoMarks(prior, this.transcriptFrom(records)));
+    this.touch();
+  }
+
+  private transcriptFrom(records: Parameters<typeof historyRows>[0]): TranscriptLine[] {
     this.todos = [];
-    this.lines = historyRows(records).map((row) => {
+    return historyRows(records).map((row) => {
       if (row.kind !== 'tool') return { kind: row.kind, text: row.text };
       const next = todosFromAction(row.action.tool, row.action.arguments, row.action.result);
       if (next) this.todos = next;
       return toolLine(row.action);
     });
-    this.touch();
   }
 
   private async showList(
@@ -1565,6 +1584,15 @@ function egressTarget(value: unknown): string {
   return `${host}:${port}`;
 }
 
+/** Approval prompt keeps the port. The settled tool row drops 80 and 443. */
+function egressApprovalTarget(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const record = value as { host?: unknown; port?: unknown };
+  const host = typeof record.host === 'string' ? record.host : '';
+  if (!host) return '';
+  return typeof record.port === 'number' ? `${host}:${record.port}` : host;
+}
+
 function autoAnswerMark(): string {
   return `✓ ${cliText('tui.toolAutoAnswer')}`;
 }
@@ -1572,6 +1600,87 @@ function autoAnswerMark(): string {
 function autoAnswerStatus(status: string | undefined): boolean {
   const phrase = cliText('tui.toolAutoAnswer');
   return status === phrase || status === autoAnswerMark() || (status?.endsWith(` ${phrase}`) ?? false);
+}
+
+/**
+ * An egress grant is not a tool result, so reloaded history does not contain
+ * that row. Keep the live row when the saved transcript has no line for it.
+ */
+function retainMissingEgress(prior: TranscriptLine[], next: TranscriptLine[]): TranscriptLine[] {
+  const present = new Set(
+    next
+      .filter((line) => line.kind === 'tool' && line.name === 'network_egress')
+      .map((line) => line.args ?? ''),
+  );
+  const missing = prior.filter((line) => {
+    if (line.kind !== 'tool' || line.name !== 'network_egress') return false;
+    const host = line.args ?? '';
+    if (!host) return present.size === 0;
+    return !present.has(host);
+  });
+  if (missing.length === 0) return next;
+  const out = [...next];
+  for (const line of missing) {
+    const at = prior.indexOf(line);
+    let insertAt = out.length;
+    for (let index = at + 1; index < prior.length; index += 1) {
+      const found = findReloadedAnchor(out, prior[index]);
+      if (found >= 0) {
+        insertAt = found;
+        break;
+      }
+    }
+    out.splice(insertAt, 0, line);
+    present.add(line.args ?? '');
+  }
+  return out;
+}
+
+function findReloadedAnchor(lines: TranscriptLine[], anchor: TranscriptLine | undefined): number {
+  if (!anchor) return -1;
+  if (anchor.kind === 'tool') {
+    if (anchor.id) {
+      const byId = lines.findIndex((line) => line.kind === 'tool' && line.id === anchor.id);
+      if (byId >= 0) return byId;
+    }
+    const matches = lines.flatMap((line, index) => (
+      line.kind === 'tool' && line.name === anchor.name ? [index] : []
+    ));
+    return matches.length === 1 ? matches[0] : -1;
+  }
+  if (!anchor.text) return -1;
+  return lines.findIndex((line) => line.kind === anchor.kind && line.text === anchor.text);
+}
+
+function keepAutoMarks(prior: TranscriptLine[], next: TranscriptLine[]): TranscriptLine[] {
+  const byId = new Map<string, TranscriptLine>();
+  const spare = new Map<string, TranscriptLine[]>();
+  for (const line of prior) {
+    if (line.kind !== 'tool' || (!line.auto && !autoAnswerStatus(line.status))) continue;
+    if (line.id) byId.set(line.id, line);
+    else {
+      const name = line.name ?? '';
+      const queued = spare.get(name) ?? [];
+      queued.push(line);
+      spare.set(name, queued);
+    }
+  }
+  return next.map((line) => {
+    if (line.kind !== 'tool') return line;
+    const queued = spare.get(line.name ?? '');
+    const match = (line.id ? byId.get(line.id) : undefined) ?? queued?.shift();
+    if (!match) return line;
+    if (match.auto && !line.status?.startsWith('✗')) {
+      line.auto = true;
+      if (!autoAnswerStatus(line.status)) line.status = appendAuto(line.status);
+    }
+    if (autoAnswerStatus(match.status)) {
+      line.status = autoAnswerMark();
+      if (!line.output && match.output) line.output = match.output;
+      if (!line.args && match.args) line.args = match.args;
+    }
+    return line;
+  });
 }
 
 function appendAuto(status: string | undefined): string {
@@ -1595,11 +1704,13 @@ function openToolStatus(status: string | undefined): boolean {
 function toolLine(action: ToolAction): TranscriptLine {
   const name = typeof action.tool === 'string' && action.tool ? action.tool : 'tool';
   const title = typeof action.view?.title === 'string' ? action.view.title : '';
+  const egress = name === 'network_egress' ? egressTarget(action.arguments) : '';
+  const asked = askRowSummary(action);
   return {
     kind: 'tool',
     id: typeof action.id === 'string' ? action.id : undefined,
     name,
-    args: title && title !== name ? title : toolArgs(action.arguments),
+    args: egress || asked || (title && title !== name ? title : toolArgs(action.arguments)),
     status: toolStatus(action),
     output: toolOutput(action),
     ...(diffOf(action) ? { diff: diffOf(action) } : {}),
@@ -1669,9 +1780,10 @@ async function editWithEditor(text: string): Promise<string> {
 
 function toolArgs(value: unknown): string {
   if (typeof value === 'string') return value;
-  if (value && typeof value === 'object' && 'command' in value) {
-    const command = (value as { command?: unknown }).command;
-    if (typeof command === 'string') return command;
+  if (value && typeof value === 'object') {
+    const record = value as { command?: unknown; url?: unknown };
+    if (typeof record.command === 'string') return record.command;
+    if (typeof record.url === 'string') return record.url;
   }
   if (value === undefined) return '';
   return JSON.stringify(value);

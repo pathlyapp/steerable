@@ -80,6 +80,22 @@ def test_caller_presentation_is_kept():
     assert registered.metadata["presentation"]["title_from"] == "path"
 
 
+def test_ask_row_uses_the_first_question_then_the_intro():
+    asked = present_call(
+        "ask_user",
+        {
+            "intro": "继续吗",
+            "questions": [
+                {"id": "q1", "text": "要不要同时改重试次数？"},
+                {"id": "q2", "text": "要不要记一条说明？"},
+            ],
+        },
+    )
+    assert asked["title"] == "要不要同时改重试次数？"
+    assert present_call("ask_user", {"intro": "继续吗"})["title"] == "继续吗"
+    assert present_call("ask_user", {})["title"] == "ask_user"
+
+
 def test_present_call_clips_long_titles_and_falls_back_to_the_name():
     long = present_call("bash", {"command": "x" * 100})
     assert long["declared"] is True

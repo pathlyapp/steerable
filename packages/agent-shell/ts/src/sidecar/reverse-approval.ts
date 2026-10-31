@@ -5,9 +5,11 @@
  *
  * Fail-closed by construction: no window, no listener, a renderer error,
  * or an invalid reply all become `deny_once` — never a hang, never an
- * auto-allow. An explicit `timeoutMs` on the approval config still fails
- * closed as `timed_out`; the desktop omits it, so the prompt waits until
- * the user decides.
+ * auto-allow. A command on the dangerous-command list is the exception:
+ * the bridge returns `allow_once` without a card so the executor can
+ * reject it with the blocked-command error. An explicit `timeoutMs` on
+ * the approval config still fails closed as `timed_out`; the desktop
+ * omits it, so the prompt waits until the user decides.
  *
  * The renderer answers via the `approval:decide` invoke with the requestId
  * echoed back; decisions are validated against the algebra's kind set
@@ -87,6 +89,19 @@ export interface ApprovalBridgeDeps {
     arguments: Record<string, unknown>;
     chatId?: string;
   }) => boolean | 'project' | 'workspace' | Promise<boolean | 'project' | 'workspace'>;
+  /**
+   * Pattern that will block this command in the executor.
+   * When set, the bridge does not show a card.
+   */
+  blockedCommand?: (toolName: string, args: Record<string, unknown>) => string | null;
+  /**
+   * An allowed network_egress grant is not a tool result. The host stores it
+   * on the running turn so the row survives reopening the chat.
+   */
+  recordEgressGrant?: (
+    prompt: ApprovalPromptRequest,
+    decision: { kind: ApprovalDecisionKind; reason: string },
+  ) => void;
 }
 
 export interface ApprovalBridge {
@@ -114,16 +129,20 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps): ApprovalBridge {
       if (!toolName) {
         return { kind: 'deny_once', reason: 'malformed approval request (no toolName)' };
       }
+      const args =
+        p.arguments && typeof p.arguments === 'object'
+          ? (p.arguments as Record<string, unknown>)
+          : {};
+      if (deps.blockedCommand?.(toolName, args)) {
+        deps.onLog?.(`approval: ${toolName} matches the dangerous-command list; no card`);
+        return { kind: 'allow_once', reason: '' };
+      }
       if (!deps.hasWindow()) {
         deps.onLog?.(`approval: no renderer window; denying ${toolName} once`);
         return deny('no renderer window available to approve the call');
       }
       const requestId = randomUUID();
       const chatId = typeof p.chatId === 'string' && p.chatId ? p.chatId : undefined;
-      const args =
-        p.arguments && typeof p.arguments === 'object'
-          ? (p.arguments as Record<string, unknown>)
-          : {};
       const category = typeof p.category === 'string' ? p.category : toolName;
       const categoryLabel = deps.categoryLabel?.(toolName, category);
       const fence = deps.outsideWorkspace
@@ -172,10 +191,18 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps): ApprovalBridge {
         entry.resolve(deny(`renderer returned an invalid decision kind: ${String(p.kind)}`));
         return { ok: true };
       }
-      entry.resolve({
-        kind,
-        reason: typeof p.reason === 'string' ? p.reason : '',
-      });
+      const reason = typeof p.reason === 'string' ? p.reason : '';
+      entry.resolve({ kind, reason });
+      if (
+        entry.prompt.toolName === 'network_egress'
+        && (kind === 'allow_once' || kind === 'allow_for_session' || kind === 'allow_always')
+      ) {
+        try {
+          deps.recordEgressGrant?.(entry.prompt, { kind, reason });
+        } catch (err) {
+          deps.onLog?.(`approval: failed to store egress grant: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
       return { ok: true };
     },
   };

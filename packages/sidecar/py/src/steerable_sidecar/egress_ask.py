@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+from contextvars import ContextVar, Token
 from typing import Any, Literal
 
 from steerable_agent_runtime import ApprovalRequest
@@ -29,6 +30,20 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import JsonRpcServer
 from .host_tools import HostApprover
 
 logger = logging.getLogger(__name__)
+
+# The asker is created once for the process. The chat id is per turn.
+_turn_chat_id: ContextVar[str | None] = ContextVar("steerable_turn_chat_id", default=None)
+
+
+def bind_turn_chat_id(chat_id: str | None) -> Token[str | None]:
+    """Remember the chat whose turn is running, so an egress grant names it."""
+    value = chat_id if isinstance(chat_id, str) and chat_id else None
+    return _turn_chat_id.set(value)
+
+
+def reset_turn_chat_id(token: Token[str | None]) -> None:
+    """Drop the chat id bound for the turn that just finished."""
+    _turn_chat_id.reset(token)
 
 #: Matches the proxy's 403 reason phrase (``proxy.py``): the only metadata
 #: channel a CONNECT client can see.
@@ -81,7 +96,11 @@ class EgressApprovalAsker:
         key = f"{host}:{port}"
         if key in self._session_denied:
             return False
-        approver = HostApprover(self._server, timeout=self._timeout_s)
+        approver = HostApprover(
+            self._server,
+            timeout=self._timeout_s,
+            chat_id=_turn_chat_id.get(),
+        )
         try:
             decision = await approver.approve(
                 ApprovalRequest(

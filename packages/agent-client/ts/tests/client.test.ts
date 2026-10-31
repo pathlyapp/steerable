@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { acquireChatWriteLock } from '@steerable/agent-shell/storage/process-locks';
-import { createLocalClient, listBusyChatIds, type AgentClient } from '../src/client.js';
+import { createLocalClient, listBusyChatIds, normalizeAskReply, type AgentClient } from '../src/client.js';
 
 const dirs: string[] = [];
 const clients: AgentClient[] = [];
@@ -21,6 +21,19 @@ async function openClient(): Promise<{ dir: string; client: AgentClient }> {
   clients.push(client);
   return { dir, client };
 }
+
+describe('normalizeAskReply', () => {
+  it('unwraps the CLI answer map and keeps a typed reply as the map', () => {
+    expect(normalizeAskReply({
+      answers: { q1: '无人可答，请按最合理的默认继续。' },
+      unattended: true,
+    })).toEqual({
+      answers: { q1: '无人可答，请按最合理的默认继续。' },
+      unattended: true,
+    });
+    expect(normalizeAskReply({ text: '自己决定' })).toEqual({ answers: { text: '自己决定' } });
+  });
+});
 
 describe('createLocalClient', () => {
   it('creates a chat and lists it', async () => {

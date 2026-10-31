@@ -29,6 +29,7 @@ import { mcpExecutor } from '../mcp-executor.js';
 import { ProjectRegistry, type ProjectRecord } from '../project-registry.js';
 import { getProductConfig } from '../product-config.js';
 import { LocalBackendRouter } from '../local-backend/router.js';
+import { getLiveStream, recordGrantedEgress } from '../local-backend/live-stream.js';
 import { WorktreeService } from '../local-backend/worktree-service.js';
 import { TaskService } from '../local-backend/task-service.js';
 import { LoopPtyMonitor } from '../local-backend/loop-pty-monitor.js';
@@ -321,6 +322,25 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
         ...(declaredLabel ? { declaredLabel } : {}),
       });
     },
+    recordEgressGrant: (prompt, decision) => {
+      if (!prompt.chatId) {
+        onLog('approval: egress grant has no chatId; not stored');
+        return;
+      }
+      const live = getLiveStream(prompt.chatId);
+      if (!live || live.status !== 'running') return;
+      recordGrantedEgress(live, {
+        requestId: prompt.requestId,
+        arguments: prompt.arguments,
+        kind: decision.kind,
+        reason: decision.reason,
+      });
+    },
+    blockedCommand: (toolName, args) => {
+      if (toolName !== 'local_exec_shell') return null;
+      const command = typeof args.command === 'string' ? args.command : '';
+      return localExecutor.detectDangerousCommand(command);
+    },
     outsideWorkspace: async ({ toolName, arguments: args, chatId }) => {
       if (!chatId || !localBackendRouter) return false;
       const project = await localBackendRouter.resolveChatProject(chatId);
@@ -342,6 +362,7 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
     hasWindow,
     onLog: (line) => onLog(line),
   });
+  localBackendRouter.setAskReplay((chatId) => askUserBridge.takeResolved(chatId));
 
   let started = false;
   let instanceLease: InstanceLease | null = null;

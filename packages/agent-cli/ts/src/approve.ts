@@ -45,6 +45,9 @@ export function decisionFor(
   return 'deny_once';
 }
 
+/** The sidecar copies this reason onto the stored tool row as `approval.auto`. */
+export const UNATTENDED_APPROVAL_REASON = 'unattended';
+
 export function unattendedAskText(): string {
   return cliText('ask.unattended');
 }

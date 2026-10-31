@@ -526,8 +526,8 @@ export interface SidecarStreamChunk {
     resultPreview?: string;
     /** W4-2: `data._sandbox` marker lifted out of the result for the card. */
     sandbox?: { backend?: string; enforcement: string };
-    /** Session-allow reuse. `cached` means this call did not show a card. */
-    approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number };
+    /** Session-allow reuse. `cached` means this call did not show a card. `auto` is an unattended allow. */
+    approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number; auto?: boolean };
   };
   /** CoreLoop notices: soft_timeout / budget_exhausted / round_end / hook_action. */
   notice?: { kind: string; [key: string]: unknown };

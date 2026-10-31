@@ -617,13 +617,14 @@ class ApprovalExecutor:
                 }
             }
         elif waited_ms is not None:
-            approval_marker = {
-                "_approval": {
-                    "kind": decision.kind,
-                    "category": request.category,
-                    "waitMs": waited_ms,
-                }
+            recorded: dict[str, Any] = {
+                "kind": decision.kind,
+                "category": request.category,
+                "waitMs": waited_ms,
             }
+            if decision.reason == "unattended":
+                recorded["auto"] = True
+            approval_marker = {"_approval": recorded}
         else:
             approval_marker = None
 

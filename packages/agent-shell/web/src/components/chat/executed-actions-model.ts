@@ -121,7 +121,7 @@ export interface ExecutedActionLike {
   arguments?: unknown;
   result?: unknown;
   sandbox?: { backend?: string; enforcement: string };
-  approval?: { kind?: string; cached?: boolean };
+  approval?: { kind?: string; cached?: boolean; auto?: boolean };
   view?: { title?: string; declared?: boolean };
   durationMs?: number;
 }
@@ -618,6 +618,7 @@ function approvalFromNestedResult(result: unknown): ExecutedActionLike['approval
   return {
     kind: marker.kind,
     ...(marker.cached === true ? { cached: true } : {}),
+    ...(marker.auto === true ? { auto: true } : {}),
   };
 }
 
@@ -643,4 +644,121 @@ export function expandRunCodeActions<T extends ExecutedActionLike>(actions: T[])
     }
   }
   return out;
+}
+
+export interface AskReplay {
+  unattended: boolean;
+  lines: string[];
+}
+
+/** First question, used as the folded tool-row title. The intro is only a fallback. */
+export function askRowSummary(action: { tool?: string; arguments?: unknown; result?: unknown }): string {
+  if (action.tool !== 'ask_user') return '';
+  return firstQuestionText(action.result) || firstQuestionText(action.arguments);
+}
+
+/** Host on a settled egress row. Ports 80 and 443 are omitted. */
+export function egressRowSummary(action: { tool?: string; arguments?: unknown }): string {
+  if (action.tool !== 'network_egress') return '';
+  const value = action.arguments;
+  if (!value || typeof value !== 'object') return '';
+  const record = value as { host?: unknown; port?: unknown };
+  const host = typeof record.host === 'string' ? record.host : '';
+  if (!host) return '';
+  const port = typeof record.port === 'number' ? record.port : null;
+  if (port === null || port === 80 || port === 443) return host;
+  return `${host}:${port}`;
+}
+
+/** Questions and answers from an ask_user result, including a JSON preview. */
+export function askReplay(result: unknown): AskReplay | null {
+  const record = unwrapAsk(result);
+  if (!record) return null;
+  const asked: string[] = [];
+  const rendered: string[] = [];
+  for (const question of record.questions) {
+    if (!question || typeof question !== 'object') continue;
+    const row = question as { id?: unknown; text?: unknown };
+    const text = typeof row.text === 'string' ? row.text.trim() : '';
+    if (!text) continue;
+    asked.push(text);
+    const id = typeof row.id === 'string' ? row.id : '';
+    rendered.push(id ? answerText(record.answers[id]) : '');
+  }
+  if (asked.length === 0) return null;
+  const filled = rendered.filter((value) => value.length > 0);
+  const first = filled[0];
+  const shared = first !== undefined && filled.length === asked.length && filled.every((value) => value === first);
+  const lines = shared
+    ? [...asked.map((text) => t('Question {text}', { text })), t('Answer {text}', { text: first })]
+    : asked.flatMap((text, index) => {
+        const answer = rendered[index] ?? '';
+        return answer
+          ? [t('Question {text}', { text }), t('Answer {text}', { text: answer })]
+          : [t('Question {text}', { text })];
+      });
+  return { unattended: record.unattended === true, lines };
+}
+
+function unwrapAsk(result: unknown): { questions: unknown[]; answers: Record<string, unknown>; unattended?: boolean } | null {
+  if (typeof result === 'string') {
+    const trimmed = result.trim();
+    if (!trimmed.startsWith('{')) return null;
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      return unwrapAsk(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+  const record = result as {
+    questions?: unknown;
+    answers?: unknown;
+    data?: unknown;
+    value?: unknown;
+    unattended?: unknown;
+  };
+  if (Array.isArray(record.questions) && record.answers && typeof record.answers === 'object' && !Array.isArray(record.answers)) {
+    return {
+      questions: record.questions,
+      answers: record.answers as Record<string, unknown>,
+      ...(record.unattended === true ? { unattended: true } : {}),
+    };
+  }
+  if (record.value && typeof record.value === 'object') {
+    const inner = unwrapAsk(record.value);
+    if (inner) return record.unattended === true ? { ...inner, unattended: true } : inner;
+  }
+  if (record.data && typeof record.data === 'object') {
+    const inner = unwrapAsk(record.data);
+    if (inner) return record.unattended === true ? { ...inner, unattended: true } : inner;
+  }
+  return null;
+}
+
+function firstQuestionText(value: unknown): string {
+  const unwrapped = unwrapAsk(value);
+  const questions = unwrapped?.questions ?? questionList(value);
+  for (const question of questions) {
+    if (!question || typeof question !== 'object') continue;
+    const text = (question as { text?: unknown }).text;
+    if (typeof text === 'string' && text.trim()) return text.trim();
+  }
+  return '';
+}
+
+function questionList(value: unknown): unknown[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const questions = (value as { questions?: unknown }).questions;
+  return Array.isArray(questions) ? questions : [];
+}
+
+function answerText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (!Array.isArray(value)) return '';
+  return value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim())
+    .join(', ');
 }

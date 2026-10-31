@@ -77,6 +77,7 @@ import { ToolRouter } from '../tool-router.js';
 import { setDefaultExecTimeoutMs } from '../local-executor.js';
 import { allowEgressForBaseUrl, getActiveEgressBroker, getEgressPosture } from '../sidecar/egress-proxy.js';
 import { buildExecSandbox, parseExecPolicy } from '../sidecar/exec-sandbox.js';
+import { storedAskResult, type ResolvedAsk } from '../sidecar/reverse-ask-user.js';
 import { clampExecPolicy } from '../host-tools.js';
 import {
   getResolvedHostTools,
@@ -495,6 +496,7 @@ export class LocalBackendRouter {
   private readonly broadcast: LocalBackendBroadcast | null;
   /** 4.6a/4.6c：任务面板的路由入口（列表 + 合并/丢弃）。未注入时任务路由 503。 */
   private readonly taskService: TaskService | null;
+  private takeAskReplay: ((chatId: string) => ResolvedAsk | undefined) | null = null;
 
   constructor(
     private readonly toolRouter: ToolRouter,
@@ -515,6 +517,11 @@ export class LocalBackendRouter {
     goals?.onChange((chatId, goal) => {
       this.broadcast?.('goal-changed', { chatId, goal });
     });
+  }
+
+  /** The host records each answered ask; the following tool row stores that text. */
+  setAskReplay(take: (chatId: string) => ResolvedAsk | undefined): void {
+    this.takeAskReplay = take;
   }
 
   private get store(): ScopedStore {
@@ -4142,6 +4149,9 @@ export class LocalBackendRouter {
     // 实时快照：executedActions / timeline / children 传引用（原地 mutate），
     // content 由 onText 逐段更新。切走再切回的 renderer 靠 GET /live-stream 读它。
     const live = registerLiveStream(chatId, { executedActions, timeline, children });
+    live.notify = () => {
+      emit(this.sseData({ type: 'executed_actions', actions: [...executedActions] }));
+    };
     // 场景包的回合观察器（如识别包技能调用并广播产物更新）。
     const packObservers = beginPackTurnObservers({ chatId, broadcast: this.broadcast ?? undefined });
     // 回合产物文件列表（回合收尾时收集）：扫描根与 exec 沙箱可写根同源
@@ -4288,13 +4298,15 @@ export class LocalBackendRouter {
           const idx = action.id
             ? executedActions.findIndex((row) => row.id === action.id)
             : -1;
+          const replay = action.tool === 'ask_user' ? this.takeAskReplay?.(args.chatId) : undefined;
+          const result = replay ? storedAskResult(replay) : action.result;
           const row = {
             id: action.id,
             tool: action.tool,
             mode: chatMode,
             arguments: action.arguments,
-            view: presentToolCall(action.tool, action.arguments, action.result),
-            result: action.result,
+            view: presentToolCall(action.tool, action.arguments, result),
+            result,
             success: action.success,
             error: action.error,
             durationMs: action.durationMs,

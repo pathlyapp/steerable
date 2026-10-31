@@ -2430,6 +2430,10 @@ class Sidecar:
         self._exec_controls[stream_id] = exec_control
         final_content_only = params.get("contentMode") == "final"
         pending_content: list[str] = []
+        from .egress_ask import bind_turn_chat_id, reset_turn_chat_id
+
+        raw_chat_id = params.get("chatId")
+        chat_token = bind_turn_chat_id(raw_chat_id if isinstance(raw_chat_id, str) else None)
         try:
             async for event in recorder.tee(
                 loop.run(
@@ -2492,6 +2496,7 @@ class Sidecar:
                 },
             )
         finally:
+            reset_turn_chat_id(chat_token)
             self._coreloops.pop(stream_id, None)
             self._exec_controls.pop(stream_id, None)
             for client in mcp_clients:

@@ -1,7 +1,7 @@
 import type { AgentClient } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
 
-import { autoAnswer, decisionFor, denied, type ApprovalSpec, type ApprovePolicy } from './approve.js';
+import { autoAnswer, decisionFor, denied, UNATTENDED_APPROVAL_REASON, type ApprovalSpec, type ApprovePolicy } from './approve.js';
 import { cliText } from './copy.js';
 import { ruleStatusLine, type RuleContext } from './rules.js';
 
@@ -304,16 +304,26 @@ function watchApprovals(
         if (!request.json && !request.streamJson && record.toolName === 'network_egress' && kind === 'allow_once') {
           stderr.write(`${egressProgressLine(prompt.arguments)}\n`);
         }
-        await client.decideApproval(prompt.requestId, kind);
+        await client.decideApproval(
+          prompt.requestId,
+          kind,
+          kind === 'allow_once' ? UNATTENDED_APPROVAL_REASON : undefined,
+        );
       } else if (event.channel === 'ask-user:request') {
-        const prompt = event.payload as { requestId?: string; prompt?: string; questions?: { id: string }[] };
+        const prompt = event.payload as {
+          requestId?: string;
+          prompt?: string;
+          intro?: string;
+          questions?: { id: string; text?: string }[];
+        };
         if (!prompt.requestId) continue;
         if (spec.answerAsk) {
           const questions = prompt.questions?.length ? prompt.questions : [{ id: 'answer' }];
-          const record: AutoAnswered = { kind: 'ask_user', prompt: prompt.prompt ?? '' };
+          const asked = questions.map((question) => question.text?.trim() ?? '').find((text) => text.length > 0) ?? '';
+          const record: AutoAnswered = { kind: 'ask_user', prompt: (asked || prompt.prompt || prompt.intro || '').trim() };
           autoAnswered.push(record);
           writeAnswerBeforeTool(streamOrder, record, stdout, request.streamJson);
-          await client.answerAsk(prompt.requestId, { answers: autoAnswer(questions) });
+          await client.answerAsk(prompt.requestId, { answers: autoAnswer(questions), unattended: true });
         } else {
           await client.answerAsk(prompt.requestId, {});
         }
@@ -392,6 +402,9 @@ function writeToolProgress(event: SSEEvent, stderr: NodeJS.WritableStream, print
     const settled = typeof row.durationMs === 'number' || typeof row.success === 'boolean' || row.error != null;
     if (!settled) continue;
     const name = typeof row.tool === 'string' ? row.tool : 'tool';
+    // The grant line is written when the approval is allowed. A later snapshot
+    // of the same grant must not print a second row.
+    if (name === 'network_egress') continue;
     const key = typeof row.id === 'string' && row.id ? row.id : `${name}:${toolProgressLine(row)}`;
     if (printed.has(key)) continue;
     printed.add(key);

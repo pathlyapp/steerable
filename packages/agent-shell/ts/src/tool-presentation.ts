@@ -63,6 +63,22 @@ function failed(result: unknown): boolean {
   );
 }
 
+function askTitle(args: Args, result?: unknown): string {
+  return clip(firstQuestion(args) || firstQuestion(result) || str(args, 'intro') || str(args, 'question')) || '提问';
+}
+
+function firstQuestion(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const questions = (value as Args).questions;
+  if (!Array.isArray(questions)) return '';
+  for (const question of questions) {
+    if (!question || typeof question !== 'object' || Array.isArray(question)) continue;
+    const text = str(question as Args, 'text').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
 function commandTitle(args: Args): string {
   return clip(str(args, 'command')) || 'shell';
 }
@@ -259,7 +275,7 @@ const PRESENTERS: Record<string, Presenter> = {
   ask_user: {
     card: 'generic',
     kind: 'other',
-    title: (args) => clip(str(args, 'intro') || str(args, 'question')) || '提问',
+    title: (args, result) => askTitle(args, result),
   },
   skill: { card: 'generic', kind: 'read', title: (args) => str(args, 'name') || 'skill' },
   delegate_subagent: {

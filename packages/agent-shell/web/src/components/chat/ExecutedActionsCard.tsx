@@ -21,6 +21,9 @@ import {
   isTaskFamilyTool,
   inspectableTaskFromAction,
   shortTaskId,
+  askReplay,
+  askRowSummary,
+  egressRowSummary,
   type InspectTaskInput,
 } from './executed-actions-model';
 import {
@@ -60,8 +63,8 @@ export interface ExecutedAction {
    * port-only egress); none = no backend on this platform.
    */
   sandbox?: { backend?: string; enforcement: string };
-  /** Set when a session allow covered this call, so the row can say so. */
-  approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number };
+  /** Set when a session allow or an unattended allow covered this call, so the row can say so. */
+  approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number; auto?: boolean };
   /**
    * 工具注册时声明的卡片。`declared` 为真时行标题用 `title`，
    * 不再按工具名猜测。旧事件没有这个字段，仍走原来的摘要。
@@ -108,7 +111,7 @@ function summarizeArguments(args: unknown): string | null {
   if (typeof args === 'string') return args.length > 60 ? args.slice(0, 57) + '…' : args;
   if (typeof args !== 'object') return String(args);
   const obj = args as Record<string, unknown>;
-  for (const key of ['command', 'cmd', 'query', 'path', 'file', 'target', 'message']) {
+  for (const key of ['command', 'cmd', 'url', 'query', 'path', 'file', 'target', 'message']) {
     const v = obj[key];
     if (typeof v === 'string' && v.length > 0) {
       return v.length > 60 ? v.slice(0, 57) + '…' : v;
@@ -129,9 +132,15 @@ function sandboxBadge(sandbox: ExecutedAction['sandbox']): string | null {
   }
 }
 
-function sessionAllowNote(action: ExecutedAction): string | undefined {
+function toolProgressNote(action: ExecutedAction): string | undefined {
   if (action.approval?.kind === 'allow_for_session' && action.approval.cached === true) {
     return t('Allowed for this chat');
+  }
+  if (action.tool === 'ask_user' && askReplay(action.result)?.unattended && deriveStatus(action) !== 'failed') {
+    return t('Answered automatically');
+  }
+  if (action.approval?.auto === true && deriveStatus(action) !== 'failed') {
+    return t('Auto');
   }
   return undefined;
 }
@@ -145,8 +154,13 @@ function actionToTool(action: ExecutedAction, idx: number): ToolExecutionPayload
         ? humanizeDelegateError(env.error)
         : env.error
       : null;
+  // 追问行用第一条问题。出网行用主机名。已保存的 view.title 往往只是开场白或工具名。
+  const asked = askRowSummary(action);
+  const egress = egressRowSummary(action);
   // 声明过的工具用 view.title。没有 view 的旧事件仍按工具名做摘要。
-  const summary = action.view?.declared
+  const summary = asked
+    || egress
+    || (action.view?.declared
     ? action.view.title
     : ((action.tool === 'delegate_subagent'
         ? summarizeDelegateSubagent(action.arguments)
@@ -156,7 +170,7 @@ function actionToTool(action: ExecutedAction, idx: number): ToolExecutionPayload
         : null) ??
       summarizeRunCodeAction(action.tool, action.arguments, action.result) ??
       summarizeWebAction(action.tool, action.arguments, action.result) ??
-      summarizeArguments(action.arguments));
+      summarizeArguments(action.arguments)));
   const badge = sandboxBadge(action.sandbox);
   return {
     id: action.id ?? `${action.tool}-${idx}`,
@@ -177,6 +191,20 @@ function actionToTool(action: ExecutedAction, idx: number): ToolExecutionPayload
  * unified `diff` (local_edit_file), render it as a coloured diff; otherwise
  * fall back to the default JSON/text view.
  */
+function renderAskOutput(output: unknown): ReactNode {
+  const replay = askReplay(output);
+  if (!replay) return renderActionOutput(output);
+  return (
+    <div className="space-y-1 text-[11px] text-agent-foreground">
+      {replay.lines.map((line, index) => (
+        <p key={`${index}-${line}`} className="whitespace-pre-wrap break-words">
+          {line}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function renderActionOutput(output: unknown): ReactNode {
   if (output && typeof output === 'object') {
     const obj = output as Record<string, unknown>;
@@ -444,6 +472,9 @@ function toolCardExtras(
       renderOutput: renderDelegateOutput,
     };
   }
+  if (action.tool === 'ask_user') {
+    return { renderOutput: renderAskOutput };
+  }
   if (isTaskFamilyTool(action.tool)) {
     return {
       label: taskToolLabel(action.tool, action.arguments) ?? undefined,
@@ -543,7 +574,7 @@ export function ToolsFlow({
               renderOutput={extras.renderOutput ?? renderActionOutput}
               onActivate={inspect.onActivate}
               activateTitle={inspect.activateTitle}
-              note={sessionAllowNote(action)}
+              note={toolProgressNote(action)}
               className="rounded-none border-0 border-t border-agent-border first:border-t-0"
             />
           );
@@ -606,7 +637,7 @@ export function ExecutedActionsCard({
               renderOutput={extras.renderOutput ?? renderActionOutput}
               onActivate={inspect.onActivate}
               activateTitle={inspect.activateTitle}
-              note={sessionAllowNote(action)}
+              note={toolProgressNote(action)}
               className="rounded-none border-0 border-t border-agent-border first:border-t-0"
             />
           );

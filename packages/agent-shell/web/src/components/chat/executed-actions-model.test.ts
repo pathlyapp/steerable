@@ -191,6 +191,32 @@ describe('summarizeRunCodeAction / expandRunCodeActions', () => {
     expect(rows[1]?.approval).toEqual({ kind: 'allow_for_session', cached: true });
   });
 
+  it('内层工具行保留自己结果里的自动放行', () => {
+    const rows = expandRunCodeActions([
+      {
+        tool: 'run_code',
+        approval: { kind: 'allow_for_session', cached: true },
+        result: {
+          success: true,
+          data: {
+            calls: [
+              {
+                tool: 'shell',
+                arguments: {},
+                result: {
+                  success: true,
+                  data: { _approval: { kind: 'allow_once', auto: true } },
+                },
+              },
+            ],
+          },
+        },
+      },
+    ]);
+    expect(rows[0]?.approval).toEqual({ kind: 'allow_for_session', cached: true });
+    expect(rows[1]?.approval).toEqual({ kind: 'allow_once', auto: true });
+  });
+
   it('结果是预览 JSON 字符串时仍展开内层并读出本会话允许', () => {
     const preview = JSON.stringify({
       success: true,

@@ -10,7 +10,7 @@ export interface ToolAction {
   success?: boolean;
   error?: unknown;
   durationMs?: number;
-  approval?: { kind?: string; cached?: boolean };
+  approval?: { kind?: string; cached?: boolean; auto?: boolean };
 }
 
 export function formatDuration(ms: number): string {
@@ -22,19 +22,119 @@ export function formatDuration(ms: number): string {
 export function toolStatus(action: ToolAction): string {
   const settled = typeof action.durationMs === 'number' || typeof action.success === 'boolean' || action.error != null;
   if (!settled) return '…';
-  const mark = action.success === false || action.error != null ? '✗' : '✓';
+  const failed = action.success === false || action.error != null;
+  if (!failed && askUserReplay(action)?.auto) return `✓ ${cliText('tui.toolAutoAnswer')}`;
+  const mark = failed ? '✗' : '✓';
   const duration = typeof action.durationMs === 'number' ? formatDuration(action.durationMs) : '';
   const base = duration ? `${mark} ${duration}` : mark;
   if (action.approval?.kind === 'allow_for_session' && action.approval.cached === true) {
     return `${base} ${cliText('tui.toolSessionAllow')}`;
   }
+  if (!failed && action.approval?.auto === true) return `${base} ${cliText('tui.toolAuto')}`;
   return base;
 }
 
 export function toolOutput(action: ToolAction): string {
   const error = textOf(action.error);
   if (error) return clip(error);
+  // A reopened chat only has the stored result object, which has no string field the generic extractor reads.
+  const replay = askUserReplay(action);
+  if (replay) return clip(replay.lines);
   return clip(textOf(action.result));
+}
+
+/** First question, for the folded tool row. The intro stays out of that column. */
+export function askRowSummary(action: ToolAction): string {
+  if (action.tool !== 'ask_user') return '';
+  return firstQuestionText(action.result) || firstQuestionText(action.arguments);
+}
+
+function askUserReplay(action: ToolAction): { lines: string; auto: boolean } | null {
+  if (action.tool !== 'ask_user') return null;
+  const record = unwrapAsk(action.result);
+  if (!record) return null;
+  const answers = record.answers;
+  const asked: string[] = [];
+  const rendered: string[] = [];
+  for (const question of record.questions) {
+    if (!question || typeof question !== 'object') continue;
+    const row = question as { id?: unknown; text?: unknown };
+    const text = typeof row.text === 'string' ? row.text.trim() : '';
+    if (!text) continue;
+    asked.push(text);
+    const id = typeof row.id === 'string' ? row.id : '';
+    rendered.push(id ? answerText(answers[id]) : '');
+  }
+  if (asked.length === 0) return null;
+  const phrase = cliText('ask.unattended');
+  const filled = rendered.filter((value) => value.length > 0);
+  const first = filled[0];
+  const shared = first !== undefined && filled.length === asked.length && filled.every((value) => value === first);
+  const auto = record.unattended === true || (shared && first === phrase);
+  const lines = shared
+    ? [...asked.map((text) => `问 ${text}`), `答 ${first}`].join('\n')
+    : asked.map((text, index) => {
+        const answer = rendered[index] ?? '';
+        return answer ? `问 ${text}\n答 ${answer}` : `问 ${text}`;
+      }).join('\n');
+  return { lines, auto };
+}
+
+function unwrapAsk(result: unknown): { questions: unknown[]; answers: Record<string, unknown>; unattended?: boolean } | null {
+  if (typeof result === 'string') {
+    const trimmed = result.trim();
+    if (!trimmed.startsWith('{')) return null;
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      return unwrapAsk(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+  const record = result as { questions?: unknown; answers?: unknown; data?: unknown; value?: unknown; unattended?: unknown };
+  if (Array.isArray(record.questions) && record.answers && typeof record.answers === 'object' && !Array.isArray(record.answers)) {
+    return {
+      questions: record.questions,
+      answers: record.answers as Record<string, unknown>,
+      ...(record.unattended === true ? { unattended: true } : {}),
+    };
+  }
+  if (record.value && typeof record.value === 'object') {
+    const inner = unwrapAsk(record.value);
+    if (inner) return record.unattended === true ? { ...inner, unattended: true } : inner;
+  }
+  if (record.data && typeof record.data === 'object') {
+    const inner = unwrapAsk(record.data);
+    if (inner) return record.unattended === true ? { ...inner, unattended: true } : inner;
+  }
+  return null;
+}
+
+function firstQuestionText(value: unknown): string {
+  const unwrapped = unwrapAsk(value);
+  const questions = unwrapped?.questions ?? questionList(value);
+  for (const question of questions) {
+    if (!question || typeof question !== 'object') continue;
+    const text = (question as { text?: unknown }).text;
+    if (typeof text === 'string' && text.trim()) return text.trim();
+  }
+  return '';
+}
+
+function questionList(value: unknown): unknown[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const questions = (value as { questions?: unknown }).questions;
+  return Array.isArray(questions) ? questions : [];
+}
+
+function answerText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (!Array.isArray(value)) return '';
+  return value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim())
+    .join('、');
 }
 
 export function plainMarkdown(source: string): string {

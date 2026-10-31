@@ -89,6 +89,7 @@ vi.mock('../src/local-backend/router.js', () => ({
     resolveChatProject = vi.fn(() => null);
     resolveChatWorkspaceRoot = vi.fn(async () => '/tmp/chat-ws');
     wakeChat = vi.fn(async () => ({ started: true }));
+    setAskReplay = vi.fn();
   },
 }));
 vi.mock('../src/local-backend/loop-pty-monitor.js', () => ({
@@ -173,6 +174,7 @@ describe('createHostRuntime · 装配', () => {
     expect(rt.toolRouter).toBeDefined();
     expect(rt.taskService).toBeDefined();
     expect(rt.localBackendRouter).toBeDefined();
+    expect(rt.localBackendRouter.setAskReplay).toHaveBeenCalledOnce();
     expect(mocks.setTaskServices).toHaveBeenCalledOnce();
     expect(mocks.loopMonitorConstructed).toHaveBeenCalledOnce();
     expect(mocks.setLoopMonitor).toHaveBeenCalledOnce();

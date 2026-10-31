@@ -9,7 +9,7 @@ import type { AgentClient } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import { createCli } from '../src/cli.js';
 import { nodeDoctorLine } from '../src/node-version.js';
-import { decisionFor } from '../src/approve.js';
+import { decisionFor, UNATTENDED_APPROVAL_REASON } from '../src/approve.js';
 
 const dirs: string[] = [];
 
@@ -163,7 +163,7 @@ describe('createCli', () => {
 
   it('warns and allows every tool for allow-all', async () => {
     const stderr = capture();
-    const kinds: string[] = [];
+    const kinds: Array<{ kind: string; reason?: string }> = [];
     const code = await createCli({
       argv: ['run', 'go', '--approve', 'allow-all', '--no-project', '--data-dir', tempDir()],
       stdout: capture().stream,
@@ -175,14 +175,14 @@ describe('createCli', () => {
             payload: { requestId: 'req-2', toolName: 'local_exec_shell', category: 'local' },
           };
         },
-        decideApproval: async (_id, kind) => {
-          kinds.push(kind);
+        decideApproval: async (_id, kind, reason) => {
+          kinds.push({ kind, reason });
           return true;
         },
       }),
     });
     expect(code).toBe(0);
-    expect(kinds).toEqual(['allow_once']);
+    expect(kinds).toEqual([{ kind: 'allow_once', reason: UNATTENDED_APPROVAL_REASON }]);
     expect(stderr.text()).toContain('--approve allow-all');
   });
 
