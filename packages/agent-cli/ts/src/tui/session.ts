@@ -1236,7 +1236,7 @@ export class AgentTui implements Component {
       }
       const prior = index >= 0 ? this.lines[index] : undefined;
       const keepAnswer = autoAnswerStatus(prior?.status);
-      const failed = next.status.startsWith('✗');
+      const failed = next.status?.startsWith('✗') === true;
       const auto = prior?.auto === true || (!keepAnswer && this.takePendingAuto(next.name ?? ''));
       if (auto && !failed) {
         next.auto = true;

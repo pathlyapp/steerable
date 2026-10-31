@@ -1,6 +1,6 @@
 # @steerable/agent-cli
 
-## [0.7.3]
+## [0.7.4]
 
 ### Fixed
 
@@ -9,6 +9,12 @@
 * The ask row title is the first question. An unattended answer is stored with the tool call.
 * A shell command the executor will block does not open an approval card.
 * The approval card for opening a page says so.
+
+## [0.7.3]
+
+### Fixed
+
+* Python packages were published. The npm publish stopped because the command-line package did not typecheck.
 
 ## [0.7.2]
 
