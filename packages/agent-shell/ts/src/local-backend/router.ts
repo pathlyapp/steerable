@@ -2838,15 +2838,16 @@ export class LocalBackendRouter {
       // 在原先失败/停止的那条回复上记下「已从这里继续」：界面据此把整张
       // 失败卡片收成一行历史记录，重启后仍然是这一行，而不是又一次失败。
       if (lastAssistant && reason !== 'interrupted') {
-        await this.store
-          .patchMessageMetadata(chatId, lastAssistant.id, {
+        // 记不下来只会让卡片多留一张，不值得让续跑失败——所以吞掉异常，
+        // 但用 try/catch 而不是 `.catch()`：store 实现可以是同步的。
+        try {
+          await this.store.patchMessageMetadata(chatId, lastAssistant.id, {
             continuedAt: new Date().toISOString(),
             continuedReason: reason,
-          })
-          .catch((err: unknown) => {
-            // 记不下来只会让卡片多留一张，不值得让续跑失败。
-            console.warn('[local-backend] continue: metadata patch failed', err);
           });
+        } catch (patchErr) {
+          console.warn('[local-backend] continue: metadata patch failed', patchErr);
+        }
       }
     } else {
       userMessageText = String(payload.message || '').trim();
@@ -4624,7 +4625,15 @@ export class LocalBackendRouter {
     // 配了遥测就把这一回合的终态作为计数上报（R4）。指标只有类别与次数，
     // 没有对话内容，所以 `metadata` 档位也可以发；没配 endpoint 就一条不发。
     // 失败不阻断：回合已经完成，投递不了是收集端的事。
-    const telemetryForTurn = await this.store.getTelemetrySettings().catch(() => null);
+    // 取遥测设置：读不到只意味着这一回合不上报，不该影响回合收尾。用
+    // try/catch 而不是 `.catch()`——store 实现是同步返回时没有 thenable，
+    // 链式 `.catch` 会直接抛。
+    let telemetryForTurn: Awaited<ReturnType<typeof this.store.getTelemetrySettings>> = null;
+    try {
+      telemetryForTurn = await this.store.getTelemetrySettings();
+    } catch (telemetryReadErr) {
+      console.warn('[local-backend] read telemetry settings failed', telemetryReadErr);
+    }
     if (telemetryEnabled(telemetryForTurn) && telemetryForTurn?.endpoint) {
       void supervisor
         ?.call(
