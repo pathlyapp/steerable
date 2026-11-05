@@ -235,9 +235,32 @@ def egress_path(
     )
 
 
+def _direct_pin_or_trust_env(
+    base_url: str,
+    proxies: Mapping[str, str],
+    *,
+    has_module: Callable[[str], bool],
+) -> dict[str, None] | None:
+    """A direct pin for `base_url`, or None when the pin cannot be built.
+
+    httpx builds a transport for every declared proxy while constructing the
+    client, so one unbuildable scheme fails the whole client no matter which
+    pattern the request matches. When that happens the caller must fall back to
+    `trust_env=False`, which is the only way to keep this host out of a proxy
+    map that cannot be assembled.
+    """
+    host = urlsplit(base_url).hostname
+    if not host:
+        return None
+    if proxies and _unbuildable_proxy_schemes(proxies, has_module=has_module):
+        return None
+    return _pin_direct(host)
+
+
 def client_env_kwargs(
     base_url: str,
     *,
+    force_direct: bool = False,
     env_proxies: Callable[[], Mapping[str, str]] = urllib.request.getproxies_environment,
     platform_bypass: Callable[[str], bool] = _platform_says_direct,
     env_bypass: Callable[[str], bool] = urllib.request.proxy_bypass_environment,
@@ -256,7 +279,17 @@ def client_env_kwargs(
 
     An empty dict leaves httpx's own environment handling untouched: the endpoint
     is proxied as declared, or confined egress owns every host.
+
+    `force_direct` overrides all of that for one endpoint: the user asked this
+    model service to connect directly, typically after a proxy turned a working
+    connection into a timeout. It cannot override confined egress — that
+    declaration owns every host, and the host's own sandbox decides reachability
+    — so it resolves to `trust_env=False` there, which is what keeps the
+    per-host egress proxy out of the request.
     """
+    if force_direct:
+        pinned = _direct_pin_or_trust_env(base_url, env_proxies(), has_module=has_module)
+        return {"trust_env": False} if pinned is None else {"mounts": pinned}
     proxies = env_proxies()
     if not proxies:
         mounts = direct_mounts(

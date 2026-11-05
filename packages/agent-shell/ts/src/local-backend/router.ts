@@ -118,7 +118,11 @@ import { resolveBranchActivation } from './branch-helper.js';
 import { detectInterruptedTurn } from './interrupted-helper.js';
 import { resumableTurn } from './resumable-turn.js';
 import { handlePortableRequest } from './portable-service.js';
-import { getProductConfig, isPortableProduct } from '../product-config.js';
+import {
+  getProductConfig,
+  isPortableProduct,
+  productConfigDirectConnection,
+} from '../product-config.js';
 import { dropCurrentUserMessage } from './history-helper.js';
 import { parseImageAttachments, processImageAttachments } from '../image-attachment.js';
 import { chatAttachmentsDirPath, isValidChatAttachmentsKey } from '../attachments.js';
@@ -4279,6 +4283,9 @@ export class LocalBackendRouter {
         provider: sidecarWireProvider(settings.provider),
         model: overrideModel || settings.model,
         reasoningEffort,
+        // 产品声明模型服务是否直连（跳过系统代理）。只在产品显式打开时下发，
+        // 未声明的产品线上字节与旧版完全一致。
+        ...(productConfigDirectConnection() ? { directConnection: true } : {}),
         // W2.2.2 凭证代理：broker 活跃且命中 provider 主机时，baseUrl 改写
         // 为 http（代理解析绝对 URI 后注入凭证转发 https），apiKey 不再下
         // 发——sidecar 进程（沙箱内、可被 agent 行为影响）永远拿不到真实

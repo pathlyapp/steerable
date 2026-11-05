@@ -241,3 +241,41 @@ def test_message_never_ends_at_an_empty_class_name_when_a_cause_exists() -> None
     assert "ConnectError" in described
     assert "ConnectionResetError" in described
     assert "[Errno 54]" in described
+
+
+@pytest.mark.asyncio
+async def test_force_direct_provider_keeps_the_proxy_out_of_its_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A direct-connection provider must not report a hop it did not take."""
+    from steerable_agent_runtime.llm import LLMMessage
+    from steerable_agent_runtime.llm.errors import LLMError
+    from steerable_agent_runtime.llm.openai_compat import OpenAICompatProvider
+
+    captured: dict[str, object] = {}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("")
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+
+    def client(**kwargs: object) -> httpx.AsyncClient:
+        captured.update(kwargs)
+        return real_client(transport=transport, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
+
+    provider = OpenAICompatProvider(
+        "openai_compat",
+        "m",
+        "https://example.invalid/v1",
+        force_direct=True,
+    )
+    with pytest.raises(LLMError) as caught:
+        async for _chunk in provider.stream([LLMMessage.text_of("user", "hi")]):
+            pass
+
+    assert captured.get("mounts") == {"all://example.invalid": None}
+    assert caught.value.proxy is None

@@ -80,6 +80,9 @@ class OpenAIResponsesProvider:
     api_key: str | None = None
     default_temperature: float | None = None
     preset: ProviderPreset | Literal["auto", "off"] = "auto"
+    #: Send this endpoint's requests direct even when the host declares a
+    #: proxy (see `OpenAICompatProvider.force_direct`).
+    force_direct: bool = False
     #: Per-request reasoning effort from the host's model picker; wins over
     #: ``STEERABLE_REASONING_EFFORT`` and the preset default. Explicitly
     #: requested effort is validated strict (``clamp_reasoning_effort``) —
@@ -117,7 +120,7 @@ class OpenAIResponsesProvider:
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(60.0),
-                **client_env_kwargs(self.base_url),
+                **client_env_kwargs(self.base_url, force_direct=self.force_direct),
             ) as client:
                 response = await client.post(
                     f"{self.base_url.rstrip('/')}/responses",
@@ -134,7 +137,7 @@ class OpenAIResponsesProvider:
                 f"{self.name}: transport error: {describe_transport_error(exc)}",
                 kind="transport",
                 provider=self.name,
-                proxy=egress_path(self.base_url).proxy,
+                proxy=None if self.force_direct else egress_path(self.base_url).proxy,
             ) from exc
 
         if payload.get("status") == "failed" or payload.get("error"):
@@ -169,7 +172,7 @@ class OpenAIResponsesProvider:
             async with (
                 httpx.AsyncClient(
                     timeout=_stream_timeout(),
-                    **client_env_kwargs(self.base_url),
+                    **client_env_kwargs(self.base_url, force_direct=self.force_direct),
                 ) as client,
                 client.stream(
                     "POST",
@@ -216,7 +219,7 @@ class OpenAIResponsesProvider:
                 f"{self.name}: transport error: {describe_transport_error(exc)}",
                 kind="transport",
                 provider=self.name,
-                proxy=egress_path(self.base_url).proxy,
+                proxy=None if self.force_direct else egress_path(self.base_url).proxy,
             ) from exc
 
     # ------------------------------------------------------------------

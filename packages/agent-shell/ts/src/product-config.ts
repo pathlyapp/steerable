@@ -130,6 +130,16 @@ export interface ProductConfig {
    * 超过则接口返回 413，不创建新会话。
    */
   forkWorkspaceMaxBytes?: number;
+  /**
+   * 模型请求是否跳过系统代理直连。缺省关（跟随系统代理）。
+   *
+   * 打开后这一端点的请求不经过用户在系统里配置的代理。用于国内常见
+   * 「开着 Clash，但模型服务本来就在直连规则里」的情形：代理多转一手
+   * 只会用更短的超时把本来能连上的请求断掉。
+   *
+   * 要求流量必须经过公司代理的环境（例如企业产品）应保持关闭。
+   */
+  directModelConnection?: boolean;
 }
 
 /** shell 内置智能体：只有产品显式 `true` 才开。 */
@@ -138,6 +148,18 @@ export function isShellBuiltinAgentEnabled(
   config: ProductConfig = getProductConfig(),
 ): boolean {
   return config.builtinAgents?.[id] === true;
+}
+
+/**
+ * 模型请求是否直连（不经过系统代理）。只有产品显式 `true` 才开。
+ *
+ * 企业产品可能要求所有出网流量经过公司代理，所以缺省是关：产品不声明
+ * 就保持跟随系统代理的旧行为。
+ */
+export function productConfigDirectConnection(
+  config: ProductConfig = getProductConfig(),
+): boolean {
+  return config.directModelConnection === true;
 }
 
 /** 对话与配置能否导出/导入。缺省关，产品必须显式打开。 */

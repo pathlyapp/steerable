@@ -3612,6 +3612,11 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
             strict=True,
         )
 
+    # The host asked this one endpoint to skip the proxy (see
+    # `ProviderConfig.force_direct`). Per request, not per process: a product
+    # may send one model service direct and leave the rest proxied.
+    direct_connection = bool(params.get("directConnection"))
+
     if provider_kind in {"openai", "openai_compat", "openai-compatible", "ollama"}:
         from steerable_agent_runtime.llm import (
             OpenAICompatFlags,
@@ -3654,6 +3659,7 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     reasoning_effort=(
                         str(reasoning_effort) if reasoning_effort else None
                     ),
+                    force_direct=direct_connection,
                 )
             )
         )
@@ -3691,6 +3697,7 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     reasoning_effort=(
                         str(reasoning_effort) if reasoning_effort else None
                     ),
+                    force_direct=direct_connection,
                 )
             )
         )
@@ -3705,6 +3712,7 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     api_key=api_key,
                     model=str(model),
                     preset=_resolve_preset_param(params),
+                    force_direct=direct_connection,
                 )
             )
         )

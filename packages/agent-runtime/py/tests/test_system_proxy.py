@@ -298,3 +298,60 @@ def test_egress_path_honors_confined_egress() -> None:
         confined=lambda: True,
     )
     assert path.proxy == "http://127.0.0.1:9"
+
+
+# ---------------------------------------------------------------------------
+# force_direct：用户/产品把某一个模型服务改成直连
+# ---------------------------------------------------------------------------
+
+
+def test_force_direct_pins_the_host_even_under_a_declared_proxy() -> None:
+    """「改走直连」must beat the proxy map for this endpoint only.
+
+    This is the case that started it: a proxy whose own dial dies turns a
+    working endpoint into a timeout. The user redirects that service; the
+    proxy stays configured for everything else.
+    """
+    assert client_env_kwargs(
+        "https://api.deepseek.com",
+        force_direct=True,
+        env_proxies=lambda: {"https": "http://127.0.0.1:7890"},
+        env_bypass=_bypass(),
+        platform_list_bypass=_bypass(),
+        confined=lambda: False,
+    ) == {"mounts": {"all://api.deepseek.com": None}}
+
+
+def test_force_direct_falls_back_to_trust_env_when_the_map_cannot_build() -> None:
+    """A socks proxy without socksio fails client construction, not the request."""
+    assert client_env_kwargs(
+        "https://api.deepseek.com",
+        force_direct=True,
+        env_proxies=lambda: SOCKS_ENV,
+        env_bypass=_bypass(),
+        platform_list_bypass=_bypass(),
+        confined=lambda: False,
+        has_module=lambda name: False,
+    ) == {"trust_env": False}
+
+
+def test_force_direct_keeps_confined_egress_in_the_path() -> None:
+    """Confined egress owns every host; the sandbox still sees the request."""
+    assert client_env_kwargs(
+        "https://api.deepseek.com",
+        force_direct=True,
+        env_proxies=lambda: {"all": "http://127.0.0.1:9"},
+        env_bypass=_bypass(),
+        platform_list_bypass=_bypass(),
+        confined=lambda: True,
+        has_module=lambda name: True,
+    ) == {"mounts": {"all://api.deepseek.com": None}}
+
+
+def test_force_direct_with_no_declared_proxy_still_pins() -> None:
+    assert client_env_kwargs(
+        "https://api.deepseek.com",
+        force_direct=True,
+        env_proxies=dict,
+        platform_bypass=_bypass(),
+    ) == {"mounts": {"all://api.deepseek.com": None}}
