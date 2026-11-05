@@ -52,6 +52,11 @@ import {
 
 export interface LlmSettingsPanelHandle {
   save: () => Promise<void>;
+  /**
+   * 把光标放到 API Key 输入框。返回 false 表示字段当前不存在（面板还在
+   * 加载，或该服务商没有这个字段），调用方据此决定是否稍后再试。
+   */
+  focusApiKey: () => boolean;
 }
 
 export interface LlmSaveUi {
@@ -389,8 +394,16 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
 
   const handleSaveRef = useRef(handleSave);
   handleSaveRef.current = handleSave;
+  const apiKeyRef = useRef<HTMLInputElement | null>(null);
+
   useImperativeHandle(ref, () => ({
     save: () => handleSaveRef.current(),
+    focusApiKey: () => {
+      const field = apiKeyRef.current;
+      if (!field) return false;
+      field.focus();
+      return document.activeElement === field;
+    },
   }), []);
 
   useEffect(() => {
@@ -482,6 +495,7 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                     </label>
                     <div className="flex items-center gap-2">
                       <input
+                        ref={apiKeyRef}
                         type="password"
                         // The failure card's 「打开模型设置」 targets this field:
                         // an authentication failure is fixed here, so the panel

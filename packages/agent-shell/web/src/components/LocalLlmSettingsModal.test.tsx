@@ -39,6 +39,10 @@ vi.mock('@/lib/local-api', () => ({
 }));
 
 const { LocalLlmSettingsModal } = await import('./LocalLlmSettingsModal');
+import {
+  LlmSettingsPanel,
+  type LlmSettingsPanelHandle,
+} from '@/components/settings/LlmSettingsPanel';
 
 const DEEPSEEK: ProviderPresetDescriptor = {
   host: 'api.deepseek.com',
@@ -368,5 +372,44 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
       expect(screen.getByTestId('llm-model-capabilities').textContent).toContain('Unrecognized'),
     );
     expect(screen.getByTestId('llm-model-capabilities').textContent).not.toContain('131K');
+  });
+});
+
+// 失败卡片的「打开模型设置」把用户带到这里，光标必须落在 API Key 上：认证
+// 失败要改的就是这个字段。
+//
+// 这里断言的是面板对外暴露的聚焦契约，而不是 portal 里的 document.activeElement：
+// 弹窗经 createPortal 挂到 body 之外的容器，面板又要等异步设置到达才渲染字段，
+// 在 jsdom 里追这两件事的时序会让用例比被测行为还复杂。契约本身是实打实的——
+// 返回 false 就意味着弹窗会继续轮询。
+describe('LocalLlmSettingsPanel — focusApiKey 契约（T-ERR-12）', () => {
+  it('字段存在时聚焦并返回 true', async () => {
+    getLlmSettings.mockResolvedValue({ ...BASE_SETTINGS });
+    const ref = { current: null as LlmSettingsPanelHandle | null };
+    render(<LlmSettingsPanel ref={ref} />);
+
+    // 面板挂载后自取设置，字段随数据出现。
+    await waitFor(() => {
+      expect(
+        document.querySelector('[data-settings-field="llm-api-key"]'),
+      ).toBeTruthy();
+    });
+
+    const ok = ref.current!.focusApiKey();
+    expect(ok).toBe(true);
+    const field = document.querySelector<HTMLInputElement>(
+      '[data-settings-field="llm-api-key"]',
+    )!;
+    expect(field.ownerDocument.activeElement).toBe(field);
+  });
+
+  it('字段还没渲染时返回 false，让弹窗继续轮询', async () => {
+    // 面板挂载后要等异步设置到达才渲染表单；在那之前没有字段可聚焦。
+    // 返回 false 是弹窗继续轮询的依据——返回 true 会让它以为已完成而放弃。
+    getLlmSettings.mockReturnValue(new Promise(() => {})); // 永不 resolve
+    const ref = { current: null as LlmSettingsPanelHandle | null };
+    render(<LlmSettingsPanel ref={ref} />);
+
+    expect(ref.current!.focusApiKey()).toBe(false);
   });
 });

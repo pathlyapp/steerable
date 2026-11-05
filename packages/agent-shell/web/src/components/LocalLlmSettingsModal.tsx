@@ -1,8 +1,11 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { LuX } from 'react-icons/lu';
 import type { LlmSettings } from '@/lib/local-api';
-import { LlmSettingsPanel } from '@/components/settings/LlmSettingsPanel';
+import {
+  LlmSettingsPanel,
+  type LlmSettingsPanelHandle,
+} from '@/components/settings/LlmSettingsPanel';
 import { t } from '@/i18n';
 
 interface LocalLlmSettingsModalProps {
@@ -16,6 +19,7 @@ interface LocalLlmSettingsModalProps {
  * 侧栏「设置」走 `/settings` 页（模型 + 洞察 / 遥测 / 用量 / 搜索 / 安全）。
  */
 export function LocalLlmSettingsModal({ open, onClose, onSaved }: LocalLlmSettingsModalProps) {
+  const panelRef = useRef<LlmSettingsPanelHandle | null>(null);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -27,27 +31,34 @@ export function LocalLlmSettingsModal({ open, onClose, onSaved }: LocalLlmSettin
 
   // An authentication failure opens this modal specifically to fix the key,
   // so put the cursor there instead of at the top of a form the reader then
-  // has to scan. The panel loads its settings asynchronously; the field only
-  // exists after that, hence the short retry window rather than one attempt.
+  // has to scan.
+  //
+  // It goes through the panel's handle rather than a document query: the panel
+  // owns the field, mounts it asynchronously once settings load, and knows when
+  // it is actually focusable. Polling the DOM found an element that had already
+  // been replaced by a re-render, so the focus call landed on a detached node.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    let attempts = 0;
+    let timer: number | undefined;
     const focusKey = () => {
       if (cancelled) return;
-      const field = document.querySelector<HTMLInputElement>(
-        '[data-settings-field="llm-api-key"]',
-      );
-      if (field) {
-        field.focus();
-        return;
-      }
-      attempts += 1;
-      if (attempts < 20) window.setTimeout(focusKey, 50);
+      // 用户已经开始在别处输入时不要抢焦点。
+      const active = document.activeElement;
+      const userTyping =
+        active instanceof HTMLElement &&
+        active !== document.body &&
+        (active.tagName === 'INPUT' ||
+          active.tagName === 'TEXTAREA' ||
+          active.isContentEditable);
+      if (userTyping) return;
+      if (panelRef.current?.focusApiKey()) return;
+      timer = window.setTimeout(focusKey, 50);
     };
     focusKey();
     return () => {
       cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [open]);
 
@@ -81,7 +92,7 @@ export function LocalLlmSettingsModal({ open, onClose, onSaved }: LocalLlmSettin
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-3">
-          <LlmSettingsPanel onSaved={onSaved} />
+          <LlmSettingsPanel ref={panelRef} onSaved={onSaved} />
         </div>
         <div className="flex h-9 flex-shrink-0 items-center justify-end border-t border-agent-border px-3 bg-agent-muted/10">
           <button
