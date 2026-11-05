@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from steerable_agent_protocol.generated import ToolCall
@@ -22,10 +22,12 @@ class _ScriptedProvider:
         script: list[list[LLMStreamChunk]],
         fail_on: set[int] | None = None,
         fail_after_content_on: set[int] | None = None,
+        failure: BaseException | None = None,
     ):
         self._script = script
         self._fail_on = fail_on or set()
         self._fail_after_content_on = fail_after_content_on or set()
+        self._failure = failure
         self.attempts = 0
         self._round = 0
         self.stream_kwargs: list[dict] = []
@@ -43,7 +45,7 @@ class _ScriptedProvider:
 
         async def _gen():
             if attempt in self._fail_on:
-                raise RuntimeError("upstream blew up")
+                raise self._failure or RuntimeError("upstream blew up")
                 yield  # pragma: no cover — make this a generator
             self._round += 1
             for chunk in chunks:
@@ -360,6 +362,82 @@ async def test_coreloop_path_reports_terminal_failure() -> None:
     assert len(errors) == 1
     assert done[0]["ok"] is False
     assert done[0]["status"] == "failed"
+    # The provider classification travels beside the legacy exception class so
+    # the host picks user-facing copy by category instead of parsing text. The
+    # scripted provider raises a bare RuntimeError, which classifies as unknown.
+    assert errors[0]["kind"] == "LoopError"
+    assert errors[0]["errorKind"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_stream_error_forwards_the_engine_failure_detail() -> None:
+    """`proxy` / `attempts` reach the host when the engine reports them.
+
+    Driven through `_emit_loop_event` rather than a live stream: the fields
+    come from the Rust engine, so a Python-only test would be asserting on the
+    installed wheel's version rather than on this module's forwarding.
+    """
+
+    class _Event:
+        kind = "error"
+        data: ClassVar[dict] = {
+            "message": "openai_compat: transport error: ConnectError",
+            "kind": "transport",
+            "proxy": "http://127.0.0.1:7890",
+            "attempts": 5,
+            "round": 9,
+        }
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit_notification(self, method: str, payload: dict) -> None:
+            self.events.append((method, payload))
+
+    transport = _Transport()
+    await Sidecar._emit_loop_event(
+        transport, "stream-1", _Event(), "trace-1", model="fake"
+    )
+
+    assert transport.events == [
+        (
+            "stream.error",
+            {
+                "streamId": "stream-1",
+                "kind": "LoopError",
+                "message": "openai_compat: transport error: ConnectError",
+                "traceId": "trace-1",
+                "errorKind": "transport",
+                "proxy": "http://127.0.0.1:7890",
+                "attempts": 5,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_error_omits_detail_the_engine_did_not_send() -> None:
+    """Absent fields stay absent; an empty value would read as "direct"."""
+
+    class _Event:
+        kind = "error"
+        data: ClassVar[dict] = {"message": "boom", "kind": "unknown"}
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit_notification(self, method: str, payload: dict) -> None:
+            self.events.append((method, payload))
+
+    transport = _Transport()
+    await Sidecar._emit_loop_event(transport, "stream-1", _Event(), None)
+
+    payload = transport.events[0][1]
+    assert "proxy" not in payload
+    assert "attempts" not in payload
+    assert payload["errorKind"] == "unknown"
 
 
 @pytest.mark.asyncio

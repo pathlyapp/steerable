@@ -18,6 +18,8 @@ import type { InspectTaskInput } from './executed-actions-model';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { TurnBlock } from './turn-timeline';
 import type { TurnFile } from './turn-files';
+import type { RetryState } from './RetryStatus';
+import type { TurnFailureCardProps } from './TurnFailureCard';
 import type { LlmSpeedSnapshot } from './process-status';
 import { ComposerStatusStack } from './composer-status-stack';
 import { t } from '@/i18n';
@@ -120,6 +122,10 @@ export interface LocalChatPanelProps {
   orchestrationChildrenByMessageId?: Record<string, ChildInfo[]>;
   /** Current round number for the in-flight turn (1-based). */
   currentRound?: number;
+  /** Live "reconnecting" state of the in-flight turn (see RetryStatus). */
+  retryState?: RetryState | null;
+  /** Resolves a failed turn's action buttons (see TurnFailureCard). */
+  failureAction?: TurnFailureCardProps['action'];
   /**
    * Settings gear callback for the input toolbar. Receiving this enables
    * the gear button on `ChatInput`; AgentPage wires it to opening
@@ -196,6 +202,8 @@ export function LocalChatPanel({
   currentTurnChildren,
   orchestrationChildrenByMessageId,
   currentRound,
+  retryState,
+  failureAction,
   onOpenSettings,
   inputToolbarExtras,
   inputLeadingChrome,
@@ -509,6 +517,8 @@ export function LocalChatPanel({
                 currentTurnChildren={currentTurnChildren}
                 orchestrationChildrenByMessageId={orchestrationChildrenByMessageId}
                 currentRound={currentRound}
+                retryState={retryState}
+                failureAction={failureAction}
                 emptyState={emptyState ?? <EmptyChat onSelectPrompt={handleSelectPrompt} />}
                 mode={mode}
                 onRegenerate={onRegenerate}

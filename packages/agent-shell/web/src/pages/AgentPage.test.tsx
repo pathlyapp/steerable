@@ -690,8 +690,11 @@ describe('AgentPage 发送流程', () => {
     await typeComposer('你好');
     pressEnter();
     // useChatStream 把错误打成 "[stream error] ..." 内容，AssistantMessage 的
-    // readTurnFailure 剥掉前缀后渲染成错误气泡「请求失败：…」。
-    expect((await screen.findByText(/Request failed/)).textContent).toContain('网关超时');
+    // readTurnFailure 剥掉前缀后渲染失败卡片。live 路径没有分类信息，所以
+    // 显示通用标题，原始文本在「详情」里（这里是唯一能看到它的地方）。
+    expect(await screen.findByText('Reply failed')).toBeTruthy();
+    fireEvent.click(screen.getByText('Details'));
+    expect(screen.getByTestId('turn-failure-details').textContent).toContain('网关超时');
   });
 
   it('挂载时向布局注册发送器，卸载时注销', async () => {

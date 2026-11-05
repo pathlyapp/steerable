@@ -26,7 +26,11 @@ import {
   makeToolRouter,
   resetRouterTestkit,
 } from './router-testkit.js';
-import { LocalBackendRouter, userFacingCoreLoopFailure } from '../../src/local-backend/router.js';
+import {
+  LocalBackendRouter,
+  readRetryNotice,
+  readTurnFailureInfo,
+} from '../../src/local-backend/router.js';
 import { ProjectRegistry, type ProjectRecord } from '../../src/project-registry.js';
 import { SidecarSupervisor } from '../../src/sidecar/index.js';
 import type { ToolRouter } from '../../src/tool-router.js';
@@ -71,7 +75,7 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// userFacingCoreLoopFailure：底层错误 → 用户可读中文提示
+// readTurnFailureInfo：失败流上的结构化字段 → 落库的 failure 元数据
 // ---------------------------------------------------------------------------
 
 async function withForkDirs<T>(body: () => Promise<T>): Promise<T> {
@@ -90,24 +94,44 @@ async function withForkDirs<T>(body: () => Promise<T>): Promise<T> {
   }
 }
 
-describe('userFacingCoreLoopFailure', () => {
-  it('HTTP 401/403 映射为认证失败提示', () => {
-    expect(userFacingCoreLoopFailure('HTTP 401 Unauthorized')).toContain('认证失败');
-    expect(userFacingCoreLoopFailure('HTTP 403 Forbidden')).toContain('认证失败');
+describe('readTurnFailureInfo', () => {
+  it('透传 sidecar 的错误类别、代理、尝试次数与状态码', () => {
+    const err = Object.assign(new Error('coreloop stream failed: LoopError: x'), {
+      failureInfo: {
+        errorKind: 'transport',
+        proxy: 'http://127.0.0.1:7890',
+        attempts: 5,
+        statusCode: 401,
+      },
+    });
+    expect(readTurnFailureInfo(err)).toEqual({
+      errorKind: 'transport',
+      proxy: 'http://127.0.0.1:7890',
+      attempts: 5,
+      statusCode: 401,
+    });
   });
 
-  it('HTTP 404 映射为模型/地址不存在提示', () => {
-    expect(userFacingCoreLoopFailure('HTTP 404 Not Found')).toContain('baseUrl 与 model');
+  it('没有结构化字段的失败返回 undefined，元数据里不写空对象', () => {
+    expect(readTurnFailureInfo(new Error('plain failure'))).toBeUndefined();
+    expect(
+      readTurnFailureInfo(
+        Object.assign(new Error('x'), { failureInfo: { errorKind: undefined } }),
+      ),
+    ).toBeUndefined();
   });
 
-  it('连接类错误（ECONNREFUSED/ENOTFOUND/ETIMEDOUT/fetch failed）映射为网络提示', () => {
-    for (const reason of ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'fetch failed']) {
-      expect(userFacingCoreLoopFailure(reason)).toContain('无法连接模型服务');
-    }
+  it('字段类型不对时忽略，不让脏值进元数据', () => {
+    const err = Object.assign(new Error('x'), {
+      failureInfo: { errorKind: 42, attempts: '5', proxy: '' },
+    });
+    expect(readTurnFailureInfo(err)).toBeUndefined();
   });
 
-  it('其他错误原样拼进提示', () => {
-    expect(userFacingCoreLoopFailure('some weird error')).toBe('[回复失败] some weird error');
+  it('非对象 failureInfo 被忽略', () => {
+    expect(
+      readTurnFailureInfo(Object.assign(new Error('x'), { failureInfo: 'transport' })),
+    ).toBeUndefined();
   });
 });
 
@@ -2336,5 +2360,35 @@ describe('resolve-paths 路由', () => {
       body: { candidates: [1, null, {}] },
     });
     expect(malformed.data).toEqual({ resolved: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readRetryNotice：重试通知 → 前端的「正在重新连接」事件
+// ---------------------------------------------------------------------------
+
+describe('readRetryNotice', () => {
+  it('重试动作带出轮次与等待时长', () => {
+    expect(
+      readRetryNotice({ kind: 'hook_action', action: 'retry', delayMs: 8000, round: 9 }),
+    ).toEqual({ delayMs: 8000, round: 9 });
+  });
+
+  it('其它 hook_action 不算重试——轮次边界逻辑不受影响', () => {
+    expect(readRetryNotice({ kind: 'hook_action', action: 'narrate' })).toBeNull();
+    expect(readRetryNotice({ kind: 'hook_action', action: 'compact' })).toBeNull();
+  });
+
+  it('非 hook_action 通知不算重试', () => {
+    expect(readRetryNotice({ kind: 'budget_exhausted' })).toBeNull();
+    expect(readRetryNotice(undefined)).toBeNull();
+  });
+
+  it('字段类型不对时丢掉该字段，不写脏值', () => {
+    expect(readRetryNotice({ kind: 'hook_action', action: 'retry', delayMs: '8s' })).toEqual({});
+  });
+
+  it('空原因不写进事件', () => {
+    expect(readRetryNotice({ kind: 'hook_action', action: 'retry', reason: '' })).toEqual({});
   });
 });

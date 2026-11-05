@@ -30,10 +30,15 @@ from ..model_info import (
 )
 from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .compat import OpenAICompatFlags
-from .errors import LLMError, classify_http_status, parse_retry_after_ms
+from .errors import (
+    LLMError,
+    classify_http_status,
+    describe_transport_error,
+    parse_retry_after_ms,
+)
 from .parts import ImagePart, TextPart
 from .presets import ProviderPreset, preset_for
-from .system_proxy import client_env_kwargs
+from .system_proxy import client_env_kwargs, egress_path
 
 logger = logging.getLogger(__name__)
 
@@ -211,9 +216,10 @@ class OpenAICompatProvider:
                 payload = response.json()
         except httpx.TransportError as exc:
             raise LLMError(
-                f"{self.name}: transport error: {exc}",
+                f"{self.name}: transport error: {describe_transport_error(exc)}",
                 kind="transport",
                 provider=self.name,
+                proxy=egress_path(self.base_url).proxy,
             ) from exc
 
         choice = payload["choices"][0]
@@ -306,9 +312,10 @@ class OpenAICompatProvider:
                     yield LLMStreamChunk(tool_call_delta=call)
         except httpx.TransportError as exc:
             raise LLMError(
-                f"{self.name}: transport error: {exc}",
+                f"{self.name}: transport error: {describe_transport_error(exc)}",
                 kind="transport",
                 provider=self.name,
+                proxy=egress_path(self.base_url).proxy,
             ) from exc
 
     # ------------------------------------------------------------------

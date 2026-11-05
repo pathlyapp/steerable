@@ -10,6 +10,8 @@ import {
 } from "@/lib/chat-transport";
 import { ChatHeader } from "@/components/ChatHeader";
 import { EmptyChatHero } from "@/components/chat/EmptyChatHero";
+import type { RetryState } from "@/components/chat/RetryStatus";
+import type { FailureAction } from "@/components/chat/turn-failure";
 import { LocalChatPanel } from "@/components/chat/LocalChatPanel";
 import { ModelPicker } from "@/components/chat/ModelPicker";
 import {
@@ -540,6 +542,11 @@ function AgentChatView({
   // before this signal, the UI looked frozen whenever the model paused to
   // wait for tool results.
   const [currentRound, setCurrentRound] = useState(1);
+  // Live "reconnecting" state for the in-flight turn. Set by the backend's
+  // `turn_retry` notice, cleared when the round ends or the stream settles —
+  // a retry that succeeded leaves no trace in the UI or in history.
+  const [retryState, setRetryState] = useState<RetryState | null>(null);
+  const navigate = useNavigate();
   // Holds the latest in-flight actions for the `message_id` reconciliation
   // — `useState`'s setter sees the latest value via the functional update
   // form, but we keep this ref so the reconciliation event handler can read
@@ -624,6 +631,21 @@ function AgentChatView({
       // 这不是新一轮，跳过计数。
       if (ev.payload?.status === "cancelled") return;
       setCurrentRound((r) => r + 1);
+      // A new round means the previous request finished (or was replaced), so
+      // any "reconnecting" line belongs to the round that is now over.
+      setRetryState(null);
+      return;
+    }
+    if (ev.event === "turn_retry") {
+      // The backend announces each retry; the first one starts the clock the
+      // status line counts from. Later ones keep it so the count is the whole
+      // wait, not just the latest attempt.
+      const delayMs =
+        typeof ev.payload?.delayMs === "number" ? ev.payload.delayMs : undefined;
+      setRetryState((prev) => ({
+        startedAt: prev?.startedAt ?? Date.now(),
+        ...(delayMs !== undefined ? { delayMs } : {}),
+      }));
       return;
     }
     if (ev.event === "orchestration_child") {
@@ -942,6 +964,7 @@ function AgentChatView({
       pendingTurnFilesRef.current = [];
       setCurrentTurnFiles([]);
       setCurrentRound(1);
+      setRetryState(null);
       const started = Date.now();
       turnStartedAtRef.current = started;
       setCurrentTurnStartedAtMs(started);
@@ -1059,6 +1082,7 @@ function AgentChatView({
     pendingTurnFilesRef.current = [];
     setCurrentTurnFiles([]);
     setCurrentRound(1);
+    setRetryState(null);
     const started = Date.now();
     turnStartedAtRef.current = started;
     setCurrentTurnStartedAtMs(started);
@@ -1080,6 +1104,36 @@ function AgentChatView({
   const handleDismissInterrupted = useCallback(() => {
     setInterrupted(false);
   }, []);
+
+  /**
+   * 失败卡片的按钮。和「继续上次回复」走同一条 resume 通道：sidecar 回放
+   * durable record，已完成的工具调用不会再执行一遍——这正是失败后点
+   * 「继续」想要的语义。本轮正在跑时按钮禁用（同一会话不能同时两轮）。
+   */
+  const failureAction = useCallback(
+    (action: FailureAction) => {
+      switch (action.kind) {
+        case "retry":
+          return {
+            onClick: () => void handleContinueInterrupted(),
+            disabled: isStreaming,
+            hint: isStreaming ? t("This chat is running. Continue when it finishes.") : undefined,
+          };
+        case "network-diagnostics":
+          // 诊断区挂在设置页「通用」下（settingsChrome('diagnose') 控制显隐）。
+          return settingsChrome("diagnose")
+            ? { onClick: () => navigate("/settings") }
+            : null;
+        case "open-model-settings":
+          return settingsChrome("llm") && hasHostBridge()
+            ? { onClick: () => setLlmSettingsOpen(true) }
+            : null;
+        case "new-chat":
+          return { onClick: () => navigate("/") };
+      }
+    },
+    [handleContinueInterrupted, isStreaming, navigate],
+  );
 
   // 轮中插队 + 失败兜底（W6-2）：streaming 期间 ⌘/Ctrl+Enter 优先注入运行中的
   // CoreLoop 回合；注入不了时 hook 按回合实况降级——仍在跑则排入待发队列
@@ -1322,6 +1376,8 @@ function AgentChatView({
         currentTurnChildren={effectiveCurrentTurnChildren}
         orchestrationChildrenByMessageId={orchestrationChildrenByMessageId}
         currentRound={currentRound}
+        retryState={retryState}
+        failureAction={failureAction}
         interrupted={interrupted}
         onContinueInterrupted={handleContinueInterrupted}
         onDismissInterrupted={handleDismissInterrupted}

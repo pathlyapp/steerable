@@ -25,10 +25,15 @@ from steerable_agent_protocol.generated import ToolCall
 
 from ..model_info import ReasoningEffortUnsupported, clamp_reasoning_effort
 from . import LLMMessage, LLMStreamChunk, LLMUsage
-from .errors import LLMError, classify_http_status, parse_retry_after_ms
+from .errors import (
+    LLMError,
+    classify_http_status,
+    describe_transport_error,
+    parse_retry_after_ms,
+)
 from .parts import ImagePart, TextPart
 from .presets import ProviderPreset, preset_for
-from .system_proxy import client_env_kwargs
+from .system_proxy import client_env_kwargs, egress_path
 
 logger = logging.getLogger(__name__)
 
@@ -126,9 +131,10 @@ class OpenAIResponsesProvider:
                 payload = response.json()
         except httpx.TransportError as exc:
             raise LLMError(
-                f"{self.name}: transport error: {exc}",
+                f"{self.name}: transport error: {describe_transport_error(exc)}",
                 kind="transport",
                 provider=self.name,
+                proxy=egress_path(self.base_url).proxy,
             ) from exc
 
         if payload.get("status") == "failed" or payload.get("error"):
@@ -207,9 +213,10 @@ class OpenAIResponsesProvider:
                     yield LLMStreamChunk(tool_call_delta=call)
         except httpx.TransportError as exc:
             raise LLMError(
-                f"{self.name}: transport error: {exc}",
+                f"{self.name}: transport error: {describe_transport_error(exc)}",
                 kind="transport",
                 provider=self.name,
+                proxy=egress_path(self.base_url).proxy,
             ) from exc
 
     # ------------------------------------------------------------------

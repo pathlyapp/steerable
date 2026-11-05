@@ -20,16 +20,19 @@ from typing import Any
 from steerable_agent_protocol.generated import ToolCall
 
 from . import LLMMessage, LLMStreamChunk, LLMUsage
-from .errors import LLMError, classify_http_status
+from .errors import LLMError, classify_http_status, describe_transport_error
 from .parts import ImagePart, TextPart
 
 
-def _classify_anthropic_error(exc: Exception, *, provider: str) -> Exception:
+def _classify_anthropic_error(
+    exc: Exception, *, provider: str, proxy: str | None = None
+) -> Exception:
     """Normalize anthropic SDK exceptions into the ``LLMError`` taxonomy.
 
     The SDK raises ``APIStatusError`` (has ``status_code``) for HTTP failures
     and ``APIConnectionError`` for transport problems; anything already
-    classified (or unrecognized) passes through with ``unknown``.
+    classified (or unrecognized) passes through with ``unknown``. `proxy` is
+    the hop the SDK client used, reported on transport failures.
     """
     if isinstance(exc, LLMError):
         return exc
@@ -45,7 +48,10 @@ def _classify_anthropic_error(exc: Exception, *, provider: str) -> Exception:
     # APIConnectionError / APITimeoutError have no status_code.
     if exc.__class__.__name__ in ("APIConnectionError", "APITimeoutError"):
         return LLMError(
-            f"{provider}: transport error: {exc}", kind="transport", provider=provider
+            f"{provider}: transport error: {describe_transport_error(exc)}",
+            kind="transport",
+            provider=provider,
+            proxy=proxy,
         )
     return LLMError(f"{provider}: {exc}", kind="unknown", provider=provider)
 
@@ -79,7 +85,9 @@ class AnthropicProvider:
         try:
             message = await client.messages.create(**body)
         except Exception as exc:  # noqa: BLE001 - normalized into the taxonomy
-            raise _classify_anthropic_error(exc, provider=self.name) from exc
+            raise _classify_anthropic_error(
+                exc, provider=self.name, proxy=self._egress_proxy()
+            ) from exc
         text_chunks: list[str] = []
         tool_calls: list[ToolCall] = []
         for block in message.content or []:
@@ -134,11 +142,19 @@ class AnthropicProvider:
                         finish_reason="stop",
                     )
         except Exception as exc:  # noqa: BLE001 - normalized into the taxonomy
-            raise _classify_anthropic_error(exc, provider=self.name) from exc
+            raise _classify_anthropic_error(
+                exc, provider=self.name, proxy=self._egress_proxy()
+            ) from exc
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _egress_proxy(self) -> str | None:
+        """Proxy the SDK client reaches `base_url` through, for failure reports."""
+        from .system_proxy import egress_path
+
+        return egress_path(self.base_url or "https://api.anthropic.com").proxy
 
     def _client(self) -> Any:
         from anthropic import AsyncAnthropic  # local import keeps optional dep optional

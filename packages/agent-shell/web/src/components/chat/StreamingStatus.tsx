@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import { t } from '@/i18n';
+import { RetryStatus, type RetryState } from './RetryStatus';
 
 /**
  * StreamingStatus — informative placeholder for an assistant bubble that has
@@ -30,13 +31,21 @@ interface StreamingStatusProps {
    * nothing (the content + cursor blink is enough).
    */
   hasContent: boolean;
+  /**
+   * Set while the request is being retried. Outranks `hasContent`: a turn
+   * that already streamed text and then lost its connection is waiting, not
+   * writing, and the cursor alone would read as a stall.
+   */
+  retry?: RetryState;
 }
 
 export function StreamingStatus({
   round,
   actionCount,
   hasContent,
+  retry,
 }: StreamingStatusProps) {
+  if (retry) return <RetryStatus retry={retry} />;
   // Once tokens are flowing the parent already has plenty of visual feedback
   // (the streaming cursor); a separate status line would be noise.
   if (hasContent) return null;

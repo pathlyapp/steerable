@@ -2634,6 +2634,20 @@ class Sidecar:
                     "kind": "LoopError",
                     "message": data["message"],
                     **({"traceId": trace_id} if trace_id else {}),
+                    # The envelope `kind` stays "LoopError" for compatibility;
+                    # the engine's own classification travels separately so the
+                    # host can pick user-facing copy by category instead of
+                    # matching on message text.
+                    **(
+                        {"errorKind": data.get("kind")}
+                        if data.get("kind")
+                        else {}
+                    ),
+                    **{
+                        field: data[field]
+                        for field in ("proxy", "attempts", "statusCode")
+                        if data.get(field) is not None
+                    },
                 },
             )
         elif kind == "completion" and data.get("status") == "executing":
@@ -3279,12 +3293,20 @@ def _retry_params_from_env() -> dict[str, int]:
     """STEERABLE_RETRY_* deployment overrides for the spec's simple retry.
 
     Desktop default is 3×200ms. Harbor OpenRouter 429s need minutes.
+
+    The ``TRANSPORT_`` prefixed names configure the connection-failure policy
+    (5 attempts, 1s base, 8s cap, 60s deadline) separately from the shared
+    one, because a proxy or a flaky link needs waits an API error does not.
     """
     params: dict[str, int] = {}
     for env_name, param in (
         ("STEERABLE_RETRY_MAX_ATTEMPTS", "max_attempts"),
         ("STEERABLE_RETRY_BASE_DELAY_MS", "base_delay_ms"),
         ("STEERABLE_RETRY_MAX_DELAY_MS", "max_delay_ms"),
+        ("STEERABLE_RETRY_TRANSPORT_ATTEMPTS", "transport_max_attempts"),
+        ("STEERABLE_RETRY_TRANSPORT_BASE_DELAY_MS", "transport_base_delay_ms"),
+        ("STEERABLE_RETRY_TRANSPORT_MAX_DELAY_MS", "transport_max_delay_ms"),
+        ("STEERABLE_RETRY_TRANSPORT_DEADLINE_MS", "transport_deadline_ms"),
     ):
         raw = os.environ.get(env_name, "").strip()
         if not raw:

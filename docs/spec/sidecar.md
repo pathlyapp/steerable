@@ -112,8 +112,20 @@ Notifications emitted by the sidecar:
 | `lifecycle.shutdown` | Just before the process exits                  | `{reason}` (`"normal" \| "eof"`)                        |
 | `stream.chunk`       | LLM token / tool-call / usage during a stream  | `{streamId, delta?, toolCall?, usage?, finishReason?, rawChunk?}` |
 | `stream.done`        | Stream terminated cleanly                      | `{streamId, ok, cancelled?}`                            |
-| `stream.error`       | Stream failed (provider error, etc.)           | `{streamId, kind, message}`                             |
+| `stream.error`       | Stream failed (provider error, etc.)           | `{streamId, kind, message, traceId?, errorKind?, proxy?, attempts?, statusCode?}` |
 | `agent.child`        | Child-agent lifecycle (spawned/completed/failed/cancelled) — from the orchestration pool and from `delegate_subagent` delegations | `{streamId, kind, childId, depth?, status?, profile?}` |
+
+`stream.error.kind` stays the exception class (`"LoopError"` for a failed
+turn) for hosts written against older sidecars. The provider classification
+travels separately in `errorKind`: `transport`, `rate_limit`, `server`,
+`auth`, `invalid_request`, `context_overflow`, or `unknown`. Hosts must branch
+on `errorKind` and treat it as absent on older sidecars; `message` is
+human-readable text whose wording is not a contract.
+
+`proxy` is the proxy the failing model request went through, with credentials
+removed; absent means the request went direct. `attempts` counts the provider
+calls spent on that request including the last one. A sidecar that cannot
+determine a field omits it rather than sending an empty value.
 
 ## `agent.chat.stream` payload
 

@@ -46,7 +46,8 @@ import os
 import urllib.request
 from collections.abc import Callable, Mapping
 from functools import lru_cache
-from urllib.parse import urlsplit
+from typing import NamedTuple
+from urllib.parse import urlsplit, urlunsplit
 
 #: The desktop sets this alongside the proxy variables when it confines the
 #: sidecar's egress to its per-host proxy, and never on the startup-failure
@@ -117,6 +118,22 @@ def direct_mounts(
     return _pin_direct(host)
 
 
+@lru_cache(maxsize=1)
+def _platform_proxies() -> tuple[tuple[str, str], ...]:
+    """The platform's own proxy map, read once per process.
+
+    `urllib.request.getproxies` reaches System Configuration on macOS and the
+    registry on Windows; a failure report must not pay that round trip on
+    every request.
+    """
+    try:
+        return tuple(
+            (key, value) for key, value in urllib.request.getproxies().items() if value
+        )
+    except Exception:
+        return ()
+
+
 def _egress_is_confined() -> bool:
     return (os.environ.get(_EGRESS_CONFINED_ENV) or "").strip() == "1"
 
@@ -134,6 +151,88 @@ def _unbuildable_proxy_schemes(
         if package and not has_module(package):
             missing.add(scheme)
     return missing
+
+
+class EgressPath(NamedTuple):
+    """How a provider request to `base_url` leaves this process.
+
+    `proxy` is the client-side proxy address without credentials, or None for a
+    direct connection. It is what a failure report shows: the address alone
+    tells the reader which hop to inspect, while credentials would leak into
+    logs and copied diagnostics.
+    """
+
+    proxy: str | None
+
+    @property
+    def uses_proxy(self) -> bool:
+        return self.proxy is not None
+
+
+def _redacted_proxy_url(value: str) -> str:
+    """Proxy URL without userinfo; a bare `host:port` is returned as written."""
+    candidate = value if "://" in value else f"http://{value}"
+    parts = urlsplit(candidate)
+    host = parts.netloc.rpartition("@")[2]
+    return urlunsplit((parts.scheme, host, parts.path, "", ""))
+
+
+def _proxy_for_scheme(
+    proxies: Mapping[str, str],
+    *,
+    scheme: str,
+    env_bypass: Callable[[str], bool],
+    platform_list_bypass: Callable[[str], bool],
+    host: str | None,
+) -> str | None:
+    """The declared proxy `host` would use, or None when it is exempt."""
+    if host and (env_bypass(host) or platform_list_bypass(host)):
+        return None
+    for key in (scheme, "all"):
+        declared = proxies.get(key)
+        if declared:
+            return _redacted_proxy_url(declared)
+    return None
+
+
+def egress_path(
+    base_url: str,
+    *,
+    env_proxies: Callable[[], Mapping[str, str]] = urllib.request.getproxies_environment,
+    platform_proxies: Callable[[], Mapping[str, str]] = lambda: dict(_platform_proxies()),
+    platform_bypass: Callable[[str], bool] = _platform_says_direct,
+    env_bypass: Callable[[str], bool] = urllib.request.proxy_bypass_environment,
+    platform_list_bypass: Callable[[str], bool] = _platform_list_says_direct,
+    confined: Callable[[], bool] = _egress_is_confined,
+) -> EgressPath:
+    """Which hop a request to `base_url` takes, for failure reports.
+
+    Mirrors `client_env_kwargs` rather than re-deciding: environment proxies
+    first, the platform's own proxy map when the environment declares none
+    (httpx reads `getproxies()` under `trust_env`), the confinement marker,
+    and the two bypass lists. It answers only what a report should show.
+    """
+    host = urlsplit(base_url).hostname
+    scheme = urlsplit(base_url).scheme or "https"
+    proxies = env_proxies()
+    if not proxies:
+        if direct_mounts(
+            base_url, env_proxies=lambda: proxies, platform_bypass=platform_bypass
+        ):
+            return EgressPath(proxy=None)
+        proxies = platform_proxies()
+    if confined():
+        declared = next(iter(proxies.values()), "")
+        return EgressPath(proxy=_redacted_proxy_url(declared) if declared else None)
+    return EgressPath(
+        proxy=_proxy_for_scheme(
+            proxies,
+            scheme=scheme,
+            env_bypass=env_bypass,
+            platform_list_bypass=platform_list_bypass,
+            host=host,
+        )
+    )
 
 
 def client_env_kwargs(

@@ -130,6 +130,24 @@ export interface CoreLoopToolAction {
   approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number; auto?: boolean };
 }
 
+/**
+ * What the sidecar knew about a failed model request, beyond its text.
+ *
+ * The host renders user-facing copy per `errorKind` and never parses
+ * `message` for it: the provider taxonomy is structured data, and message
+ * text is for the diagnostics panel.
+ */
+export interface TurnFailureInfo {
+  /** Provider classification; `undefined` when the sidecar did not send one. */
+  errorKind?: string;
+  /** Proxy the request used, credentials stripped; `undefined` means direct. */
+  proxy?: string;
+  /** Provider attempts spent on the failing request, including the last. */
+  attempts?: number;
+  /** HTTP status when the provider answered with one. */
+  statusCode?: number;
+}
+
 export interface CoreLoopTurnOutcome {
   status: string;
   reason?: string;
@@ -601,7 +619,17 @@ export async function streamCoreLoopTurn(
           // persist the partial trace — failed turns are the ones dogfooding
           // most needs to inspect.
           const failure = new Error(`coreloop stream failed: ${err.kind}: ${err.message}`);
-          if (err.traceId) (failure as Error & { traceId?: string }).traceId = err.traceId;
+          const annotated = failure as Error & {
+            traceId?: string;
+            failureInfo?: TurnFailureInfo;
+          };
+          if (err.traceId) annotated.traceId = err.traceId;
+          annotated.failureInfo = {
+            errorKind: err.errorKind,
+            proxy: err.proxy,
+            attempts: err.attempts,
+            statusCode: err.statusCode,
+          };
           reject(failure);
         },
       })

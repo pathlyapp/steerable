@@ -564,6 +564,22 @@ export interface SidecarStreamError {
   traceId?: string;
   kind: string;
   message: string;
+  /**
+   * Provider classification (`transport` / `auth` / `rate_limit` / `server` /
+   * `context_overflow` / `invalid_request` / `unknown`). Absent from older
+   * sidecars and from non-provider failures; treat missing as `unknown` rather
+   * than parsing the message.
+   */
+  errorKind?: string;
+  /**
+   * Proxy the model request went through, credentials stripped. Absent means
+   * the request went direct or the sidecar predates this field.
+   */
+  proxy?: string;
+  /** Provider attempts spent on the failing request, including the last. */
+  attempts?: number;
+  /** HTTP status when the provider answered with one. */
+  statusCode?: number;
 }
 
 /**

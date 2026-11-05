@@ -25,6 +25,8 @@ import { followedPreviewPath, type TurnFile } from './turn-files';
 import { publishConversationPreview } from '@/layouts/conversation-preview';
 import { inferDurationMs, readPersistedDurationMs } from './elapsed';
 import type { LlmSpeedSnapshot } from './process-status';
+import type { RetryState } from './RetryStatus';
+import type { TurnFailureCardProps } from './TurnFailureCard';
 
 /**
  * MessageList — scrolling viewport that renders user/assistant message
@@ -154,6 +156,13 @@ interface MessageListProps {
    * AssistantMessage so its `StreamingStatus` can show "Round 2 · 继续推理...".
    */
   currentRound?: number;
+  /**
+   * Live "reconnecting" state of the in-flight turn (backend `turn_retry`).
+   * Forwarded to the tail message so the status line replaces "thinking".
+   */
+  retryState?: RetryState | null;
+  /** Resolves a failed turn's action buttons (see TurnFailureCard). */
+  failureAction?: TurnFailureCardProps['action'];
   /** Current chat mode (Agent / Plan). */
   mode?: ChatMode;
   /** W1.2.1: regenerate an assistant turn (fork-preserving). */
@@ -207,6 +216,8 @@ export function MessageList({
   currentTurnChildren,
   orchestrationChildrenByMessageId,
   currentRound,
+  retryState,
+  failureAction,
   mode,
   onRegenerate,
   interrupted = false,
@@ -530,6 +541,8 @@ export function MessageList({
                         orchestrationChildren={childList}
                         previousUser={previousUser}
                         currentRound={isStreamingTail ? currentRound : undefined}
+                        retryState={isStreamingTail ? retryState : null}
+                        failureAction={failureAction}
                         isPlanMode={isPlanMode}
                         onRegenerate={onRegenerate}
                         startedAtMs={isStreamingTail ? currentTurnStartedAtMs : undefined}

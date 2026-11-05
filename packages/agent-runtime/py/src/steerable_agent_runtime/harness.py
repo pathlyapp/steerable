@@ -27,7 +27,7 @@ from .compaction import CompactionHooks
 from .history import ContextFragment
 from .hooks import LoopHooks, NoopHooks
 from .llm import LLMProvider
-from .retry import RetryHooks
+from .retry import RetryHooks, TransportRetryPolicy
 from .storage import InMemoryStorage, StorageAdapter
 from .tool_search import DEFAULT_MAX_RESULTS
 from .tools import ToolRouter
@@ -329,11 +329,20 @@ class NoRetry:
 
 @dataclass(frozen=True, slots=True)
 class SimpleRetry:
-    """The existing bounded exponential backoff (RetryHooks)."""
+    """Bounded exponential backoff (RetryHooks).
+
+    The ``transport_*`` fields configure the connection-failure policy, which
+    is deliberately more patient than the shared one and stops at a deadline:
+    see :class:`TransportRetryPolicy`.
+    """
 
     max_attempts: int = 4
     base_delay_ms: int = 200
     max_delay_ms: int = 5000
+    transport_max_attempts: int = 5
+    transport_base_delay_ms: int = 1000
+    transport_max_delay_ms: int = 8000
+    transport_deadline_ms: int = 60_000
     name: str = "simple"
     assumes: str = (
         "failures are dominated by transient transport/rate-limit/server "
@@ -350,7 +359,13 @@ class SimpleRetry:
                     max_attempts=self.max_attempts,
                     base_delay_ms=self.base_delay_ms,
                     max_delay_ms=self.max_delay_ms,
-                )
+                ),
+                transport_policy=TransportRetryPolicy(
+                    max_attempts=self.transport_max_attempts,
+                    base_delay_ms=self.transport_base_delay_ms,
+                    max_delay_ms=self.transport_max_delay_ms,
+                    deadline_ms=self.transport_deadline_ms,
+                ),
             )
         )
 

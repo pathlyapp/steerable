@@ -14,7 +14,11 @@
     {
       "impl": "simple",
       "params": {
-        "max_attempts": 3
+        "max_attempts": 3,
+        "transport_max_attempts": 5,
+        "transport_base_delay_ms": 1000,
+        "transport_max_delay_ms": 8000,
+        "transport_deadline_ms": 60000
       }
     }
   ],

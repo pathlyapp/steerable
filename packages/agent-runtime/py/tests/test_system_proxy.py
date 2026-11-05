@@ -209,3 +209,92 @@ def test_mount_pattern_is_accepted_by_httpx() -> None:
     client = httpx.AsyncClient(mounts=mounts)
     transport = client._transport_for_url(httpx.URL("http://127.0.0.1:11434/v1/chat/completions"))
     assert transport is client._transport
+
+
+def test_egress_path_reports_the_declared_proxy() -> None:
+    """A failure report names the hop, so the reader knows which one to inspect."""
+    from steerable_agent_runtime.llm.system_proxy import egress_path
+
+    path = egress_path(
+        "https://api.deepseek.com",
+        env_proxies=lambda: {"https": "http://127.0.0.1:7890"},
+        env_bypass=_bypass(),
+        platform_list_bypass=_bypass(),
+        confined=lambda: False,
+    )
+    assert path.proxy == "http://127.0.0.1:7890"
+    assert path.uses_proxy
+
+
+def test_egress_path_strips_proxy_credentials() -> None:
+    """Copied diagnostics must not carry the proxy password into a bug report."""
+    from steerable_agent_runtime.llm.system_proxy import egress_path
+
+    path = egress_path(
+        "https://api.deepseek.com",
+        env_proxies=lambda: {"https": "http://user:secret@10.0.0.1:3128"},
+        env_bypass=_bypass(),
+        platform_list_bypass=_bypass(),
+        confined=lambda: False,
+    )
+    assert path.proxy == "http://10.0.0.1:3128"
+    assert "secret" not in (path.proxy or "")
+
+
+def test_egress_path_reports_direct_for_an_exempt_host() -> None:
+    from steerable_agent_runtime.llm.system_proxy import egress_path
+
+    path = egress_path(
+        "https://api.deepseek.com",
+        env_proxies=lambda: {"https": "http://127.0.0.1:7890"},
+        env_bypass=_bypass("api.deepseek.com"),
+        platform_list_bypass=_bypass(),
+        confined=lambda: False,
+    )
+    assert path.proxy is None
+    assert not path.uses_proxy
+
+
+def test_egress_path_reads_the_platform_map_when_the_environment_is_empty() -> None:
+    """httpx reads `getproxies()` under trust_env, so the report must too."""
+    from steerable_agent_runtime.llm.system_proxy import egress_path
+
+    path = egress_path(
+        "https://api.deepseek.com",
+        env_proxies=dict,
+        platform_proxies=lambda: {"https": "http://127.0.0.1:7890"},
+        platform_bypass=_bypass(),
+        env_bypass=_bypass(),
+        platform_list_bypass=_bypass("127.0.0.1"),
+        confined=lambda: False,
+    )
+    assert path.proxy == "http://127.0.0.1:7890"
+
+
+def test_egress_path_prefers_a_direct_pin_over_the_platform_map() -> None:
+    from steerable_agent_runtime.llm.system_proxy import egress_path
+
+    path = egress_path(
+        "https://api.deepseek.com",
+        env_proxies=dict,
+        platform_proxies=lambda: {"https": "http://127.0.0.1:7890"},
+        platform_bypass=_bypass("api.deepseek.com"),
+        env_bypass=_bypass(),
+        platform_list_bypass=_bypass(),
+        confined=lambda: False,
+    )
+    assert path.proxy is None
+
+
+def test_egress_path_honors_confined_egress() -> None:
+    """Confined egress owns every host, including ones the OS calls direct."""
+    from steerable_agent_runtime.llm.system_proxy import egress_path
+
+    path = egress_path(
+        "https://api.deepseek.com",
+        env_proxies=lambda: {"all": "http://127.0.0.1:9"},
+        env_bypass=_bypass("api.deepseek.com"),
+        platform_list_bypass=_bypass("api.deepseek.com"),
+        confined=lambda: True,
+    )
+    assert path.proxy == "http://127.0.0.1:9"

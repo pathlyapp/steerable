@@ -23,6 +23,7 @@ import {
   type CoreLoopToolAction,
   type SkillTurnContext,
   type StreamCoreLoopTurnOptions,
+  type TurnFailureInfo,
   type TurnToolWire,
 } from './coreloop-stream.js';
 import {
@@ -278,25 +279,28 @@ export interface WakeResult {
 }
 
 /**
- * 把 CoreLoop/LLM 的底层错误翻译成适合直接显示在助手消息里的中文提示。
- * 原始错误仍保存在 messageMetadata.completionReason 里，便于排查。
+ * Reads the structured failure detail off a rejected stream.
+ *
+ * `streamCoreLoopTurn` annotates its rejection; anything else (an abort, a
+ * router-level error) carries none, which the renderer shows as its generic
+ * card. Returns undefined rather than an empty object so the persisted
+ * metadata omits the field entirely.
  */
-export function userFacingCoreLoopFailure(reason: string): string {
-  if (reason.includes('HTTP 401') || reason.includes('HTTP 403')) {
-    return '[回复失败] 模型服务认证失败，请检查 API Key 配置。';
-  }
-  if (reason.includes('HTTP 404')) {
-    return '[回复失败] 模型服务或模型名不存在（HTTP 404），请检查 baseUrl 与 model 配置。';
-  }
-  if (
-    reason.includes('ECONNREFUSED') ||
-    reason.includes('ENOTFOUND') ||
-    reason.includes('ETIMEDOUT') ||
-    reason.includes('fetch failed')
-  ) {
-    return '[回复失败] 无法连接模型服务，请检查网络或 baseUrl 配置。';
-  }
-  return `[回复失败] ${reason}`;
+export function readTurnFailureInfo(err: unknown): TurnFailureInfo | undefined {
+  const info = (err as { failureInfo?: unknown })?.failureInfo;
+  if (!info || typeof info !== 'object') return undefined;
+  const record = info as Record<string, unknown>;
+  const pick = (key: string): string | undefined =>
+    typeof record[key] === 'string' && record[key] ? (record[key] as string) : undefined;
+  const pickNumber = (key: string): number | undefined =>
+    typeof record[key] === 'number' ? (record[key] as number) : undefined;
+  const out: TurnFailureInfo = {
+    errorKind: pick('errorKind'),
+    proxy: pick('proxy'),
+    attempts: pickNumber('attempts'),
+    statusCode: pickNumber('statusCode'),
+  };
+  return Object.values(out).some((value) => value !== undefined) ? out : undefined;
 }
 
 export interface StreamOptions {
@@ -392,6 +396,25 @@ const LOCAL_AGENT_ID = 'local-agent';
 function isRoundBoundaryHook(notice: { kind?: string; action?: unknown } | undefined): boolean {
   if (notice?.kind !== 'hook_action') return false;
   return notice.action === 'retry' || notice.action === 'narrate';
+}
+
+/**
+ * Extracts the fields a "reconnecting" indicator needs from a retry notice.
+ *
+ * The loop announces every retry as a `hook_action`; only attempts on the
+ * same model request are a wait the user notices, so the round and delay are
+ * carried through. Returns null for any other hook action so the caller can
+ * keep its round-boundary handling unchanged.
+ */
+export function readRetryNotice(
+  notice: { kind?: string; action?: unknown; delayMs?: unknown; round?: unknown; reason?: unknown } | undefined,
+): { round?: number; delayMs?: number; reason?: string } | null {
+  if (notice?.kind !== 'hook_action' || notice.action !== 'retry') return null;
+  return {
+    ...(typeof notice.round === 'number' ? { round: notice.round } : {}),
+    ...(typeof notice.delayMs === 'number' ? { delayMs: notice.delayMs } : {}),
+    ...(typeof notice.reason === 'string' && notice.reason ? { reason: notice.reason } : {}),
+  };
 }
 
 function buildLocalAgent() {
@@ -4134,6 +4157,10 @@ export class LocalBackendRouter {
     const children: Array<Record<string, unknown>> = [];
     let completionStatus: string = 'completed';
     let completionReason = '';
+    // Provider classification of the failing request (see TurnFailureInfo).
+    // Stays empty for a clean sidecar-reported failure, which carries its own
+    // `completionReason` but no per-request detail.
+    let failureInfo: TurnFailureInfo | undefined;
     let outcomeTraceId: string | undefined;
     // Every pass records its own sidecar trace; all of them are persisted
     // against the one assistant message this turn produces.
@@ -4326,6 +4353,14 @@ export class LocalBackendRouter {
           }
         },
         onNotice: (kind, notice) => {
+          // A retry is a wait the user can feel: connection backoff runs for
+          // seconds. Announce it so the turn can show "reconnecting" instead
+          // of looking stuck, and so the wait itself is visible before the
+          // next attempt starts. Not persisted — history keeps outcomes only.
+          const retry = readRetryNotice(notice);
+          if (retry) {
+            emit(this.sseData({ type: 'turn_retry', ...retry }));
+          }
           if (kind === 'budget_exhausted') {
             // 预算维度（rounds/tokens）在 notice.budget；notice.kind 是信封
             // 类型（loop 事件 data 里的 budget 键经 sidecar 透传）。message
@@ -4442,6 +4477,7 @@ export class LocalBackendRouter {
       } else {
         completionStatus = 'failed';
         completionReason = err instanceof Error ? err.message : String(err);
+        failureInfo = readTurnFailureInfo(err);
         emit(this.sse('error', { message: completionReason }));
       }
       // streamCoreLoopTurn attaches the sidecar trace id to failures — the
@@ -4489,6 +4525,7 @@ export class LocalBackendRouter {
         ...(durationMs != null ? { durationMs } : {}),
         ...(autoContinuations > 0 ? { autoContinuations } : {}),
         ...(turnFiles.length > 0 ? { turnFiles } : {}),
+        ...(failureInfo ? { failure: failureInfo } : {}),
       })
     );
     try {

@@ -308,6 +308,7 @@ async def _collect_stream(
             status_code=getattr(exc, "status_code", None),
             provider=getattr(exc, "provider", None),
             retry_after_ms=getattr(exc, "retry_after_ms", None),
+            proxy=getattr(exc, "proxy", None),
         )
         return
     display_tail = stripper.feed(content_carry) + stripper.flush()
@@ -470,6 +471,7 @@ async def _on_request_error(
         status_code=error_raw.get("status_code"),
         provider=error_raw.get("provider"),
         retry_after_ms=error_raw.get("retry_after_ms"),
+        proxy=error_raw.get("proxy"),
     )
     transcript = [_msg_from_json(item) for item in raw.get("transcript", [])]
     loop._run_context.round_index = int(raw.get("round_index") or 0)

@@ -10,6 +10,9 @@ import type { ChildInfo } from './OrchestrationChildrenCard';
 import { collectTurnParticipants, extractMentionedAgentIds } from './executed-actions-model';
 import type { InspectTaskInput } from './executed-actions-model';
 import { StreamingStatus } from './StreamingStatus';
+import { TurnFailureCard, type TurnFailureCardProps } from './TurnFailureCard';
+import { readFailureDetail, type TurnFailureDetail } from './turn-failure';
+import type { RetryState } from './RetryStatus';
 import { getFriendlyDate } from './timestamp';
 import { useCopy } from './useCopy';
 import type { TurnBlock } from './turn-timeline';
@@ -101,6 +104,12 @@ interface AssistantMessageProps {
    * `StreamingStatus` to render "Round 2 · 继续推理..." between LLM bursts.
    */
   currentRound?: number;
+  /**
+   * Live retry state of the in-flight request. While set, the status line
+   * says "reconnecting" instead of "thinking": a seconds-scale backoff and a
+   * stalled request look the same without it.
+   */
+  retryState?: RetryState | null;
   /** True iff the message was generated in Plan mode. */
   isPlanMode?: boolean;
   /**
@@ -110,6 +119,12 @@ interface AssistantMessageProps {
    * has fully streamed; the caller then re-hydrates the message list.
    */
   onRegenerate?: (messageId: string) => Promise<void>;
+  /**
+   * Resolves a failed turn's action into a handler. The message list decides
+   * what this build can do (Continue needs a backend route, opening settings
+   * needs the modal); the card only draws what it is given.
+   */
+  failureAction?: TurnFailureCardProps['action'];
   /** Epoch ms when this turn started — live ticker while streaming. */
   startedAtMs?: number;
   /** Frozen wall-clock of a finished turn. */
@@ -188,11 +203,18 @@ function bubbleClass(isPlanMode: boolean): string {
 // 两处汇合到同一个错误气泡，失败回合不再只显示"（空消息）"。
 const STREAM_ERROR_PREFIX = '[stream error] ';
 
-function readTurnFailure(
-  message: ChatMessage,
-  content: string,
-): { reason: string; contentIsError: boolean } | null {
+interface TurnFailure {
+  reason: string;
+  contentIsError: boolean;
+  /** Classified detail; undefined for live stream errors and old records. */
+  detail?: TurnFailureDetail;
+  traceId?: string;
+}
+
+function readTurnFailure(message: ChatMessage, content: string): TurnFailure | null {
   if (content.startsWith(STREAM_ERROR_PREFIX)) {
+    // Live path: the framework stamped the reason into the content before the
+    // turn was persisted, so nothing structured is available yet.
     return { reason: content.slice(STREAM_ERROR_PREFIX.length), contentIsError: true };
   }
   const raw = (message as { messageMetadata?: unknown }).messageMetadata;
@@ -201,13 +223,20 @@ function readTurnFailure(
     const meta = JSON.parse(raw) as {
       completionStatus?: unknown;
       completionReason?: unknown;
+      failure?: unknown;
+      traceId?: unknown;
     };
     if (
       meta?.completionStatus === 'failed' &&
       typeof meta.completionReason === 'string' &&
       meta.completionReason
     ) {
-      return { reason: meta.completionReason, contentIsError: false };
+      return {
+        reason: meta.completionReason,
+        contentIsError: false,
+        detail: readFailureDetail(meta.failure),
+        traceId: typeof meta.traceId === 'string' && meta.traceId ? meta.traceId : undefined,
+      };
     }
   } catch {
     // 元数据损坏按无失败处理——落回原有的空消息展示。
@@ -226,11 +255,26 @@ function readPersistedAgentId(message: ChatMessage): string | undefined {
   }
 }
 
-function TurnErrorBubble({ reason }: { reason: string }) {
+function TurnErrorBubble({
+  failure,
+  completedSteps,
+  happenedAt,
+  onAction,
+}: {
+  failure: TurnFailure;
+  completedSteps: number;
+  happenedAt?: string;
+  onAction?: TurnFailureCardProps['action'];
+}) {
   return (
-    <div className="rounded-agent-lg border border-agent-destructive/40 bg-agent-destructive/5 px-2.5 py-2 text-xs leading-relaxed text-agent-destructive shadow-sm">
-      {t('Request failed: {reason}', { reason })}
-    </div>
+    <TurnFailureCard
+      detail={failure.detail}
+      reason={failure.reason}
+      completedSteps={completedSteps}
+      happenedAt={happenedAt}
+      traceId={failure.traceId}
+      action={onAction}
+    />
   );
 }
 
@@ -263,8 +307,10 @@ export function AssistantMessage({
   orchestrationChildren,
   previousUser,
   currentRound = 1,
+  retryState,
   isPlanMode = false,
   onRegenerate,
+  failureAction,
   startedAtMs,
   durationMs,
   llmSpeed,
@@ -359,13 +405,19 @@ export function AssistantMessage({
             orchestrationChildren={orchestrationChildren}
             emptyFallback={
               failure ? (
-                <TurnErrorBubble reason={failure.reason} />
+                <TurnErrorBubble
+                  failure={failure}
+                  completedSteps={toolActions.length}
+                  happenedAt={message.createdAt}
+                  onAction={failureAction}
+                />
               ) : isStreaming ? (
                 <div className={bubbleClass(isPlanMode)}>
                   <StreamingStatus
                     round={currentRound}
                     actionCount={executedActions?.length ?? 0}
                     hasContent={false}
+                    retry={retryState ?? undefined}
                   />
                 </div>
               ) : (
@@ -379,6 +431,7 @@ export function AssistantMessage({
                 round={currentRound}
                 actionCount={executedActions?.length ?? 0}
                 hasContent={false}
+                retry={retryState ?? undefined}
               />
             }
             renderAnswer={(block, isLast) => (
@@ -394,7 +447,12 @@ export function AssistantMessage({
               （无块时走上面的 emptyFallback，不会重复）。 */}
           {failure && blocks.length > 0 ? (
             <div className="mt-1.5">
-              <TurnErrorBubble reason={failure.reason} />
+              <TurnErrorBubble
+                  failure={failure}
+                  completedSteps={toolActions.length}
+                  happenedAt={message.createdAt}
+                  onAction={failureAction}
+                />
             </div>
           ) : null}
           </>
@@ -417,13 +475,19 @@ export function AssistantMessage({
                 {isStreaming && <StreamingCursor />}
               </div>
             ) : failure ? (
-              <TurnErrorBubble reason={failure.reason} />
+              <TurnErrorBubble
+                  failure={failure}
+                  completedSteps={toolActions.length}
+                  happenedAt={message.createdAt}
+                  onAction={failureAction}
+                />
             ) : isStreaming ? (
               <div className={bubbleClass(isPlanMode)}>
                 <StreamingStatus
                   round={currentRound}
                   actionCount={executedActions?.length ?? 0}
                   hasContent={false}
+                  retry={retryState ?? undefined}
                 />
               </div>
             ) : (
@@ -433,7 +497,12 @@ export function AssistantMessage({
             )}
             {displayContent && failure ? (
               <div className="mt-1.5">
-                <TurnErrorBubble reason={failure.reason} />
+                <TurnErrorBubble
+                  failure={failure}
+                  completedSteps={toolActions.length}
+                  happenedAt={message.createdAt}
+                  onAction={failureAction}
+                />
               </div>
             ) : null}
           </>
