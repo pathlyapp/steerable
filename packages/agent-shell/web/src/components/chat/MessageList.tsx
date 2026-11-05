@@ -542,7 +542,15 @@ export function MessageList({
                         previousUser={previousUser}
                         currentRound={isStreamingTail ? currentRound : undefined}
                         retryState={isStreamingTail ? retryState : null}
-                        failureAction={failureAction}
+                        // 「继续」只属于当前最后一个回合：用户已经发了新消息
+                        // 时，继续旧回合会把旧任务的输出接在新消息之后，前后
+                        // 顺序就乱了。判据是「这条是不是会话里最后一条消息」，
+                        // 不是「最后一条助手消息」——后者在用户已追问后仍成立。
+                        failureAction={
+                          message.id === lastAssistantId && isLast
+                            ? failureAction
+                            : undefined
+                        }
                         isPlanMode={isPlanMode}
                         onRegenerate={onRegenerate}
                         startedAtMs={isStreamingTail ? currentTurnStartedAtMs : undefined}
