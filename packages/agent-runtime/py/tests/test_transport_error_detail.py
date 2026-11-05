@@ -221,3 +221,23 @@ async def test_direct_requests_report_no_proxy(
             pass
 
     assert caught.value.proxy is None
+
+
+def test_message_never_ends_at_an_empty_class_name_when_a_cause_exists() -> None:
+    """The failure mode that started this: `transport error: ` with nothing after.
+
+    A proxy that accepts CONNECT and drops the tunnel produces an outer
+    `ConnectError('')` whose cause chain names the real problem. Whatever the
+    chain looks like, the text must not stop at the outer hop.
+    """
+    outer = httpx.ConnectError("")
+    middle = httpx.ConnectError("")
+    inner = ConnectionResetError("[Errno 54] Connection reset by peer")
+    middle.__cause__ = inner
+    outer.__cause__ = middle
+
+    described = describe_transport_error(outer)
+
+    assert "ConnectError" in described
+    assert "ConnectionResetError" in described
+    assert "[Errno 54]" in described
