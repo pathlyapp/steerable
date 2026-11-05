@@ -3065,3 +3065,77 @@ async def test_stream_restart_is_forwarded_to_the_host() -> None:
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_metrics_export_pushes_turn_counters_to_collector() -> None:
+    """metrics.export (R4): turn outcomes go to the collector's /v1/metrics.
+
+    Kept separate from trace.export because a collector may accept one and not
+    the other, and because the payload is counts only — there is no content for
+    a privacy mode to filter.
+    """
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received: dict = {}
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received["path"] = self.path
+            received["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("hi")]))
+    try:
+        response = await sidecar.server.handle_frame(
+            _frame(
+                "metrics.export",
+                {
+                    "endpoint": f"http://127.0.0.1:{server.server_port}/v1/metrics",
+                    "samples": [
+                        {"outcome": "completed", "attempts": 2, "retried": True, "usedDirect": True},
+                        {"outcome": "failed", "failureKind": "transport", "attempts": 5},
+                    ],
+                },
+            )
+        )
+        assert "error" not in response, response
+        assert response["result"] == {"status": 200, "metrics": 2}
+        assert received["path"] == "/v1/metrics"
+
+        metrics = received["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+        names = {metric["name"] for metric in metrics}
+        assert names == {"steerable.turn.outcome", "steerable.turn.attempts"}
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_metrics_export_rejects_an_empty_or_invalid_batch() -> None:
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("hi")]))
+
+    empty = await sidecar.server.handle_frame(
+        _frame("metrics.export", {"endpoint": "http://127.0.0.1:1/v1/metrics", "samples": []})
+    )
+    assert "error" in empty
+
+    missing_endpoint = await sidecar.server.handle_frame(
+        _frame("metrics.export", {"samples": [{"outcome": "completed"}]})
+    )
+    assert "error" in missing_endpoint
+
+    not_an_object = await sidecar.server.handle_frame(
+        _frame(
+            "metrics.export",
+            {"endpoint": "http://127.0.0.1:1/v1/metrics", "samples": ["completed"]},
+        )
+    )
+    assert "error" in not_an_object

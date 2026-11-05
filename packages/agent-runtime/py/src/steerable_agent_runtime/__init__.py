@@ -193,7 +193,14 @@ from .orchestration import (
     OrchestrationExecutor,
     orchestration_tool_descriptors,
 )
-from .otel import PrivacyMode, export_otlp_http, export_trace, to_otlp_json
+from .otel import (
+    PrivacyMode,
+    export_metrics,
+    export_otlp_http,
+    export_trace,
+    to_otlp_json,
+    to_otlp_metrics_json,
+)
 from .pricing import (
     MODEL_PRICES,
     ModelPrice,
@@ -462,6 +469,8 @@ __all__ = [
     "estimate_tokens",
     "export_otlp_http",
     "export_trace",
+    "export_metrics",
+    "to_otlp_metrics_json",
     "extract_inline_tool_calls",
     "factor_for_model",
     "family_tree",

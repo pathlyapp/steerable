@@ -86,6 +86,7 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 | `skills.list`           | request   | `{skills}` (parse + select SKILL.md from host roots) |
 | `trace.fetch`           | request   | `{"trace": HarnessTrace, "spans": TraceSpan[], "events": TraceEvent[]}` |
 | `trace.export`          | request   | `{status, traceId, privacyMode}` (OTLP/HTTP push) |
+| `metrics.export`        | request   | `{status, metrics}` — posts turn-outcome counters to an OTLP/HTTP `/v1/metrics` endpoint. Params: `{endpoint, samples, serviceName?}`; each sample is `{outcome, failureKind?, attempts?, retried?, usedDirect?}`. Counts and labels only: no message, model, or conversation id, so there is no content for a privacy mode to filter. Separate from `trace.export` because a collector may accept one and not the other. |
 | `config.get`            | request   | `Record<string, unknown>`              |
 | `config.set`            | request   | `null`                                 |
 | `models.list`           | request   | `{models, catalogStatus, fetchedAt?, current?, error?}` (live `GET /models` discovery against the configured gateway) |

@@ -491,6 +491,74 @@ describe('流式回合 SSE 序列', () => {
       );
     });
   });
+
+  it('同一 endpoint 也把这一回合的终态作为计数上报（R4）', async () => {
+    const chat = await seedChat();
+    h.store.state.telemetry = {
+      // 用户填的是 collector 根地址或 /v1/traces；metric 要打到 /v1/metrics。
+      endpoint: 'http://otlp:4318/v1/traces',
+      privacyMode: 'metadata',
+      serviceName: 'svc',
+    };
+    const { supervisor } = installStream(() => {}, {
+      status: 'completed',
+      traceId: 'trace-m',
+    });
+    await makeRouter().handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+
+    await vi.waitFor(() => {
+      expect(supervisor.call).toHaveBeenCalledWith(
+        'metrics.export',
+        expect.objectContaining({
+          endpoint: 'http://otlp:4318/v1/metrics',
+          serviceName: 'svc',
+          samples: [expect.objectContaining({ outcome: 'completed', attempts: 1 })],
+        }),
+        { timeoutMs: 10_000 },
+      );
+    });
+  });
+
+  it('没有配置遥测时一条指标都不发', async () => {
+    const chat = await seedChat();
+    const { supervisor } = installStream(() => {}, { status: 'completed', traceId: 'trace-n' });
+    await makeRouter().handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+
+    const calls = supervisor.call.mock.calls.map((call) => call[0]);
+    expect(calls).not.toContain('metrics.export');
+    expect(calls).not.toContain('trace.export');
+  });
+
+  it('指标上报失败不影响回合完成', async () => {
+    const chat = await seedChat();
+    h.store.state.telemetry = {
+      endpoint: 'http://otlp:4318/v1/traces',
+      privacyMode: 'metadata',
+      serviceName: 'svc',
+    };
+    const { supervisor } = installStream(() => {}, { status: 'completed', traceId: 'trace-f' });
+    supervisor.call.mockImplementation(async (method: string) => {
+      if (method === 'metrics.export') throw new Error('collector down');
+      return { trace: {}, spans: [], events: [] };
+    });
+
+    const res = await makeRouter().handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+
+    expect(res.status).toBe(200);
+    const assistant = (await h.store.listMessages(chat.id, 10))[0];
+    expect(JSON.parse(assistant.messageMetadata!)).toMatchObject({
+      completionStatus: 'completed',
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

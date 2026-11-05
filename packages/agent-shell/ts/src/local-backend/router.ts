@@ -4621,6 +4621,42 @@ export class LocalBackendRouter {
       console.warn('[local-backend] record turn outcome failed', reliabilityErr);
     }
 
+    // 配了遥测就把这一回合的终态作为计数上报（R4）。指标只有类别与次数，
+    // 没有对话内容，所以 `metadata` 档位也可以发；没配 endpoint 就一条不发。
+    // 失败不阻断：回合已经完成，投递不了是收集端的事。
+    const telemetryForTurn = await this.store.getTelemetrySettings().catch(() => null);
+    if (telemetryEnabled(telemetryForTurn) && telemetryForTurn?.endpoint) {
+      void supervisor
+        ?.call(
+          'metrics.export',
+          {
+            // 一个端点同时收 trace 与 metric 时，把 /v1/traces 换成 /v1/metrics。
+            endpoint: telemetryForTurn.endpoint.replace(/\/v1\/traces$/, '/v1/metrics'),
+            serviceName: telemetryForTurn.serviceName,
+            samples: [
+              {
+                outcome:
+                  completionStatus === 'failed'
+                    ? 'failed'
+                    : completionStatus === 'cancelled'
+                      ? 'cancelled'
+                      : 'completed',
+                ...(completionStatus === 'failed'
+                  ? { failureKind: failureInfo?.errorKind ?? 'unknown' }
+                  : {}),
+                attempts: turnPasses + turnRetries,
+                retried: retriedThisTurn,
+                usedDirect: directThisTurn || productConfigDirectConnection(),
+              },
+            ],
+          },
+          { timeoutMs: 10_000 },
+        )
+        .catch((err) => {
+          console.warn('[local-backend] telemetry metrics export failed', err);
+        });
+    }
+
     const durationMs = turnDurationMs(
       (await this.store.getTurnActive(chatId))?.startedAt,
       Date.now(),

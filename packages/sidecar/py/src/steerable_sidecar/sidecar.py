@@ -101,6 +101,7 @@ from steerable_agent_runtime import (
     close_dangling_tool_calls,
     entry_from_dict,
     estimate_cost_usd,
+    export_metrics,
     export_trace,
     resolve_compaction_policy,
     is_large_window,
@@ -306,6 +307,7 @@ class Sidecar:
         register("skills.list", self._handle_skills_list)
         register("trace.fetch", self._handle_trace_fetch)
         register("trace.export", self._handle_trace_export)
+        register("metrics.export", self._handle_metrics_export)
         register("config.get", self._handle_config_get)
         register("config.set", self._handle_config_set)
         register("compat.describe", self._handle_compat_describe)
@@ -726,6 +728,47 @@ class Sidecar:
                 f"trace export failed: {exc}", code=-32603, kind="internal"
             ) from exc
         return {"status": status, "traceId": trace_id, "privacyMode": privacy_mode}
+
+    async def _handle_metrics_export(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """POST turn-outcome counters to a collector's ``/v1/metrics`` (R4).
+
+        Params: ``samples`` (required) — one dict per finished turn with
+        ``outcome`` / ``failureKind`` / ``attempts`` / ``usedDirect`` —,
+        ``endpoint`` (required, the collector's ``/v1/metrics`` URL),
+        ``serviceName`` (optional).
+
+        Separate from ``trace.export`` because a collector may accept traces
+        and not metrics, or the reverse; the host calls this only when it has
+        turn outcomes to report. The payload carries no conversation content,
+        so there is nothing for the privacy mode to filter.
+        """
+        params = _require_params(params)
+        samples = params.get("samples")
+        endpoint = params.get("endpoint")
+        if not isinstance(samples, list) or not samples:
+            raise JsonRpcError("samples required", code=-32602, kind="invalid_params")
+        if not endpoint:
+            raise JsonRpcError("endpoint required", code=-32602, kind="invalid_params")
+        cleaned: list[dict[str, Any]] = []
+        for sample in samples:
+            if not isinstance(sample, dict):
+                raise JsonRpcError(
+                    "each sample must be an object", code=-32602, kind="invalid_params"
+                )
+            cleaned.append(sample)
+        try:
+            status = export_metrics(
+                cleaned,
+                str(endpoint),
+                service_name=str(params.get("serviceName") or "steerable-agent"),
+            )
+        except Exception as exc:  # collector unreachable / non-2xx
+            raise JsonRpcError(
+                f"metrics export failed: {exc}", code=-32603, kind="internal"
+            ) from exc
+        return {"status": status, "metrics": len(cleaned)}
 
     async def _handle_config_get(
         self, params: dict[str, Any] | None
