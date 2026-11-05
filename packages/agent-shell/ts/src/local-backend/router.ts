@@ -2822,6 +2822,19 @@ export class LocalBackendRouter {
       // buildConversationMessages，让 mode  preamble / deferred-exec 检测
       // 仍然基于真实诉求。发给 sidecar 的 messages 为空（见下方调用点）。
       userMessageText = lastUser.content;
+      // 在原先失败/停止的那条回复上记下「已从这里继续」：界面据此把整张
+      // 失败卡片收成一行历史记录，重启后仍然是这一行，而不是又一次失败。
+      if (lastAssistant && reason !== 'interrupted') {
+        await this.store
+          .patchMessageMetadata(chatId, lastAssistant.id, {
+            continuedAt: new Date().toISOString(),
+            continuedReason: reason,
+          })
+          .catch((err: unknown) => {
+            // 记不下来只会让卡片多留一张，不值得让续跑失败。
+            console.warn('[local-backend] continue: metadata patch failed', err);
+          });
+      }
     } else {
       userMessageText = String(payload.message || '').trim();
     }
@@ -4181,6 +4194,10 @@ export class LocalBackendRouter {
     // when the attempt began, so a retry can withdraw exactly its own output.
     let streamedText = '';
     let attemptBlockStart = 0;
+    // A retry notice arrived and no output followed yet: the turn is waiting
+    // on the network, not on the model. `stream_restart` clears it because the
+    // retry has begun producing again.
+    let retrying = false;
     const executedActions: Array<Record<string, unknown>> = [];
     const timeline: PersistedTurnBlock[] = [];
     // 编排子代理生命周期事件累积（切回后用于重建 currentTurnChildren）。
@@ -4344,6 +4361,9 @@ export class LocalBackendRouter {
             assistantText = assistantText.slice(0, assistantText.length - streamedText.length);
             streamedText = '';
           }
+          // The retry is producing again; a Stop from here on is not a stop
+          // "during reconnection".
+          retrying = false;
           live.content = assistantText;
           dropAttemptBlocks(timeline, attemptBlockStart);
           attemptBlockStart = timeline.length;
@@ -4410,6 +4430,7 @@ export class LocalBackendRouter {
           // next attempt starts. Not persisted — history keeps outcomes only.
           const retry = readRetryNotice(notice);
           if (retry) {
+            retrying = true;
             emit(this.sseData({ type: 'turn_retry', ...retry }));
           }
           if (kind === 'budget_exhausted') {
@@ -4524,7 +4545,11 @@ export class LocalBackendRouter {
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         completionStatus = 'cancelled';
-        completionReason = 'aborted_by_user';
+        // Stop lands for two very different reasons, and the card says which:
+        // while waiting out a retry (almost always impatience with a slow
+        // reconnect) or while the model was writing (a deliberate stop).
+        // Recorded here because only the host saw whether a retry was pending.
+        completionReason = retrying ? 'aborted_during_retry' : 'aborted_by_user';
       } else {
         completionStatus = 'failed';
         completionReason = err instanceof Error ? err.message : String(err);

@@ -483,6 +483,10 @@ export const LlmSettingsPanel = forwardRef<LlmSettingsPanelHandle, LlmSettingsPa
                     <div className="flex items-center gap-2">
                       <input
                         type="password"
+                        // The failure card's 「打开模型设置」 targets this field:
+                        // an authentication failure is fixed here, so the panel
+                        // focuses it instead of leaving the reader to hunt.
+                        data-settings-field="llm-api-key"
                         value={settings.apiKey || ''}
                         onChange={(e) =>
                           setSettings((prev) => ({ ...prev, apiKey: e.target.value }))

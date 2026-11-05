@@ -239,3 +239,111 @@ describe('AssistantMessage 顶栏智能体', () => {
     expect(row.textContent).not.toContain('Explore');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 失败 / 停止 / 已继续：同一个回合位置上的三种终态
+// ---------------------------------------------------------------------------
+
+function metaMessage(metadata: Record<string, unknown>): ChatMessage {
+  return {
+    id: 'm-fail',
+    role: 'assistant',
+    content: '',
+    createdAt: '2026-11-05T06:00:00.000Z',
+    messageMetadata: JSON.stringify(metadata),
+  } as ChatMessage;
+}
+
+describe('AssistantMessage 失败与停止', () => {
+  it('失败的回合：即使没有正文也有「重新生成」（P5-05）', () => {
+    render(
+      <AssistantMessage
+        message={metaMessage({ completionStatus: 'failed', completionReason: 'transport' })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+        onRegenerate={async () => {}}
+      />,
+    );
+    expect(screen.getByLabelText('Regenerate')).toBeTruthy();
+  });
+
+  it('停止的回合显示中性「已停止」，不是失败卡片', () => {
+    render(
+      <AssistantMessage
+        message={metaMessage({ completionStatus: 'cancelled', completionReason: 'aborted_by_user' })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+      />,
+    );
+    expect(screen.getByTestId('turn-stopped')).toBeTruthy();
+    expect(screen.queryByTestId('turn-failure')).toBeNull();
+    expect(screen.getByText('You stopped this task.')).toBeTruthy();
+  });
+
+  it('重新连接时点停止，文案区分开来', () => {
+    render(
+      <AssistantMessage
+        message={metaMessage({
+          completionStatus: 'cancelled',
+          completionReason: 'aborted_during_retry',
+        })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+      />,
+    );
+    expect(
+      screen.getByText('You stopped this task while it was reconnecting.'),
+    ).toBeTruthy();
+  });
+
+  it('停止的回合可以继续（P5-04）', () => {
+    const onClick = vi.fn();
+    render(
+      <AssistantMessage
+        message={metaMessage({ completionStatus: 'cancelled' })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+        failureAction={() => ({ onClick })}
+      />,
+    );
+    fireEvent.click(screen.getByText('Continue'));
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it('已继续过的失败收成一行，展开仍是原卡片（P5-03）', () => {
+    render(
+      <AssistantMessage
+        message={metaMessage({
+          completionStatus: 'failed',
+          completionReason: 'transport error: ConnectError',
+          continuedAt: '2026-11-05T06:05:00.000Z',
+        })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+      />,
+    );
+    expect(screen.getByTestId('continued-here')).toBeTruthy();
+    // 卡片本体默认收起；点开后才是失败卡片。
+    expect(screen.queryByTestId('turn-failure')).toBeNull();
+    fireEvent.click(screen.getByText('Connection failed here. Continued.'));
+    expect(screen.getByTestId('turn-failure')).toBeTruthy();
+  });
+
+  it('没有 continuing 标记的失败不收起', () => {
+    render(
+      <AssistantMessage
+        message={metaMessage({ completionStatus: 'failed', completionReason: 'boom' })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+      />,
+    );
+    expect(screen.queryByTestId('continued-here')).toBeNull();
+    expect(screen.getByTestId('turn-failure')).toBeTruthy();
+  });
+});

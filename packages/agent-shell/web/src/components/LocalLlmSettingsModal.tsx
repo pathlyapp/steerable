@@ -25,6 +25,32 @@ export function LocalLlmSettingsModal({ open, onClose, onSaved }: LocalLlmSettin
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
+  // An authentication failure opens this modal specifically to fix the key,
+  // so put the cursor there instead of at the top of a form the reader then
+  // has to scan. The panel loads its settings asynchronously; the field only
+  // exists after that, hence the short retry window rather than one attempt.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    let attempts = 0;
+    const focusKey = () => {
+      if (cancelled) return;
+      const field = document.querySelector<HTMLInputElement>(
+        '[data-settings-field="llm-api-key"]',
+      );
+      if (field) {
+        field.focus();
+        return;
+      }
+      attempts += 1;
+      if (attempts < 20) window.setTimeout(focusKey, 50);
+    };
+    focusKey();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
   if (!open) return null;
   if (typeof document === 'undefined') return null;
 

@@ -1105,6 +1105,9 @@ function AgentChatView({
     setInterrupted(false);
   }, []);
 
+  // 「新建对话」失败时的就地提示；点一次清一次。
+  const [newChatError, setNewChatError] = useState<string | null>(null);
+
   /**
    * 失败卡片的按钮。和「继续上次回复」走同一条 resume 通道：sidecar 回放
    * durable record，已完成的工具调用不会再执行一遍——这正是失败后点
@@ -1129,10 +1132,34 @@ function AgentChatView({
             ? { onClick: () => setLlmSettingsOpen(true) }
             : null;
         case "new-chat":
-          return { onClick: () => navigate("/") };
+          // 同项目的空会话：对话过长时的新出路，而不是把用户丢回落地页再
+          // 重选项目、重填输入。失败时提示并留在原地，不吞掉这次点击。
+          return {
+            onClick: () => {
+              void ctx
+                .createChat({
+                  ...(chat?.projectId ? { projectId: chat.projectId } : {}),
+                  ...(chat?.agentId ? { agentId: chat.agentId } : {}),
+                })
+                .then((id) => {
+                  if (id) navigate(`/agent/${id}`);
+                  else setNewChatError(t("Failed to create the chat. Please try again."));
+                })
+                .catch((err: unknown) =>
+                  setNewChatError(err instanceof Error ? err.message : String(err)),
+                );
+            },
+          };
       }
     },
-    [handleContinueInterrupted, isStreaming, navigate],
+    [
+      chat?.agentId,
+      chat?.projectId,
+      ctx,
+      handleContinueInterrupted,
+      isStreaming,
+      navigate,
+    ],
   );
 
   // 轮中插队 + 失败兜底（W6-2）：streaming 期间 ⌘/Ctrl+Enter 优先注入运行中的
@@ -1425,6 +1452,23 @@ function AgentChatView({
         }
         inputBanner={
           <>
+            {newChatError ? (
+              <div
+                role="status"
+                data-testid="new-chat-error"
+                className="mb-1 flex items-center justify-between gap-2 rounded-agent-md border border-agent-destructive/20 bg-agent-destructive/10 px-2.5 py-1.5 text-xs text-agent-destructive"
+              >
+                <span>{newChatError}</span>
+                <button
+                  type="button"
+                  onClick={() => setNewChatError(null)}
+                  className="rounded px-1 hover:bg-agent-destructive/10"
+                  aria-label={t("Dismiss")}
+                >
+                  ✕
+                </button>
+              </div>
+            ) : null}
             <GoalLoopStatusBar
               chatId={chatId}
               goal={goal}
