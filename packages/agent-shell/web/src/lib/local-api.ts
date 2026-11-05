@@ -915,6 +915,24 @@ export async function installCommandLineTool(name: string) {
   });
 }
 
+/** Reliability numbers for the settings page's network section (R4). */
+export interface ReliabilitySummary {
+  sinceDays: number;
+  total: number;
+  failed: number;
+  cancelled: number;
+  recoveredByRetry: number;
+  usedDirect: number;
+  failuresByKind: Array<{ kind: string; count: number }>;
+}
+
+export async function getReliabilitySummary(days = 7) {
+  return bridge().localBackend.request<ReliabilitySummary>({
+    method: 'GET',
+    path: `/api/v2/usage/reliability?days=${encodeURIComponent(days)}`,
+  });
+}
+
 export async function diagnoseLlmConnection(input: {
   baseUrl?: string;
   apiKey?: string;

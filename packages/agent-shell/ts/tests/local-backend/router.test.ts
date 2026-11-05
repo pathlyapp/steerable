@@ -2133,6 +2133,18 @@ describe('Insights 与用量路由', () => {
     expect((fallback.data as Record<string, any>).days).toBe(30);
   });
 
+  it('GET /api/v2/usage/reliability：默认 7 天，days 可覆盖（R4）', async () => {
+    const router = makeRouter();
+    const byDefault = await router.handle({ method: 'GET', path: '/api/v2/usage/reliability' });
+    expect((byDefault.data as Record<string, any>).sinceDays).toBe(7);
+
+    const windowed = await router.handle({
+      method: 'GET',
+      path: '/api/v2/usage/reliability?days=30',
+    });
+    expect((windowed.data as Record<string, any>).sinceDays).toBe(30);
+  });
+
   it('GET /api/v2/local/traces：缺 chatId 400；payload 经 safeJson 解析', async () => {
     const router = makeRouter();
     const noChat = await router.handle({ method: 'GET', path: '/api/v2/local/traces' });

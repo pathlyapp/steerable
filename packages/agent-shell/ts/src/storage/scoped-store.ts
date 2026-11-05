@@ -14,6 +14,7 @@ import type {
 import type { LlmSettings } from './llm-settings.js';
 import type { TelemetrySettings } from './telemetry-settings.js';
 import type { UsageSummary } from './usage-summary.js';
+import type { ReliabilitySummary } from './reliability-summary.js';
 import type { WebSearchSettings } from './web-search-settings.js';
 import type { TenantScope } from './driver.js';
 
@@ -55,8 +56,24 @@ export interface ScopedStore {
   updateTask(taskId: string, updates: Partial<Pick<TaskRecord, 'status' | 'answer' | 'error' | 'worktreeState' | 'traceId' | 'recordId'>>): Promise<TaskRecord | null>;
   saveTaskProcess(taskId: string, processJson: string): Promise<void>;
   failRunningTasks(reason: string): Promise<number>;
-  recordUsageEvent(input: { chatId?: string | null; kind: string; provider?: string | null; model?: string | null; promptTokens: number; completionTokens: number; totalTokens: number; cachedPromptTokens?: number; costUsd?: number | null }): Promise<void>;
+  recordUsageEvent(input: {
+    chatId?: string | null;
+    kind: string;
+    provider?: string | null;
+    model?: string | null;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    cachedPromptTokens?: number;
+    costUsd?: number | null;
+    outcome?: 'completed' | 'failed' | 'cancelled';
+    failureKind?: string | null;
+    attempts?: number | null;
+    retried?: boolean;
+    usedDirect?: boolean;
+  }): Promise<void>;
   getUsageSummary(sinceDays?: number): Promise<UsageSummary>;
+  getReliabilitySummary(sinceDays?: number): Promise<ReliabilitySummary>;
   getLlmSettings(): Promise<LlmSettings | null>;
   setLlmSettings(settings: LlmSettings): Promise<LlmSettings>;
   getTelemetrySettings(): Promise<TelemetrySettings | null>;

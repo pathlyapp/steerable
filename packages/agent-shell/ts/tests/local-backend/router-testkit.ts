@@ -385,6 +385,25 @@ class FakeLocalStore {
     return { days: sinceDays, events: this.state.usageEvents.length };
   }
 
+  /**
+   * 真实实现的 SQL 版本在 `reliability-sql.test.ts` 里用真库验证；这里只
+   * 按同样的口径把内存里记下的 usage 事件数一遍，让路由层能端到端读到数。
+   */
+  async getReliabilitySummary(sinceDays = 7): Promise<Record<string, unknown>> {
+    const turns = this.state.usageEvents.filter((event) => event.kind === 'turn');
+    return {
+      sinceDays,
+      total: turns.length,
+      failed: turns.filter((event) => event.outcome === 'failed').length,
+      cancelled: turns.filter((event) => event.outcome === 'cancelled').length,
+      recoveredByRetry: turns.filter(
+        (event) => event.outcome === 'completed' && event.retried === true,
+      ).length,
+      usedDirect: turns.filter((event) => event.usedDirect === true).length,
+      failuresByKind: [],
+    };
+  }
+
   // ── settings ──
   async getLlmSettings(): Promise<Record<string, unknown> | null> {
     return this.state.llmSettings;

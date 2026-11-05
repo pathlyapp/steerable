@@ -391,7 +391,7 @@ describe('流式回合 SSE 序列', () => {
     expect(await h.store.getTurnActive(chat.id)).toBeNull();
   });
 
-  it('usage 与 trace：recordUsageEvent 落一条；trace.fetch 取回后 saveTrace', async () => {
+  it('usage 与 trace：token 用量与回合终态各落一条；trace.fetch 取回后 saveTrace', async () => {
     const chat = await seedChat();
     const { supervisor } = installStream(() => {}, {
       status: 'completed',
@@ -403,12 +403,20 @@ describe('流式回合 SSE 序列', () => {
       makeEmitCapture().emit,
     );
 
-    expect(h.store.state.usageEvents).toHaveLength(1);
+    // 两条记录，回答两个不同问题：`chat` 是这一趟花了多少 token（自动续跑
+    // 的每趟各一条），`turn` 是这一回合怎么结束的（R4 的统计口径）。
+    expect(h.store.state.usageEvents).toHaveLength(2);
     expect(h.store.state.usageEvents[0]).toMatchObject({
       chatId: chat.id,
       kind: 'chat',
       totalTokens: 15,
       costUsd: 0.001,
+    });
+    expect(h.store.state.usageEvents[1]).toMatchObject({
+      chatId: chat.id,
+      kind: 'turn',
+      outcome: 'completed',
+      attempts: 1,
     });
 
     // 60s（DEEPPATH_TRACE_FETCH_TIMEOUT_MS 可覆盖）：5s 会丢长跑 trace。
@@ -508,6 +516,35 @@ describe('流式回合失败与取消', () => {
       completionStatus: 'failed',
       completionReason: 'HTTP 401 Unauthorized',
     });
+  });
+
+  it('失败回合记一条 failed 的终态（R4）', async () => {
+    const chat = await seedChat();
+    installStream(() => {}, { status: 'failed', reason: 'HTTP 401 Unauthorized' });
+    await makeRouter().handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+
+    const turn = h.store.state.usageEvents.find((event) => event.kind === 'turn');
+    expect(turn).toMatchObject({ outcome: 'failed', attempts: 1, retried: false });
+    // 失败也要有类别：缺省 unknown 而不是空，统计里才不会丢掉这一类。
+    expect(turn?.failureKind).toBe('unknown');
+  });
+
+  it('用户停止的回合记为 cancelled，不算失败（R4）', async () => {
+    const chat = await seedChat();
+    installStream(() => {
+      throw new DOMException('aborted', 'AbortError');
+    });
+    await makeRouter().handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+
+    const turn = h.store.state.usageEvents.find((event) => event.kind === 'turn');
+    expect(turn).toMatchObject({ outcome: 'cancelled' });
+    expect(turn?.failureKind ?? null).toBeNull();
   });
 
   it('streamCoreLoopTurn 抛 AbortError → cancelled，不发 error 事件', async () => {

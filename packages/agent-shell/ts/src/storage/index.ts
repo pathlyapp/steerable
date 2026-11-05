@@ -49,6 +49,7 @@ import {
   type UsageSummary,
   type UsageSummaryRow,
 } from './usage-summary.js';
+import type { ReliabilitySummary } from './reliability-summary.js';
 import type { TenantScope } from './driver.js';
 import type { ScopedStore } from './scoped-store.js';
 
@@ -528,6 +529,21 @@ export class SqliteScopedStore implements ScopedStore {
     this.ensureColumn('tasks', 'owner_instance_id', 'TEXT');
     this.ensureColumn('insights_outbox', 'claimed_by', 'TEXT');
     this.ensureColumn('insights_outbox', 'claimed_at', 'TEXT');
+
+    // 网络失败统计（二期 R4）。一次回合一行，与 token 用量共用一张表：
+    // 两者都是「这一回合发生了什么」的事实，分成两张表只会让复盘时
+    // 要 join。
+    //
+    // outcome 取值 completed / failed / cancelled。cancelled 是用户主动
+    // 停止，不算失败——界面与统计都不该把它和网络故障混为一谈。
+    this.ensureColumn('usage_events', 'outcome', `TEXT NOT NULL DEFAULT 'completed'`);
+    // 失败类别（provider 分类：transport / auth / rate_limit / …）。
+    this.ensureColumn('usage_events', 'failure_kind', 'TEXT');
+    // 本回合一共发出了几次模型请求（含重试）。
+    this.ensureColumn('usage_events', 'attempts', 'INTEGER');
+    // 是否发生过重试，以及是否改走过直连。
+    this.ensureColumn('usage_events', 'retried', 'INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn('usage_events', 'used_direct', 'INTEGER NOT NULL DEFAULT 0');
 
     // 智能体技能面（增量迁移）：load_all_skills = 无视触发条件全量加载。
     // 此前这个行为是 router 里 `chatAgentId === 'all-round-assistant'` 的
@@ -1580,11 +1596,21 @@ export class SqliteScopedStore implements ScopedStore {
     totalTokens: number;
     cachedPromptTokens?: number;
     costUsd?: number | null;
+    /** How the turn ended; omitted keeps the historical 'completed' default. */
+    outcome?: 'completed' | 'failed' | 'cancelled';
+    /** Provider classification, recorded only for `failed`. */
+    failureKind?: string | null;
+    /** Model requests spent on the turn, retries included. */
+    attempts?: number | null;
+    /** Whether any request in the turn was retried. */
+    retried?: boolean;
+    /** Whether any request went direct instead of through the proxy. */
+    usedDirect?: boolean;
   }): Promise<void> {
     this.db.prepare(`
       INSERT INTO usage_events
-        (tenant_id, user_id, id, chat_id, kind, provider, model, prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens, cost_usd, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (tenant_id, user_id, id, chat_id, kind, provider, model, prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens, cost_usd, created_at, outcome, failure_kind, attempts, retried, used_direct)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       this.scope.tenantId,
       this.scope.userId,
@@ -1598,8 +1624,76 @@ export class SqliteScopedStore implements ScopedStore {
       Math.max(0, Math.floor(input.totalTokens)),
       Math.max(0, Math.floor(input.cachedPromptTokens ?? 0)),
       input.costUsd ?? null,
-      new Date().toISOString()
+      new Date().toISOString(),
+      input.outcome ?? 'completed',
+      input.failureKind ?? null,
+      input.attempts ?? null,
+      input.retried ? 1 : 0,
+      input.usedDirect ? 1 : 0
     );
+  }
+
+  /**
+   * Reliability summary for the last `sinceDays` days.
+   *
+   * Splits the three terminal states apart because they answer different
+   * questions: a failed turn is something to fix, a cancelled one is the user's
+   * decision and must not inflate the failure rate, and a retried turn that
+   * completed is the measure of whether retrying is doing its job. Turns
+   * recorded before these columns existed default to `completed`, which is the
+   * only honest reading — their outcome was not observed.
+   *
+   * @param sinceDays Window length in days, ending now.
+   * @returns Counts per outcome, failures broken down by provider
+   *   classification, and how many completed turns had retried.
+   */
+  async getReliabilitySummary(sinceDays = 7): Promise<ReliabilitySummary> {
+    const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString();
+    const totals = this.db
+      .prepare(
+        `SELECT
+           COUNT(*) AS total,
+           SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failed,
+           SUM(CASE WHEN outcome = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+           SUM(CASE WHEN outcome = 'completed' AND retried = 1 THEN 1 ELSE 0 END) AS recovered,
+           SUM(CASE WHEN used_direct = 1 THEN 1 ELSE 0 END) AS used_direct
+         FROM usage_events
+         WHERE tenant_id = ? AND user_id = ? AND created_at >= ?`,
+      )
+      .get(this.scope.tenantId, this.scope.userId, since) as {
+      total: number | null;
+      failed: number | null;
+      cancelled: number | null;
+      recovered: number | null;
+      used_direct: number | null;
+    };
+    const byKind = this.db
+      .prepare(
+        // Group by the expression, not the output alias: a bare `GROUP BY kind`
+        // resolves to a source column when one exists, which silently merges
+        // every row into the wrong bucket.
+        `SELECT COALESCE(failure_kind, 'unknown') AS kind, COUNT(*) AS count
+         FROM usage_events
+         WHERE tenant_id = ? AND user_id = ? AND created_at >= ?
+           AND outcome = 'failed'
+         GROUP BY COALESCE(failure_kind, 'unknown')
+         ORDER BY count DESC, kind`,
+      )
+      .all(this.scope.tenantId, this.scope.userId, since) as Array<{
+      kind: string;
+      count: number;
+    }>;
+    return {
+      sinceDays,
+      total: totals.total ?? 0,
+      failed: totals.failed ?? 0,
+      cancelled: totals.cancelled ?? 0,
+      /** Completed turns that had retried at least once. */
+      recoveredByRetry: totals.recovered ?? 0,
+      /** Turns where the model request went direct instead of via a proxy. */
+      usedDirect: totals.used_direct ?? 0,
+      failuresByKind: byKind.map((row) => ({ kind: row.kind, count: row.count })),
+    };
   }
 
   /**

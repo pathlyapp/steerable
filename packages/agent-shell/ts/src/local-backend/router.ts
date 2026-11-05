@@ -2340,6 +2340,15 @@ export class LocalBackendRouter {
       };
     }
 
+    // 二期 R4：网络失败统计。窗口默认 7 天（设置页「最近 7 天」那一块）。
+    if (method === 'GET' && pathname === '/api/v2/usage/reliability') {
+      const days = parsePositiveIntParam(url.searchParams.get('days'), 7);
+      return {
+        status: 200,
+        data: await this.store.getReliabilitySummary(days),
+      };
+    }
+
     if (method === 'POST' && pathname.match(/^\/api\/v2\/chats\/[^/]+\/suggest-replies$/)) {
       return {
         status: 200,
@@ -4202,6 +4211,15 @@ export class LocalBackendRouter {
     // on the network, not on the model. `stream_restart` clears it because the
     // retry has begun producing again.
     let retrying = false;
+    // Reliability accounting for this turn (R4). A model request is either a
+    // pass (a fresh loop run) or a retry inside one (the sidecar re-issuing
+    // the same request), so attempts = passes + retries. The retry and direct
+    // flags are sticky: one retry anywhere in the turn is what the statistic
+    // asks about.
+    let turnPasses = 0;
+    let turnRetries = 0;
+    let retriedThisTurn = false;
+    let directThisTurn = false;
     const executedActions: Array<Record<string, unknown>> = [];
     const timeline: PersistedTurnBlock[] = [];
     // 编排子代理生命周期事件累积（切回后用于重建 currentTurnChildren）。
@@ -4438,6 +4456,8 @@ export class LocalBackendRouter {
           const retry = readRetryNotice(notice);
           if (retry) {
             retrying = true;
+            retriedThisTurn = true;
+            turnRetries += 1;
             emit(this.sseData({ type: 'turn_retry', ...retry }));
           }
           if (kind === 'budget_exhausted') {
@@ -4509,6 +4529,7 @@ export class LocalBackendRouter {
             ),
           afterPass: async (outcome) => {
             if (outcome.traceId) passTraceIds.push(outcome.traceId);
+            turnPasses += 1;
             // W6-9 用量归因:落一条 chat 用量事件(含成本估算,无单价模型 costUsd=null)。
             // 每趟各落一条——续跑的花费是真实发生的，不该被合并掉。
             if (outcome.usage) {
@@ -4570,6 +4591,34 @@ export class LocalBackendRouter {
         outcomeTraceId = failureTraceId;
         passTraceIds.push(failureTraceId);
       }
+    }
+
+    // 可靠性统计（R4）：一回合一条终态记录，与 token 用量分开记——用量
+    // 是每趟各一条（自动续跑的花费是真实发生的），终态只有一个。
+    // `usedDirect` 取产品当前配置：直连是产品级开关，不是每回合的决定。
+    try {
+      await this.store.recordUsageEvent({
+        chatId,
+        kind: 'turn',
+        provider: settings.provider,
+        model: overrideModel || settings.model,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        outcome:
+          completionStatus === 'failed'
+            ? 'failed'
+            : completionStatus === 'cancelled'
+              ? 'cancelled'
+              : 'completed',
+        failureKind: completionStatus === 'failed' ? (failureInfo?.errorKind ?? 'unknown') : null,
+        attempts: turnPasses + turnRetries || null,
+        retried: retriedThisTurn,
+        usedDirect: directThisTurn || productConfigDirectConnection(),
+      });
+    } catch (reliabilityErr) {
+      // 统计写不进去不该影响回合收尾——消息已经落库，用户看到的是结果。
+      console.warn('[local-backend] record turn outcome failed', reliabilityErr);
     }
 
     const durationMs = turnDurationMs(
