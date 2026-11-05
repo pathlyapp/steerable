@@ -753,7 +753,7 @@ describe('regenerate', () => {
 // ---------------------------------------------------------------------------
 
 describe('resume', () => {
-  it('无中断签名 → 409 没有可继续的中断回复', async () => {
+  it('正常完成的回合 → 409 没有可继续的回复', async () => {
     const chat = await seedChat();
     await h.store.addMessage(chat.id, 'user', '问题');
     await h.store.addMessage(chat.id, 'assistant', '完整回答'); // 已正常完结
@@ -768,7 +768,55 @@ describe('resume', () => {
       cap.emit,
     );
     expect(res.status).toBe(409);
-    expect((cap.events()[0].data as { message: string }).message).toContain('没有可继续的中断回复');
+    expect((cap.events()[0].data as { message: string }).message).toContain('没有可继续的回复');
+  });
+
+  it('失败回合 → resume 放行（P1-01：失败也能从断点继续）', async () => {
+    const chat = await seedChat();
+    await h.store.addMessage(chat.id, 'user', '整理资料');
+    await h.store.addMessage(
+      chat.id,
+      'assistant',
+      '',
+      JSON.stringify({ completionStatus: 'failed', completionReason: 'transport' }),
+    );
+    const { seen } = installStream((opts) => opts.onText('续跑回答'));
+
+    const res = await makeRouter().handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/send`,
+        body: { resume: true },
+      },
+      makeEmitCapture().emit,
+    );
+
+    expect(res.status).toBe(200);
+    expect(seen[0].resume).toBe(true);
+    expect(seen[0].messages).toEqual([]);
+  });
+
+  it('用户停止的回合 → resume 放行', async () => {
+    const chat = await seedChat();
+    await h.store.addMessage(chat.id, 'user', '整理资料');
+    await h.store.addMessage(
+      chat.id,
+      'assistant',
+      '',
+      JSON.stringify({ completionStatus: 'cancelled' }),
+    );
+    installStream(() => {});
+
+    const res = await makeRouter().handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/send`,
+        body: { resume: true },
+      },
+      makeEmitCapture().emit,
+    );
+
+    expect(res.status).toBe(200);
   });
 
   it('中断签名成立（turn_active 残留 + 末尾是 user）→ resume:true + 空 messages', async () => {

@@ -28,6 +28,7 @@ import {
 } from './router-testkit.js';
 import {
   LocalBackendRouter,
+  readCompletionStatus,
   readRetryNotice,
   readTurnFailureInfo,
 } from '../../src/local-backend/router.js';
@@ -2390,5 +2391,35 @@ describe('readRetryNotice', () => {
 
   it('空原因不写进事件', () => {
     expect(readRetryNotice({ kind: 'hook_action', action: 'retry', reason: '' })).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readCompletionStatus：「继续」的准入依据
+// ---------------------------------------------------------------------------
+
+describe('readCompletionStatus', () => {
+  it('读出失败回合的状态', () => {
+    expect(
+      readCompletionStatus({
+        messageMetadata: JSON.stringify({ completionStatus: 'failed' }),
+      }),
+    ).toBe('failed');
+  });
+
+  it('没有元数据时返回 null，不猜成可续跑', () => {
+    expect(readCompletionStatus({ messageMetadata: null })).toBeNull();
+    expect(readCompletionStatus({})).toBeNull();
+    expect(readCompletionStatus(undefined)).toBeNull();
+  });
+
+  it('元数据损坏时返回 null', () => {
+    expect(readCompletionStatus({ messageMetadata: '{not json' })).toBeNull();
+  });
+
+  it('状态字段类型不对时返回 null', () => {
+    expect(
+      readCompletionStatus({ messageMetadata: JSON.stringify({ completionStatus: 1 }) }),
+    ).toBeNull();
   });
 });

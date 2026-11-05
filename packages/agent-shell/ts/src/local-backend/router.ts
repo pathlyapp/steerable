@@ -116,6 +116,7 @@ import {
 } from './regenerate-helper.js';
 import { resolveBranchActivation } from './branch-helper.js';
 import { detectInterruptedTurn } from './interrupted-helper.js';
+import { resumableTurn } from './resumable-turn.js';
 import { handlePortableRequest } from './portable-service.js';
 import { getProductConfig, isPortableProduct } from '../product-config.js';
 import { dropCurrentUserMessage } from './history-helper.js';
@@ -407,6 +408,28 @@ function isRoundBoundaryHook(notice: { kind?: string; action?: unknown } | undef
  * carried through. Returns null for any other hook action so the caller can
  * keep its round-boundary handling unchanged.
  */
+/**
+ * `completionStatus` of a persisted assistant message, or null.
+ *
+ * Only the terminal assistant message's status decides whether Continue is
+ * offered, so this reads the field and leaves the meaning to
+ * `resumableTurn`. A message without metadata (older builds) yields null,
+ * which refuses — resuming a turn whose end state is unknown could append a
+ * reply to a conversation that already finished.
+ */
+export function readCompletionStatus(
+  message: { messageMetadata?: string | null } | undefined,
+): string | null {
+  const raw = message?.messageMetadata;
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const status = (JSON.parse(raw) as { completionStatus?: unknown }).completionStatus;
+    return typeof status === 'string' && status ? status : null;
+  } catch {
+    return null;
+  }
+}
+
 export function readRetryNotice(
   notice: { kind?: string; action?: unknown; delayMs?: unknown; round?: unknown; reason?: unknown } | undefined,
 ): { round?: number; delayMs?: number; reason?: string } | null {
@@ -2778,19 +2801,21 @@ export class LocalBackendRouter {
         deletedCount: deleted,
       });
     } else if (isResume) {
-      // W7-1: 继续被中断的 turn —— 不追加新用户消息（记录里已有），而是让
-      // sidecar 回放 durable record 的投影作为循环种子。只在检测确为
-      // interrupted 时接受：对一个已正常完结的 turn 续跑只会给完整对话
-      // 凭空多接一段回复。
+      // 继续上一轮 —— 不追加新用户消息（记录里已有），而是让 sidecar 回放
+      // durable record 的投影作为循环种子。允许续跑的三种终态见
+      // `resumable-turn.ts`：崩溃中断、失败、用户停止。正常完成的回合拒绝，
+      // 否则会给完整对话凭空多接一段回复。
       const prior = await this.store.listMessages(chatId, 200);
-      const interrupted = detectInterruptedTurn({
-        turnActive: await this.store.getTurnActive(chatId) !== null,
+      const lastAssistant = prior.find((m) => m.role === 'assistant');
+      const reason = resumableTurn({
+        turnActive: (await this.store.getTurnActive(chatId)) !== null,
         streamActive: getActiveCoreLoopStreamId(chatId) !== undefined,
         lastMessageRole: prior[0]?.role ?? null,
+        lastAssistantStatus: readCompletionStatus(lastAssistant),
       });
       const lastUser = prior.find(m => m.role === 'user');
-      if (!interrupted || !lastUser) {
-        emit(this.sse('error', { message: '没有可继续的中断回复' }));
+      if (!reason || !lastUser) {
+        emit(this.sse('error', { message: '没有可继续的回复' }));
         return { status: 409 };
       }
       // 触发轮的用户消息仍在库里（崩溃只丢了回复）——取其原文喂给
