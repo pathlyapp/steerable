@@ -134,7 +134,7 @@ describe('复制诊断信息', () => {
   });
 
   it('复制后按钮显示已复制', async () => {
-    const writeText = vi.fn(async () => {});
+    const writeText = vi.fn(async (_text: string) => {});
     // jsdom 的 navigator 上 clipboard 只有 getter，必须用 defineProperty 覆盖。
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText },

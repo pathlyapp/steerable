@@ -2561,6 +2561,21 @@ class Sidecar:
             await transport.emit_notification(
                 "stream.chunk", {"streamId": stream_id, "reasoningDelta": data["delta"]}
             )
+        elif kind == "stream_restart":
+            # The engine is re-issuing the request it was streaming, so what
+            # the host already appended belongs to a discarded attempt. The
+            # host drops it instead of appending the retry's text after it.
+            await transport.emit_notification(
+                "stream.chunk",
+                {
+                    "streamId": stream_id,
+                    "restart": {
+                        "reason": data.get("reason") or "retry",
+                        "round": data.get("round"),
+                        "attempt": data.get("attempt"),
+                    },
+                },
+            )
         elif kind == "tool_call_start":
             await transport.emit_notification(
                 "stream.chunk",

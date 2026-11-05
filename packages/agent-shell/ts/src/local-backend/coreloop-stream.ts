@@ -318,6 +318,13 @@ export interface StreamCoreLoopTurnOptions {
   onToolStart?: (call: { id: string; tool: string; arguments: Record<string, unknown> }) => void;
   /** Fired when a tool finishes on the host (for tool-card rendering). */
   onToolAction?: (action: CoreLoopToolAction) => void;
+  /**
+   * Fired when the sidecar abandons the attempt it was streaming and starts
+   * the request again (a retry after partial output). Everything emitted via
+   * `onText` / `onReasoning` since the last restart belongs to a reply the
+   * user will never see in full and must be withdrawn from the display.
+   */
+  onRestart?: () => void;
   /** soft_timeout / budget_exhausted notices from the loop. */
   onNotice?: (kind: string, notice?: { kind: string; [key: string]: unknown }) => void;
   /**
@@ -555,6 +562,9 @@ export async function streamCoreLoopTurn(
           // The user cancelled — swallow any in-flight deltas while we wait
           // for the sidecar's cancelled done.
           if (cancelling) return;
+          if (chunk.restart) {
+            options.onRestart?.();
+          }
           if (chunk.delta) {
             options.onText(chunk.delta);
           }

@@ -3032,3 +3032,36 @@ async def test_subagent_profile_system_prompt_seeds_child_and_roster_advertised(
         t for t in first_tools if t["function"]["name"] == "delegate_subagent"
     )
     assert "explore: 只读代码侦察。" in descriptor["function"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_stream_restart_is_forwarded_to_the_host() -> None:
+    """A retry after partial output must tell the host to drop what it has.
+
+    Without this the host appends the retry's text after the abandoned
+    attempt's and the reader sees both.
+    """
+
+    class _Event:
+        kind = "stream_restart"
+        data: ClassVar[dict] = {"reason": "retry", "round": 3, "attempt": 2}
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit_notification(self, method: str, payload: dict) -> None:
+            self.events.append((method, payload))
+
+    transport = _Transport()
+    await Sidecar._emit_loop_event(transport, "stream-1", _Event(), None)
+
+    assert transport.events == [
+        (
+            "stream.chunk",
+            {
+                "streamId": "stream-1",
+                "restart": {"reason": "retry", "round": 3, "attempt": 2},
+            },
+        )
+    ]

@@ -150,6 +150,7 @@ type Action =
   | { type: 'insert-before-last-assistant'; message: ChatMessage }
   | { type: 'patch-last-assistant'; patch: Partial<ChatMessage> }
   | { type: 'append-content'; delta: string }
+  | { type: 'replace-content'; content: string }
   | { type: 'append-tool-call'; call: ToolCall }
   | { type: 'attach-tool-result'; result: ToolResult }
   | { type: 'finalize-assistant' };
@@ -189,6 +190,20 @@ function reducer(state: State, action: Action): State {
       const patched: ChatMessage = {
         ...target,
         content: (target.content ?? '') + action.delta,
+      } as ChatMessage;
+      const next = state.messages.slice();
+      next[idx] = patched;
+      return { messages: next };
+    }
+    case 'replace-content': {
+      // A retried attempt restarts the reply, so the accumulated text is no
+      // longer an append target: replacing it is the only way the live view
+      // can match what the backend will persist.
+      const idx = findLastAssistantIndex(state.messages);
+      if (idx === -1) return state;
+      const patched: ChatMessage = {
+        ...state.messages[idx],
+        content: action.content,
       } as ChatMessage;
       const next = state.messages.slice();
       next[idx] = patched;
@@ -354,6 +369,19 @@ export function useChatStream(
           return;
         }
         case 'agent':
+          // `stream_restart`: the backend discarded the attempt it was
+          // streaming and started the request again. It carries the
+          // authoritative replacement text rather than a length to cut, so
+          // the live view cannot drift from the persisted reply. Handled here
+          // because the text lives in this hook's state; still forwarded, as
+          // every other `agent` event is.
+          if (event.event === 'stream_restart') {
+            const content =
+              typeof event.payload?.content === 'string' ? event.payload.content : '';
+            dispatch({ type: 'replace-content', content });
+          }
+          options.onUnknownEvent?.(event);
+          return;
         case 'orchestration':
         case 'loader-hint':
         case 'keepalive':

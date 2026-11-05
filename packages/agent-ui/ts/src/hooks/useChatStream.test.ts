@@ -185,6 +185,33 @@ describe('useChatStream', () => {
     expect(onUnknownEvent.mock.calls[1]?.[0].type).toBe('agent');
   });
 
+  it('stream_restart replaces the streamed text instead of appending to it', async () => {
+    // A retry after partial output discards the abandoned attempt. The host
+    // has already handed those deltas over, so the only way the live view can
+    // match the persisted reply is to take the replacement text.
+    const { transport } = makeTransport([
+      [
+        { type: 'content', content: 'half a sen' },
+        { type: 'agent', event: 'stream_restart', payload: { content: '' } },
+        { type: 'content', content: 'complete reply' },
+        { type: 'done' },
+      ],
+    ]);
+    const onUnknownEvent = vi.fn();
+    const { result } = renderHook(() => useChatStream({ transport, onUnknownEvent }));
+
+    await act(async () => {
+      await result.current.sendUserMessage({ content: 'go' });
+    });
+
+    await waitFor(() => {
+      const last = result.current.messages.at(-1);
+      expect(last?.content).toBe('complete reply');
+    });
+    // Still forwarded: callers that track agent events keep seeing them.
+    expect(onUnknownEvent.mock.calls.some(([e]) => e.event === 'stream_restart')).toBe(true);
+  });
+
   it('emits an error overlay onto the assistant message when the stream throws', async () => {
     const transport: ChatStreamTransport = {
       stream: async () => {

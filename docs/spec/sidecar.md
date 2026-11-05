@@ -127,6 +127,15 @@ removed; absent means the request went direct. `attempts` counts the provider
 calls spent on that request including the last one. A sidecar that cannot
 determine a field omits it rather than sending an empty value.
 
+A retry that follows partial output also emits `stream.chunk` with
+`{"streamId", "restart": {reason, round?, attempt?}}` before the retry's first
+delta. The deltas already sent belong to an attempt the engine discarded and
+will never be completed, so a host must withdraw the text and reasoning it
+appended since the last `restart` before accepting more. Tool blocks stay —
+those calls ran and the retry does not repeat them. A host that ignores the
+field shows the abandoned attempt's text followed by the retry's, which is not
+what the durable record holds.
+
 ## `agent.chat.stream` payload
 
 ```json

@@ -531,6 +531,13 @@ export interface SidecarStreamChunk {
   };
   /** CoreLoop notices: soft_timeout / budget_exhausted / round_end / hook_action. */
   notice?: { kind: string; [key: string]: unknown };
+  /**
+   * The sidecar abandoned the attempt it was streaming and re-issued the
+   * request. Deltas received before this point belong to a reply that will
+   * never be completed, so the host withdraws them from the display rather
+   * than appending the retry's text after them.
+   */
+  restart?: { reason: string; round?: number; attempt?: number };
   finishReason?: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
 }

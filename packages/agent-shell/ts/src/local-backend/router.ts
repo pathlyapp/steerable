@@ -53,6 +53,7 @@ import {
 } from './task-process.js';
 import {
   appendTimelineDelta,
+  dropAttemptBlocks,
   freezeTimelineReasoning,
   sealLastTimelineBlock,
   syncTimelineTools,
@@ -4151,6 +4152,10 @@ export class LocalBackendRouter {
     const approval = resolveTurnApproval();
 
     let assistantText = '';
+    // Text this attempt streamed (reset on restart) and the timeline length
+    // when the attempt began, so a retry can withdraw exactly its own output.
+    let streamedText = '';
+    let attemptBlockStart = 0;
     const executedActions: Array<Record<string, unknown>> = [];
     const timeline: PersistedTurnBlock[] = [];
     // 编排子代理生命周期事件累积（切回后用于重建 currentTurnChildren）。
@@ -4300,7 +4305,28 @@ export class LocalBackendRouter {
           assistantText += delta;
           appendTimelineDelta(timeline, 'text', delta);
           live.content = assistantText;
+          // Track what this attempt emitted so a retry can take exactly it
+          // back: the host has already handed these bytes to the renderer.
+          streamedText += delta;
           emit(this.sseData({ content: delta }));
+        },
+        onRestart: () => {
+          // The sidecar is re-issuing this request. Withdraw the attempt's
+          // text and reasoning — persisted, live, and renderer views — so the
+          // retry's reply does not arrive after a half sentence the model
+          // never finished. Tool blocks stay: those calls ran.
+          if (streamedText) {
+            assistantText = assistantText.slice(0, assistantText.length - streamedText.length);
+            streamedText = '';
+          }
+          live.content = assistantText;
+          dropAttemptBlocks(timeline, attemptBlockStart);
+          attemptBlockStart = timeline.length;
+          emit(this.sseData({
+            type: 'stream_restart',
+            content: assistantText,
+            blocks: timeline,
+          }));
         },
         onReasoning: (delta) => {
           appendTimelineDelta(timeline, 'reasoning', delta);
