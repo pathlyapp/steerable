@@ -62,7 +62,7 @@ await runtime.close();
 | `listTools` / `invokeTool` | `tool.list` / `tool.invoke` |
 | `listSkills` | `skills.list` |
 | `applyEdits` | `workspace.apply_edits` |
-| `fetchTrace` / `exportTrace` | `trace.fetch` / `trace.export` |
+| `fetchTrace` / `exportTrace` / `exportMetrics` | `trace.fetch` / `trace.export` / `metrics.export` |
 | `getConfig` / `setConfig` | `config.get` / `config.set` |
 
 The full wire contract is [docs/spec/sidecar.md](../../../docs/spec/sidecar.md).

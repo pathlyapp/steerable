@@ -32,6 +32,7 @@ export const SIDECAR_METHODS = [
   'skills.list',
   'trace.fetch',
   'trace.export',
+  'metrics.export',
   'config.get',
   'config.set',
   'compat.describe',

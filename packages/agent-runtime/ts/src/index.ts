@@ -36,6 +36,8 @@ export {
   type SessionMessages,
   type SkillInfo,
   type ToolDescriptor,
+  type MetricsExportResult,
+  type MetricsExportSample,
   type TraceExportResult,
   type TraceFetchResult,
 } from './runtime.js';

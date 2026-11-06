@@ -71,6 +71,20 @@ export interface TraceExportResult {
   privacyMode: string;
 }
 
+/** One finished turn, as `metrics.export` accepts it. Counts and labels only. */
+export interface MetricsExportSample {
+  outcome: 'completed' | 'failed' | 'cancelled';
+  failureKind?: string | null;
+  attempts?: number | null;
+  retried?: boolean;
+  usedDirect?: boolean;
+}
+
+export interface MetricsExportResult {
+  status: string;
+  metrics: number;
+}
+
 /**
  * Wire-level descriptor of one OpenAI-compat flag, as served by
  * `compat.describe`. `kind` is `"bool"`, `"string-list"`, or
@@ -585,6 +599,15 @@ export class AgentRuntime {
 
   exportTrace(traceId: string): Promise<TraceExportResult> {
     return this.process.request('trace.export', { traceId });
+  }
+
+  /** POST turn-outcome counters to a collector's `/v1/metrics`. */
+  exportMetrics(params: {
+    endpoint: string;
+    samples: MetricsExportSample[];
+    serviceName?: string;
+  }): Promise<MetricsExportResult> {
+    return this.process.request('metrics.export', params);
   }
 
   getConfig(): Promise<Record<string, unknown>> {
