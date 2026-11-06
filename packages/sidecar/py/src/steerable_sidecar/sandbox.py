@@ -510,7 +510,20 @@ class BwrapExecBackend:
         rebind: list[str] = []
         for top in _tmp_exec_roots(argv):
             rebind += ["--dir", top, "--ro-bind", top, top]
-        return [self._executable, *self._profile_args(), *rebind, "--", *argv]
+        # The private /tmp tmpfs and the read-only rebind above cover a
+        # writable root that lives under /tmp. Bind those roots last so
+        # sqlite can create the database.
+        writable: list[str] = []
+        for root in self._roots:
+            writable += ["--bind", root, root]
+        return [
+            self._executable,
+            *self._profile_args(),
+            *rebind,
+            *writable,
+            "--",
+            *argv,
+        ]
 
     def wrap_command(self, command: str) -> str:
         return " ".join(shlex.quote(part) for part in self.argv_for(command))

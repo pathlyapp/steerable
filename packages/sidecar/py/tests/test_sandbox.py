@@ -597,6 +597,36 @@ class TestBwrapExecBackend:
         ]
         assert args[sep + 1] == binary
 
+    def test_writable_root_under_tmp_is_bound_after_readonly_rebind(self) -> None:
+        root = Path("/tmp") / f"steerable_writable_{os.getpid()}"
+        root.mkdir()
+        try:
+            db = str(root / "sessions.db")
+            args = BwrapExecBackend(
+                writable_roots=[str(root)],
+                executable="/usr/bin/bwrap",
+                network=True,
+            ).argv_for_exec(["python", "--storage-path", db])
+        finally:
+            root.rmdir()
+        sep = args.index("--")
+        head = args[:sep]
+        # macOS /tmp is a symlink; the writable root is the resolved path,
+        # while the argv rebind uses the /tmp path the command named.
+        normalized = str(root.resolve())
+        top = f"/tmp/{root.name}"
+        ro_at = next(
+            index
+            for index, flag in enumerate(head)
+            if flag == "--ro-bind" and head[index + 1] == top
+        )
+        bind_at = max(
+            index
+            for index, flag in enumerate(head)
+            if flag == "--bind" and head[index + 1] == normalized
+        )
+        assert bind_at > ro_at
+
     def test_writable_root_must_exist(self, tmp_path) -> None:
         with pytest.raises(ValueError, match="does not exist"):
             BwrapExecBackend(
