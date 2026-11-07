@@ -255,6 +255,11 @@ export interface StreamCoreLoopTurnOptions {
    * entry, so an unsupportable level fails the turn at stream start
    * (invalid_params) instead of being silently dropped. */
   reasoningEffort?: string;
+  /**
+   * 产品声明模型服务是否直连（跳过系统代理）。只在产品显式打开时下发，
+   * 未声明的产品线上字节与旧版完全一致。
+   */
+  directConnection?: boolean;
   /** Forwarded on every reverse tool.invoke (host enforces plan-mode etc.). */
   toolContext?: Record<string, unknown>;
   /**
@@ -456,6 +461,9 @@ export async function streamCoreLoopTurn(
     compat: options.compat,
     presets: options.presets,
     ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+    // Omitted unless the product declared direct model connections: an
+    // undeclared product's wire bytes stay identical to before.
+    ...(options.directConnection ? { directConnection: true } : {}),
     chatId: options.chatId,
     recordId: options.recordId,
     resume: options.resume,

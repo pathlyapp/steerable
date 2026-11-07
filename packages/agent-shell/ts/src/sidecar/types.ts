@@ -291,6 +291,13 @@ export interface SidecarChatStreamRequest {
    * never a silently dropped field); omitted → env/preset defaults apply.
    */
   reasoningEffort?: string;
+  /**
+   * Send this turn's model requests direct, skipping every declared proxy
+   * (the product config's `directModelConnection`). The sidecar applies it
+   * per request, not per process, so one model service can go direct while
+   * everything else keeps the proxy. Omitted → the proxy keeps its say.
+   */
+  directConnection?: boolean;
   tools?: unknown[];
   streamId?: string;
   providerOptions?: Record<string, unknown>;

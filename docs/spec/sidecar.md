@@ -313,6 +313,18 @@ being silently dropped from the wire body (EVALS 2.5.22). A vendor whose
 compat flags reject the field outright (Moonshot thinking) still drops it
 silently — the gate runs before validation.
 
+`agent.chat.stream` also accepts `directConnection`. The host sends it when
+the product config declares `directModelConnection`, and the sidecar then
+builds that request's provider with `force_direct` so it reaches
+`base_url` without any declared proxy. It is per request, not per process:
+a product can route its own model service direct while everything else
+keeps the proxy. Omitted means the proxy keeps its say, so an undeclared
+product's request bytes are unchanged. Every host path that reaches the
+same model service must send it — the chat turn, background task streams,
+and the auxiliary `SidecarLlmProvider` calls (title generation, AI
+suggestions); one path without it leaves those calls failing on a proxy
+the user turned off.
+
 `agent.chat.cancel` on a CoreLoop stream is cooperative: the loop winds
 down at the next safe point (round boundary, stream chunk, or tool-call
 slot), records the partial turn so the chat can continue, and the

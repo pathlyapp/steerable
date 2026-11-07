@@ -27,6 +27,7 @@
 import path from 'node:path';
 
 import { llmService, getSidecarSupervisor } from '../llm/index.js';
+import { productConfigDirectConnection } from '../product-config.js';
 import { sidecarWireProvider } from '../storage/llm-settings.js';
 import type { TaskRecord } from '../storage/index.js';
 import type { ToolRouter } from '../tool-router.js';
@@ -451,6 +452,9 @@ export class TaskService {
         baseUrl: settings.baseUrl,
         apiKey: settings.apiKey,
         temperature: settings.temperature,
+        // 直连是产品级开关：后台任务的模型请求与前台回合同源，不能一个跳过
+        // 代理、一个还在代理上。
+        ...(productConfigDirectConnection() ? { directConnection: true } : {}),
         // 项目围栏按父 chat 解析；worktree 任务再叠加 workspaceRoot 收窄。
         toolContext: {
           mode: 'agent',

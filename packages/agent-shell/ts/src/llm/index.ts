@@ -1,4 +1,5 @@
 import type { LlmSettings, ScopedStore } from '../storage/index.js';
+import { productConfigDirectConnection } from '../product-config.js';
 import { sidecarWireProvider } from '../storage/llm-settings.js';
 import { OllamaProvider } from './ollama.js';
 import { OpenAICompatProvider } from './openai-compat.js';
@@ -115,6 +116,8 @@ export class LlmService {
         baseUrl: settings.baseUrl,
         apiKey: settings.apiKey,
         temperature: settings.temperature,
+        // 与对话回合同一个产品开关：标题生成、AI 建议也打这个模型服务。
+        ...(productConfigDirectConnection() ? { directConnection: true } : {}),
       });
     } else if (settings.provider === 'ollama') {
       this.provider = new OllamaProvider({

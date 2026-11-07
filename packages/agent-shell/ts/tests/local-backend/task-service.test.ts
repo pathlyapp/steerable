@@ -8,12 +8,16 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TaskRecord } from '../../src/storage/index.js';
 import type { WorktreeService } from '../../src/local-backend/worktree-service.js';
 import type { CoreLoopTurnOutcome } from '../../src/local-backend/coreloop-stream.js';
 import type { StreamCoreLoopTurnOptions } from '../../src/local-backend/coreloop-stream.js';
+import {
+  resetProductConfigForTests,
+  setProductConfig,
+} from '../../src/product-config.js';
 
 // task-service 的模块级依赖在这里全部替掉：llm 设置、sidecar 句柄、
 // egress 代理、coreloop-stream（buildWorldState）。
@@ -201,6 +205,25 @@ describe('task-service / runTask', () => {
   let h: Harness;
   beforeEach(() => {
     h = makeService();
+  });
+
+  afterEach(() => {
+    resetProductConfigForTests();
+  });
+
+  it('任务流继承产品的直连开关', async () => {
+    // 直连是产品级的（跳过系统代理），后台任务与前台回合必须同一路由：
+    // 一个跳过代理、一个还在代理上，等于同一个产品两条网络行为。
+    setProductConfig({ directModelConnection: true });
+    const result = await h.service.runTask({ chatId: 'chat-1', task: '统计行数' });
+    await waitTaskTerminal(h.store, result.taskId);
+    expect(h.streamCalls[0].directConnection).toBe(true);
+  });
+
+  it('未声明直连的产品不下发该字段', async () => {
+    const result = await h.service.runTask({ chatId: 'chat-1', task: '统计行数' });
+    await waitTaskTerminal(h.store, result.taskId);
+    expect(h.streamCalls[0]).not.toHaveProperty('directConnection');
   });
 
   it('立即返回 running，落任务表，独立流带独立身份', async () => {

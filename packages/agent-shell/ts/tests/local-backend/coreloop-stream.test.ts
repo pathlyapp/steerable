@@ -63,6 +63,25 @@ describe('streamCoreLoopTurn', () => {
     expect(sent[1].reasoningEffort).toBeUndefined();
   });
 
+  it('carries the product direct-connection switch to the wire, and omits it when off', async () => {
+    const { supervisor, sent } = makeSupervisor([
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+
+    await streamCoreLoopTurn({
+      ...BASE_OPTIONS,
+      supervisor,
+      directConnection: true,
+      onText: () => {},
+    });
+    expect(sent[0].directConnection).toBe(true);
+
+    // An undeclared product's request must stay byte-identical to before the
+    // switch existed, so the key is absent rather than `false`.
+    await streamCoreLoopTurn({ ...BASE_OPTIONS, supervisor, onText: () => {} });
+    expect(sent[1]).not.toHaveProperty('directConnection');
+  });
+
   it('sends useCoreLoop + toolsViaHost with fc-shaped tools', async () => {
     const { supervisor, sent } = makeSupervisor([
       { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
