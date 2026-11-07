@@ -133,6 +133,7 @@ import {
   chatWorkspacePath,
   ensureChatWorkspace,
   ensureProjectHome,
+  ensureWritableRoots,
   expandUserPath,
 } from '../project-home.js';
 import type { TaskService } from './task-service.js';
@@ -4255,11 +4256,11 @@ export class LocalBackendRouter {
     // （项目根 + 包工作区），与沙箱是否启用无关——「完整权限」下根列表只是
     // 不再被强制，产物仍大概率落在这里；根之外的显式写由工具参数并集补。
     const turnStartedAtMs = Date.now();
-    const turnFileRoots = [
+    const turnFileRoots = ensureWritableRoots([
       ...collectPackExecWritableRoots(chatId),
       workspaceRoot,
       ...(chatProject?.sourceFolders ?? []),
-    ];
+    ]);
 
     try {
       const coreLoopOptions: StreamCoreLoopTurnOptions = {

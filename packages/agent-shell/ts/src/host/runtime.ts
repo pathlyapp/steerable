@@ -61,7 +61,7 @@ import { createJsonStore } from '../json-store.js';
 import { bindWorkspaceSkillRoots, listSkillRoots } from '../local-backend/skill-loader.js';
 import { collectPackExecWritableRoots } from '../local-backend/pack-turn-hooks.js';
 import { getChatAttachmentsDir } from '../attachments.js';
-import { ensureChatWorkspace } from '../project-home.js';
+import { ensureChatWorkspace, ensureWritableRoots } from '../project-home.js';
 import { recordInsightTurn } from '../insights/record.js';
 import { llmService } from '../llm/index.js';
 import { isProductLlmLocked, resolveRuntimeLlmSettings } from '../host-tools-runtime.js';
@@ -421,12 +421,14 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
           ];
         },
         // 写：源文件夹、包声明的可写根，以及各自的子目录。附件目录保持只读。
+        // ensureWritableRoots 让这些名字先落成目录：Landlock/bwrap 在安装沙箱
+        // 规则时要 open 它们，声明了却还没建过的目录会让子进程起不来。
         resolveAdditionalWriteRoots: async (chatId) => {
           const project = await localBackendRouter.resolveChatProject(chatId);
-          return [
+          return ensureWritableRoots([
             ...(project?.sourceFolders ?? []),
             ...collectPackExecWritableRoots(chatId),
-          ];
+          ]);
         },
         approvalHandler: approvalBridge.handler,
         askUserHandler: askUserBridge.handler,
