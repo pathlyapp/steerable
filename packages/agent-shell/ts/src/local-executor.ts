@@ -542,15 +542,21 @@ export class LocalExecutor {
   /**
    * P2b：会话恢复时重灌 read-before-write 证据。sidecar 扫描持久记录里的
    * 文件工具结果，把 path → version 经 `read_state.seed` 推到这里——进程
-   * 重启后自动 CAS 仍然成立（CC `seed_read_state` 语义）。键是 sidecar 侧
-   * 已解析的绝对路径，原样存储；resolvePath 对绝对路径是恒等，查询能命中。
+   * 重启后自动 CAS 仍然成立（CC `seed_read_state` 语义）。
+   *
+   * 键必须过一遍 `resolvePath`：读证据的每一次读写都用规范化后的路径做键，
+   * 而 seed 来的路径是 sidecar 记录的原文。两者不一致时自动 CAS 永远查不
+   * 中，write/edit 会退回「未读先写已拒绝」。macOS 上 `/var/folders/…` 与
+   * `/private/var/folders/…` 就是这种情形（`os.tmpdir()` 返回未解析的
+   * 形式），Linux 的 `/tmp` 符号链接同理。
+   *
    * 返回实际收录的条目数（畸形条目跳过）。
    */
   seedReadState(state: Record<string, unknown>): number {
     let seeded = 0;
     for (const [p, version] of Object.entries(state)) {
       if (typeof p === 'string' && p.length > 0 && typeof version === 'string') {
-        this.readFileState.set(p, version);
+        this.readFileState.set(this.resolvePath(p), version);
         seeded += 1;
       }
     }
