@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "artifactVersion": "1.0.6",
+  "artifactVersion": "1.0.7",
   "license": "LicenseRef-DeepPath-Steerable-Engine",
   "release": {
     "repository": "pathlyapp/steerable",
-    "tag": "rust-v1.0.6",
-    "manifest": "steerable-rust-artifacts-1.0.6-manifest.json",
-    "sha256": "6046618b3cc6ca11378f26d4c74b7765facf1bfb9bd9fc1f0a3d2f1ad5461c1d"
+    "tag": "rust-v1.0.7",
+    "manifest": "steerable-rust-artifacts-1.0.7-manifest.json",
+    "sha256": "beaa9a06e6e16d9d345fa808ac3dc4ebe34c94a5eb9a50f98027c817beb77f4e"
   },
   "native": {
     "package": "steerable-agent-runtime-native",
-    "version": "1.0.6"
+    "version": "1.0.7"
   },
   "compatibility": {
     "coreloopApi": 1,
