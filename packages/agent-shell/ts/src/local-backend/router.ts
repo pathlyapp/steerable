@@ -4187,13 +4187,18 @@ export class LocalBackendRouter {
       ? chatProject.folderPath
       : await this.resolveChatWorkspaceRoot(chatId);
     const execSandbox = buildExecSandbox(
-      [
+      // Landlock opens each writable root when it installs its rules and
+      // bwrap bind-mounts them, so a declared root that has no directory yet
+      // aborts the sandboxed spawn. The chat workspace is created by
+      // resolveChatWorkspaceRoot, but pack workspaces and a project's source
+      // folders are only names until something writes there.
+      ensureWritableRoots([
         // 场景包声明的每会话可写根（如文档包在项目根之外落盘产物的
         // 工作区）。
         ...collectPackExecWritableRoots(chatId),
         workspaceRoot,
         ...(chatProject?.sourceFolders ?? []),
-      ],
+      ]),
       { policy: clampExecPolicy(parseExecPolicy(payload.execPolicy), getResolvedHostTools()) },
     );
 
