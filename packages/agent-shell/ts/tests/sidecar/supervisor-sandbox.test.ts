@@ -63,7 +63,9 @@ function fakeChild() {
     stdin: EventEmitter & {
       write: (data: string, cb?: (err?: Error | null) => void) => void;
     };
-    kill: () => void;
+    kill: ReturnType<typeof vi.fn>;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
   };
   child.stdout = Object.assign(new EventEmitter(), { setEncoding: () => {} });
   child.stderr = Object.assign(new EventEmitter(), { setEncoding: () => {} });
@@ -87,7 +89,15 @@ function fakeChild() {
       cb?.();
     },
   });
-  child.kill = () => {};
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = vi.fn((signal: NodeJS.Signals = 'SIGTERM') => {
+    queueMicrotask(() => {
+      child.signalCode = signal;
+      child.emit('exit', null, signal);
+    });
+    return true;
+  });
   queueMicrotask(() => child.stderr.emit('data', READY_LINE));
   return child;
 }
@@ -206,6 +216,24 @@ describe('SidecarSupervisor sandbox spawn plan', () => {
     const error = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
     expect(() => child.stdin.emit('error', error)).not.toThrow();
     await supervisor.shutdown();
+  });
+
+  it('forceShutdown kills the host child without a graceful shutdown RPC', async () => {
+    const supervisor = await SidecarSupervisor.start({
+      pythonExecutable: '/fake/python3',
+      healthIntervalMs: 0,
+      sandbox: false,
+    });
+    const child = spawnMock.mock.results[0].value as ReturnType<typeof fakeChild>;
+    const write = vi.spyOn(child.stdin, 'write');
+
+    await supervisor.forceShutdown();
+
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(write.mock.calls.some(([frame]) => String(frame).includes('system.shutdown'))).toBe(
+      false,
+    );
   });
 
   it('wraps the spawn in sandbox-exec when sandbox: true', async () => {

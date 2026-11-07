@@ -494,6 +494,10 @@ options:
 - Parent processes should also send `SIGTERM` as a backstop in case
   `system.shutdown` hangs; the sidecar installs a `SIGTERM` handler that
   forces an immediate exit.
+- `SidecarSupervisor.forceShutdown()` is the host-owned crash/emergency path:
+  it sends `SIGKILL` to the supervised host child without an RPC drain and
+  waits for exit. Do not signal `system.ping.pid`; under bwrap that value is
+  from the private PID namespace and is not a host-process identifier.
 - `web_fetch` (always) and `web_search` (when a search backend is
   configured) are registered on the RPC router at boot
   (`steerable_sidecar/web_tools.py`; bounds and SSRF policy in

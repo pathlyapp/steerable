@@ -519,6 +519,53 @@ export class SidecarSupervisor extends EventEmitter {
     this.failPending(new SidecarShutdownError('sidecar shut down'));
   }
 
+  /**
+   * Kill the supervised process without sending the sidecar shutdown RPC.
+   *
+   * This is the host-owned abrupt-stop path for crash recovery and emergency
+   * teardown. Callers must not use the pid reported by `system.ping`: under
+   * bwrap that pid belongs to the private PID namespace and is not a host pid.
+   */
+  async forceShutdown(): Promise<void> {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+    this.stopHealthTimer();
+    const child = this.child;
+    if (!child) return;
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new SidecarShutdownError('sidecar did not exit after SIGKILL'));
+      }, 2_000);
+      const onExit = () => {
+        cleanup();
+        resolve();
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        child.off('exit', onExit);
+      };
+      child.once('exit', onExit);
+      try {
+        const signalled = child.kill('SIGKILL');
+        if (!signalled && child.exitCode === null && child.signalCode === null) {
+          cleanup();
+          reject(new SidecarShutdownError('failed to send SIGKILL to sidecar'));
+        } else if (child.exitCode !== null || child.signalCode !== null) {
+          onExit();
+        }
+      } catch (err) {
+        cleanup();
+        reject(new SidecarShutdownError(
+          `failed to send SIGKILL to sidecar: ${(err as Error).message}`,
+        ));
+      }
+    });
+    this.child = null;
+    this.failPending(new SidecarShutdownError('sidecar forcibly shut down'));
+  }
+
   // ------------------------------------------------------------------
   // Internal: boot
   // ------------------------------------------------------------------
