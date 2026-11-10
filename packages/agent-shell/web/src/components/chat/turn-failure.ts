@@ -7,29 +7,18 @@
  * names out of the headline. The message itself belongs in the details
  * disclosure, which is for whoever reads it: the user reporting a problem and
  * the person on support.
+ *
+ * The vocabulary and the metadata reader live in `@steerable/agent-protocol` so
+ * the command line classifies a failure exactly as this card does.
  */
 
+import { readTurnFailureDetail, readTurnFailureKind, type TurnFailureDetail, type TurnFailureKind } from '@steerable/agent-protocol';
 import { t } from '@/i18n';
 
-export type FailureKind =
-  | 'transport'
-  | 'rate_limit'
-  | 'server'
-  | 'auth'
-  | 'invalid_request'
-  | 'context_overflow'
-  | 'unknown';
+export type FailureKind = TurnFailureKind;
+export type { TurnFailureDetail };
 
-/** The provider classifications the backend can send. */
-const KINDS: readonly FailureKind[] = [
-  'transport',
-  'rate_limit',
-  'server',
-  'auth',
-  'invalid_request',
-  'context_overflow',
-  'unknown',
-];
+export { readTurnFailureDetail, readTurnFailureKind };
 
 /** One action a failed turn can offer. */
 export type FailureAction =
@@ -37,16 +26,6 @@ export type FailureAction =
   | { kind: 'network-diagnostics' }
   | { kind: 'open-model-settings' }
   | { kind: 'new-chat' };
-
-/** Structured failure detail persisted with the turn (`messageMetadata.failure`). */
-export interface TurnFailureDetail {
-  kind: FailureKind;
-  /** Proxy the failing request used, credentials already stripped. */
-  proxy?: string;
-  /** Provider attempts spent on the request, including the last. */
-  attempts?: number;
-  statusCode?: number;
-}
 
 /** Everything the card renders, derived from one failure. */
 export interface FailurePresentation {
@@ -67,11 +46,7 @@ export interface FailurePresentation {
  * the generic card with the raw message, which is still actionable when the
  * only remedy is reporting it.
  */
-export function readFailureKind(value: unknown): FailureKind | undefined {
-  return typeof value === 'string' && (KINDS as readonly string[]).includes(value)
-    ? (value as FailureKind)
-    : undefined;
-}
+export const readFailureKind = readTurnFailureKind;
 
 /**
  * Copy and actions for one failure.
@@ -161,25 +136,4 @@ export function failurePresentation(
 }
 
 /** Reads the persisted failure block, dropping fields of the wrong type. */
-export function readFailureDetail(value: unknown): TurnFailureDetail | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  const kind = readFailureKind(record.errorKind);
-  if (!kind) return undefined;
-  const proxy =
-    typeof record.proxy === 'string' && record.proxy ? record.proxy : undefined;
-  const attempts =
-    typeof record.attempts === 'number' && Number.isFinite(record.attempts)
-      ? record.attempts
-      : undefined;
-  const statusCode =
-    typeof record.statusCode === 'number' && Number.isFinite(record.statusCode)
-      ? record.statusCode
-      : undefined;
-  return {
-    kind,
-    ...(proxy ? { proxy } : {}),
-    ...(attempts !== undefined ? { attempts } : {}),
-    ...(statusCode !== undefined ? { statusCode } : {}),
-  };
-}
+export const readFailureDetail = readTurnFailureDetail;

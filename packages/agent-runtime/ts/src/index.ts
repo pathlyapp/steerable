@@ -19,6 +19,20 @@ export {
   type SidecarRestartPolicy,
 } from './sidecar.js';
 export {
+  PLATFORM_PACKAGE_SCOPE,
+  platformPackageName,
+  resetPlatformRuntimeCache,
+  resolvePlatformRuntime,
+  supportedTargetsLine,
+  verifyPlatformRuntimeDeep,
+  type PlatformRuntime,
+  type PlatformRuntimeFailure,
+  type PlatformRuntimeFailureReason,
+  type PlatformRuntimeManifest,
+  type PlatformRuntimeResult,
+  type RuntimeFile,
+} from './platform-runtime.js';
+export {
   SIDECAR_METHODS,
   SIDECAR_NOTIFICATIONS,
   type SidecarMethod,

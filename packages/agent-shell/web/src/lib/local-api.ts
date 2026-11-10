@@ -871,6 +871,30 @@ export async function getLlmAccount(refresh = false) {
   });
 }
 
+/** Why a turn can or cannot start: the credential source the host resolved. */
+export interface LlmCredentialStatus {
+  ok: boolean;
+  source: 'config' | 'env' | 'not_required' | 'missing';
+  envName?: string;
+  envNames: string[];
+  provider: string;
+  vendorId: string | null;
+  model: string;
+}
+
+/**
+ * Reads the host's credential verdict.
+ *
+ * The first-run page uses it instead of inspecting settings itself, so the web
+ * shell and the command line agree on what "configured" means.
+ */
+export async function getLlmCredential() {
+  return bridge().localBackend.request<LlmCredentialStatus>({
+    method: 'GET',
+    path: '/api/v2/llm/credential',
+  });
+}
+
 export async function getLlmSettings() {
   return bridge().localBackend.request<LlmSettings>({
     method: 'GET',

@@ -16,8 +16,34 @@ CoreLoop the server uses, there is no second implementation to drift.
 npm install @steerable/agent-runtime
 ```
 
-A Python ≥3.11 environment with `steerable-sidecar` installed must be
-reachable. Point at it with `STEERABLE_PYTHON` or the `python` option.
+npm also installs one `@steerable/runtime-<target>` package for your platform,
+as an optional dependency of this package. It carries the Python sidecar, the
+`run_code` interpreter and the egress proxy, so nothing else has to be
+installed.
+
+The interpreter resolves in this order:
+
+1. the `python` option, then `STEERABLE_SIDECAR_PYTHON`
+2. the platform package installed above
+3. a framework checkout's `.venv` (so an example inside the repo runs from
+   source)
+4. `STEERABLE_PYTHON`, then `python3` on `PATH`
+
+Point at a specific interpreter with the `python` option when you ship your own
+runtime. `resolveRuntimePython()` exposes the same resolution if you need to
+report it.
+
+Each platform package carries a `runtime.json` with SHA-256 digests for its
+files; the interpreter and proxy are verified the first time they are used, and
+a mismatch refuses to start rather than running a modified binary.
+
+## Upgrading from 0.8
+
+- The interpreter now comes from the platform package instead of
+  `STEERABLE_PYTHON` or the system `python3`. Existing overrides still win.
+- `engines.node` is `>=22.19.0`; the package no longer requires Node 26.
+- This package is published to npm, so remove any `link:` specifier pointing at
+  a framework checkout.
 
 ## Quick start
 

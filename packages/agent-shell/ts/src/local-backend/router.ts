@@ -74,7 +74,7 @@ import {
 import { getBrand } from '../brand.js';
 import { recordInsightEvent, recordInsightTurn, recordInsightProfile } from '../insights/record.js';
 import { buildInsightsExportPayload, flushInsightsOutbox, uploadInsightsBundle } from '../insights/flush.js';
-import { sanitizeCompatOverrides, sanitizePresetsChoice, sanitizeLlmProvider, sanitizeVendorId, sidecarWireProvider, listingBaseUrl, vendorModelsListUrl, usesOpenAiCompatExtras } from '../storage/llm-settings.js';
+import { sanitizeCompatOverrides, sanitizePresetsChoice, sanitizeLlmProvider, sanitizeVendorId, sidecarWireProvider, listingBaseUrl, vendorModelsListUrl, usesOpenAiCompatExtras, withResolvedApiKey, resolveApiKey } from '../storage/llm-settings.js';
 import { ToolRouter } from '../tool-router.js';
 import { setDefaultExecTimeoutMs } from '../local-executor.js';
 import { allowEgressForBaseUrl, getActiveEgressBroker, getEgressPosture } from '../sidecar/egress-proxy.js';
@@ -2045,7 +2045,7 @@ export class LocalBackendRouter {
     // Bearer、Anthropic x-api-key、Google x-goog-api-key），再与 models.dev
     // 能力表 join。refresh=1 绕过 60s 缓存。凭证随设置显式下发。
     if (method === 'GET' && pathname === '/api/v2/llm/models') {
-      const settings = llmService.getSettings();
+      const settings = withResolvedApiKey(llmService.getSettings());
       const draftBase = url.searchParams.get('baseUrl');
       const draftKey = url.searchParams.get('apiKey');
       const provider = sanitizeLlmProvider(url.searchParams.get('provider') || settings.provider);
@@ -2108,7 +2108,7 @@ export class LocalBackendRouter {
 
     if (method === 'POST' && pathname === '/api/v2/llm/diagnose') {
       const payload = this.toRecord(request.body);
-      const settings = llmService.getSettings();
+      const settings = withResolvedApiKey(llmService.getSettings());
       const baseUrl =
         typeof payload.baseUrl === 'string' && payload.baseUrl.trim()
           ? payload.baseUrl.trim()
@@ -2162,6 +2162,26 @@ export class LocalBackendRouter {
         refresh: url.searchParams.get('refresh') === '1',
       });
       return { status: 200, data: account };
+    }
+
+    // Whether a turn can start on the current credential. The web shell's
+    // first-run page and the CLI preflight both read this rather than
+    // inspecting the settings object themselves.
+    if (method === 'GET' && pathname === '/api/v2/llm/credential') {
+      const settings = resolveRuntimeLlmSettings(await this.store.getLlmSettings());
+      const resolved = resolveApiKey(settings, process.env);
+      return {
+        status: 200,
+        data: {
+          ok: Boolean(resolved.key) || resolved.source.kind === 'not_required',
+          source: resolved.source.kind,
+          ...(resolved.source.kind === 'env' ? { envName: resolved.source.name } : {}),
+          envNames: resolved.envNames,
+          provider: settings.provider,
+          vendorId: settings.vendorId ?? null,
+          model: settings.model,
+        },
+      };
     }
 
     if (pathname === '/api/v2/local-settings/llm') {
@@ -3363,7 +3383,7 @@ export class LocalBackendRouter {
       })))
       .filter(Boolean) as LlmMessage[];
 
-    const settings = llmService.getSettings();
+    const settings = withResolvedApiKey(llmService.getSettings());
 
     const { personaAgents, capability, identityName } = turnAgents;
     let personaPreamble = '';
@@ -4166,7 +4186,7 @@ export class LocalBackendRouter {
       return { status: 503 };
     }
 
-    const settings = llmService.getSettings();
+    const settings = withResolvedApiKey(llmService.getSettings());
     const PLACEHOLDER_MODELS = new Set(['default', 'auto', '', 'undefined', 'null']);
     const rawModel = typeof payload.model === 'string' ? payload.model.trim() : '';
     const overrideModel = PLACEHOLDER_MODELS.has(rawModel) ? undefined : rawModel;

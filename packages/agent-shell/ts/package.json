@@ -1,7 +1,7 @@
 {
   "name": "@steerable/agent-shell",
   "version": "0.8.5",
-  "description": "Steerable framework \u2014 product-neutral Node HostRuntime and headless HTTP server shared by Tauri desktop and browser deployments; scenario packs extend it through @steerable/pack-sdk.",
+  "description": "Steerable framework — product-neutral Node HostRuntime and headless HTTP server shared by Tauri desktop and browser deployments; scenario packs extend it through @steerable/pack-sdk.",
   "license": "Apache-2.0",
   "homepage": "https://steerableframework.com/",
   "repository": {
@@ -58,6 +58,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "@steerable/agent-harness": "workspace:*",
     "@steerable/agent-protocol": "workspace:*",
+    "@steerable/agent-runtime": "workspace:*",
     "@steerable/pack-sdk": "workspace:*",
     "better-sqlite3": "^12.11.1",
     "conf": "10.2.0",

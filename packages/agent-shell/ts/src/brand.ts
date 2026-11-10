@@ -53,6 +53,11 @@ export interface Brand {
   homeHint?: string;
   /** 新对话 / 首页未选手动专家时绑定的内置智能体 id */
   defaultAgentId: string;
+  /**
+   * 首次打开、且没有可用模型凭据时，先显示配置页再进对话页。
+   * 缺省关闭：产品自带首启流程或预置了凭据时不受影响。
+   */
+  firstRunSetup?: boolean;
 }
 
 /**
@@ -65,6 +70,10 @@ const SHELL_BRAND: Omit<Brand, 'flavor'> = {
   agentName: 'Agent',
   tagline: 'A local desktop AI partner',
   defaultAgentId: LOCAL_ASSISTANT_AGENT_ID,
+  // The framework's own shell has no preconfigured credential, so a new user
+  // needs one step before the chat is usable. Products that ship a configured
+  // model, or their own first-run flow, leave this off.
+  firstRunSetup: true,
 };
 
 let productBrand: Omit<Brand, 'flavor'> | null = null;

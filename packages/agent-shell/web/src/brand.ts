@@ -31,6 +31,12 @@ export const BRAND_TITLE: string =
 export const BRAND_HOME_HINT: string =
   import.meta.env.VITE_BRAND_HOME_HINT ?? 'Type a message to start a new chat.';
 
+/**
+ * 首启是否先显示模型配置页。中性 shell 为 true；产品注入自己的品牌后
+ * 缺省为 false，产品自带首启流程或已预置模型时保持原样。
+ */
+export const BRAND_FIRST_RUN: boolean = import.meta.env.VITE_BRAND_FIRST_RUN === 'true';
+
 /** shell 默认方形标，用于侧栏和 favicon。包只注册一枚 logo 时与字标相同。 */
 let brandMarkUrl: string = shellMarkUrl;
 

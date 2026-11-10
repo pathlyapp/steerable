@@ -27,6 +27,7 @@ import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { defaultSearchBaseUrl } from '../storage/web-search-settings.js';
 import { resolveSidecarPython } from './supervisor.js';
+import { resolvePlatformRuntime } from '@steerable/agent-runtime';
 
 type EgressProxyChild = ChildProcessByStdio<null, Readable, Readable>;
 
@@ -274,9 +275,15 @@ export function downloadPublishedEgress(repoRoot: string, cacheDir: string): Pro
 }
 
 /**
- * Env override, then a locally built private binary, then a cached copy
- * whose SHA-256 still matches, then the verified public Release asset.
- * A missing binary stays null so boot can fall back to port-level rules.
+ * Env override, then the platform npm package, then a locally built private
+ * binary, then a cached copy whose SHA-256 still matches, then the verified
+ * public Release asset. A missing binary stays null so boot can fall back to
+ * port-level rules.
+ *
+ * The platform package comes before the in-repo build so an installed CLI
+ * enforces host-level egress rules without a framework checkout. Callers that
+ * treat a missing proxy as a degraded posture must say so; see
+ * {@link egressProxyMissingWarning}.
  */
 export async function ensureEgressProxyExecutable(
   startDir: string,
@@ -285,6 +292,8 @@ export async function ensureEgressProxyExecutable(
 ): Promise<string | null> {
   const fromEnv = resolveEgressProxyExecutable();
   if (fromEnv) return fromEnv;
+  const platform = resolvePlatformRuntime();
+  if (platform.kind === 'ok' && platform.runtime.egressProxy) return platform.runtime.egressProxy;
   const repoRoot = findFrameworkRoot(startDir);
   if (!repoRoot) return null;
   const built = localBuiltEgress(repoRoot);
@@ -296,6 +305,22 @@ export async function ensureEgressProxyExecutable(
   if (cached) return cached;
   const downloaded = await download(repoRoot, cacheDir);
   return downloaded && verifiedCachedEgress(cacheDir, version, target);
+}
+
+/**
+ * One-line warning for a host running without the egress proxy.
+ *
+ * Without it the sandbox still confines writes, but network rules fall back
+ * to port-level filtering, so a host allow-list becomes "any host on 443".
+ * That is a posture change the user has to hear about, not a `doctor` detail.
+ *
+ * @returns The warning text, including the supported fix.
+ */
+export function egressProxyMissingWarning(): string {
+  return (
+    '警告：未找到出口代理，网络只按端口放行，不按域名过滤。' +
+    '修复：npm install -g @steerable/agent-cli --include=optional，或设置 STEERABLE_EGRESS_PROXY_BIN。'
+  );
 }
 
 export function buildEgressProxyPlan(options: {
@@ -453,6 +478,8 @@ export interface EgressPosture {
   mode: 'per-host-proxy' | 'port-only-fallback' | 'disabled';
   /** 退回/关闭的原因（人可读，一行）。per-host-proxy 时为 null。 */
   reason: string | null;
+  /** 需要用户当场知道的降级，用来决定 CLI 首行警告。 */
+  notice?: 'egress_proxy_missing';
 }
 
 let egressPosture: EgressPosture | null = null;

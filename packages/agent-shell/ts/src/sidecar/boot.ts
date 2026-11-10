@@ -42,6 +42,7 @@ import { executeHostedWebSearch } from '../hosted-web-search.js';
 import type { createApprovalBridge } from './reverse-approval.js';
 import type { SidecarReverseHandler } from './types.js';
 import { getProductConfig } from '../product-config.js';
+import { resolvePlatformRuntime } from '@steerable/agent-runtime';
 
 export interface HostSidecarDeps {
   store: ScopedStore;
@@ -201,8 +202,11 @@ async function startEgressProxyIfEnabled(store: ScopedStore): Promise<{
     const executable = await ensureEgressProxyExecutable(path.dirname(fileURLToPath(import.meta.url)));
     if (!executable) {
       log.warn('[egress-proxy] steerable-egress-proxy binary was not found; staying on port-level enforcement');
+      // Degraded, not disabled: the user's host allow-list is not enforced by
+      // domain any more. Recorded so the CLI can warn on the first line of run.
       recordEgressPosture({
         mode: 'port-only-fallback',
+        notice: 'egress_proxy_missing',
         reason: '未找到 steerable-egress-proxy 二进制，按主机管控未启用',
       });
       return null;
@@ -320,6 +324,20 @@ export async function wirePluginRegistry(
 }
 
 /**
+ * Interpreter for `run_code` programs: explicit `STEERABLE_PYTHON` →
+ * platform package → null (the tool stays unavailable).
+ *
+ * The platform package ships the same interpreter the sidecar uses, so an
+ * installed CLI gets `run_code` without a second setup step.
+ */
+function resolveRunCodePython(): string | undefined {
+  const explicit = process.env.STEERABLE_PYTHON?.trim();
+  if (explicit) return explicit;
+  const platform = resolvePlatformRuntime();
+  return platform.kind === 'ok' ? platform.runtime.runCodePython : undefined;
+}
+
+/**
  * The complete Python sidecar hosts the Rust CoreLoop and is mandatory.
  * Boot is registered synchronously so early RPC thin clients (skill-loader
  * et al.) can await it via whenSidecarSupervisor().
@@ -327,7 +345,7 @@ export async function wirePluginRegistry(
 export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
   hostSidecarDeps = deps;
   const generation = ++sidecarGeneration;
-  const pythonRunner = process.env.STEERABLE_PYTHON?.trim();
+  const pythonRunner = resolveRunCodePython();
   const runCodeEnabled = true;
   // ready 后的完整接线：注册全局 handle + reverse channels + web 工具握手。
   // 正常 boot 路径与「boot 失败后后台 restart 迟到就绪」路径共用。

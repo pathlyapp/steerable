@@ -23,6 +23,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 import { resolveWinSpawnHelperPath } from './reverse-spawn.js';
+import { resolvePlatformRuntime } from '@steerable/agent-runtime';
+import { bundledRuntimeTag } from '@steerable/agent-protocol';
 import {
   SidecarBootError,
   SidecarMethodError,
@@ -1135,10 +1137,48 @@ export class SidecarSupervisor extends EventEmitter {
 }
 
 /**
+ * Why the sidecar interpreter could not be located. The CLI turns this into
+ * actionable text and exit code 78 rather than printing a stack trace.
+ */
+export class SidecarRuntimeMissingError extends Error {
+  readonly reason: 'not_installed' | 'unsupported_platform' | 'invalid_manifest' | 'digest_mismatch';
+  readonly target: string | null;
+  readonly detail: string;
+
+  constructor(failure: {
+    reason: 'not_installed' | 'unsupported_platform' | 'invalid_manifest' | 'digest_mismatch';
+    target: string | null;
+    detail: string;
+  }) {
+    super(
+      failure.reason === 'unsupported_platform'
+        ? `Steerable publishes no runtime bundle for ${failure.detail}`
+        : failure.reason === 'digest_mismatch'
+          ? `platform runtime file does not match its published digest: ${failure.detail}`
+          : failure.reason === 'invalid_manifest'
+            ? `platform runtime descriptor is unusable: ${failure.detail}`
+            : `platform runtime package is not installed: ${failure.detail}`,
+    );
+    this.name = 'SidecarRuntimeMissingError';
+    this.reason = failure.reason;
+    this.target = failure.target;
+    this.detail = failure.detail;
+  }
+}
+
+/**
  * Resolve the sidecar's Python interpreter: explicit option →
- * STEERABLE_SIDECAR_PYTHON → bundled python-runtime → sibling framework
- * venv (dev layout) → system python. Module-level so the egress-proxy
- * launcher (W1.3.3) spawns the same interpreter the sidecar uses.
+ * STEERABLE_SIDECAR_PYTHON → bundled python-runtime → platform npm package →
+ * sibling framework venv (dev layout).
+ *
+ * The platform package sits after the bundled resources so a desktop product's
+ * vendored runtime keeps winning, and before the dev venv so an installed CLI
+ * works without a framework checkout.
+ *
+ * Module-level so the egress-proxy launcher (W1.3.3) spawns the same
+ * interpreter the sidecar uses.
+ *
+ * @throws {SidecarRuntimeMissingError} When no candidate exists, naming the reason.
  */
 export function resolveSidecarPython(pythonExecutable?: string): string {
   if (pythonExecutable) {
@@ -1147,28 +1187,29 @@ export function resolveSidecarPython(pythonExecutable?: string): string {
   const explicit = process.env.STEERABLE_SIDECAR_PYTHON;
   if (explicit && existsSync(explicit)) return explicit;
 
-  const platformTag = (() => {
-    switch (process.platform) {
-      case 'darwin':
-        return process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64';
-      case 'win32':
-        return 'win32-x64';
-      default:
-        return 'linux-x64';
-    }
-  })();
+  const platformTag = bundledRuntimeTag(process.platform, process.arch);
   const binaryName = process.platform === 'win32' ? 'python.exe' : 'python3';
 
   // build_sidecar.py 的产物布局是 <platform>/python/<exe>（Windows：
   // python/python.exe；POSIX：python/bin/python3，见 build_sidecar.py 的
   // python_binary()）。保留无 python/ 层的旧布局候选做向后兼容。
-  const runtimeBase = join(__dirname, '..', '..', 'python-runtime');
-  const candidates = [
-    join(runtimeBase, platformTag, 'python', binaryName),
-    join(runtimeBase, platformTag, 'python', 'bin', binaryName),
-    join(runtimeBase, platformTag, binaryName),
-    join(runtimeBase, platformTag, 'bin', binaryName),
-  ];
+  if (platformTag) {
+    const runtimeBase = join(__dirname, '..', '..', 'python-runtime');
+    const candidates = [
+      join(runtimeBase, platformTag, 'python', binaryName),
+      join(runtimeBase, platformTag, 'python', 'bin', binaryName),
+      join(runtimeBase, platformTag, binaryName),
+      join(runtimeBase, platformTag, 'bin', binaryName),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+
+  // Installed CLI: the per-platform npm package carries the same signed
+  // bundle the desktop products vendor.
+  const platform = resolvePlatformRuntime();
+  if (platform.kind === 'ok') return platform.runtime.sidecarPython;
 
   // Dev-layout convenience: the framework repo root .venv (uv sync). The
   // shell lives inside the framework repo (packages/agent-shell/ts), so the
@@ -1181,21 +1222,19 @@ export function resolveSidecarPython(pythonExecutable?: string): string {
   // 本模块在两个平面执行：源码（vitest，ts/src/sidecar/）与编译产物
   // （ts/dist/sidecar/）——到框架仓库根分别是四层与五层，两个候选都压入，
   // 由下方 existsSync 挑出存在的那个。
+  const devCandidates: string[] = [];
   for (const up of [
     join('..', '..', '..', '..'),
     join('..', '..', '..', '..', '..'),
   ]) {
     const frameworkVenv = join(__dirname, up, '.venv');
-    candidates.push(join(frameworkVenv, 'bin', 'python3'));
+    devCandidates.push(join(frameworkVenv, 'bin', 'python3'));
     if (process.platform === 'win32') {
-      candidates.push(join(frameworkVenv, 'Scripts', 'python.exe'));
+      devCandidates.push(join(frameworkVenv, 'Scripts', 'python.exe'));
     }
   }
-
-  for (const candidate of candidates) {
+  for (const candidate of devCandidates) {
     if (existsSync(candidate)) return candidate;
   }
-  throw new Error(
-    'portable Python sidecar runtime not found; prepare python-runtime or set STEERABLE_SIDECAR_PYTHON',
-  );
+  throw new SidecarRuntimeMissingError(platform);
 }

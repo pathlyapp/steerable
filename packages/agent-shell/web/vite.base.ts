@@ -67,6 +67,8 @@ export function createProductViteConfig(options: ProductViteConfigOptions) {
         brand?.homeHint ?? 'Type a message to start a new chat.',
       ),
       'import.meta.env.VITE_DEFAULT_AGENT_ID': JSON.stringify(brand?.defaultAgentId ?? 'local-assistant'),
+      // 首启配置页：只有中性 shell 打开；产品声明了自己的品牌即缺省关闭。
+      'import.meta.env.VITE_BRAND_FIRST_RUN': JSON.stringify(brand?.firstRunSetup === true ? 'true' : 'false'),
       // 宿主工具族 / 安全询问：与 node 侧 setProductConfig 读同一份 product.json。
       'import.meta.env.VITE_HOST_TOOLS': JSON.stringify(JSON.stringify(product.hostTools ?? {})),
       'import.meta.env.VITE_APPROVAL': JSON.stringify(product.approval ?? 'host'),

@@ -14,10 +14,56 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { resolvePlatformRuntime } from './platform-runtime.js';
 import {
   JsonRpcPeer,
   JsonRpcTransportClosedError,
 } from './jsonrpc.js';
+
+/**
+ * Interpreter for the sidecar process.
+ *
+ * Resolution order: explicit `STEERABLE_SIDECAR_PYTHON`, the platform package
+ * npm installed for this host, the framework checkout's `.venv` (so an example
+ * or test inside the repo finds the editable install), then
+ * `STEERABLE_PYTHON`, then `python3`.
+ *
+ * A global install has no framework checkout; a checkout has no platform
+ * package. Both paths end at a working sidecar without extra setup.
+ *
+ * @returns Path to the interpreter, or `python3` when nothing else resolves.
+ */
+export function resolveRuntimePython(): string {
+  const explicit = process.env.STEERABLE_SIDECAR_PYTHON?.trim();
+  if (explicit) return explicit;
+  const platform = resolvePlatformRuntime();
+  if (platform.kind === 'ok') return platform.runtime.sidecarPython;
+  const venv = frameworkVenvPython();
+  if (venv) return venv;
+  return process.env.STEERABLE_PYTHON?.trim() || 'python3';
+}
+
+/**
+ * Walks up from this module to a framework checkout and returns its `.venv`
+ * interpreter when present.
+ *
+ * The package runs from two planes — source (`ts/src/`) and build
+ * (`ts/dist/`) — so both depths are probed and the first hit wins. Absent in a
+ * packed install, where the platform package above already supplied one.
+ */
+function frameworkVenvPython(): string | null {
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const up of [join('..', '..', '..'), join('..', '..', '..', '..')]) {
+    const venv = join(here, up, '.venv');
+    for (const candidate of [join(venv, 'bin', 'python3'), join(venv, 'Scripts', 'python.exe')]) {
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
 
 export class SidecarNotReadyError extends Error {
   constructor(message = 'sidecar is not running') {
@@ -43,8 +89,9 @@ export interface SidecarRestartPolicy {
 export interface SidecarProcessOptions {
   /**
    * Python interpreter used to launch the sidecar. Default: env
-   * `STEERABLE_PYTHON`, else `python3`. The interpreter must have
-   * `steerable-sidecar` installed (or be run from a venv that does).
+   * `STEERABLE_SIDECAR_PYTHON`, then the `@steerable/runtime-<target>` package
+   * npm installed for this host, then env `STEERABLE_PYTHON`, then `python3`.
+   * The interpreter must be able to import `steerable_sidecar`.
    */
   python?: string;
   /**
@@ -185,8 +232,7 @@ export class SidecarProcess extends EventEmitter {
   }
 
   private async spawnOnce(): Promise<void> {
-    const python =
-      this.options.python ?? process.env.STEERABLE_PYTHON ?? 'python3';
+    const python = this.options.python ?? resolveRuntimePython();
     const entry =
       this.options.entryModule === null
         ? null

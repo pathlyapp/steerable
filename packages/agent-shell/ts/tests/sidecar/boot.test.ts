@@ -448,8 +448,11 @@ describe('startHostSidecar · egress 代理', () => {
     mocks.supervisorStart.mockResolvedValue(sup);
     await startHostSidecar(makeDeps());
     expect(mocks.startEgressProxy).not.toHaveBeenCalled();
+    // The notice flag is what makes the CLI warn on the first line of a run:
+    // without the proxy the host allow-list is not enforced by domain.
     expect(mocks.recordEgressPosture).toHaveBeenCalledWith({
       mode: 'port-only-fallback',
+      notice: 'egress_proxy_missing',
       reason: '未找到 steerable-egress-proxy 二进制，按主机管控未启用',
     });
   });

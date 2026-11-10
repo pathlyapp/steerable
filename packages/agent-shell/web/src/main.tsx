@@ -6,8 +6,9 @@ import { I18nProvider, configureI18n, getLocale, notifyHostLocale } from './i18n
 import { AgentLayout } from './layouts/AgentLayout';
 import { AgentPage } from './pages/AgentPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { SetupPage } from './pages/SetupPage';
 import { getPackRoutes } from './packs/registry';
-import { getBrandMarkUrl, BRAND_NAME } from './brand';
+import { BRAND_FIRST_RUN, getBrandMarkUrl, BRAND_NAME } from './brand';
 import { getAppShellGate } from './auth/gate';
 import { installHostPaste } from './lib/host-paste';
 import './styles/index.css';
@@ -52,7 +53,9 @@ function renderApplication(root: Root): void {
         {
           element: <AgentLayout />,
           children: [
-            { index: true, element: <AgentPage /> },
+            // The framework's own shell has no credential yet, so its first
+            // screen configures one. A product brand keeps its own first run.
+            { index: true, element: BRAND_FIRST_RUN ? <SetupPage /> : <AgentPage /> },
             { path: 'agent', element: <AgentPage /> },
             { path: 'agent/:chatId', element: <AgentPage /> },
             { path: 'settings', element: <SettingsPage /> },

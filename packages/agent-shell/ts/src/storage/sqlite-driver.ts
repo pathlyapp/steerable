@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 
@@ -129,6 +129,30 @@ function blockUpgrade(message: string): never {
   throw new StorageUpgradeBlockedError(message);
 }
 
+/**
+ * Removes group and other permissions from the database and its WAL files.
+ *
+ * The settings table stores the provider API key in plain text, so the file is
+ * as sensitive as a key file. `-wal` and `-shm` are created lazily by SQLite
+ * with the process umask and can hold the same rows, so they are tightened
+ * whenever they exist. Windows has no POSIX mode; there the file inherits the
+ * user-profile ACL, which already excludes other accounts.
+ *
+ * @param dbPath Absolute path to the database file.
+ */
+function restrictToOwner(dbPath: string): void {
+  if (process.platform === 'win32') return;
+  for (const suffix of ['', '-wal', '-shm']) {
+    const file = `${dbPath}${suffix}`;
+    try {
+      if (existsSync(file)) chmodSync(file, 0o600);
+    } catch {
+      // A read-only or network mount cannot take the mode change. The database
+      // still works; the report belongs to the caller that owns the volume.
+    }
+  }
+}
+
 /** Default local SQLite storage driver. */
 export class SqliteStorageDriver implements StorageDriver {
   private db: Database.Database | null = null;
@@ -189,6 +213,10 @@ export class SqliteStorageDriver implements StorageDriver {
       db.pragma(`busy_timeout = ${MAIN_DB_BUSY_TIMEOUT_MS}`);
       db.pragma('journal_mode = WAL');
       db.pragma('foreign_keys = ON');
+      // The settings table holds the provider API key, so the file must not be
+      // readable by other local accounts. SQLite creates `-wal` and `-shm`
+      // alongside and inherits the process umask, so they are tightened too.
+      restrictToOwner(dbPath);
       this.db = db;
       const local = new SqliteScopedStore(db, LOCAL_SCOPE);
       await local.initialize();
