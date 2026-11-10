@@ -1,8 +1,13 @@
 import type { AgentClient } from '@steerable/agent-client';
+import { classifyErrorMessage } from '@steerable/agent-protocol';
 import type { SSEEvent } from '@steerable/agent-protocol';
+import { getEgressPosture } from '@steerable/agent-shell/sidecar/egress-proxy';
+import { resolveApiKey, type LlmSettings } from '@steerable/agent-shell/storage/llm-settings';
 
 import { autoAnswer, decisionFor, denied, UNATTENDED_APPROVAL_REASON, type ApprovalSpec, type ApprovePolicy } from './approve.js';
 import { cliText } from './copy.js';
+import { EXIT_BUDGET, EXIT_CHAT_BUSY, EXIT_DENIED, EXIT_OK, EXIT_STORAGE_UPGRADE, EXIT_TURN_FAILED } from './exit-codes.js';
+import { failureLines, failureReport } from './failure-text.js';
 import { ruleStatusLine, type RuleContext } from './rules.js';
 
 export interface RunRequest {
@@ -15,6 +20,8 @@ export interface RunRequest {
   json: boolean;
   streamJson: boolean;
   timeoutMs?: number;
+  /** Print stacks and log paths for failures. */
+  verbose?: boolean;
 }
 
 export async function runTurn(
@@ -35,15 +42,16 @@ export async function runTurn(
     });
     if (created.status !== 200) {
       stderr.write(`failed to create chat (${created.status})\n`);
-      return 1;
+      return EXIT_TURN_FAILED;
     }
     chatId = (created.data as { chatId?: string }).chatId;
     if (!chatId) {
       stderr.write('failed to create chat\n');
-      return 1;
+      return EXIT_TURN_FAILED;
     }
   }
   await reportRules(client, chatId, stderr);
+  const context = await runContext(client, stderr);
 
   let exitCode = 0;
   let deniedApproval = false;
@@ -61,16 +69,16 @@ export async function runTurn(
       { message: messageText(request), ...(request.agentId ? { agentId: request.agentId } : {}) },
       signal,
     )) {
-      const next = observeEvent(event, request, stdout, stderr, text, streamOrder, printedTools);
+      const next = observeEvent(event, request, stdout, stderr, text, streamOrder, printedTools, context);
       if (next !== 0) exitCode = next;
     }
   } finally {
     approvals.stop();
     if (request.streamJson) flushStreamOrder(streamOrder, stdout);
   }
-  if (signal.aborted && exitCode === 0) exitCode = 1;
-  if (deniedApproval) exitCode = 3;
-  if (client.lastStatus === 409) exitCode = 6;
+  if (signal.aborted && exitCode === EXIT_OK) exitCode = EXIT_TURN_FAILED;
+  if (deniedApproval) exitCode = EXIT_DENIED;
+  if (client.lastStatus === 409) exitCode = EXIT_CHAT_BUSY;
   if (request.json) {
     stdout.write(`${JSON.stringify({
       ok: exitCode === 0,
@@ -82,6 +90,48 @@ export async function runTurn(
     })}\n`);
   }
   return exitCode;
+}
+
+/**
+ * Reads the settings and posture the failure text quotes, and warns once when
+ * the host runs without domain-level egress control.
+ *
+ * The warning belongs on the first line of a run: a missing proxy means the
+ * configured host allow-list is not enforced, which the user has to know
+ * before trusting the turn's network behaviour.
+ */
+async function runContext(
+  client: AgentClient,
+  stderr: NodeJS.WritableStream,
+): Promise<RunContext> {
+  const response = await client.request('GET', '/api/v2/local-settings/llm', undefined);
+  const settings = (response.status === 200 ? response.data : {}) as Partial<LlmSettings>;
+  const resolved = resolveApiKey(settings as LlmSettings, process.env);
+  const posture = getEgressPosture();
+  if (posture?.notice === 'egress_proxy_missing') {
+    stderr.write(`${cliText('egress.missing')}\n`);
+  }
+  return {
+    providerLabel: settings.vendorId ?? settings.provider ?? '模型服务',
+    host: hostOf(settings.baseUrl),
+    ...(typeof settings.model === 'string' ? { model: settings.model } : {}),
+    credentialSource:
+      resolved.source.kind === 'env' ? 'env' : resolved.source.kind === 'config' ? 'config' : 'none',
+    ...(resolved.source.kind === 'env' ? { envName: resolved.source.name } : {}),
+    logPath: process.env.DEEPPATH_USER_DATA_DIR
+      ? `${process.env.DEEPPATH_USER_DATA_DIR}/logs/main.log`
+      : '~/.agent-shell/logs/main.log',
+    completedSteps: 0,
+  };
+}
+
+function hostOf(baseUrl: string | undefined): string {
+  if (!baseUrl) return '';
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    return baseUrl;
+  }
 }
 
 async function reportRules(
@@ -412,6 +462,18 @@ function writeToolProgress(event: SSEEvent, stderr: NodeJS.WritableStream, print
   }
 }
 
+/** Settings the failure text quotes: provider label, host, credential source. */
+export interface RunContext {
+  providerLabel: string;
+  host: string;
+  model?: string;
+  credentialSource?: 'config' | 'env' | 'none';
+  envName?: string;
+  logPath: string;
+  /** Tool steps finished before the failure; a resumed turn will not repeat them. */
+  completedSteps: number;
+}
+
 function observeEvent(
   event: SSEEvent,
   request: RunRequest,
@@ -420,6 +482,7 @@ function observeEvent(
   text: string[],
   streamOrder: StreamOrder,
   printedTools: Set<string>,
+  settings: RunContext,
 ): number {
   if (request.streamJson) writeStreamJsonEvent(streamOrder, event, stdout);
   if (event.type === 'content' && typeof event.content === 'string') {
@@ -435,14 +498,39 @@ function observeEvent(
   }
   if (event.type === 'error') {
     const message = typeof event.message === 'string' ? event.message : 'error';
-    if (!request.streamJson) stderr.write(`${message}\n`);
-    if (event.code === 'chat_busy') return 6;
-    if (message.includes('storage upgrade blocked') || message.includes('newer than this program')) return 75;
-    return 1;
+    const statusCode = typeof event.statusCode === 'number' ? event.statusCode : undefined;
+    if (request.streamJson) {
+      // The event already went to stdout verbatim; the classification is for
+      // whoever reads stderr next to it.
+      if (request.verbose) stderr.write(`${message}\n`);
+    } else {
+      const report = failureReport({
+        message,
+        kind: event.code === 'chat_busy' ? 'unknown' : undefined,
+        ...(statusCode !== undefined ? { statusCode } : {}),
+        providerLabel: settings.providerLabel,
+        host: settings.host,
+        ...(request.chatId ? { chatId: request.chatId } : {}),
+        ...(settings.completedSteps > 0 ? { completedSteps: settings.completedSteps } : {}),
+        ...(settings.model ? { model: settings.model } : {}),
+        ...(settings.credentialSource ? { credentialSource: settings.credentialSource } : {}),
+        ...(settings.envName ? { envName: settings.envName } : {}),
+      });
+      for (const line of failureLines(report)) stderr.write(`${line}\n`);
+      if (request.verbose) {
+        stderr.write(`\n日志：${settings.logPath}\n`);
+        if (event.code) stderr.write(`错误码：${event.code}\n`);
+      }
+    }
+    if (event.code === 'chat_busy') return EXIT_CHAT_BUSY;
+    if (message.includes('storage upgrade blocked') || message.includes('newer than this program')) {
+      return EXIT_STORAGE_UPGRADE;
+    }
+    return EXIT_TURN_FAILED;
   }
   if (event.type === 'budget_exhausted') {
     if (!request.streamJson) stderr.write('budget exhausted\n');
-    return 4;
+    return EXIT_BUDGET;
   }
-  return 0;
+  return EXIT_OK;
 }

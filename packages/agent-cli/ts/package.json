@@ -37,7 +37,7 @@
     "provenance": true
   },
   "engines": {
-    "node": ">=26.4.0"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "gen": "echo agent-cli",
@@ -53,6 +53,7 @@
     "@opentui/core": "0.5.12",
     "@steerable/agent-client": "workspace:*",
     "@steerable/agent-protocol": "workspace:*",
+    "@steerable/agent-runtime": "workspace:*",
     "@steerable/agent-shell": "workspace:*"
   },
   "devDependencies": {

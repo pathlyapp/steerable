@@ -11,6 +11,11 @@ export interface RunTuiOptions {
   client: AgentClient;
   product: string;
   dataDir?: string;
+  /**
+   * Interactive login with the screen released. The renderer owns stdin while
+   * the TUI runs, so the caller drops the alternate screen first.
+   */
+  runLogin?: () => Promise<number>;
   projectId?: string;
   projectLabel?: string;
   approvalPolicy?: ApprovalSpec;
@@ -54,6 +59,20 @@ async function runOpenTui(options: RunTuiOptions): Promise<number> {
       ...(options.projectId ? { projectId: options.projectId } : {}),
       ...(options.projectLabel ? { projectLabel: options.projectLabel } : {}),
       ...(options.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
+      ...(options.runLogin
+        ? {
+            runLogin: async () => {
+              renderer.destroy();
+              try {
+                return await options.runLogin!();
+              } finally {
+                // The renderer is gone; the session keeps rendering into the
+                // snapshot the caller reapplies after login.
+                view.apply(session.snapshot());
+              }
+            },
+          }
+        : {}),
       onChange() {
         view.apply(session.snapshot());
       },
@@ -102,6 +121,19 @@ function runPlainTui(options: RunTuiOptions): Promise<number> {
       ...(options.projectId ? { projectId: options.projectId } : {}),
       ...(options.projectLabel ? { projectLabel: options.projectLabel } : {}),
       ...(options.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
+      ...(options.runLogin
+        ? {
+            runLogin: async () => {
+              tui.stop();
+              try {
+                return await options.runLogin!();
+              } finally {
+                tui.start();
+                tui.requestRender();
+              }
+            },
+          }
+        : {}),
       onChange() {
         tui.requestRender();
       },

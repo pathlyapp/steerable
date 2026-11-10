@@ -177,7 +177,10 @@ describe('project binding command', () => {
       path: '/api/v2/projects/resolve',
       body: { folderPath: fs.realpathSync(dir), origin: 'cli' },
     });
-    expect(calls[1]).toMatchObject({
+    // The credential check sits between binding and chat creation: a usage
+    // error wins over it, and a missing key leaves no empty chat behind.
+    expect(calls[1]?.path).toBe('/api/v2/local-settings/llm');
+    expect(calls[2]).toMatchObject({
       path: '/api/v2/chats/new',
       body: { projectId: 'proj-1' },
     });

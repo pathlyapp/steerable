@@ -8,7 +8,6 @@ import { acquireChatWriteLock } from '@steerable/agent-shell/storage/process-loc
 import type { AgentClient } from '@steerable/agent-client';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import { createCli } from '../src/cli.js';
-import { nodeDoctorLine } from '../src/node-version.js';
 import { decisionFor, UNATTENDED_APPROVAL_REASON } from '../src/approve.js';
 
 const dirs: string[] = [];
@@ -226,7 +225,7 @@ describe('createCli', () => {
     expect(console.error).toBe(error);
   });
 
-  it('reports a busy chat from the data directory', async () => {
+  it('reports a busy chat and exits 78 when a check fails', async () => {
     const dir = tempDir();
     const lease = acquireChatWriteLock(dir, 'chat-busy');
     try {
@@ -237,15 +236,31 @@ describe('createCli', () => {
         stderr: capture().stream,
         createClient: async () => client(),
       });
-      expect(code).toBe(0);
-      expect(stdout.text()).toContain(nodeDoctorLine(process.versions.node).trim());
-      expect(stdout.text()).toContain(`data dir: ${dir}`);
-      expect(stdout.text()).toContain(`log file: ${path.join(dir, 'logs', 'main.log')}`);
+      // The fake client cannot boot a sidecar, so its check fails and the
+      // report exits 78 while still listing the busy chat it found on disk.
+      expect(code).toBe(78);
+      expect(stdout.text()).toContain('Node.js');
+      expect(stdout.text()).toContain(`日志：${path.join(dir, 'logs', 'main.log')}`);
       expect(stdout.text()).toContain('chat-busy');
-      expect(stdout.text()).toContain('missing: run_code');
     } finally {
       lease.release();
     }
+  });
+
+  it('prints doctor checks as JSON with stable ids and statuses', async () => {
+    const dir = tempDir();
+    const stdout = capture();
+    const code = await createCli({
+      argv: ['doctor', '--data-dir', dir, '--json'],
+      stdout: stdout.stream,
+      stderr: capture().stream,
+      createClient: async () => client(),
+    });
+    expect(code).toBe(78);
+    const rows = JSON.parse(stdout.text()) as Array<{ id: string; status: string }>;
+    expect(rows.map((row) => row.id)).toContain('node');
+    expect(rows.map((row) => row.id)).toContain('sidecar_python');
+    for (const row of rows) expect(['ok', 'warn', 'fail', 'skip']).toContain(row.status);
   });
 });
 

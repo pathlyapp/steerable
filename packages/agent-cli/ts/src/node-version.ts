@@ -1,12 +1,17 @@
 /**
  * Minimum Node for the command line.
  *
- * `@opentui/core` 0.5.12 declares `engines.node` `>=26.4.0`. Its FFI packages
- * and the rest of the agent-cli dependency tree do not declare a higher
- * minimum. This module imports nothing: the bin loads it before the CLI.
+ * Only the TUI forces the highest floor: `@opentui/core` 0.5.12 declares
+ * `engines.node` `>=26.4.0`, and every other module must stay importable
+ * without it. `run`, `chat`, `config`, `mcp`, `skills`, `doctor` and `login`
+ * load the TUI lazily; see `REQUIRED_NODE_TUI`.
+ *
+ * `better-sqlite3` and `node-pty` ship prebuilt binaries for this line.
  */
+export const REQUIRED_NODE = '22.19.0';
 
-export const REQUIRED_NODE = '26.4.0';
+/** Minimum Node for `tui`, set by `@opentui/core`. */
+export const REQUIRED_NODE_TUI = '26.4.0';
 
 export interface NodeVersionWriter {
   write(chunk: string): unknown;
@@ -37,11 +42,20 @@ export function ensureSupportedNode(
   return 1;
 }
 
+/**
+ * @param current Installed version.
+ * @returns Whether the terminal interface can run on it.
+ */
+export function supportsTui(current: string): boolean {
+  return satisfies(current, REQUIRED_NODE_TUI);
+}
+
 /** @param current Installed version. @returns One doctor row, including whether it meets {@link REQUIRED_NODE}. */
 export function nodeDoctorLine(current: string): string {
   const shown = current.replace(/^v/, '');
   const mark = satisfies(current, REQUIRED_NODE) ? '✓' : '✗';
-  return `Node.js: ${shown}（需要 ≥ ${REQUIRED_NODE}） ${mark}\n`;
+  const tui = supportsTui(current) ? '' : `；tui 需要 ≥ ${REQUIRED_NODE_TUI}`;
+  return `Node.js: ${shown}（需要 ≥ ${REQUIRED_NODE}${tui}） ${mark}\n`;
 }
 
 function readVersion(value: string): [number, number, number] | null {

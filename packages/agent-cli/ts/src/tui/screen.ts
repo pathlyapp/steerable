@@ -61,6 +61,8 @@ export interface TuiScreen {
   permission?: 'ask' | 'auto' | 'read';
   approvalPolicy?: 'ask' | 'deny' | 'allow-read' | 'allow-all';
   todos?: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed' }>;
+  /** One-line configuration notice, such as a missing API key. */
+  notice?: string | null;
   goal?: {
     objective: string;
     phase: 'active' | 'paused' | 'blocked' | 'complete';
@@ -231,6 +233,7 @@ export function projectStatusLine(screen: TuiScreen): string {
 export function bannerLines(screen: TuiScreen): string[] {
   const lines: string[] = [];
   if (!screen.help && !screen.chats) {
+    if (screen.notice) lines.push(screen.notice);
     if (screen.goal) lines.push(goalText(screen.goal));
     if ((screen.loops?.length ?? 0) > 0) {
       lines.push(`Loop · ${screen.loops!.length} 个运行中`);

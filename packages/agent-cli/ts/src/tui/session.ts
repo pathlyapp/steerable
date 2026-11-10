@@ -12,6 +12,7 @@ import { saveAttachmentFiles } from '@steerable/agent-shell/attachments';
 
 import { autoAnswer, decisionFor, UNATTENDED_APPROVAL_REASON, type ApprovalSpec } from '../approve.js';
 import { cliText } from '../copy.js';
+import { maskApiKey, preflightApiKey } from '../credentials.js';
 import { applyChildEvent, childLines, type ChildRow } from './children.js';
 import { readSystemClipboard, saveClipboardImage, writeSystemClipboard, type ClipboardRead } from './clipboard.js';
 import { completeSlash, slashAt } from './commands.js';
@@ -56,6 +57,11 @@ export interface AgentTuiOptions {
   projectId?: string;
   projectLabel?: string;
   approvalPolicy?: ApprovalSpec;
+  /**
+   * Runs the interactive login flow with the terminal released. Provided by
+   * `runTui`; a missing hook makes `/login` tell the user to run it outside.
+   */
+  runLogin?: () => Promise<number>;
   liveIntervalMs?: number;
   onExit: () => void;
   onChange?: () => void;
@@ -79,6 +85,8 @@ export class AgentTui implements Component {
   private readonly options: AgentTuiOptions;
   private title = '新会话';
   private modelName = '';
+  /** Set when the stored settings and environment offer no usable key. */
+  private missingKeyEnv: string | null = null;
   private chatId: string | null = null;
   private lines: TranscriptLine[] = [];
   private rows: ChatRow[] = [];
@@ -186,6 +194,7 @@ export class AgentTui implements Component {
     if (settings.status === 200) {
       const model = (settings.data as { model?: string }).model;
       if (model) this.modelName = model;
+      this.refreshCredential(settings.data as Record<string, unknown>);
     }
     this.rows = await this.loadChats();
     const projectId = this.options.projectId;
@@ -203,6 +212,34 @@ export class AgentTui implements Component {
 
   async settled(): Promise<void> {
     await this.pending;
+  }
+
+  /**
+   * Records whether a key is usable, so the banner and the send guard agree.
+   *
+   * @param settings Settings payload from `GET /api/v2/local-settings/llm`.
+   */
+  private refreshCredential(settings: Record<string, unknown>): void {
+    const check = preflightApiKey(settings, process.env);
+    this.missingKeyEnv = check.ok ? null : (check.envNames[0] ?? 'DEEPSEEK_API_KEY');
+  }
+
+  /**
+   * Hands the terminal to the login flow and reports the result.
+   *
+   * The renderer owns stdin while the TUI runs, so login only starts after the
+   * caller releases the screen; a missing hook is a packaging gap, not a user
+   * error, and says so.
+   *
+   * @returns Process exit code from the login flow.
+   */
+  private async runLogin(): Promise<number> {
+    const run = this.options.runLogin;
+    if (!run) {
+      this.status = '在这个界面里无法运行 login，退出后执行 steerable-cli login';
+      return 1;
+    }
+    return run();
   }
 
   invalidate(): void {}
@@ -473,6 +510,9 @@ export class AgentTui implements Component {
       draft: this.buffer.text,
       cursor: this.buffer.cursor,
       status: this.status,
+      notice: this.missingKeyEnv
+        ? cliText('tui.noKeyBanner', { env: this.missingKeyEnv })
+        : null,
       ...(this.options.projectLabel ? { projectLabel: this.options.projectLabel } : {}),
       ...(this.ruleLabel ? { ruleLabel: this.ruleLabel } : {}),
       picks: this.pickRows(),
@@ -680,6 +720,16 @@ export class AgentTui implements Component {
       this.touch();
       return;
     }
+    // No key means the sidecar cannot build a request; say so where the user
+    // is typing instead of surfacing a provider 401 one turn later.
+    if (this.missingKeyEnv) {
+      this.lines = [...this.lines, { kind: 'user', text: cliText('tui.noKeyLine') }];
+      this.buffer.text = text;
+      this.buffer.cursor = [...text].length;
+      this.status = `输入 /login 配置，或设置 ${this.missingKeyEnv}`;
+      this.touch();
+      return;
+    }
     const files = this.attachments.splice(0);
     this.queue.push({ text, files });
     if (this.sending || this.backendTurnActive) {
@@ -754,6 +804,28 @@ export class AgentTui implements Component {
       this.lines = [];
       this.readOnly = false;
       await this.openChat(chatId);
+      return;
+    }
+    if (command === 'login') {
+      const code = await this.runLogin();
+      if (code === 0) {
+        const saved = await this.client.request('GET', '/api/v2/local-settings/llm', undefined);
+        if (saved.status === 200) {
+          const data = saved.data as Record<string, unknown>;
+          const model = typeof data.model === 'string' ? data.model : this.modelName;
+          this.modelName = model;
+          this.refreshCredential(data);
+          this.lines = [
+            ...this.lines,
+            { kind: 'user', text: cliText('tui.loginSaved', {
+              provider: String(data.vendorId ?? data.provider ?? ''),
+              model,
+              key: maskApiKey(typeof data.apiKey === 'string' ? data.apiKey : ''),
+            }) },
+          ];
+        }
+      }
+      this.touch();
       return;
     }
     if (command === 'model') {

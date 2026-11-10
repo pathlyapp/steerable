@@ -363,7 +363,12 @@ describe('tui session', () => {
         if (method === 'POST') return { status: 200, data: { ...(body as object), model: 'next-model' } };
         if (requestPath.endsWith('/messages')) return { status: 200, data: { messages: [] } };
         if (requestPath.startsWith('/api/v2/chats/')) return { status: 200, data: { id: 'chat-new', title: 'New' } };
-        return { status: 200, data: { provider: 'openai-compat', model: 'demo-model', chats: [] } };
+        // A key is present so the turn is not blocked by the credential guard;
+        // this case exercises the slash commands, not login.
+        return {
+          status: 200,
+          data: { provider: 'openai-compat', model: 'demo-model', apiKey: 'demo-key', chats: [] },
+        };
       },
     }), { product: 'Demo', onExit() {} });
     await session.open();

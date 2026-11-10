@@ -1,4 +1,5 @@
 import type { AgentClient } from '@steerable/agent-client';
+import { maskApiKey, resolveApiKey, sanitizeLlmProvider } from '@steerable/agent-shell/storage/llm-settings';
 
 export interface CommandIO {
   positionals: string[];
@@ -191,6 +192,10 @@ export async function configCommand(
     return open(async (client) => {
       const current = await readConfig(client, stderr);
       if (!current) return 1;
+      if (key === 'apiKey') {
+        stdout.write(`${apiKeyLine(current)}\n`);
+        return 0;
+      }
       const value = current[key];
       stdout.write(`${key}=${value === undefined ? '' : String(value)}\n`);
       return 0;
@@ -345,6 +350,34 @@ async function readConfig(
 
 function isConfigKey(key: string): key is (typeof CONFIG_KEYS)[number] {
   return (CONFIG_KEYS as readonly string[]).includes(key);
+}
+
+/**
+ * One line for `config get apiKey`: the masked key and where it came from.
+ *
+ * Reading a key from the environment never writes it to storage, so this line
+ * is how a user confirms a shell export took effect.
+ *
+ * @param settings Current settings as returned by the backend.
+ * @returns Text such as `apiKey=sk-…a1b2 (env:DEEPSEEK_API_KEY)`.
+ */
+function apiKeyLine(settings: Record<string, unknown>): string {
+  const resolved = resolveApiKey(
+    {
+      provider: sanitizeLlmProvider(settings.provider),
+      ...(typeof settings.vendorId === 'string' ? { vendorId: settings.vendorId } : {}),
+      ...(typeof settings.baseUrl === 'string' ? { baseUrl: settings.baseUrl } : {}),
+      ...(typeof settings.apiKey === 'string' ? { apiKey: settings.apiKey } : {}),
+    },
+    process.env,
+  );
+  if (resolved.key) {
+    const source = resolved.source.kind === 'env' ? `env:${resolved.source.name}` : 'config';
+    return `apiKey=${maskApiKey(resolved.key)} (${source})`;
+  }
+  if (resolved.source.kind === 'not_required') return 'apiKey= (not_required) 本地提供方不需要 key';
+  const hint = resolved.envNames[0] ? `设置 ${resolved.envNames[0]} 或运行 steerable-cli login` : '运行 steerable-cli login';
+  return `apiKey= (missing) ${hint}`;
 }
 
 function coerceConfigValue(key: string, raw: string): string | number | undefined {
