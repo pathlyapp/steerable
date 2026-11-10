@@ -109,10 +109,10 @@ without any component-level changes.
 **Packages:** `@steerable/agent-shell` · `@steerable/agent-shell-tauri` ·
 `@steerable/agent-shell-web` · `@steerable/pack-sdk` — versioned in lockstep
 and **published to npm** so product repos can pin semantic versions. The npm
-surface at `0.8.5` is `@steerable/agent-shell` 0.8.5,
-`@steerable/agent-shell-tauri` 0.8.5 (the Rust crate source ships inside that
-package; it is not published to crates.io), `@steerable/agent-shell-web` 0.8.5
-and `@steerable/pack-sdk` 0.8.5. `agent-shell` ships its compiled `dist/`;
+surface is `@steerable/agent-shell`, `@steerable/agent-shell-tauri` (the Rust
+crate source ships inside that package; it is not published to crates.io),
+`@steerable/agent-shell-web` and `@steerable/pack-sdk`, all at the release
+version. `agent-shell` ships its compiled `dist/`;
 `agent-shell-web` ships its `src/` (products compile it via the
 `createProductViteConfig` factory and the `@/` alias); `pack-sdk` ships pure
 `types/` (zero runtime). Products may still use source/`link:` during local

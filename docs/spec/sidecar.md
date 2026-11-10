@@ -22,7 +22,7 @@ sequenceDiagram
 
     P->>S: spawn(child, ['-m','steerable_sidecar'], stdio=pipe)
     Note over S: bootstrap …
-    S-->>P: stderr: __SIDECAR_READY__:{"status":"ok",<br/>"version":"0.8.5","protocolVersion":"0.1.0", …}
+    S-->>P: stderr: __SIDECAR_READY__:{"status":"ok",<br/>"version":"0.9.0","protocolVersion":"0.1.0", …}
     S-->>P: stdout (no id):<br/>{"jsonrpc":"2.0","method":"lifecycle.ready","params":{…}}
     Note over P: Now safe to send JSON-RPC frames.
 ```
@@ -47,7 +47,7 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 ### Successful response
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.8.5","protocolVersion":"0.1.0","uptimeMs":1234,"pid":42,"pythonVersion":"3.12.6","platform":"darwin-arm64","loadedProviders":[],"loadedTools":0,"activeTraces":0,"checks":{}}}
+{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.9.0","protocolVersion":"0.1.0","uptimeMs":1234,"pid":42,"pythonVersion":"3.12.6","platform":"darwin-arm64","loadedProviders":[],"loadedTools":0,"activeTraces":0,"checks":{}}}
 ```
 
 ### Error response
@@ -443,7 +443,7 @@ corruption (a lineage cycle).
 ```json
 {
   "status": "ok",
-  "version": "0.8.5",
+  "version": "0.9.0",
   "protocolVersion": "0.1.0",
   "uptimeMs": 12345,
   "pid": 42,

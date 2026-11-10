@@ -116,7 +116,7 @@ const runtime = new AgentRuntime({
 });
 await runtime.start();                   // spawn + lifecycle.ready handshake
 
-const health = await runtime.ping();     // { status: 'ok', version: '0.8.5', … }
+const health = await runtime.ping();     // { status: 'ok', version: '0.9.0', … }
 
 const stream = await runtime.chatStream({
   provider: 'openai_compat',

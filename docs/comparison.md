@@ -32,7 +32,7 @@ official release notes.
 
 | Project | Version read | Source |
 | --- | --- | --- |
-| Steerable | `0.8.5`, Rust engine artifacts `1.0.7` | This repository |
+| Steerable | `0.9.0`, Rust engine artifacts `1.0.7` | This repository |
 | OpenAI Codex | `0.167.0` (`main` at `8703d32`) | Source |
 | DeepSeek Harness | `0.2.2-rc.1` (`master` at `fcc0ad4`) | Source |
 | Pi | `1.5.0` (`main` at `ea1cfcc`) | Source |
