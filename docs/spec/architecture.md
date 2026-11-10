@@ -136,6 +136,23 @@ runs standalone for evaluation: `pnpm agent-shell:web` boots the headless
 server with the neutral web app. A desktop window comes from a product's own
 `src-tauri` crate calling `steerable_agent_shell_tauri::run`.
 
+### Where the bundled runtime comes from
+
+The Python sidecar, its `run_code` interpreter and the egress proxy are binary
+artifacts, so the shell resolves them from the first place that has them:
+an explicit `STEERABLE_SIDECAR_PYTHON` (or the `host-runtime.json` a desktop
+product writes), the packaged `python-runtime/` directory, the
+`@steerable/runtime-<target>` npm package, then a repository `.venv`.
+`@steerable/agent-runtime` resolves the interpreter the same way so a plain
+TypeScript host needs one dependency.
+
+The npm package is what makes `npm install -g @steerable/agent-cli` work
+without a checkout. It carries a `runtime.json` descriptor with relative paths
+and SHA-256 digests; the shell hashes the interpreter and proxy on first use
+and refuses to start when a digest does not match, rather than running a
+modified binary. npm installs only the package whose `os`/`cpu` match the host,
+which is why the five platform packages are `optionalDependencies` of the CLI.
+
 ## Data flow at runtime
 
 ```

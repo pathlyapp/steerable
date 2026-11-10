@@ -113,14 +113,13 @@ cat > package.json <<JSON
     "@steerable/agent-protocol": "file:$REPO/dist/npm/steerable-agent-protocol-0.1.0.tgz",
     "@steerable/agent-harness":  "file:$REPO/dist/npm/steerable-agent-harness-0.1.0.tgz"
   },
-  "pnpm": {
-    "overrides": {
-      "@steerable/agent-protocol": "file:$REPO/dist/npm/steerable-agent-protocol-0.1.0.tgz",
-      "@steerable/agent-harness":  "file:$REPO/dist/npm/steerable-agent-harness-0.1.0.tgz"
-    }
-  }
 }
 JSON
+cat > pnpm-workspace.yaml <<YAML
+overrides:
+  "@steerable/agent-protocol": $REPO/dist/npm/steerable-agent-protocol-0.1.0.tgz
+  "@steerable/agent-harness":  $REPO/dist/npm/steerable-agent-harness-0.1.0.tgz
+YAML
 pnpm install --no-frozen-lockfile
 node --input-type=module -e "
 import { decideToolMode, isTerminalResult } from '@steerable/agent-harness';
@@ -128,9 +127,16 @@ console.log({mode: decideToolMode('read_file'), done: isTerminalResult({success:
 "
 ```
 
-> **Why `pnpm.overrides`?** Tarballs of internal packages declare each other as
+> **Why overrides?** Tarballs of internal packages declare each other as
 > registry dependencies (`workspace:*` is rewritten on `pnpm pack`). Without
-> overrides, pnpm tries to fetch them from `registry.npmjs.org` and fails.
+> overrides, pnpm fetches them from `registry.npmjs.org` and fails.
+>
+> They go in `pnpm-workspace.yaml`: pnpm 10 stopped reading a `pnpm` field in
+> `package.json`, and an override takes a bare path — a `file:` prefix is read
+> as part of the path.
+>
+> `scripts/release/verify-local-artifacts.sh` does all of this for the whole
+> batch; run it instead of wiring a project by hand.
 
 ### Consuming Mode B artifacts from another project
 
@@ -141,13 +147,15 @@ console.log({mode: decideToolMode('read_file'), done: isTerminalResult({success:
   "dependencies": {
     "@steerable/agent-protocol": "file:../steerable/dist/npm/steerable-agent-protocol-0.1.0.tgz",
     "@steerable/agent-ui":       "file:../steerable/dist/npm/steerable-agent-ui-0.1.0.tgz"
-  },
-  "pnpm": {
-    "overrides": {
-      "@steerable/agent-protocol": "file:../steerable/dist/npm/steerable-agent-protocol-0.1.0.tgz"
-    }
   }
 }
+```
+
+With the matching `pnpm-workspace.yaml` beside it:
+
+```yaml
+overrides:
+  "@steerable/agent-protocol": ../steerable/dist/npm/steerable-agent-protocol-0.1.0.tgz
 ```
 
 #### Python (FastAPI / Sidecar embedder)

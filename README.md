@@ -158,10 +158,26 @@ The Tier 5 host shell runs standalone with neutral branding (no product, no pack
 pnpm install
 pnpm agent-shell:web       # builds shell + neutral web app, boots the headless server
 # → http://127.0.0.1:4787  (Steerable Shell)
-
-npm install -g @steerable/agent-cli
-steerable-cli              # command line and terminal session; Node 26.4.0
 ```
+
+<!-- quickstart:cli -->
+```bash
+npm install -g @steerable/agent-cli
+steerable-cli login                    # pick a provider, paste a key, pick a model
+steerable-cli run "summarize this repo"
+```
+
+Two other install paths produce the same command: `curl -fsSL https://steerableframework.com/install.sh | sh` (installs Node too when missing) and `brew install pathlyapp/steerable/steerable`. See [packaging](packaging/README.md).
+
+`login` verifies the key with one model-list request before saving it. In scripts and CI, set the provider's environment variable instead and skip the prompt:
+
+```bash
+export DEEPSEEK_API_KEY=sk-...
+steerable-cli run "summarize this repo"
+```
+
+`steerable-cli doctor` lists every runtime and configuration check with the command that fixes a failure; `steerable-cli tui` opens the terminal interface (it needs Node 26.4.0 because of the renderer, while the other commands run on Node 22.19.0 and newer).
+<!-- /quickstart:cli -->
 
 A product ships the desktop window through `@steerable/agent-shell-tauri` and its own thin `src-tauri` crate; the framework repo itself boots the same shell in the browser.
 

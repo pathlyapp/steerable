@@ -60,6 +60,12 @@ Agents) and LangGraph's Deep Agents harness. The remaining differences are in
 deployment form, confinement defaults, protocol surface and source
 availability.
 
+Ease of use was our largest gap in the previous round and is closed in
+`0.9.0`: one `npm install` brings the runtime, `login` verifies the key, and a
+turn refuses to start without one instead of returning a provider 401. The
+comparison below keeps that history rather than presenting it as parity by
+default.
+
 ## At a glance
 
 | Dimension | Steerable | OpenAI Codex | DeepSeek Harness | Pi | LangGraph | OpenAI Agents SDK | Claude Code / Agent SDK |
@@ -177,6 +183,21 @@ availability.
   says so. A denied CONNECT can be approved per session through the
   proxy's loopback control endpoint (its token never reaches sandboxed
   children), or auto-allowed by product configuration.
+- **Getting started was the weakest part, and is now fixed.** Measured on a
+  clean `HOME` on 2026-11-10, `npm install -g @steerable/agent-cli` followed
+  by `steerable-cli doctor` used to fail with a Node stack trace: the npm
+  package carried no Python sidecar, and the README did not say one was
+  needed. Three undocumented steps followed (a PyPI install, two environment
+  variables, a key). For comparison, Claude Code printed
+  `Not logged in · Please run /login` and Pi pointed at its providers doc —
+  both one step from working. The fix is in `0.9.0`: the platform runtime
+  ships as an optional npm dependency, `login` verifies a key before saving
+  it, `run` refuses to start without a credential and prints the three ways to
+  configure one, `doctor` prints one row per check with the command that fixes
+  it, and `scripts/quickstart_smoke.mjs` runs the README's own commands on
+  three platforms in CI. What remains behind: the CLI needs Node 22.19 (Pi
+  22.19, Claude Code 22), `tui` still needs 26.4 for its renderer, and the
+  desktop window still needs a product `src-tauri` crate.
 - **No hosted offering.** No cloud, no managed platform, no live
   observability stream. Traces and per-turn outcome counters export to
   OTLP after the fact, without conversation content. Codex now resumes

@@ -2,6 +2,20 @@
 
 Product-neutral Node HostRuntime and headless HTTP host for Steerable Framework.
 
+## Runtime bundle
+
+The sidecar, its `run_code` interpreter and the egress proxy are binary
+artifacts. The shell resolves them from the first place that has them: an
+explicit `STEERABLE_SIDECAR_PYTHON` (or the `host-runtime.json` a desktop
+product writes), a packaged `python-runtime/` directory, the
+`@steerable/runtime-<target>` npm package, then a repository `.venv`. A missing
+bundle raises `SidecarRuntimeMissingError` with the reason and the target, and
+a digest mismatch refuses to start.
+
+`egressProxyMissingWarning()` is the one-line notice a command line should print
+when the proxy is absent: the host allow-list is then not enforced by domain and
+network rules fall back to ports.
+
 ## Desktop composition
 
 Tauri desktop products supervise the same BS executable used by browser mode,

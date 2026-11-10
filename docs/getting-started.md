@@ -8,10 +8,14 @@
 
 | Tool      | Version | Why                                                              |
 | --------- | ------- | ---------------------------------------------------------------- |
-| Node.js   | ≥ 26.4.0 | TypeScript packages, Vitest, command line                       |
+| Node.js   | ≥ 26.4.0 | Working in this repository: TypeScript packages, Vitest, the terminal renderer |
 | pnpm      | ≥ 10    | Workspace + dependency resolution                                |
 | Python    | ≥ 3.10  | Harness, runtime, sidecar packages                               |
 | uv        | latest  | Fast Python dependency manager (replaces pip/virtualenv flow)    |
+
+Installing the command line as a user does not need this repository's Node
+floor: `@steerable/agent-cli` runs on Node 22.19 or newer, and only
+`steerable-cli tui` needs 26.4 for the renderer.
 
 ## 1 · Install the packages
 

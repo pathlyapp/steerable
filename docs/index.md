@@ -89,8 +89,9 @@ One command boots a full agent shell; every layer underneath ships as its own pa
 </div>
 <div class="sf-run-pane sf-run-pane--cli">
 <pre><code><span class="sf-cmd">npm install -g @steerable/agent-cli</span>
-<span class="sf-cmd"><b>steerable-cli</b></span></code></pre>
-<div class="sf-out">→ steerable-cli opens a terminal session. Node 26.4.0.</div>
+<span class="sf-cmd"><b>steerable-cli login</b></span>
+<span class="sf-cmd">steerable-cli run "summarize this repo"</span></code></pre>
+<div class="sf-out">→ one install brings the runtime; login verifies the key; Node 22.19 or newer (the terminal session needs 26.4)</div>
 </div>
 </div>
 </div>
@@ -444,11 +445,11 @@ graph BT
 | ------- | ---- | ------------ |
 | [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent` envelope, `ToolCall` / `ToolResult`, `ChatMessage`, sidecar JSON-RPC types — codegen from `spec/`, drift-checked in CI |
 | `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, `is_terminal_result`, command-safety patterns |
-| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · `@steerable/agent-runtime` (TS, source-only) | 3 | `CoreLoop` + `LLMProvider` adapters (OpenAI-compat / Responses / Anthropic / Gemini), `ToolRouter` + `@tool`, storage & transport adapters (FastAPI SSE, stdio JSON-RPC); the TS package owns the sidecar process lifecycle for pure-TypeScript hosts |
+| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop` + `LLMProvider` adapters (OpenAI-compat / Responses / Anthropic / Gemini), `ToolRouter` + `@tool`, storage & transport adapters (FastAPI SSE, stdio JSON-RPC); the TS package owns the sidecar process lifecycle for pure-TypeScript hosts |
 | [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | Portable CPython binary — boots in <1s, macOS notarised, Windows signed — plus the bundled per-host CONNECT allow-list egress proxy |
 | [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | `ChatPanel`, `MessageList`, `AgentSelector`, `ModelSelector`, `OrchestrationPlanCard`, `ToolCallRenderer`, `SSEStreamView` + 14-card `/cards` subpath + hooks + Tailwind preset |
 | `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri + headless host shell, shared Node HostRuntime, sidecar supervision, product-neutral renderer — published to npm (`dist` / source / pure-types respectively) |
-| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) | 5 | Product-neutral command line and terminal session. `npm install -g @steerable/agent-cli`, then `steerable-cli`. It shares the host database with the desktop app. |
+| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | Product-neutral command line and terminal session. `npm install -g @steerable/agent-cli`, then `steerable-cli login`. The install pulls one platform runtime package (sidecar, `run_code` interpreter, egress proxy) as an optional dependency, so nothing else has to be installed. Shares the host database with the desktop app. |
 
 <h2 class="sf-section">How it compares</h2>
 
