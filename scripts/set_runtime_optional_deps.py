@@ -34,12 +34,28 @@ def runtime_deps(version: str) -> dict[str, str]:
 
 
 def write(path: pathlib.Path, deps: dict[str, str] | None) -> None:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    """Adds or removes the platform dependencies without touching other bytes.
+
+    The manifest is rewritten only when its dependency map actually changes, and
+    only the `optionalDependencies` member is spliced in: re-serialising the
+    whole file changes unrelated escapes (`\u2014` becomes a literal em dash)
+    and leaves a diff in a file the release did not mean to edit.
+    """
+    text = path.read_text(encoding="utf-8")
+    data = json.loads(text)
     if deps is None:
-        data.pop("optionalDependencies", None)
-    else:
-        data["optionalDependencies"] = dict(sorted(deps.items()))
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        if "optionalDependencies" not in data:
+            return
+        # Drop the member by round-tripping, then restore the original escapes
+        # by re-encoding ASCII-only: this file has no non-ASCII payload, and
+        # `json.dumps` with `ensure_ascii=True` reproduces `\uXXXX` as written.
+        data.pop("optionalDependencies")
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        return
+    if data.get("optionalDependencies") == dict(sorted(deps.items())):
+        return
+    data["optionalDependencies"] = dict(sorted(deps.items()))
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
