@@ -219,6 +219,55 @@ describe('classifyErrorMessage', () => {
   });
 });
 
+describe('runtime missing', () => {
+  it('turns a missing platform package into the install fix, not a stack trace', async () => {
+    const stderr = capture();
+    const missing = Object.assign(new Error('platform runtime package is not installed'), {
+      name: 'SidecarRuntimeMissingError',
+      reason: 'not_installed',
+      target: 'darwin-arm64',
+      detail: '@steerable/runtime-darwin-arm64',
+    });
+    const code = await createCli({
+      argv: ['run', 'hello', '--no-project'],
+      stdout: capture().stream,
+      stderr: stderr.stream,
+      stdinIsTTY: false,
+      createClient: async () => {
+        throw missing;
+      },
+    });
+    expect(code).toBe(EXIT_CONFIG);
+    expect(stderr.text()).toContain('没有找到本平台（darwin-arm64）的 Steerable 运行时');
+    expect(stderr.text()).toContain('--include=optional');
+    expect(stderr.text()).toContain('STEERABLE_SIDECAR_PYTHON');
+    expect(stderr.text()).not.toContain('\n    at ');
+  });
+
+  it('names the unsupported targets instead of guessing a fix', async () => {
+    const stderr = capture();
+    const unsupported = Object.assign(new Error('unsupported'), {
+      name: 'SidecarRuntimeMissingError',
+      reason: 'unsupported_platform',
+      target: null,
+      detail: 'freebsd-x64',
+    });
+    const code = await createCli({
+      argv: ['run', 'hello', '--no-project'],
+      stdout: capture().stream,
+      stderr: stderr.stream,
+      stdinIsTTY: false,
+      createClient: async () => {
+        throw unsupported;
+      },
+    });
+    expect(code).toBe(EXIT_CONFIG);
+    expect(stderr.text()).toContain('暂不支持当前平台');
+    expect(stderr.text()).toContain('linux-arm64');
+    expect(stderr.text()).not.toContain('\n    at ');
+  });
+});
+
 describe('--version', () => {
   it('prints the package version without starting a client', async () => {
     const stdout = capture();

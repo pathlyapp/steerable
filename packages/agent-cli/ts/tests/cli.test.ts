@@ -220,8 +220,35 @@ describe('createCli', () => {
       }],
     });
     expect(code).toBe(0);
-    expect(seen).toEqual([{ info: false, error: true }]);
+    // The CLI reports its own failures in a form a user can act on, so the
+    // host's error-level stack traces stay off the terminal too. The log file
+    // still receives them.
+    expect(seen).toEqual([{ info: false, error: false }]);
     expect(console.info).toBe(info);
+    expect(console.error).toBe(error);
+  });
+
+  it('keeps host logs on the terminal with --verbose', async () => {
+    const error = console.error;
+    const seen: boolean[] = [];
+    const code = await createCli({
+      argv: ['probe', '--data-dir', tempDir(), '--verbose'],
+      stdout: process.stdout,
+      stderr: capture().stream,
+      env: {},
+      createClient: async () => client(),
+      commands: [{
+        name: 'probe',
+        summary: 'records console state',
+        run: () => {
+          seen.push(console.error === error);
+          return 0;
+        },
+      }],
+    });
+    expect(code).toBe(0);
+    // `--verbose` is the request for the stack: do not swallow it.
+    expect(seen).toEqual([true]);
     expect(console.error).toBe(error);
   });
 

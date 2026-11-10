@@ -15,6 +15,7 @@ import {
 } from '@steerable/agent-client';
 
 import { REQUIRED_NODE_TUI, supportsTui } from './node-version.js';
+import { supportedTargetsLine } from '@steerable/agent-runtime';
 import { doctorExitCode, logFilePath, renderDoctor, runDoctorChecks, type DoctorContext } from './doctor.js';
 import { parseApprovePolicy, resolveApprovalRequest } from './approve.js';
 import {
@@ -50,7 +51,12 @@ export interface CliOptions {
 
 export async function createCli(options: CliOptions = {}): Promise<number> {
   const ownsTerminal = (options.stdout ?? process.stdout) === process.stdout;
-  if (ownsTerminal) silenceLogConsole('routine');
+  // `all`, not `routine`: the host logs a boot failure at error level with a
+  // stack trace, and the CLI reports that failure itself in a form a user can
+  // act on. The log file still receives everything.
+  const verbose =
+    (options.env ?? process.env).STEERABLE_DEBUG === '1' || (options.argv ?? process.argv.slice(2)).includes('--verbose');
+  if (ownsTerminal && !verbose) silenceLogConsole('all');
   try {
     return await runCli(options);
   } finally {
@@ -443,6 +449,81 @@ async function webCommandFrom(
   });
 }
 
+/**
+ * Turns a failed host boot into an actionable message.
+ *
+ * The host can fail for reasons the user can fix: no platform runtime package
+ * (a plain `npm install -g` before the runtime exists, or `--omit=optional`),
+ * an interpreter the variable names that is not there. Those get the fix and
+ * exit 78; anything else stays a one-line failure with the log path, never a
+ * stack trace.
+ *
+ * @returns Process exit code.
+ */
+function reportClientFailure(
+  error: unknown,
+  stderr: NodeJS.WritableStream,
+  options: CliOptions,
+): number {
+  const missing = findRuntimeFailure(error);
+  if (missing) {
+    if (missing.reason === 'unsupported_platform') {
+      stderr.write(`${cliText('runtime.unsupported', { target: missing.target ?? 'unknown' })}\n`);
+      stderr.write(`  ${cliText('runtime.unsupportedTargets', { targets: supportedTargetsLine() })}\n`);
+      stderr.write(`  ${cliText('runtime.unsupportedManual')}\n`);
+      return EXIT_CONFIG;
+    }
+    if (missing.reason === 'digest_mismatch') {
+      stderr.write(`${cliText('runtime.digestMismatch', { file: missing.detail })}\n`);
+      stderr.write(`  ${cliText('runtime.reinstall')}\n`);
+      return EXIT_CONFIG;
+    }
+    if (missing.reason === 'invalid_manifest') {
+      stderr.write(`${cliText('runtime.invalidManifest', { detail: missing.detail })}\n`);
+      stderr.write(`  ${cliText('runtime.reinstall')}\n`);
+      return EXIT_CONFIG;
+    }
+    stderr.write(`${cliText('runtime.missing', { target: missing.target ?? 'unknown' })}\n`);
+    stderr.write(`  ${cliText('runtime.missingFix')}\n`);
+    stderr.write(`  ${cliText('runtime.missingOverride')}\n`);
+    return EXIT_CONFIG;
+  }
+  stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  if (options.stdout === undefined || options.stdout === process.stdout) {
+    stderr.write(`日志：${dataDirFrom({ values: {} } as ReturnType<typeof parseArgs>, options.env ?? process.env)}/logs/main.log\n`);
+  }
+  return EXIT_TURN_FAILED;
+}
+
+/**
+ * Walks the error chain for a platform-runtime failure.
+ *
+ * The boot path wraps the resolver error, so the reason can sit one or two
+ * `cause` links down. Matching on the class name keeps this working across the
+ * package boundary without importing the shell's error class here.
+ *
+ * @returns The failure fields, or null when this is a different failure.
+ */
+function findRuntimeFailure(
+  error: unknown,
+): { reason: string; target: string | null; detail: string } | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current; depth += 1) {
+    // Duck-typed on purpose: the error crosses an ESM package boundary, and
+    // `instanceof Error` is not reliable across module instances.
+    const shaped = current as { name?: unknown; reason?: unknown; target?: unknown; detail?: unknown; message?: unknown; cause?: unknown };
+    if (shaped.name === 'SidecarRuntimeMissingError' && typeof shaped.reason === 'string') {
+      return {
+        reason: shaped.reason,
+        target: typeof shaped.target === 'string' ? shaped.target : null,
+        detail: typeof shaped.detail === 'string' ? shaped.detail : String(shaped.message ?? ''),
+      };
+    }
+    current = shaped.cause ?? null;
+  }
+  return null;
+}
+
 async function createClientFor(
   parsed: ReturnType<typeof parseArgs>,
   options: CliOptions,
@@ -483,8 +564,7 @@ async function credentialCommand(
       dataDir,
     });
   } catch (error) {
-    stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    return EXIT_TURN_FAILED;
+    return reportClientFailure(error, stderr, options);
   } finally {
     await client.close();
   }
@@ -523,8 +603,7 @@ async function withClient(
     if (interrupted) return EXIT_INTERRUPTED;
     return code;
   } catch (error) {
-    stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    return EXIT_TURN_FAILED;
+    return reportClientFailure(error, stderr, options);
   } finally {
     if (timer) clearTimeout(timer);
     if (options.installSignals) process.off('SIGINT', onSigint);
