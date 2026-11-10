@@ -62,7 +62,7 @@ Every agent SDK assumes the model emits clean, structured `tool_calls`. Local, q
 | **"What shape is this SSE stream?"** Every team invents their own envelope; FE and BE drift. | One JSON Schema → generated **TypeScript types + Pydantic models**, in lockstep release. `content`, `tool_call`, `tool_result`, `error`, `done`, `budget_exhausted` all standardised; conformance test suite verifies the two language SDKs stay byte-compatible. |
 | **Tool dispatch / budgets / retries / safety regex** | `agent-harness` (Py): `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, `is_terminal_result`, command-safety patterns. **Pure functions, zero I/O coupling** — drop into FastAPI / Celery / a notebook. 49 unit + golden tests. |
 | **LLM provider abstraction** | `agent-runtime` (Py): one `LLMProvider` interface across **four wire protocols** — OpenAI-compatible chat/completions (Ollama, vLLM, DeepSeek, Groq, …), OpenAI Responses, Anthropic-native, Gemini-native — with a live gateway model catalog, per-vendor sampling presets, `@tool` decorator, `ToolRouter`, SSE-over-HTTP and stdio JSON-RPC transports. |
-| **Shipping LLMs in a desktop app without a network round-trip** | `steerable-sidecar`: a portable, signed CPython binary that speaks JSON-RPC over stdio (34 methods). Bundle with Electron / Tauri / Wails / your custom shell — **macOS notarised, Windows code-signed**, ~95 MB stripped on darwin-arm64 under a CI size budget. |
+| **Shipping LLMs in a desktop app without a network round-trip** | `steerable-sidecar`: a portable, signed CPython binary that speaks JSON-RPC over stdio (36 methods). Bundle it into a Tauri app (`@steerable/agent-shell-tauri`), any other native shell, or your own host — **macOS notarised, Windows code-signed**, ~95 MB stripped on darwin-arm64 under a CI size budget. |
 | **Chat UI that doesn't look like 2003** | `@steerable/agent-ui`: 7 headless React components + 14 rich cards + 3 hooks + Tailwind preset. Every component has Storybook + a11y (axe) + visual-regression baselines locked in CI. |
 
 Every layer is independently published. Use just the protocol types, just the UI, just the sidecar — there is no monolith to swallow.
@@ -128,7 +128,7 @@ export function Chat() {
 
 `useChatStream` parses every standard `SSEEvent` shape into typed messages — you don't write a parser, you don't argue about envelope format. See live components at the [Storybook](https://steerableframework.com/storybook/).
 
-### "I'm shipping an Electron app and want LLMs to run locally"
+### "I'm shipping a desktop app and want LLMs to run locally"
 
 ```bash
 # Bundle the sidecar binary into resources/python-runtime/<platform>/
@@ -146,26 +146,26 @@ proc.stdin.write(JSON.stringify({
 // SSE-over-JSON-RPC events stream back on stdout, one per line.
 ```
 
-TypeScript hosts can skip the subprocess plumbing with `@steerable/agent-runtime` (`packages/agent-runtime/ts` — source-consumed via `link:`, not on npm yet): it owns spawn, the `lifecycle.ready` handshake, health pings, bounded auto-restart, and graceful drain, and exposes the full CoreLoop-level API (`chatStream` / `cancelChat` / `steerChat` / session fork & branch tree / …).
+TypeScript hosts can skip the subprocess plumbing with `@steerable/agent-runtime` (`packages/agent-runtime/ts` — source-consumed via `link:`, not on npm yet): it owns spawn, the `lifecycle.ready` handshake, health pings, bounded auto-restart, and graceful drain, and exposes the full CoreLoop-level API (`chatStream` / `cancelChat` / `steerChat` / session fork & branch tree / …). A Tauri product usually takes `@steerable/agent-shell-tauri` instead: the crate owns the native window and supervises the shell's Node host, which supervises the sidecar.
 
 Full runnable: [`examples/sidecar-roundtrip`](./examples/sidecar-roundtrip). Real-world embedder: [`deeppath-agent`](https://github.com/deeppath/deeppath-agent).
 
 ### "I just want to see the agent shell running"
 
-The Tier 5 host shell runs standalone with neutral branding (no product, no packs), in two modes:
+The Tier 5 host shell runs standalone with neutral branding (no product, no packs), in the browser or from the command line:
 
 ```bash
 pnpm install
-pnpm agent-shell:web       # BS mode: builds shell + neutral web app, boots the headless server
+pnpm agent-shell:web       # builds shell + neutral web app, boots the headless server
 # → http://127.0.0.1:4787  (Steerable Shell)
-
-pnpm agent-shell:client    # desktop client mode: same build, launched as an Electron window
 
 npm install -g @steerable/agent-cli
 steerable-cli              # command line and terminal session; Node 26.4.0
 ```
 
-Both are the production code path (prod web build, shell default preload) — the browser-dev Electron mock is dev-server-only and tree-shaken out of prod builds, so it never appears here.
+A product ships the desktop window through `@steerable/agent-shell-tauri` and its own thin `src-tauri` crate; the framework repo itself boots the same shell in the browser.
+
+Both web and CLI are the production code path — the browser-dev host mock is dev-server-only and tree-shaken out of prod builds, so it never appears here.
 
 ---
 
@@ -176,8 +176,9 @@ Five tiers, strict no-upward-imports rule. Each tier is shippable on its own.
 ```mermaid
 flowchart TB
     subgraph T5[Tier 5 · Host Shell]
-        SH["<b>@steerable/agent-shell</b> (TS, private)<br/>Electron main + preload · headless HTTP server · local-backend · storage · sidecar supervisor"]
-        SHW["<b>@steerable/agent-shell-web</b> (TS, private)<br/>product-neutral renderer SPA source (React + Vite)"]
+        SH["<b>@steerable/agent-shell</b> (TS)<br/>Node host runtime + headless HTTP server · local-backend · storage · sidecar supervisor"]
+        SHT["<b>@steerable/agent-shell-tauri</b> (Rust)<br/>native window · menus · dialogs · updates · process containment"]
+        SHW["<b>@steerable/agent-shell-web</b> (TS)<br/>product-neutral renderer SPA source (React + Vite)"]
     end
 
     subgraph T4[Tier 4 · UI]
@@ -200,6 +201,7 @@ flowchart TB
 
     SH --> UI
     SH --> SC
+    SHT --> SH
     SHW --> UI
     UI --> P
     RT --> H
@@ -216,7 +218,7 @@ flowchart TB
     class H,HF t2
     class RT,SC t3
     class UI t4
-    class SH,SHW t5
+    class SH,SHW,SHT t5
 ```
 
 **The rules:**
@@ -286,13 +288,13 @@ flowchart TB
 </details>
 
 <details>
-<summary><b>Tier 5 — Host Shell</b> · <code>@steerable/agent-shell</code> + <code>@steerable/agent-shell-web</code> + <code>@steerable/pack-sdk</code> (private)</summary>
+<summary><b>Tier 5 — Host Shell</b> · <code>@steerable/agent-shell</code> + <code>@steerable/agent-shell-tauri</code> + <code>@steerable/agent-shell-web</code> + <code>@steerable/pack-sdk</code></summary>
 
-- **Two hosts, one runtime**: Electron desktop shell (main process, IPC, strict CSP, visible PTY via node-pty) and headless HTTP server (`/api/v2/*`, SSE) assembled from the same `HostRuntime`
+- **Two hosts, one runtime**: a Tauri desktop window (`@steerable/agent-shell-tauri`, a Rust crate that supervises the Node host on a loopback port — native window, menus, dialogs, single-instance, process containment, updates) and a headless HTTP server (`/api/v2/*`, SSE) assembled from the same `HostRuntime`
 - **Local backend**: chat/project/agent CRUD, CoreLoop streaming, skill loader (brand-placeholder rendering), subagent profiles, cross-turn background tasks with a panel UI, git-worktree isolation, session branch tree, usage/insights storage (SQLite via better-sqlite3)
 - **Sidecar supervision**: boot, health, egress proxy, seatbelt/exec sandbox, reverse approval/ask-user bridges
 - **Connection diagnostics**: LLM connection diagnosis panel, system/ambient proxy detection, and egress hints surfaced in settings — a misconfigured gateway fails with a remedy, not a hang
-- **Scenario-pack extension points** (`pack-sdk` types): services, tools, migrations, seeds, skills, IPC namespaces, HTTP routes, renderer chat slots & settings panels, brand/logo — composed at build time by the product's assembly root
+- **Scenario-pack extension points** (`pack-sdk` types): services, tools, migrations, skills, agent seeds, HTTP routes, CLI commands, packaging spec, and renderer contributions (routes, settings panels, chat slots, card renderers, brand/logo) — composed at build time by the product's assembly root
 - **Renderer SPA source** (`agent-shell-web`): product-neutral React app consumed by product web entries via the `@/` alias + `createProductViteConfig` factory
 - **Packaging helpers**: `scripts/prepare-sidecar.sh` / `prepare-framework-wheels.sh` build the embedded Python runtime for product installers
 - **Neutrality gate**: `pnpm --filter @steerable/agent-shell shell:neutral` fails CI on any product hardcoding in shell sources or skill text
@@ -326,7 +328,7 @@ For a comparison with agent-specific frameworks and products (Codex, DeepSeek Ha
 
 ## Who's using it in production
 
-- **[DeepPath](https://deeppath.cc)** — web (`@steerable/agent-protocol` + `@steerable/agent-ui`), API (all 3 Py packages), Electron desktop (sidecar + UI). The framework was extracted from this codebase and is dogfooded back into it on every release.
+- **[DeepPath](https://deeppath.cc)** — web (`@steerable/agent-protocol` + `@steerable/agent-ui`), API (all 3 Py packages), desktop (Tauri shell + sidecar + UI). The framework was extracted from this codebase and is dogfooded back into it on every release; that repo assembles several branded builds from the same shell.
 
 If you're using Steerable in production, send a PR adding your project here.
 
@@ -334,7 +336,7 @@ If you're using Steerable in production, send a PR adding your project here.
 
 ## Project status & roadmap
 
-**Current**: `0.6.x` series — public registries, lockstep tag-driven releases, one production consumer ([DeepPath](https://deeppath.cc)) shipping on web, API, and desktop.
+**Current**: `0.8.x` series — public registries, lockstep tag-driven releases, native engine artifacts at `1.0.7`. One consumer codebase ([DeepPath](https://deeppath.cc)) ships web, API and desktop from this framework, and assembles several branded desktop builds from the same shell.
 
 | Phase | Status | What lands |
 |---|---|---|
@@ -342,6 +344,7 @@ If you're using Steerable in production, send a PR adding your project here.
 | **0.3+ Trusted Publishing** | ✅ done | npm `--provenance` (sigstore) + PyPI Trusted Publishing over OIDC; cross-platform sidecar build/sign matrix in GHA |
 | **0.4+ Sidecar slimming** | ✅ done | `install_only_stripped` distro landed; darwin-arm64 bundle 94.7 MB (was ~700 MB class), CI budgets back at the 320 MB design target |
 | **0.5–0.6 Architecture-review waves 0–4** | ✅ done | Append-only model-visible history, world-state diffing with `cache_control` emission, tool exposure tiers + `tool_search`, MCP client, approval algebra, per-exec sandbox, AG-UI/ACP peer transports, plugin lifecycle, gateway model catalog |
+| **0.6.x–0.7 Rust CoreLoop + Tauri host** | ✅ done | The loop and egress proxy became digest-pinned Rust artifacts adopted through one lock file; the desktop host moved from an Electron main process to `@steerable/agent-shell-tauri`, which supervises the same Node host; `directConnection`, diagnosable and reconnectable provider failures, continuation of failed or stopped turns, OTLP turn-outcome counters, approval policy rules and project binding |
 | **1.0** | ⚪ gated on | One full minor cycle without breaking changes; spec freeze (`additionalProperties` semantics locked); shared `1.0.0` decision for protocol+harness pair |
 
 Pre-1.0 contract: minor (`0.X`) is the breaking-change axis.

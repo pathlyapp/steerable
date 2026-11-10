@@ -25,7 +25,7 @@ uv add steerable-agent-protocol steerable-agent-harness steerable-agent-runtime
 uv add steerable-sidecar
 ```
 
-### TypeScript (web app or Electron renderer)
+### TypeScript (web app or desktop renderer)
 
 ```bash
 pnpm add @steerable/agent-protocol @steerable/agent-ui
@@ -91,7 +91,7 @@ asyncio.run(main())
 The `@tool` decorator auto-classifies via `decide_tool_mode("read_file")` →
 `"read"` (read-only); see [Tools spec](spec/tools.md) for the rules.
 
-## 4 · Hello, Sidecar (Electron / shell embedder)
+## 4 · Hello, Sidecar (desktop / shell embedder)
 
 The official TypeScript entry is `@steerable/agent-runtime` — it owns the
 sidecar process lifecycle (spawn, `lifecycle.ready` handshake, health ping,
@@ -112,7 +112,7 @@ const runtime = new AgentRuntime({
 });
 await runtime.start();                   // spawn + lifecycle.ready handshake
 
-const health = await runtime.ping();     // { status: 'ok', version: '0.6.4', … }
+const health = await runtime.ping();     // { status: 'ok', version: '0.8.5', … }
 
 const stream = await runtime.chatStream({
   provider: 'openai_compat',
@@ -168,20 +168,23 @@ function MyChat() {
 ```
 
 `useChatStream` is intentionally transport-agnostic — fetch+SSE in the browser,
-WebSocket in your dev panel, IPC in Electron, sidecar JSON-RPC in a desktop
-shell. The hook reduces protocol `SSEEvent`s onto a `ChatMessage[]` regardless.
+WebSocket in your dev panel, IPC from a native host, sidecar JSON-RPC in a
+desktop shell. The hook reduces protocol `SSEEvent`s onto a `ChatMessage[]`
+regardless.
 
 ## 6 · Run the local dev preview
 
 The framework ships its own product-neutral host shell, so you can boot the
-full stack — Electron main or headless HTTP server, sidecar, chat UI — without
-any consumer repo:
+full stack — host runtime, sidecar, chat UI — without any consumer repo:
 
 ```bash
 pnpm install
 pnpm agent-shell:web       # headless server + neutral web app → http://127.0.0.1:4787
-pnpm agent-shell:client    # same build, launched as an Electron window
 ```
+
+A desktop window comes from a product's own `src-tauri` crate calling
+`steerable_agent_shell_tauri::run`; the framework repo boots the shell in the
+browser only.
 
 For a UI-only preview, `pnpm shell:dev` boots the example web shell with a mock
 transport that replays the 14 rich chat cards — zero external services.

@@ -83,10 +83,9 @@ One command boots a full agent shell; every layer underneath ships as its own pa
 <div class="sf-out">→ Steerable Shell listening at http://127.0.0.1:4787</div>
 </div>
 <div class="sf-run-pane sf-run-pane--desktop">
-<pre><code><span class="sf-cmd">git clone https://github.com/pathlyapp/steerable.git</span>
-<span class="sf-cmd">cd steerable &amp;&amp; pnpm install</span>
-<span class="sf-cmd"><b>pnpm agent-shell:client</b></span></code></pre>
-<div class="sf-out">→ Steerable Shell opens in its own Electron window</div>
+<pre><code><span class="sf-cmd"># in your product repo, with src-tauri wired to the shell crate</span>
+<span class="sf-cmd"><b>pnpm tauri dev</b></span></code></pre>
+<div class="sf-out">→ native window on the same host runtime and sidecar</div>
 </div>
 <div class="sf-run-pane sf-run-pane--cli">
 <pre><code><span class="sf-cmd">npm install -g @steerable/agent-cli</span>
@@ -317,7 +316,7 @@ One `LLMProvider` interface across **four wire protocols** — OpenAI-compatible
 </div>
 <div class="sf-card" markdown>
 ### Embeddable sidecar
-A portable, signed CPython binary speaking JSON-RPC over stdio (34 methods). Ship local LLMs inside **Electron / Tauri / Wails** — macOS notarised, Windows code-signed — with an OS sandbox, per-host egress proxy, and plugin lifecycle built in.
+A portable, signed CPython binary speaking JSON-RPC over stdio (36 methods). Ship local LLMs inside a **Tauri desktop app** (`@steerable/agent-shell-tauri`) or any native host — macOS notarised, Windows code-signed — with an OS sandbox, per-host egress proxy, and plugin lifecycle built in.
 </div>
 <div class="sf-card" markdown>
 ### Headless React UI & Web Shell
@@ -336,10 +335,11 @@ A portable, signed CPython binary speaking JSON-RPC over stdio (34 methods). Shi
     cd steerable && pnpm install
 
     pnpm agent-shell:web      # full agent shell → http://127.0.0.1:4787
-    pnpm agent-shell:client   # same shell as a desktop (Electron) window
     ```
 
     Chat, integrated terminal, bundled skills, model picker, and a Seatbelt-sandboxed sidecar, all on the production code path. Add your model endpoint in settings and start working.
+
+    A desktop window comes from a product's own `src-tauri` crate calling `steerable_agent_shell_tauri::run` (`@steerable/agent-shell-tauri`); the framework repo boots the shell in the browser.
 
     Only want to explore the UI? `pnpm shell:dev` opens a UI-only reference app on `http://localhost:5180` that replays all 14 rich cards from sample data, with no backend or API key.
 
@@ -382,7 +382,7 @@ A portable, signed CPython binary speaking JSON-RPC over stdio (34 methods). Shi
     }
     ```
 
-=== "Electron + local LLM"
+=== "Desktop app + local LLM"
 
     ```bash
     # Bundle the sidecar binary into resources/python-runtime/<platform>/
@@ -415,11 +415,11 @@ Five tiers, strict no-upward-imports rule. Tier N never imports Tier N+1 — ado
 
 ```mermaid
 graph BT
-  T5["<b>Tier 5 · Host Shell</b> (TypeScript, private)<br/>@steerable/agent-shell · agent-shell-web · pack-sdk<br/>Electron main + headless HTTP server · local backend ·<br/>sidecar supervision · product-neutral renderer SPA"]
+  T5["<b>Tier 5 · Host Shell</b> (TypeScript + Rust)<br/>@steerable/agent-shell · agent-shell-tauri · agent-shell-web · pack-sdk<br/>Tauri native window · Node host runtime + headless HTTP server · local backend ·<br/>sidecar supervision · product-neutral renderer SPA"]
 
   T4["<b>Tier 4 · UI</b> (TypeScript / React)<br/>@steerable/agent-ui<br/>Hooks: useChatStream · useToolCallStatus · useAgentSession<br/>Components: ChatPanel · MessageList · AgentSelector · ModelSelector ·<br/>OrchestrationPlanCard · ToolCallRenderer · SSEStreamView + 14 cards<br/>Tailwind preset (dark-mode aware)"]
 
-  T3S["<b>Tier 3 · Sidecar</b> (portable CPython binary)<br/>steerable-sidecar<br/>JSON-RPC over stdio · 34 methods · graceful shutdown<br/>agent.chat.stream · tool.invoke · agent.session.* · plugin.* · models.list"]
+  T3S["<b>Tier 3 · Sidecar</b> (portable CPython binary)<br/>steerable-sidecar<br/>JSON-RPC over stdio · 36 methods · graceful shutdown<br/>agent.chat.stream · tool.invoke · agent.session.* · plugin.* · models.list"]
 
   T3R["<b>Tier 3 · Runtime</b> (Python only)<br/>steerable-agent-runtime<br/>CoreLoop · LLMProvider (OpenAI-compat / Responses / Anthropic / Gemini)<br/>ToolRouter · StorageAdapter · TransportAdapter (FastAPI SSE)"]
 
@@ -430,7 +430,7 @@ graph BT
   T5 -->|"spawns + supervises"| T3S
   T5 -.->|"renders with"| T4
   T4 -.->|"shared wire types"| T1
-  T4 -->|"spawns + JSON-RPC stdio (Electron)"| T3S
+  T4 -->|"spawns + JSON-RPC stdio (host bridge)"| T3S
   T3S -->|"embeds"| T2
   T3S -->|"validates against"| T1
   T3R -->|"embeds"| T2
@@ -459,10 +459,10 @@ Steerable isn't the only way to ship an agent. The short, honest version against
 | Dimension | Steerable | OpenAI Codex | DeepSeek Harness | LangGraph | OpenAI Agents SDK | Claude Code / Agent SDK |
 | --------- | --------- | ------------ | ---------------- | --------- | ----------------- | ----------------------- |
 | **Form factor** | Layered library — the same loop in a desktop sidecar and a server | Product family: CLI, IDE, desktop, cloud — Rust core | Plugin-based harness (TS) on Cordis | Orchestration library — you write the graph | Lightweight framework over the Responses API | One closed-source bundle behind both the CLI and the Agent SDK |
-| **Loop / events** | `CoreLoop` + structured `LoopEvent` taxonomy; mid-turn `agent.chat.steer` | Session-owned turn loop; interrupt/abort; 12-event hooks | Inbox-driven ReactLoop; steer / inject / followup | Interrupts at node boundaries | Handoffs + guardrails; no mid-run steer | Mid-turn fold queue; hooks can veto continuation |
-| **Sandbox** | Seatbelt + bwrap/Landlock, fail-closed; command classifier; per-host egress proxy | Approvals + ExecPolicy + Seatbelt/Landlock + Guardian | `sandbox.confine`, fail-closed | None built-in | Guardrails; no sandbox | Permission modes; Seatbelt/bwrap opt-in, fail-open |
+| **Loop / events** | `CoreLoop` + structured `LoopEvent` taxonomy; mid-turn `agent.chat.steer` | Session-owned turn loop; `turn/steer`, interrupt, durable queue; 14-event hooks | Inbox-driven loop; steer / inject / followup | Interrupts at node boundaries | Handoffs + guardrails; no mid-run steer in stable | Mid-turn fold queue; hooks can veto continuation |
+| **Sandbox** | Seatbelt + bwrap/Landlock + Windows host spawn, fail-closed; command classifier; per-host egress proxy | Approvals + ExecPolicy + Seatbelt/bwrap+seccomp/Windows + Guardian | `sandbox.confine`, fail-closed | None built-in | Guardrails; Sandbox Agents on Docker or hosted providers | Permission modes; Seatbelt/bwrap opt-in, fail-open in the CLI |
 | **Model quality** | Recovers malformed tool calls; completion veto; grounding; token calibration | Assumes structured `tool_calls` | Assumes structured `tool_calls` | Substrate — you own the loop | Built for frontier models | Built for frontier models |
-| **Maturity** | `0.6.x`; used in production deployments | Massive real-world usage | Pre-release (`0.1.x`); internal use | Widely adopted in production | Production, OpenAI-tied | Production; Anthropic models via first-party, Bedrock, Vertex, Foundry, Gateway |
+| **Maturity** | `0.8.x`; one consumer codebase shipping several branded desktop builds | Massive real-world usage | Public prerelease (`0.2.x` on npm, MIT) | Widely adopted in production | Production, OpenAI-tied | Production; Anthropic models via eight backends |
 
 <p class="sf-lede" markdown>
 Where Steerable genuinely differs, where it lags, and how to choose: [Full comparison](comparison.md).

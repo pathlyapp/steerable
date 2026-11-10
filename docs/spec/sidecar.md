@@ -1,8 +1,8 @@
 # Sidecar Spec
 
 `steerable-sidecar` is a **portable Python executable** that exposes the
-runtime over JSON-RPC 2.0 framed on stdin/stdout. UI shells (Electron,
-Tauri, native, …) spawn the sidecar as a subprocess, send method calls
+runtime over JSON-RPC 2.0 framed on stdin/stdout. UI shells (Tauri, native,
+or custom) spawn the sidecar as a subprocess, send method calls
 on stdin, receive responses + notifications on stdout, and observe
 log + ready markers on stderr.
 
@@ -22,7 +22,7 @@ sequenceDiagram
 
     P->>S: spawn(child, ['-m','steerable_sidecar'], stdio=pipe)
     Note over S: bootstrap …
-    S-->>P: stderr: __SIDECAR_READY__:{"status":"ok",<br/>"version":"0.6.4","protocolVersion":"0.1.0", …}
+    S-->>P: stderr: __SIDECAR_READY__:{"status":"ok",<br/>"version":"0.8.5","protocolVersion":"0.1.0", …}
     S-->>P: stdout (no id):<br/>{"jsonrpc":"2.0","method":"lifecycle.ready","params":{…}}
     Note over P: Now safe to send JSON-RPC frames.
 ```
@@ -47,7 +47,7 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 ### Successful response
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.6.4","protocolVersion":"0.1.0","uptimeMs":1234,"pid":42,"pythonVersion":"3.12.6","platform":"darwin-arm64","loadedProviders":[],"loadedTools":0,"activeTraces":0,"checks":{}}}
+{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.8.5","protocolVersion":"0.1.0","uptimeMs":1234,"pid":42,"pythonVersion":"3.12.6","platform":"darwin-arm64","loadedProviders":[],"loadedTools":0,"activeTraces":0,"checks":{}}}
 ```
 
 ### Error response
@@ -62,7 +62,11 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 {"jsonrpc":"2.0","method":"stream.chunk","params":{"streamId":"s_42","delta":"Hello"}}
 ```
 
-## Method catalog (v0.6.x)
+## Method catalog (v0.8.x)
+
+36 request methods. The list is frozen in `runtime-contract.json`, and a test
+fails when a registered method drifts from it; the table below mirrors the
+contract.
 
 | Method                  | Direction | Result                                 |
 | ----------------------- | --------- | -------------------------------------- |
@@ -439,7 +443,7 @@ corruption (a lineage cycle).
 ```json
 {
   "status": "ok",
-  "version": "0.6.4",
+  "version": "0.8.5",
   "protocolVersion": "0.1.0",
   "uptimeMs": 12345,
   "pid": 42,

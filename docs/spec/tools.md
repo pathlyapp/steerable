@@ -359,7 +359,7 @@ persists that key in userData and injects it at sidecar spawn; an empty
 key still leaves `web_search` **unregistered**.
 
 `STEERABLE_WEB_SEARCH_PROVIDER=host` registers without a sidecar key so the
-Electron host can execute hosted search with the existing chat credential
+desktop host can execute hosted search with the existing chat credential
 (OpenAI `api.openai.com` only). GLM, OpenRouter, and DeepSeek have no hosted
 search here — they need the Tavily settings key, or the explicit free
 backend `STEERABLE_WEB_SEARCH_PROVIDER=ddg` (DuckDuckGo lite HTML; not a

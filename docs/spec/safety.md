@@ -42,29 +42,34 @@ deterministic across runtimes.
 | Network probes   | `nmap`, `tcpdump` (warning, not critical)                              |
 
 The full rule set lives in
-`packages/agent-runtime/py/src/steerable_agent_runtime/safety/builtins.py`
-(canonical) and `packages/agent-harness/ts/src/safety-patterns.ts`
-(TS facade for parity tests).
+`packages/agent-harness/py/src/steerable_agent_harness/safety.py`
+(canonical, 61 built-in rules) and
+`packages/agent-harness/ts/src/safety-patterns.ts` (TS twin, kept in lockstep
+by the conformance case `tests/conformance/cases/safety/classify_shell_command.yaml`).
 
-## Adding custom rules
+## Disabling and adding rules
+
+The framework classifier takes the built-in set plus the ids to disable:
 
 ```python
-from steerable_agent_protocol import CommandSafetyPattern
-from steerable_agent_runtime.safety import classify_shell_command, register_rule
+from steerable_agent_harness import CommandSafetyConfig, classify_shell_command
 
-register_rule(CommandSafetyPattern(
-    id="my-org-no-prod-db",
-    label="No direct prod DB",
-    description="Block any psql/mysql against the prod hostname.",
-    pattern=r"(psql|mysql).*--host.*prod-db",
-    category="data",
-    severity="critical",
-    platform="all",
-))
+classify_shell_command("rm -rf / --no-preserve-root")
+# → ShellCommandClassification(severity='critical', matched_rules=['rm', 'rm_rf_root'])
 
-result = classify_shell_command("psql --host prod-db -U admin")
-# → {"severity": "critical", "matchedRules": ["my-org-no-prod-db"]}
+config = CommandSafetyConfig(disabled_pattern_ids=["git_push"])
+classify_shell_command("git reset --hard origin/main", config)
+# → ShellCommandClassification(severity='safe', matched_rules=[])
 ```
+
+Product-specific rules are host data, not framework code: the desktop shell's
+`CommandSafetyConfigPayload` (`{disabledPatternIds, customPatterns}`) reaches
+`LocalExecutor.updateSafetyConfig`, and `getActivePatterns(config)` in the
+harness facade merges built-ins with the enabled `customPatterns` entries
+(`{id, label, pattern, category, enabled}`). An invalid custom regex is logged
+and skipped. Add a rule there when the policy belongs to one deployment; add
+it to `BUILTIN_PATTERNS` in both language twins only when every deployment
+should have it.
 
 ## Why a regex layer instead of a parser
 
@@ -200,7 +205,7 @@ Wave 3 added the opt-in third layer: `SandboxedToolExecutor`
 shell/subprocess call's `command` into a sandboxed invocation before
 dispatch. Because the rewrite happens before the reverse channel, the
 desktop host's shell spawns the confined command without learning any
-sandbox mechanics — per-exec Seatbelt in the Electron deployment. The
+sandbox mechanics — per-exec Seatbelt in the desktop deployment. The
 backend is pluggable (`SandboxBackend`); the reference
 `SeatbeltExecBackend` reuses the layer-1 profile generator with
 tool-execution defaults (deny-by-default, no network unless declared,
@@ -267,23 +272,27 @@ landlock syscalls; version checks would misjudge all of these. A host
 that cannot confine gets `enforcement: "none"` (and `requireFull`
 refusals), never a weaker wrap.
 
-### Windows: no backend (recorded decision, 2026-08-30)
+### Windows: host spawn, not a rewriter backend (recorded decision, 2026-08-30)
 
-Windows constructs no backend, and this is a deliberate scope decision,
-not an oversight. The platform's confinement primitive — restricted
+Windows constructs no command-rewriting backend, and this is a deliberate
+scope decision, not an oversight.
+The platform's confinement primitive — restricted
 token + job object, cf. dsh's `sandbox-windows-acl` — is host-side spawn
 support: the token must be created and applied *by the process that
 spawns the child* (`CreateProcessWithTokenW` & friends). It cannot be
 expressed as a command-line rewrite, so it does not fit this layer's
 rewriter architecture, and no wrapper-string backend can fake it.
 
-What real support requires (a future workstream, in order): a native
-spawn helper shipped per Windows arch; a reverse-channel protocol
-extension so the host (which legitimately holds that capability) performs
-the confined spawn on the loop's behalf; Windows CI coverage for the
-confinement matrix. Until that lands, Windows reports
-`enforcement: "none"` on every call and `requireFull` refuses — the
-honest-degradation contract holds there exactly as elsewhere.
+The shipped answer is the host capability surface below: the desktop sets
+`execSandbox.hostSpawn` on Windows, `select_exec_backend` returns `None`, and
+`HostSpawnExecutor` delegates the spawn over the reverse channel to
+`win-spawn-helper`, which applies a restricted token and a job object. That
+path confines filesystem writes only; `network` / `allowedHosts` come back in
+`sandbox.notEnforced`, so the host reports `enforcement: "partial"` — not
+`full`. A host without the capability, and every rewriter-architecture
+deployment that does not opt in, still reports `enforcement: "none"` and
+`requireFull` refuses; the honest-degradation contract holds there exactly as
+elsewhere.
 
 ## Host capability surface (W2.2, contract 2026-08-30)
 
@@ -332,8 +341,8 @@ Rules:
   writable paths, `network: false` means no egress, `allowedHosts` bounds
   egress when network is on. Hosts that cannot honor a policy field must
   report `partial`/`none`, not silently ignore the field.
-- TS hosts implement it via `AgentRuntime.onProcessSpawn`; the Electron
-  desktop wires its own reverse handler to the same method name.
+- TS hosts implement it via `AgentRuntime.onProcessSpawn`; the desktop
+  host wires its own reverse handler to the same method name.
 
 #### Reference implementation: `win-spawn-helper` (deeppath-agent, 2026-08-31)
 
@@ -464,7 +473,8 @@ All three layers are **on by default** in the DeepPath desktop build:
   single localhost endpoint, which Seatbelt pins per host and reports
   `full`, so macOS requires it; bwrap and Landlock have no per-host pinning
   <!-- anchor: packages/sidecar/py/src/steerable_sidecar/sandbox.py :: Windows\w*(ExecBackend|Rewriter) -->
-  and Windows has no rewriter backend, so those report `partial`/`none`
+  and Windows has no rewriter backend (its host-spawn path confines writes
+  only), so those report `partial`/`none`
   and the desktop leaves `requireFull` off rather than refusing every shell
   call. Deriving it from a platform check instead denied all shell on Linux
   for as long as the proxy was up. `STEERABLE_EXEC_SANDBOX=0` restores

@@ -99,33 +99,42 @@ Headless React hooks + components, Tailwind preset. Designed so a single
 React tree can mount either:
 
 - a transport that hits HTTP+SSE (web app)
-- a transport that uses Electron IPC bridged to the sidecar (desktop)
+- a transport that talks to the host runtime, which bridges to the sidecar
+  (desktop app)
 
 without any component-level changes.
 
 ## Tier 5 — Host Shell
 
-**Packages:** `@steerable/agent-shell` · `@steerable/agent-shell-web` ·
-`@steerable/pack-sdk` — versioned in lockstep and **published to npm** so
-product repos can pin semantic versions. `agent-shell` ships its compiled
-`dist/`; `agent-shell-web` ships its `src/` (products compile it via the
+**Packages:** `@steerable/agent-shell` · `@steerable/agent-shell-tauri` ·
+`@steerable/agent-shell-web` · `@steerable/pack-sdk` — versioned in lockstep
+and **published to npm** so product repos can pin semantic versions. The npm
+surface at `0.8.5` is `@steerable/agent-shell` 0.8.5,
+`@steerable/agent-shell-tauri` 0.8.5 (the Rust crate source ships inside that
+package; it is not published to crates.io), `@steerable/agent-shell-web` 0.8.5
+and `@steerable/pack-sdk` 0.8.5. `agent-shell` ships its compiled `dist/`;
+`agent-shell-web` ships its `src/` (products compile it via the
 `createProductViteConfig` factory and the `@/` alias); `pack-sdk` ships pure
 `types/` (zero runtime). Products may still use source/`link:` during local
 development.
 
-The assemble-a-product tier: an Electron desktop shell (main process, IPC,
-strict CSP, visible PTY) and a headless HTTP server (`/api/v2/*`, SSE) built
-from the same `HostRuntime`; a local backend (chat/project/agent CRUD,
-CoreLoop streaming, skill loader, subagent profiles, worktree service,
-background tasks, usage/insights storage); sidecar supervision (boot, health,
-egress proxy, exec sandbox, reverse approval/ask-user bridges); and a
-product-neutral renderer SPA. Brand, telemetry endpoints, help links, and
-data-directory names are injected by the consuming product's assembly root —
-the `shell:neutral` CI gate fails on any product hardcoding in shell sources.
+The assemble-a-product tier: a Tauri desktop host (a Rust crate that owns the
+native window, menus, dialogs, single-instance behaviour, screenshot clipboard
+transfer, resource paths, process containment and updates, and supervises the
+product's Node entry on an ephemeral loopback port) and a headless HTTP server
+(`/api/v2/*`, SSE) built from the same `HostRuntime`; a local backend
+(chat/project/agent CRUD, CoreLoop streaming, skill loader, subagent profiles,
+worktree service, background tasks, usage/insights storage); sidecar
+supervision (boot, health, egress proxy, exec sandbox, reverse
+approval/ask-user bridges); and a product-neutral renderer SPA. Brand,
+telemetry endpoints, help links, and data-directory names are injected by the
+consuming product's assembly root — the `shell:neutral` CI gate fails on any
+product hardcoding in shell sources.
 
 Tier 5 is how [DeepPath](https://deeppath.cc) ships its desktop app, and it
-runs standalone for evaluation: `pnpm agent-shell:web` (headless server +
-neutral web app) or `pnpm agent-shell:client` (Electron window).
+runs standalone for evaluation: `pnpm agent-shell:web` boots the headless
+server with the neutral web app. A desktop window comes from a product's own
+`src-tauri` crate calling `steerable_agent_shell_tauri::run`.
 
 ## Data flow at runtime
 
@@ -167,7 +176,7 @@ The split avoids maintaining duplicate business logic:
 2. The desktop app needed to share **business logic**, not just types.
 3. Maintaining two implementations of policy/budget/retry/tools/storage
    in TS+Py guaranteed drift.
-4. Embedding a portable Python sidecar in Electron lets the desktop app
+4. Embedding a portable Python sidecar in a desktop host lets the desktop app
    call the same harness + runtime the server uses, with zero drift.
 
 The Python sidecar owns the complete Tier 2 / 3 API and business behavior.
