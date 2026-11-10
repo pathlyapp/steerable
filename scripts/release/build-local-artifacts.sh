@@ -25,11 +25,19 @@ pnpm -r --filter '@steerable/*' build
 echo "== 4/5  pack TS tarballs + build Py wheels"
 rm -rf dist
 mkdir -p dist/npm dist/py
-for pkg in agent-protocol agent-harness agent-ui; do
+# Keep this list identical to the `for dir in ...` list in
+# .github/workflows/publish-npm.yml — a package missing here never reaches the
+# local verification, so a broken tarball is only found after publishing.
+# Order matters: consumers pack after the packages they depend on so a
+# verification run installs matching versions.
+for pkg in agent-protocol agent-harness pack-sdk agent-ui agent-runtime agent-client agent-shell agent-cli; do
   (cd "packages/$pkg/ts" && \
    pnpm pack --pack-destination "$ROOT/dist/npm" >/dev/null)
   echo "    packed @steerable/$pkg"
 done
+(cd packages/agent-shell/web && \
+ pnpm pack --pack-destination "$ROOT/dist/npm" >/dev/null)
+echo "    packed @steerable/agent-shell-web"
 uv build --all-packages --out-dir dist/py >/dev/null
 rm -f dist/py/steerable_example_*.whl dist/py/steerable_example_*.tar.gz
 echo "    built $(ls dist/py | wc -l | tr -d ' ') Python files"

@@ -1,0 +1,19 @@
+{
+  "name": "steerable-example-ts-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Minimal Steerable TypeScript example: agent-runtime drives one sidecar turn.",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@steerable/agent-protocol": "workspace:*",
+    "@steerable/agent-runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  }
+}

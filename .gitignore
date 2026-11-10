@@ -94,3 +94,6 @@ evals/jobs/
 
 # MkDocs default local build output (mkdocs build without -d)
 site/
+
+# Packed release artifacts left in a package directory by manual checks
+*.tgz

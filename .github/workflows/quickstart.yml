@@ -1,0 +1,75 @@
+name: Quickstart
+
+# Runs the README's command-line quickstart on the platforms the CLI supports,
+# so the install path a new user follows cannot drift away from what works.
+# The check extracts the commands from README.md itself (see
+# scripts/quickstart_smoke.mjs) and points the provider at a local fake
+# gateway, so no credential or network access is involved.
+
+on:
+  pull_request:
+    paths:
+      - "README.md"
+      - "packages/agent-cli/**"
+      - "packages/agent-client/**"
+      - "packages/agent-shell/**"
+      - "packages/agent-protocol/**"
+      - "packages/agent-runtime/**"
+      - "scripts/quickstart_smoke.mjs"
+      - "scripts/fake-openai-server.mjs"
+      - ".github/workflows/quickstart.yml"
+  push:
+    branches: [main, develop, 'release/**']
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  cli-quickstart:
+    name: CLI quickstart (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v6
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm gen
+      - run: pnpm --filter @steerable/agent-cli... build
+      # The sidecar is the runtime the quickstart turn needs; `uv sync` puts it
+      # on the interpreter the CLI resolves from the repo. The published CLI
+      # gets the same code as a platform package.
+      - run: uv sync
+      - name: Run the README quickstart
+        shell: bash
+        run: node scripts/quickstart_smoke.mjs
+
+  web-quickstart:
+    name: Web shell quickstart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm gen
+      # `pnpm agent-shell:web` is the source path the README documents. A clean
+      # build proves the command in the README still produces a runnable shell;
+      # the server itself is not started, so no port or browser is needed.
+      - name: Build the shell the README command builds
+        run: |
+          pnpm --filter @steerable/agent-shell-web app:build
+          pnpm --filter @steerable/agent-shell build
+          test -d packages/agent-shell/web/dist || {
+            echo "::error::pnpm agent-shell:web did not produce packages/agent-shell/web/dist";
+            exit 1;
+          }

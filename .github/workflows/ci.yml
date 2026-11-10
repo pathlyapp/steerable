@@ -123,6 +123,13 @@ jobs:
           cargo fmt --check
           cargo test
           cargo clippy --all-targets -- -D warnings
+      # The desktop example is the documented starting point for a product, so
+      # a change that breaks it must fail here rather than in someone's repo.
+      - name: Desktop example compiles
+        working-directory: examples/tauri-desktop/src-tauri
+        run: |
+          cargo fmt --check
+          cargo check --all-targets
 
   py:
     runs-on: ubuntu-latest
@@ -218,6 +225,17 @@ jobs:
           echo "$out" | grep -q "^\[ready\]" || { echo "::error::sidecar-roundtrip missing [ready] marker"; exit 1; }
           echo "$out" | grep -q "^\[ping\]"  || { echo "::error::sidecar-roundtrip missing [ping] marker"; exit 1; }
           echo "$out" | grep -q "^\[bye\]"   || { echo "::error::sidecar-roundtrip missing [bye] marker"; exit 1; }
+
+      - name: example / ts-runtime
+        # Boots the real sidecar through @steerable/agent-runtime. No key, so it
+        # prints the tool count instead of running a turn: the point is that a
+        # host can spawn and drain the sidecar with one dependency.
+        run: |
+          out=$(pnpm --filter steerable-example-ts-runtime start 2>&1)
+          echo "$out"
+          echo "$out" | grep -q "^\[ready\]" || { echo "::error::ts-runtime missing [ready] marker"; exit 1; }
+          echo "$out" | grep -q "^\[tools\]" || { echo "::error::ts-runtime missing [tools] marker"; exit 1; }
+          echo "$out" | grep -q "^\[bye\]"   || { echo "::error::ts-runtime missing [bye] marker"; exit 1; }
 
       - name: example / web-shell (vite build smoke)
         # The framework's runnable reference app. We don't run it (no headless

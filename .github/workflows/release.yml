@@ -107,8 +107,15 @@ jobs:
   # Chained publish jobs. `if: success()` is implicit on `needs:`. The
   # workflows are idempotent — re-running them on a partially-published
   # tag only uploads what's missing.
-  publish-npm:
+  #
+  # The quickstart gate runs first: publishing a CLI that cannot complete the
+  # documented install path is the one failure a release must not ship.
+  quickstart:
     needs: validate
+    uses: ./.github/workflows/quickstart.yml
+
+  publish-npm:
+    needs: [validate, quickstart]
     uses: ./.github/workflows/publish-npm.yml
     secrets: inherit
     permissions:

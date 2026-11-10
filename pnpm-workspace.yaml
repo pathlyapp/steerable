@@ -4,6 +4,7 @@ packages:
   - "packages/*/tauri"
   - "tests/conformance/ts"
   - "examples/ts-minimal"
+  - "examples/ts-runtime"
   - "examples/web-shell"
 
 # pnpm 10 起 build 脚本默认全部不执行，approve 列表只能放在这里；

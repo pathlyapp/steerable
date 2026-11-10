@@ -31,6 +31,22 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  examples/ts-runtime:
+    dependencies:
+      '@steerable/agent-protocol':
+        specifier: workspace:*
+        version: link:../../packages/agent-protocol/ts
+      '@steerable/agent-runtime':
+        specifier: workspace:*
+        version: link:../../packages/agent-runtime/ts
+    devDependencies:
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.1
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
   examples/web-shell:
     dependencies:
       '@steerable/agent-protocol':
@@ -82,6 +98,9 @@ importers:
       '@steerable/agent-protocol':
         specifier: workspace:*
         version: link:../../agent-protocol/ts
+      '@steerable/agent-runtime':
+        specifier: workspace:*
+        version: link:../../agent-runtime/ts
       '@steerable/agent-shell':
         specifier: workspace:*
         version: link:../../agent-shell/ts
@@ -176,6 +195,9 @@ importers:
       '@steerable/agent-protocol':
         specifier: workspace:*
         version: link:../../agent-protocol/ts
+      '@steerable/agent-runtime':
+        specifier: workspace:*
+        version: link:../../agent-runtime/ts
       '@steerable/pack-sdk':
         specifier: workspace:*
         version: link:../../pack-sdk/ts

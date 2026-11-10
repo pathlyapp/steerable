@@ -21,6 +21,11 @@ jobs:
           - os: ubuntu-24.04
             target: linux-x64
             wheel_platform: manylinux-x64
+          # arm64 Linux servers and containers. ubuntu-24.04-arm is a native
+          # arm64 runner, so the bundled interpreter needs no cross-build.
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+            wheel_platform: manylinux-arm64
           - os: windows-2022
             target: win32-x64
             wheel_platform: win32-x64

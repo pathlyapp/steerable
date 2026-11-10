@@ -61,6 +61,62 @@ jobs:
           pnpm gen
           pnpm build
 
+      - name: Download runtime bundles
+        # Each platform job builds one sidecar bundle; the package assembler
+        # turns them into @steerable/runtime-<target>. A missing artifact is a
+        # hard failure: publishing a CLI without its platform packages would
+        # leave every install broken.
+        uses: actions/download-artifact@v5
+        with:
+          pattern: steerable-sidecar-*
+          path: artifacts
+
+      - name: Download egress proxies
+        # The egress proxy comes from the private Rust release, verified by the
+        # artifact lock. linux-arm64 may be absent until keel publishes it; the
+        # assembler records the gap and the CLI warns at run time.
+        run: |
+          python scripts/fetch_verified_artifacts.py egress \
+            --artifact-lock --target all --out artifacts || \
+            echo "::warning::some egress proxy targets are unavailable; those runtime packages ship without the proxy"
+
+      - name: Assemble platform runtime packages
+        run: |
+          python scripts/assemble_runtime_packages.py \
+            --sidecar-root artifacts --egress-root artifacts --out dist/runtime
+
+      - name: Verify platform package descriptors
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          missing = []
+          for path in sorted(pathlib.Path('dist/runtime').glob('runtime-*')):
+              descriptor = json.loads((path / 'runtime.json').read_text())
+              if not descriptor['egressProxy']:
+                  print(f"::warning::{descriptor['target']} ships without the egress proxy")
+              if not (path / descriptor['sidecarPython']).is_file():
+                  missing.append(descriptor['target'])
+          if missing:
+              print(f"::error::runtime packages missing their interpreter: {', '.join(missing)}")
+              sys.exit(1)
+          PY
+
+      - name: Check the packed packages install and import
+        # `tsc` resolves workspace packages to `src/`, so it cannot see that a
+        # new export is missing from a sibling's published tarball. This packs
+        # the batch, installs it into a clean project, and imports it. It runs
+        # before publishing because a package that throws on import cannot be
+        # unpublished.
+        run: |
+          python scripts/check_package_install.py
+
+      - name: Declare platform runtime dependencies
+        # The repository cannot carry these entries: the packages do not exist
+        # on the registry until this job publishes them.
+        run: |
+          version=$(node -p "require('./packages/agent-cli/ts/package.json').version")
+          python scripts/set_runtime_optional_deps.py prepare --version "${version}"
+
       - name: Publish each @steerable/* TS package whose version is new
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -77,13 +133,21 @@ jobs:
           # pack-sdk 是 agent-shell 的纯类型依赖（workspace:* 会被 pnpm 重写为
           # 锁步版本号），必须先于 agent-shell 发布；agent-shell-web 是源码包，
           # 产品经 vite.base + @/ alias 消费其 src/，与 ts 同版本发布。
-          for dir in packages/agent-protocol/ts packages/agent-harness/ts packages/agent-ui/ts packages/pack-sdk/ts packages/agent-shell/ts packages/agent-client/ts packages/agent-cli/ts packages/agent-shell/web packages/agent-shell/tauri; do
+          # agent-runtime is consumed from source by no in-repo package and is
+          # published for external TypeScript hosts; it must exist before the
+          # CLI's optional platform dependencies resolve.
+          for dir in packages/agent-protocol/ts packages/agent-harness/ts packages/agent-ui/ts packages/pack-sdk/ts packages/agent-runtime/ts packages/agent-shell/ts packages/agent-client/ts dist/runtime/runtime-darwin-arm64 dist/runtime/runtime-darwin-x64 dist/runtime/runtime-linux-x64 dist/runtime/runtime-linux-arm64 dist/runtime/runtime-win32-x64 packages/agent-cli/ts packages/agent-shell/web packages/agent-shell/tauri; do
             name=$(node -p "require('./${dir}/package.json').name")
             local_version=$(node -p "require('./${dir}/package.json').version")
 
             # `npm view <pkg>@<version>` exits 0 if the exact version exists,
             # non-zero (E404 or empty) otherwise. We treat any non-zero as
             # "not yet published".
+            if [ ! -d "${dir}" ]; then
+              echo "::notice title=skip::${dir} was not assembled; the platform runtime packages are built by scripts/assemble_runtime_packages.py."
+              continue
+            fi
+
             if npm view "${name}@${local_version}" version >/dev/null 2>&1; then
               echo "::notice title=skip::${name}@${local_version} is already on the registry."
               continue

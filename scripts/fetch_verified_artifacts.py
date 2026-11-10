@@ -32,7 +32,7 @@ WHEEL_PLATFORMS = (
     "darwin-x64",
     "win32-x64",
 )
-SIDECAR_TARGETS = ("darwin-arm64", "darwin-x64", "linux-x64", "win32-x64")
+SIDECAR_TARGETS = ("darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "win32-x64")
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -89,8 +89,8 @@ def host_sidecar_target() -> str:
         return "darwin-arm64" if arm else "darwin-x64"
     if system == "Windows":
         return "win32-x64"
-    if system == "Linux" and not arm:
-        return "linux-x64"
+    if system == "Linux":
+        return "linux-arm64" if arm else "linux-x64"
     raise SystemExit(f"unsupported sidecar host {system} {machine}")
 
 
@@ -442,7 +442,12 @@ def main(argv: list[str] | None = None) -> None:
     egress = sub.add_parser("egress", help="download one verified egress proxy binary")
     egress.add_argument("--version")
     egress.add_argument("--artifact-lock", "--lockstep", action="store_true")
-    egress.add_argument("--target", choices=[*SIDECAR_TARGETS, "host"], default="host")
+    egress.add_argument(
+        "--target",
+        choices=[*SIDECAR_TARGETS, "host", "all"],
+        default="host",
+        help="'all' downloads every published target for release packaging",
+    )
     egress.add_argument("--out", required=True, type=Path)
 
     license_parser = sub.add_parser("license", help="download the verified engine license")
@@ -469,9 +474,20 @@ def main(argv: list[str] | None = None) -> None:
         path = download_sidecar(_resolve_version(args), target, args.out, bundle=bundle)
         print(path)
     elif args.command == "egress":
-        target = host_sidecar_target() if args.target == "host" else args.target
-        path = download_egress(_resolve_version(args), target, args.out, bundle=bundle)
-        print(path)
+        if args.target == "all":
+            # Release packaging needs every platform. A target the private
+            # release does not carry yet is a warning, not a failure: the
+            # assembler records the gap and the CLI warns at run time.
+            version = _resolve_version(args)
+            for target in SIDECAR_TARGETS:
+                try:
+                    print(download_egress(version, target, args.out, bundle=bundle))
+                except SystemExit as error:
+                    print(f"::warning::egress {target} unavailable: {error}", file=sys.stderr)
+        else:
+            target = host_sidecar_target() if args.target == "host" else args.target
+            path = download_egress(_resolve_version(args), target, args.out, bundle=bundle)
+            print(path)
     elif args.command == "license":
         print(download_license(artifact_version(), args.out, bundle=bundle))
     elif args.command == "verify-wheels":
