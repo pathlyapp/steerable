@@ -1,6 +1,7 @@
 import type { LlmSettings, ScopedStore } from '../storage/index.js';
 import { productConfigDirectConnection } from '../product-config.js';
-import { sidecarWireProvider, withResolvedApiKey } from '../storage/llm-settings.js';import { OllamaProvider } from './ollama.js';
+import { sidecarWireProvider, withResolvedApiKey } from '../storage/llm-settings.js';
+import { OllamaProvider } from './ollama.js';
 import { OpenAICompatProvider } from './openai-compat.js';
 import { SidecarLlmProvider } from './sidecar-provider.js';
 import { getSidecarSupervisor, isSidecarEnabled, setSidecarSupervisor, setSidecarSupervisorPending, whenSidecarSupervisor } from '../sidecar/handle.js';
