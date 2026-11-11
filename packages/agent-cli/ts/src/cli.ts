@@ -207,7 +207,7 @@ async function runCommand(
     // After binding, before the chat exists: a usage error must win over the
     // credential check, and a missing key must not leave an empty chat behind.
     if (parsed.values['no-preflight'] !== true) {
-      const blocked = await preflightGate(client, request, stdout, stderr);
+      const blocked = await preflightGate(client, request, stdout, stderr, options);
       if (blocked !== null) return blocked;
     }
     return runTurn(client, {
@@ -231,13 +231,14 @@ async function preflightGate(
   request: RunRequest,
   stdout: NodeJS.WritableStream,
   stderr: NodeJS.WritableStream,
+  options: CliOptions,
 ): Promise<number | null> {
   const response = await client.request('GET', '/api/v2/local-settings/llm', undefined);
   if (response.status !== 200) return null;
   const settings = (response.data ?? {}) as Record<string, unknown>;
   const result = preflightApiKey(settings, process.env);
   if (result.ok) return null;
-  const fixes = preflightFixes(result.envNames);
+  const fixes = preflightFixes(result.envNames, options.commandName ?? 'steerable-cli');
   if (request.streamJson || request.json) {
     stdout.write(
       `${JSON.stringify({
@@ -255,7 +256,7 @@ async function preflightGate(
   stderr.write(`${cliText('preflight.missingKey')}\n\n`);
   for (const line of fixes) stderr.write(`  ${line}\n`);
   const provider = String(settings.vendorId ?? settings.provider ?? '');
-  stderr.write(`\n${cliText('preflight.currentProvider', { provider })}\n`);
+  stderr.write(`\n${cliText('preflight.currentProvider', { provider, command: options.commandName ?? 'steerable-cli' })}\n`);
   return EXIT_CONFIG;
 }
 

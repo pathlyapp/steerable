@@ -219,6 +219,27 @@ describe('classifyErrorMessage', () => {
   });
 });
 
+describe('preflight command name', () => {
+  it('names the product bin, not this package', async () => {
+    // A product wraps `createCli` with its own command name. The preflight
+    // lines are copied by users, so they have to name the command that exists
+    // on their machine.
+    const stderr = capture();
+    await createCli({
+      argv: ['run', 'hello', '--no-project'],
+      commandName: 'aroli',
+      stdout: capture().stream,
+      stderr: stderr.stream,
+      stdinIsTTY: false,
+      createClient: async () =>
+        client({ settings: { provider: 'openai-compat', vendorId: 'deepseek', model: 'deepseek-chat' } }),
+    });
+    expect(stderr.text()).toContain('aroli login');
+    expect(stderr.text()).toContain('aroli config set apiKey');
+    expect(stderr.text()).not.toContain('steerable-cli');
+  });
+});
+
 describe('runtime missing', () => {
   it('turns a missing platform package into the install fix, not a stack trace', async () => {
     const stderr = capture();

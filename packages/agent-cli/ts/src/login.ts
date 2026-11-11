@@ -403,13 +403,17 @@ export function settingsPath(dataDir: string): string {
  * @param platform Host platform, choosing the PowerShell export form.
  * @returns Runnable lines.
  */
-export function preflightFixes(envNames: readonly string[], platform: string = process.platform): string[] {
+export function preflightFixes(
+  envNames: readonly string[],
+  command: string,
+  platform: string = process.platform,
+): string[] {
   const env = envNames[0] ?? 'DEEPSEEK_API_KEY';
   return [
-    cliText('preflight.login'),
+    cliText('preflight.login', { command }),
     platform === 'win32'
       ? cliText('preflight.envExportPowerShell', { env })
       : cliText('preflight.envExport', { env }),
-    cliText('preflight.configSet'),
+    cliText('preflight.configSet', { command }),
   ];
 }

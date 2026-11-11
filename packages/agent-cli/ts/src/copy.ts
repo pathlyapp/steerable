@@ -16,11 +16,11 @@ export const cliCopy = {
 
   // 预检：没有可用的 API key
   'preflight.missingKey': '还没有配置模型的 API key。任选一种：',
-  'preflight.login': 'steerable-cli login',
+  'preflight.login': '{command} login',
   'preflight.envExport': 'export {env}=sk-...',
   'preflight.envExportPowerShell': '$env:{env}="sk-..."',
-  'preflight.configSet': 'steerable-cli config set apiKey sk-...',
-  'preflight.currentProvider': '当前提供方：{provider}，改提供方用 steerable-cli login。',
+  'preflight.configSet': '{command} config set apiKey sk-...',
+  'preflight.currentProvider': '当前提供方：{provider}，改提供方用 {command} login。',
 
   // login / logout
   'login.pickProvider': '选择模型提供方（↑↓ 选择，回车确认，Esc 取消）',
