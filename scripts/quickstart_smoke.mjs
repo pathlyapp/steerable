@@ -55,9 +55,23 @@ function readQuickstart() {
   return commands;
 }
 
+/**
+ * Quotes a path for the shell it will run in.
+ *
+ * @param value Absolute path.
+ * @returns The path, quoted when it contains characters a shell would split on.
+ */
+function quote(value) {
+  return /[\s"'$`\\]/.test(value) ? JSON.stringify(value) : value;
+}
+
 async function run(command, env, options = {}) {
   console.log(`$ ${command}`);
-  const child = spawn('/bin/sh', ['-c', command], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  // No `/bin/sh` on Windows; `cmd.exe` runs the same one-liners (the README
+  // commands are a bare executable plus arguments).
+  const [shell, shellArgs] =
+    process.platform === 'win32' ? ['cmd.exe', ['/d', '/s', '/c']] : ['/bin/sh', ['-c']];
+  const child = spawn(shell, [...shellArgs, command], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '';
   let stderr = '';
   child.stdout.setEncoding('utf8');
@@ -106,7 +120,7 @@ async function seedSettings(baseUrl, env) {
   const scriptPath = path.join(os.tmpdir(), `steerable-seed-${process.pid}.mjs`);
   fs.writeFileSync(scriptPath, seed);
   try {
-    await run(`node ${scriptPath}`, env);
+    await run(`node ${quote(scriptPath)}`, env);
   } finally {
     fs.rmSync(scriptPath, { force: true });
   }
@@ -157,8 +171,10 @@ async function main() {
         continue;
       }
       // `run` reads stdin when no task is given; a quickstart turn always has
-      // one, and the pipe keeps the check from waiting on a terminal.
-      const scripted = `${command.replaceAll('steerable-cli', `node ${CLI}`)} < /dev/null`;
+      // one. The child's stdin is already `ignore` in `run()`, so no shell
+      // redirection is needed — and `< /dev/null` would be a POSIX-only syntax
+      // on a job that also runs on Windows.
+      const scripted = command.replaceAll('steerable-cli', `node ${quote(CLI)}`);
       const { stdout, stderr } = await run(scripted, env);
       if (command.includes('run "summarize this repo"') && !stdout.includes('hello from the fake gateway')) {
         console.error(stdout, stderr);
@@ -170,7 +186,7 @@ async function main() {
     // directory is required: the settings written above already hold a key.
     const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'steerable-quickstart-nokey-'));
     const blocked = await run(
-      `node ${CLI} run "no key" --no-project --data-dir ${freshDir}`,
+      `node ${quote(CLI)} run "no key" --no-project --data-dir ${quote(freshDir)}`,
       { ...env, DEEPPATH_USER_DATA_DIR: freshDir, DEEPSEEK_API_KEY: '' },
       { expectCode: 78 },
     );
