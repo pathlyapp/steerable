@@ -62,14 +62,28 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm gen
-      # `pnpm agent-shell:web` is the source path the README documents. A clean
-      # build proves the command in the README still produces a runnable shell;
-      # the server itself is not started, so no port or browser is needed.
+      # The exact command the README documents. It used to build only the
+      # renderer and the shell, so a clean checkout failed on a missing
+      # `@steerable/agent-ui` build; the script now builds its dependencies
+      # first, and this job is what caught that.
+      #
+      # The server itself is not started (no port, no browser): a produced
+      # `app/dist/index.html` is what the command promises.
       - name: Build the shell the README command builds
         run: |
-          pnpm --filter @steerable/agent-shell-web app:build
-          pnpm --filter @steerable/agent-shell build
-          test -d packages/agent-shell/web/dist || {
-            echo "::error::pnpm agent-shell:web did not produce packages/agent-shell/web/dist";
-            exit 1;
+          pnpm agent-shell:web &
+          server_pid=$!
+          for _ in $(seq 1 60); do
+            if [ -f packages/agent-shell/web/app/dist/index.html ]; then
+              break
+            fi
+            sleep 2
+          done
+          # The command keeps serving after the build; stop it once the bundle
+          # exists or it never returns.
+          kill "$server_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+          test -f packages/agent-shell/web/app/dist/index.html || {
+            echo "::error::pnpm agent-shell:web did not produce packages/agent-shell/web/app/dist/index.html"
+            exit 1
           }
