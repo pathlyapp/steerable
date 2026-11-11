@@ -17,6 +17,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { resolvePlatformRuntime } from '@steerable/agent-runtime';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
@@ -52,11 +53,17 @@ export function resolveWinSpawnHelperPath(): string | null {
     return override && existsSync(override) ? override : null;
   }
   // Packaged desktop hosts pass the bundled helper through the override.
-  // npm-published shell cannot see the host checkout via __dirname.
+  // npm-published shell cannot see the host checkout via __dirname, so the
+  // platform runtime package is consulted next: it is the only place a global
+  // install can ship the helper.
   const candidates = [
     join(process.cwd(), 'resources', 'windows-spawn-helper', binary),
     join(__dirname, '..', '..', 'resources', 'windows-spawn-helper', binary),
   ];
+  const platform = resolvePlatformRuntime();
+  if (platform.kind === 'ok' && platform.runtime.winSpawnHelper) {
+    candidates.push(platform.runtime.winSpawnHelper);
+  }
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }

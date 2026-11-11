@@ -73,6 +73,14 @@ def package_version(root: Path) -> str:
     return str(manifest["version"])
 
 
+def find_artifact(root: Path, stem: str, target: str) -> Path | None:
+    """@returns A helper binary for one target, matched by name stem."""
+    for path in sorted(root.glob(f"*{stem}*")):
+        if path.is_file() and target in path.name:
+            return path
+    return None
+
+
 def find_egress(egress_root: Path, version: str, target: str) -> Path | None:
     suffix = ".exe" if target == "win32-x64" else ""
     candidate = egress_root / f"steerable-egress-proxy-bin-{version}-{target}{suffix}"
@@ -138,11 +146,31 @@ def build_package(
     package_dir.mkdir(parents=True)
     shutil.copytree(bundle, package_dir / "python-runtime")
 
+    # The Windows sidecar refuses to start without its spawn helper (it is the
+    # only confinement the host has there), so a win32-x64 package without one
+    # installs a CLI that cannot run a turn. Missing is reported, not fatal:
+    # the Rust release does not publish the helper yet.
+    helper_relative: str | None = None
+    if target == "win32-x64":
+        helper_source = find_artifact(egress_root, "win-spawn-helper", target)
+        if helper_source is None:
+            print(
+                f"::warning::win32-x64 ships without win-spawn-helper.exe; "
+                "the sidecar will refuse to start on Windows",
+                file=sys.stderr,
+            )
+        else:
+            bin_dir = package_dir / "bin"
+            bin_dir.mkdir(exist_ok=True)
+            shutil.copy2(helper_source, bin_dir / "win-spawn-helper.exe")
+            helper_relative = "bin/win-spawn-helper.exe"
+
     egress = find_egress(egress_root, engine_version, target)
     egress_relative: str | None = None
     if egress is not None:
         bin_dir = package_dir / "bin"
-        bin_dir.mkdir()
+        # The Windows helper may have created it already.
+        bin_dir.mkdir(exist_ok=True)
         egress_name = "steerable-egress-proxy.exe" if target == "win32-x64" else "steerable-egress-proxy"
         shutil.copy2(egress, bin_dir / egress_name)
         (bin_dir / egress_name).chmod(0o755)
@@ -161,7 +189,7 @@ def build_package(
         "sidecarPython": f"python-runtime/{sidecar_python}",
         "runCodePython": f"python-runtime/{run_code_python}",
         "egressProxy": egress_relative,
-        "winSpawnHelper": None,
+        "winSpawnHelper": helper_relative,
         "files": declared_files(package_dir),
     }
     (package_dir / "runtime.json").write_text(
