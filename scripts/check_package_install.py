@@ -70,6 +70,10 @@ FILE_ONLY: dict[str, tuple[str, ...]] = {
     "agent-shell-web": ("src/auth/gate.ts",),
 }
 
+# Packages whose install scripts must run for the tarball to be usable. Kept in
+# step with `onlyBuiltDependencies` in the repository's pnpm-workspace.yaml.
+BUILT_DEPENDENCIES = ("better-sqlite3", "esbuild", "node-pty")
+
 # The CLI is checked as an installed command: its bin entry point is the
 # surface a user gets.
 BIN_PROBES: dict[str, str] = {"agent-cli": "--version"}
@@ -133,6 +137,13 @@ def wire_project(project: Path, tarballs: dict[str, Path]) -> None:
     # `pnpm-workspace.yaml` rewrite those to the local tarballs; pnpm 10 stopped
     # reading a `pnpm` field in package.json.
     lines = ["overrides:"] + [f'  "{name}": "{path}"' for name, path in sorted(tarballs.items())]
+    # Native packages build from source on install. pnpm 10 refuses to run their
+    # scripts without an allow-list here, and a skipped build leaves a module
+    # that imports and then throws at first use. The repository has its own
+    # list; the throwaway project needs the same one, or the gate fails on a
+    # configuration gap rather than on the package.
+    lines.append("onlyBuiltDependencies:")
+    lines.extend(f"  - {name}" for name in BUILT_DEPENDENCIES)
     (project / "pnpm-workspace.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
