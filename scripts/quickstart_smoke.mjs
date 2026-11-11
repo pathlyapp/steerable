@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const README = path.join(ROOT, 'README.md');
@@ -138,8 +138,11 @@ async function run(command, env, options = {}) {
  * @param env Environment for the temp HOME.
  */
 async function seedSettings(baseUrl, env) {
+  // `import()` needs a URL on Windows: a bare `C:\...` path is rejected with
+  // ERR_UNSUPPORTED_ESM_URL_SCHEME.
+  const clientModule = pathToFileURL(path.join(ROOT, 'packages/agent-client/ts/dist/index.js')).href;
   const seed = `
-    const { createLocalClient } = await import(${JSON.stringify(path.join(ROOT, 'packages/agent-client/ts/dist/index.js'))});
+    const { createLocalClient } = await import(${JSON.stringify(clientModule)});
     const client = await createLocalClient({ dataDir: process.env.DEEPPATH_USER_DATA_DIR, startSidecar: false });
     const saved = await client.request('POST', '/api/v2/local-settings/llm', {
       provider: 'openai-compat',
