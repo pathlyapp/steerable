@@ -58,11 +58,16 @@ function readQuickstart() {
 /**
  * Quotes a path for the shell it will run in.
  *
+ * `JSON.stringify` is wrong here: it escapes every backslash, and `cmd.exe`
+ * does not read `\\` as an escape, so the path arrives mangled
+ * (`Cannot find module 'D:\a\...\"C:\Users\...'`). Both shells only need the
+ * path wrapped in double quotes.
+ *
  * @param value Absolute path.
  * @returns The path, quoted when it contains characters a shell would split on.
  */
 function quote(value) {
-  return /[\s"'$`\\]/.test(value) ? JSON.stringify(value) : value;
+  return /[\s"'$`\\]/.test(value) ? `"${value}"` : value;
 }
 
 async function run(command, env, options = {}) {
