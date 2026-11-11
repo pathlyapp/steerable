@@ -32,7 +32,7 @@ official release notes.
 
 | Project | Version read | Source |
 | --- | --- | --- |
-| Steerable | `0.9.0`, Rust engine artifacts `1.0.7` | This repository |
+| Steerable | `0.9.1`, Rust engine artifacts `1.0.7` | This repository |
 | OpenAI Codex | `0.167.0` (`main` at `8703d32`) | Source |
 | DeepSeek Harness | `0.2.2-rc.1` (`master` at `fcc0ad4`) | Source |
 | Pi | `1.5.0` (`main` at `ea1cfcc`) | Source |
@@ -61,7 +61,7 @@ deployment form, confinement defaults, protocol surface and source
 availability.
 
 Ease of use was our largest gap in the previous round and is closed in
-`0.9.0`: one `npm install` brings the runtime, `login` verifies the key, and a
+`0.9.1`: one `npm install` brings the runtime, `login` verifies the key, and a
 turn refuses to start without one instead of returning a provider 401. The
 comparison below keeps that history rather than presenting it as parity by
 default.
@@ -190,14 +190,27 @@ default.
   needed. Three undocumented steps followed (a PyPI install, two environment
   variables, a key). For comparison, Claude Code printed
   `Not logged in · Please run /login` and Pi pointed at its providers doc —
-  both one step from working. The fix is in `0.9.0`: the platform runtime
-  ships as an optional npm dependency, `login` verifies a key before saving
-  it, `run` refuses to start without a credential and prints the three ways to
-  configure one, `doctor` prints one row per check with the command that fixes
-  it, and `scripts/quickstart_smoke.mjs` runs the README's own commands on
-  three platforms in CI. What remains behind: the CLI needs Node 22.19 (Pi
-  22.19, Claude Code 22), `tui` still needs 26.4 for its renderer, and the
-  desktop window still needs a product `src-tauri` crate.
+  both one step from working. The fix ships in `0.9.1`: the platform runtime
+  is an optional npm dependency, `login` verifies a key before saving it, `run`
+  refuses to start without a credential and prints the three ways to configure
+  one, `doctor` prints one row per check with the command that fixes it, and
+  `scripts/quickstart_smoke.mjs` runs the README's own commands on three
+  platforms in CI.
+
+  Verified on 2026-11-11 by installing `@steerable/agent-cli@0.9.1` from the
+  registry into an empty project: one platform package came with it, the
+  interpreter was executable, `--version` answered, `run` without a key printed
+  the three commands and exited 78, and a turn against a local gateway returned
+  its text. `doctor` reported the sidecar and egress proxy as coming from the
+  platform package.
+
+  What remains behind: the CLI needs Node 22.19 (Pi 22.19, Claude Code 22) and
+  `tui` still needs 26.4 for its renderer. pnpm needs `better-sqlite3` and
+  `node-pty` in `onlyBuiltDependencies`, or the CLI imports and then throws —
+  npm runs those scripts and only warns. Windows cannot start a turn until the
+  engine release publishes `win-spawn-helper.exe`, and linux-arm64 ships
+  without the egress proxy; both are gaps in the private release, not in the
+  install path.
 - **No hosted offering.** No cloud, no managed platform, no live
   observability stream. Traces and per-turn outcome counters export to
   OTLP after the fact, without conversation content. Codex now resumes

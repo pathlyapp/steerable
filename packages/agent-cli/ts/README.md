@@ -14,6 +14,19 @@ The npm package installs one `@steerable/runtime-<target>` package for the host
 platform; it carries the Python sidecar, the `run_code` interpreter and the
 egress proxy as optional dependencies. Nothing else has to be installed.
 
+### Platform notes
+
+- **pnpm** does not run install scripts by default. `better-sqlite3` and
+  `node-pty` need theirs, or the CLI imports and then throws. Add them to
+  `onlyBuiltDependencies` in `pnpm-workspace.yaml`; npm runs them and only
+  warns.
+- **Windows** needs `win-spawn-helper.exe`, which the private engine release
+  does not publish yet. The CLI refuses to start a turn there rather than
+  spawning unsandboxed. The package picks the helper up automatically once it
+  is published.
+- **linux-arm64** ships without the egress proxy for the same reason. Network
+  rules there are port-only, and `run` says so on its first line.
+
 `login` verifies the key with one model-list request before saving it, and
 never saves a rejected key. In scripts and CI, skip the prompt:
 
