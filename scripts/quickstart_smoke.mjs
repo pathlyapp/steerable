@@ -56,27 +56,59 @@ function readQuickstart() {
 }
 
 /**
- * Quotes a path for the shell it will run in.
+ * Builds a shell-free invocation of the CLI from a README line.
  *
- * `JSON.stringify` is wrong here: it escapes every backslash, and `cmd.exe`
- * does not read `\\` as an escape, so the path arrives mangled
- * (`Cannot find module 'D:\a\...\"C:\Users\...'`). Both shells only need the
- * path wrapped in double quotes.
+ * The line is `steerable-cli <args>`; splitting on whitespace outside quotes
+ * turns it into argv, so no shell has to interpret the quoting. This is the
+ * only form that behaves the same on macOS, Linux and Windows.
  *
- * @param value Absolute path.
- * @returns The path, quoted when it contains characters a shell would split on.
+ * @param rest Everything after `steerable-cli`.
+ * @returns Arguments for {@link run}'s direct mode.
  */
-function quote(value) {
-  return /[\s"'$`\\]/.test(value) ? `"${value}"` : value;
+function directCli(rest) {
+  return { direct: { command: process.execPath, args: [CLI, ...splitArgs(rest)] } };
+}
+
+/**
+ * Splits a command line into arguments, honouring double quotes.
+ *
+ * @param text Argument text without the executable name.
+ * @returns The arguments.
+ */
+function splitArgs(text) {
+  const args = [];
+  let current = '';
+  let quoted = false;
+  for (const char of text) {
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && /\s/.test(char)) {
+      if (current) args.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current) args.push(current);
+  return args;
 }
 
 async function run(command, env, options = {}) {
   console.log(`$ ${command}`);
-  // No `/bin/sh` on Windows; `cmd.exe` runs the same one-liners (the README
-  // commands are a bare executable plus arguments).
-  const [shell, shellArgs] =
-    process.platform === 'win32' ? ['cmd.exe', ['/d', '/s', '/c']] : ['/bin/sh', ['-c']];
-  const child = spawn(shell, [...shellArgs, command], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  // `direct` skips the shell entirely: `cmd.exe` re-parses its argv and turns a
+  // quoted absolute path into a path relative to cwd, which is how
+  // `D:\a\steerable\steerable\"C:\Users\..."` appeared. Anything this script
+  // runs itself (the seed and the CLI) goes direct; the README lines are shell
+  // text by nature and use the platform shell.
+  const direct = options.direct;
+  const [shell, shellArgs] = direct
+    ? [direct.command, direct.args]
+    : process.platform === 'win32'
+      ? ['cmd.exe', ['/d', '/s', '/c', command]]
+      : ['/bin/sh', ['-c', command]];
+  const child = spawn(shell, shellArgs, { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '';
   let stderr = '';
   child.stdout.setEncoding('utf8');
@@ -125,7 +157,7 @@ async function seedSettings(baseUrl, env) {
   const scriptPath = path.join(os.tmpdir(), `steerable-seed-${process.pid}.mjs`);
   fs.writeFileSync(scriptPath, seed);
   try {
-    await run(`node ${quote(scriptPath)}`, env);
+    await run(`node ${scriptPath}`, env, { direct: { command: process.execPath, args: [scriptPath] } });
   } finally {
     fs.rmSync(scriptPath, { force: true });
   }
@@ -179,8 +211,7 @@ async function main() {
       // one. The child's stdin is already `ignore` in `run()`, so no shell
       // redirection is needed — and `< /dev/null` would be a POSIX-only syntax
       // on a job that also runs on Windows.
-      const scripted = command.replaceAll('steerable-cli', `node ${quote(CLI)}`);
-      const { stdout, stderr } = await run(scripted, env);
+      const { stdout, stderr } = await run(command, env, directCli(command.replace(/^steerable-cli\s*/, '')));
       if (command.includes('run "summarize this repo"') && !stdout.includes('hello from the fake gateway')) {
         console.error(stdout, stderr);
         fail('the run command did not reach the fake gateway');
@@ -191,9 +222,9 @@ async function main() {
     // directory is required: the settings written above already hold a key.
     const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'steerable-quickstart-nokey-'));
     const blocked = await run(
-      `node ${quote(CLI)} run "no key" --no-project --data-dir ${quote(freshDir)}`,
+      `steerable-cli run "no key" --no-project --data-dir ${freshDir}`,
       { ...env, DEEPPATH_USER_DATA_DIR: freshDir, DEEPSEEK_API_KEY: '' },
-      { expectCode: 78 },
+      { expectCode: 78, ...directCli(`run "no key" --no-project --data-dir ${freshDir}`) },
     );
     fs.rmSync(freshDir, { recursive: true, force: true });
     if (!blocked.stderr.includes('还没有配置模型的 API key')) {
