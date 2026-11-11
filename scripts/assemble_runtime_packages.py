@@ -107,6 +107,14 @@ def sidecar_layout(bundle: Path) -> tuple[str, str]:
     )
 
 
+def sidecar_bundle(sidecar_root: Path, target: str) -> Path | None:
+    """@returns The built bundle directory for one target, or None."""
+    for candidate in (sidecar_root / f"steerable-sidecar-{target}", sidecar_root / target):
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
 def build_package(
     *,
     root: Path,
@@ -119,10 +127,8 @@ def build_package(
     budget_mb: int,
 ) -> dict:
     os_name, cpu = PLATFORM_FIELDS[target]
-    bundle = sidecar_root / f"steerable-sidecar-{target}"
-    if not bundle.is_dir():
-        bundle = sidecar_root / target
-    if not bundle.is_dir():
+    bundle = sidecar_bundle(sidecar_root, target)
+    if bundle is None:
         raise SystemExit(f"missing sidecar bundle for {target} (looked in {sidecar_root})")
     sidecar_python, run_code_python = sidecar_layout(bundle)
 
@@ -214,11 +220,22 @@ def main(argv: list[str] | None = None) -> int:
     engine_version = args.engine_version or artifact_version(ROOT)
     targets = args.target or list(PLATFORM_FIELDS)
 
-    args.out.mkdir(parents=True, exist_ok=True)
-    reports = []
     for target in targets:
         if target not in PLATFORM_FIELDS:
             raise SystemExit(f"unknown target {target}; known: {', '.join(PLATFORM_FIELDS)}")
+
+    # Report every missing bundle at once. CI logs are read on failure, and one
+    # target per run means one pipeline re-run per missing platform.
+    absent = [target for target in targets if sidecar_bundle(args.sidecar_root, target) is None]
+    if absent:
+        print(f"::error::missing sidecar bundles for: {', '.join(absent)}", file=sys.stderr)
+        print(f"  looked in {args.sidecar_root}", file=sys.stderr)
+        print("  the release builds them with .github/workflows/sidecar-build.yml", file=sys.stderr)
+        return 1
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    reports = []
+    for target in targets:
         reports.append(
             build_package(
                 root=ROOT,

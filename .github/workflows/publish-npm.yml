@@ -86,20 +86,42 @@ jobs:
             --sidecar-root artifacts --egress-root artifacts --out dist/runtime
 
       - name: Verify platform package descriptors
+        # Every published target must be present, carry its interpreter, and
+        # declare the files the resolver hashes. A missing target here would
+        # publish a CLI whose install cannot start on that platform.
         run: |
           python - <<'PY'
           import json, pathlib, sys
-          missing = []
-          for path in sorted(pathlib.Path('dist/runtime').glob('runtime-*')):
-              descriptor = json.loads((path / 'runtime.json').read_text())
-              if not descriptor['egressProxy']:
-                  print(f"::warning::{descriptor['target']} ships without the egress proxy")
-              if not (path / descriptor['sidecarPython']).is_file():
-                  missing.append(descriptor['target'])
-          if missing:
-              print(f"::error::runtime packages missing their interpreter: {', '.join(missing)}")
+
+          TARGETS = ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "win32-x64"]
+          root = pathlib.Path("dist/runtime")
+          present = {path.name.removeprefix("runtime-"): path for path in sorted(root.glob("runtime-*"))}
+          missing_targets = [target for target in TARGETS if target not in present]
+          problems = []
+          for target, path in present.items():
+              descriptor = json.loads((path / "runtime.json").read_text())
+              if not (path / descriptor["sidecarPython"]).is_file():
+                  problems.append(f"{target}: interpreter {descriptor['sidecarPython']} is not in the package")
+              if not descriptor["files"]:
+                  problems.append(f"{target}: runtime.json declares no files to verify")
+              if descriptor["egressProxy"] is None:
+                  print(f"::warning::{target} ships without the egress proxy; network rules there are port-only")
+          for target in missing_targets:
+              problems.append(f"{target}: no runtime package was assembled")
+          if problems:
+              for problem in problems:
+                  print(f"::error::{problem}")
               sys.exit(1)
+          print(f"::notice::all {len(TARGETS)} platform runtime packages verified")
           PY
+
+      - name: Declare platform runtime dependencies
+        # The repository cannot carry these entries: the packages do not exist
+        # on the registry until this job publishes them. This runs before the
+        # install check so the check sees the tarball a user would get.
+        run: |
+          version=$(node -p "require('./packages/agent-cli/ts/package.json').version")
+          python scripts/set_runtime_optional_deps.py prepare --version "${version}"
 
       - name: Check the packed packages install and import
         # `tsc` resolves workspace packages to `src/`, so it cannot see that a
@@ -108,14 +130,9 @@ jobs:
         # before publishing because a package that throws on import cannot be
         # unpublished.
         run: |
-          python scripts/check_package_install.py
-
-      - name: Declare platform runtime dependencies
-        # The repository cannot carry these entries: the packages do not exist
-        # on the registry until this job publishes them.
-        run: |
-          version=$(node -p "require('./packages/agent-cli/ts/package.json').version")
-          python scripts/set_runtime_optional_deps.py prepare --version "${version}"
+          python scripts/check_package_install.py \
+            --package agent-protocol --package agent-harness \
+            --package agent-runtime --package agent-client --package agent-cli
 
       - name: Publish each @steerable/* TS package whose version is new
         env:
@@ -136,23 +153,23 @@ jobs:
           # agent-runtime is consumed from source by no in-repo package and is
           # published for external TypeScript hosts; it must exist before the
           # CLI's optional platform dependencies resolve.
-          for dir in packages/agent-protocol/ts packages/agent-harness/ts packages/agent-ui/ts packages/pack-sdk/ts packages/agent-runtime/ts packages/agent-shell/ts packages/agent-client/ts dist/runtime/runtime-darwin-arm64 dist/runtime/runtime-darwin-x64 dist/runtime/runtime-linux-x64 dist/runtime/runtime-linux-arm64 dist/runtime/runtime-win32-x64 packages/agent-cli/ts packages/agent-shell/web packages/agent-shell/tauri; do
+          # Workspace packages first, then the assembled runtime packages.
+          # The runtime packages are generated into `dist/runtime/` and are not
+          # workspace members, so `pnpm --filter` cannot see them; they are
+          # published with `npm publish` from their own directory. They come
+          # after `agent-cli`'s dependencies are on the registry, and before
+          # `agent-cli` itself, which names them as optional dependencies.
+          WORKSPACE_PACKAGES="packages/agent-protocol/ts packages/agent-harness/ts packages/agent-ui/ts packages/pack-sdk/ts packages/agent-runtime/ts packages/agent-shell/ts packages/agent-client/ts packages/agent-shell/web packages/agent-shell/tauri"
+          RUNTIME_PACKAGES="dist/runtime/runtime-darwin-arm64 dist/runtime/runtime-darwin-x64 dist/runtime/runtime-linux-x64 dist/runtime/runtime-linux-arm64 dist/runtime/runtime-win32-x64"
+
+          publish_workspace() {
+            dir=$1
             name=$(node -p "require('./${dir}/package.json').name")
             local_version=$(node -p "require('./${dir}/package.json').version")
-
-            # `npm view <pkg>@<version>` exits 0 if the exact version exists,
-            # non-zero (E404 or empty) otherwise. We treat any non-zero as
-            # "not yet published".
-            if [ ! -d "${dir}" ]; then
-              echo "::notice title=skip::${dir} was not assembled; the platform runtime packages are built by scripts/assemble_runtime_packages.py."
-              continue
-            fi
-
             if npm view "${name}@${local_version}" version >/dev/null 2>&1; then
               echo "::notice title=skip::${name}@${local_version} is already on the registry."
-              continue
+              return
             fi
-
             echo "::group::publish ${name}@${local_version}"
             if [ "${DRY_RUN}" = "true" ]; then
               echo "DRY_RUN=true; would run: pnpm --filter ${name} publish --no-git-checks --access public --provenance"
@@ -165,7 +182,38 @@ jobs:
             fi
             echo "::endgroup::"
             published_any=1
-          done
+          }
+
+          publish_runtime() {
+            dir=$1
+            if [ ! -d "${dir}" ]; then
+              echo "::error::${dir} is missing; scripts/assemble_runtime_packages.py did not produce it."
+              exit 1
+            fi
+            name=$(node -p "require('./${dir}/package.json').name")
+            local_version=$(node -p "require('./${dir}/package.json').version")
+            if npm view "${name}@${local_version}" version >/dev/null 2>&1; then
+              echo "::notice title=skip::${name}@${local_version} is already on the registry."
+              return
+            fi
+            echo "::group::publish ${name}@${local_version}"
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "DRY_RUN=true; would run: (cd ${dir} && npm publish --access public --provenance)"
+              ( cd "${dir}" && npm pack --dry-run )
+            else
+              # `npm publish` from the package directory: these packages have no
+              # `workspace:` ranges, and they are not workspace members.
+              ( cd "${dir}" && npm publish --access public --provenance )
+            fi
+            echo "::endgroup::"
+            published_any=1
+          }
+
+          for dir in ${WORKSPACE_PACKAGES}; do publish_workspace "${dir}"; done
+          for dir in ${RUNTIME_PACKAGES}; do publish_runtime "${dir}"; done
+          # The CLI names every runtime package as an optional dependency, so it
+          # goes last: `npm install -g` resolves them from the registry.
+          publish_workspace packages/agent-cli/ts
 
           if [ "${published_any}" = "0" ]; then
             echo "::notice title=nothing to publish::All @steerable/* TS packages were already at the latest published version."

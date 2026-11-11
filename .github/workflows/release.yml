@@ -16,7 +16,11 @@ name: Release
 #      `scripts/check_lockstep_versions.py --expected X.Y.Z`.
 #      Refuses to proceed if even one is out of sync.
 #   3. Creates a GitHub Release for the tag (auto-generated notes).
-#   4. Chains publish-npm.yml + publish-native.yml + publish-pypi.yml.
+#   4. Builds the platform sidecar bundles, then chains
+#      publish-npm.yml + publish-native.yml + publish-pypi.yml.
+#      The bundles must be built in this run: workflow artifacts do not cross
+#      runs, and publish-npm turns them into the runtime packages the CLI
+#      installs.
 #      publish-native.yml only verifies that the private build already
 #      published binary wheels. It does not build or upload an sdist.
 #      Registry uploads are idempotent.
@@ -114,8 +118,18 @@ jobs:
     needs: validate
     uses: ./.github/workflows/quickstart.yml
 
+  # The signed sidecar bundles, one per published target. `publish-npm` turns
+  # them into `@steerable/runtime-<target>`, and the CLI's install depends on
+  # those existing. Building them here rather than expecting a prior
+  # `sidecar-v*` tag run means a release cannot forget them.
+  sidecar-bundles:
+    needs: validate
+    uses: ./.github/workflows/sidecar-build.yml
+    permissions:
+      contents: read
+
   publish-npm:
-    needs: [validate, quickstart]
+    needs: [validate, quickstart, sidecar-bundles]
     uses: ./.github/workflows/publish-npm.yml
     secrets: inherit
     permissions:
@@ -144,7 +158,7 @@ jobs:
   # the team. A missing webhook (or a Feishu outage) is a warning, not a
   # failed release — the registries are already the source of truth.
   notify:
-    needs: [validate, publish-npm, publish-pypi, publish-native]
+    needs: [validate, sidecar-bundles, publish-npm, publish-pypi, publish-native]
     if: always() && github.repository == 'pathlyapp/steerable'
     runs-on: ubuntu-latest
     steps:
@@ -153,6 +167,7 @@ jobs:
           FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}
           VERSION: ${{ needs.validate.outputs.version }}
           VALIDATE: ${{ needs.validate.result }}
+          SIDECAR: ${{ needs.sidecar-bundles.result }}
           NPM: ${{ needs.publish-npm.result }}
           PYPI: ${{ needs.publish-pypi.result }}
           NATIVE: ${{ needs.publish-native.result }}
@@ -171,11 +186,13 @@ jobs:
 
           version = (os.environ.get("VERSION") or "").strip() or "(unknown)"
           validate = os.environ.get("VALIDATE") or "unknown"
+          sidecar = os.environ.get("SIDECAR") or "unknown"
           npm = os.environ.get("NPM") or "unknown"
           pypi = os.environ.get("PYPI") or "unknown"
           native = os.environ.get("NATIVE") or "unknown"
           ok = (
               validate == "success"
+              and sidecar == "success"
               and npm == "success"
               and pypi == "success"
               and native == "success"
@@ -187,6 +204,7 @@ jobs:
               f"版本：{tag}",
               f"发布者：{os.environ.get('ACTOR', '')}",
               f"validate：{validate}",
+              f"sidecar bundles：{sidecar}",
               f"npm：{npm}",
               f"PyPI：{pypi}",
               f"native：{native}",

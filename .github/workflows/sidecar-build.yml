@@ -1,7 +1,16 @@
 name: Sidecar build
 
+# Produces one signed bundle per published target. Two callers:
+#   * `release.yml`, which needs them before publishing the platform runtime
+#     packages — a CLI without its runtime cannot start;
+#   * a `sidecar-v*` tag, for rebuilding the bundles alone.
+#
+# Artifacts are workflow-scoped, so a caller has to run these jobs in its own
+# run: `release.yml` calls this file rather than downloading from a separate
+# run.
 on:
   workflow_dispatch:
+  workflow_call:
   push:
     tags: ["sidecar-v*"]
 
