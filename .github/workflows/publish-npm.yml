@@ -71,14 +71,18 @@ jobs:
           pattern: steerable-sidecar-*
           path: artifacts
 
-      - name: Download egress proxies
-        # The egress proxy comes from the private Rust release, verified by the
-        # artifact lock. linux-arm64 may be absent until keel publishes it; the
-        # assembler records the gap and the CLI warns at run time.
+      - name: Download egress proxies and the Windows spawn helper
+        # Both come from the private Rust release, verified against the
+        # artifact lock. A target the release does not carry is a warning, not
+        # a failure: the assembler records the gap and the CLI reports it at
+        # run time. Since rust-v1.0.8 every target is present.
         run: |
           python scripts/fetch_verified_artifacts.py egress \
             --artifact-lock --target all --out artifacts || \
             echo "::warning::some egress proxy targets are unavailable; those runtime packages ship without the proxy"
+          python scripts/fetch_verified_artifacts.py helper \
+            --artifact-lock --out artifacts || \
+            echo "::warning::the Windows spawn helper is unavailable; win32-x64 cannot start a sidecar"
 
       - name: Assemble platform runtime packages
         run: |

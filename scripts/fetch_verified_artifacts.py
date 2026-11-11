@@ -264,6 +264,62 @@ def download_egress(
     return path
 
 
+def helper_filename(version: str, target: str) -> str:
+    """Return the published Windows spawn-helper filename for one target."""
+    if target != "win32-x64":
+        raise SystemExit(f"the spawn helper has no target {target}")
+    return f"win-spawn-helper-{version}-{target}.exe"
+
+
+def helper_manifest_name(version: str) -> str:
+    return f"win-spawn-helper-{version}-manifest.json"
+
+
+def download_helper(
+    version: str,
+    dest: Path,
+    *,
+    bundle: dict | None = None,
+    opener=urllib.request.urlopen,
+) -> Path:
+    """Download the verified Windows spawn helper.
+
+    Windows cannot start the sidecar without it, so a runtime package that
+    omits it installs a CLI that refuses to run a turn.
+    """
+    manifest_url = release_asset_url(version, helper_manifest_name(version))
+    manifest_blob = fetch_bytes(manifest_url, opener)
+    component = component_from_bundle(bundle, "helper")
+    if component is not None:
+        if component["manifest"] != helper_manifest_name(version):
+            raise SystemExit("helper component manifest name mismatch")
+        verify_bytes(manifest_blob, str(component["sha256"]), component["manifest"])
+    manifest = json.loads(manifest_blob.decode("utf-8"))
+    if manifest.get("version") != version or manifest.get("kind") != "rust-win-spawn-helper":
+        raise SystemExit("helper manifest header mismatch")
+    entry = next(
+        (item for item in manifest.get("files", []) if item.get("target") == "win32-x64"),
+        None,
+    )
+    if entry is None:
+        raise SystemExit("helper manifest has no win32-x64")
+    filename = str(entry["name"])
+    if filename != helper_filename(version, "win32-x64"):
+        raise SystemExit(f"unexpected helper filename {filename}")
+    blob = fetch_bytes(release_asset_url(version, filename), opener)
+    verify_bytes(blob, str(entry["sha256"]), filename)
+    if len(blob) != int(entry["bytes"]):
+        raise SystemExit(f"helper size mismatch for {filename}")
+    dest.mkdir(parents=True, exist_ok=True)
+    path = dest / filename
+    path.write_bytes(blob)
+    (dest / f"{filename}.sha256").write_text(
+        f"{entry['sha256']}  {filename}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def sidecar_filename(version: str, target: str) -> str:
     """Return the published sidecar filename for one target."""
     if target not in SIDECAR_TARGETS:
@@ -439,6 +495,11 @@ def main(argv: list[str] | None = None) -> None:
     sidecar.add_argument("--target", choices=[*SIDECAR_TARGETS, "host"], default="host")
     sidecar.add_argument("--out", required=True, type=Path)
 
+    helper = sub.add_parser("helper", help="download the verified Windows spawn helper")
+    helper.add_argument("--version")
+    helper.add_argument("--artifact-lock", "--lockstep", action="store_true")
+    helper.add_argument("--out", required=True, type=Path)
+
     egress = sub.add_parser("egress", help="download one verified egress proxy binary")
     egress.add_argument("--version")
     egress.add_argument("--artifact-lock", "--lockstep", action="store_true")
@@ -473,6 +534,8 @@ def main(argv: list[str] | None = None) -> None:
         target = host_sidecar_target() if args.target == "host" else args.target
         path = download_sidecar(_resolve_version(args), target, args.out, bundle=bundle)
         print(path)
+    elif args.command == "helper":
+        print(download_helper(_resolve_version(args), args.out, bundle=bundle))
     elif args.command == "egress":
         if args.target == "all":
             # Release packaging needs every platform. A target the private
