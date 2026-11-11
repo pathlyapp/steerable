@@ -240,7 +240,9 @@ without a registry.
    git commit -am "chore(release): vA.B.C"
    git tag vA.B.C
    git push origin develop vA.B.C
-        └─► release.yml verifies the pinned bundle, then publishes npm/PyPI
+        └─► release.yml verifies the pinned bundle, builds the platform
+            sidecar bundles, runs the quickstart gate, then publishes
+            npm (workspace packages, platform runtimes, CLI) and PyPI
    ```
 
    `bump_to.sh` never edits the native pin. A framework release may reuse
@@ -277,17 +279,42 @@ clean checkout of the tagged commit:
 ```bash
 git checkout vX.Y.Z
 
-# TS — npm
+# TS — workspace packages first
 pnpm install --frozen-lockfile
 pnpm gen
 pnpm -r --filter '@steerable/*' build
 NODE_AUTH_TOKEN="$NPM_TOKEN" \
   pnpm -r --filter '@steerable/*' publish --no-git-checks
 
+# Platform runtimes, then the CLI that names them. These packages are
+# generated into dist/runtime/ and are NOT workspace members, so the
+# `pnpm --filter` above cannot publish them.
+VERSION=$(node -p "require('./packages/agent-cli/ts/package.json').version")
+python scripts/set_runtime_optional_deps.py prepare --version "$VERSION"
+( cd packages/agent-cli/ts && pnpm pack --pack-destination ../../../dist/npm )
+( cd packages/agent-runtime/ts && pnpm pack --pack-destination ../../../dist/npm )
+# Assembles dist/runtime/runtime-<target>/ from the built sidecar bundles.
+python scripts/assemble_runtime_packages.py \
+  --sidecar-root <sidecar-artifacts> --egress-root <egress-artifacts> --out dist/runtime
+for dir in dist/runtime/runtime-*; do
+  ( cd "$dir" && NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public --provenance )
+done
+( cd packages/agent-cli/ts && NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public --provenance )
+( cd packages/agent-runtime/ts && NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public --provenance )
+python scripts/set_runtime_optional_deps.py restore
+
 # Py — PyPI
 uv build --all-packages --out-dir dist/py
 rm dist/py/steerable_example_*.{whl,tar.gz} 2>/dev/null || true
 uv publish --token "$PYPI_API_TOKEN" dist/py/steerable_*.whl dist/py/steerable_*.tar.gz
+```
+
+Before publishing anything, run the packaged-install gate. It packs the batch,
+installs it into a clean project and imports it, which is the only check that
+sees a missing cross-package export:
+
+```bash
+python scripts/check_package_install.py
 ```
 
 ### Versioning rules
