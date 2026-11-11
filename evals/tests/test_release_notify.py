@@ -14,9 +14,13 @@ def test_release_posts_feishu_after_both_publish_jobs() -> None:
     already do this, and a silent registry push is how 0.6.x releases
     used to land without anyone noticing."""
     assert "FEISHU_BOT_WEBHOOK: ${{ secrets.FEISHU_BOT_WEBHOOK }}" in RELEASE
-    assert "needs: [validate, publish-npm, publish-pypi, publish-native]" in RELEASE
+    # The notify job waits on every stage that can fail, including the sidecar
+    # bundle build that the npm publish depends on.
+    assert "needs: [validate, sidecar-bundles, publish-npm, publish-pypi, publish-native]" in RELEASE
+    assert "SIDECAR: ${{ needs.sidecar-bundles.result }}" in RELEASE
     assert "NATIVE: ${{ needs.publish-native.result }}" in RELEASE
     assert 'f"native：{native}"' in RELEASE
+    assert 'f"sidecar bundles：{sidecar}"' in RELEASE
     assert "if: always()" in RELEASE
     assert "FEISHU_BOT_WEBHOOK unset; skip" in RELEASE
     assert "::warning::Feishu post failed" in RELEASE

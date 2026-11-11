@@ -20,5 +20,5 @@ path = "src/main.rs"
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-steerable-agent-shell-tauri = { path = "../../packages/agent-shell/tauri" }
+steerable-agent-shell-tauri = { path = "../../../packages/agent-shell/tauri" }
 tauri = { version = "2.11.6", features = [] }

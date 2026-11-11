@@ -40,6 +40,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/agent-runtime/ts
     devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
       tsx:
         specifier: ^4.19.2
         version: 4.21.1
