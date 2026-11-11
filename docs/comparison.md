@@ -207,10 +207,9 @@ default.
   What remains behind: the CLI needs Node 22.19 (Pi 22.19, Claude Code 22) and
   `tui` still needs 26.4 for its renderer. pnpm needs `better-sqlite3` and
   `node-pty` in `onlyBuiltDependencies`, or the CLI imports and then throws —
-  npm runs those scripts and only warns. Windows cannot start a turn until the
-  engine release publishes `win-spawn-helper.exe`, and linux-arm64 ships
-  without the egress proxy; both are gaps in the private release, not in the
-  install path.
+  npm runs those scripts and only warns. Every platform target now ships its
+  full runtime: `rust-v1.0.8` added the Windows spawn helper (Windows cannot
+  start the sidecar without it) and the linux-arm64 sidecar and egress proxy.
 - **No hosted offering.** No cloud, no managed platform, no live
   observability stream. Traces and per-turn outcome counters export to
   OTLP after the fact, without conversation content. Codex now resumes

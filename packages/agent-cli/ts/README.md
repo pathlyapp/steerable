@@ -20,12 +20,13 @@ egress proxy as optional dependencies. Nothing else has to be installed.
   `node-pty` need theirs, or the CLI imports and then throws. Add them to
   `onlyBuiltDependencies` in `pnpm-workspace.yaml`; npm runs them and only
   warns.
-- **Windows** needs `win-spawn-helper.exe`, which the private engine release
-  does not publish yet. The CLI refuses to start a turn there rather than
-  spawning unsandboxed. The package picks the helper up automatically once it
-  is published.
-- **linux-arm64** ships without the egress proxy for the same reason. Network
-  rules there are port-only, and `run` says so on its first line.
+- **Windows** runs the sidecar under `win-spawn-helper.exe`, which confines the
+  child process to a restricted token and a Job Object. It ships inside
+  `@steerable/runtime-win32-x64`; without it the CLI refuses to start a turn
+  rather than spawning unsandboxed.
+- **linux-arm64** carries the sidecar and the egress proxy like every other
+  target. On Linux the namespace backends have no per-host pinning, so
+  per-host egress is enforced by the proxy plus the app-layer domain list.
 
 `login` verifies the key with one model-list request before saving it, and
 never saves a rejected key. In scripts and CI, skip the prompt:
