@@ -84,6 +84,29 @@ BIN_PROBES: dict[str, str] = {"agent-cli": "--version"}
 TIMING = bool(os.environ.get("STEERABLE_PACK_CHECK_TIMING"))
 
 
+def publishable_manifests() -> list[tuple[str, dict]]:
+    """@returns Each publishable package's name and manifest."""
+    return [(meta["name"], meta) for meta in (package_meta(ROOT / path) for path in PUBLISHABLE.values())]
+
+
+def check_publish_config() -> list[str]:
+    """Every published package must declare public access.
+
+    Without it npm treats a scoped package as private and rejects the upload
+    with `402 Payment Required — You must sign up for private packages`, which
+    is how the first 0.9.0 publish stopped after `@steerable/agent-runtime`
+    joined the release list.
+    """
+    failures: list[str] = []
+    for name, manifest in publishable_manifests():
+        access = (manifest.get("publishConfig") or {}).get("access")
+        if access != "public":
+            failures.append(f"{name}: publishConfig.access is {access!r}; npm will refuse to publish a scoped package")
+        if manifest.get("private") is True:
+            failures.append(f"{name}: private is true, so npm cannot publish it")
+    return failures
+
+
 def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     started = time.monotonic()
     result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
@@ -197,6 +220,12 @@ def main(argv: list[str] | None = None) -> int:
     unknown = [name for name in selected if name not in PUBLISHABLE]
     if unknown:
         raise SystemExit(f"unknown package(s): {', '.join(unknown)}; known: {', '.join(PUBLISHABLE)}")
+
+    config_failures = check_publish_config()
+    if config_failures:
+        for failure in config_failures:
+            print(f"::error::{failure}")
+        return 1
 
     work = Path(tempfile.mkdtemp(prefix="steerable-pack-check-"))
     project = work / "consumer"
