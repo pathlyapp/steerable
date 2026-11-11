@@ -94,6 +94,30 @@ def find_egress(egress_root: Path, version: str, target: str) -> Path | None:
     return None
 
 
+def restore_executable_bits(package_dir: Path) -> list[str]:
+    """Re-applies the executable bit to everything that needs it.
+
+    An npm tarball does not carry POSIX modes: `npm install` writes files as
+    644, so the bundled interpreter and the console scripts under
+    `python/bin/` arrive non-executable and every spawn fails with EACCES. The
+    egress proxy kept its mode only because this script chmods it explicitly.
+
+    Directories that hold executables by definition: the interpreter's `bin/`
+    and the package's own `bin/`.
+    """
+    touched: list[str] = []
+    for directory in sorted(package_dir.rglob("*")):
+        if not directory.is_dir():
+            continue
+        if directory.name != "bin":
+            continue
+        for entry in sorted(directory.iterdir()):
+            if entry.is_file():
+                entry.chmod(entry.stat().st_mode | 0o755)
+                touched.append(str(entry.relative_to(package_dir)))
+    return touched
+
+
 def declared_files(package_dir: Path) -> list[dict[str, str]]:
     """Every shipped file except the descriptor itself, with its digest."""
     rows: list[dict[str, str]] = []
@@ -175,6 +199,13 @@ def build_package(
         shutil.copy2(egress, bin_dir / egress_name)
         (bin_dir / egress_name).chmod(0o755)
         egress_relative = f"bin/{egress_name}"
+
+    # Do this before hashing: the digests cover file bytes, but the runtime
+    # check also spawns these files, and a non-executable interpreter fails
+    # only on a real install.
+    executables = restore_executable_bits(package_dir)
+    if not executables:
+        raise SystemExit(f"{target}: no executables found under bin/; the bundle layout changed")
 
     total = sum(path.stat().st_size for path in package_dir.rglob("*") if path.is_file())
     total_mb = total / 1024 / 1024
