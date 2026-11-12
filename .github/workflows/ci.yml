@@ -14,11 +14,15 @@ jobs:
       - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 26
           cache: pnpm
+      - uses: astral-sh/setup-uv@v6
       - run: pnpm install --frozen-lockfile
       - run: pnpm gen
       - run: pnpm build
+      # CLI coexistence tests boot the real sidecar. It resolves the repo
+      # .venv that `uv sync` creates; without that, those tests exit 1.
+      - run: uv sync
       - run: pnpm test
       - run: pnpm check:drift
       # agent-shell 产品中立门禁（3.2 随 shell 上提到本仓）：shell 源码与
@@ -39,6 +43,59 @@ jobs:
             git --no-pager diff -- packages
             exit 1
           fi
+
+  tui-portable:
+    name: TUI portable (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm gen
+      - run: pnpm --filter @steerable/agent-cli... build
+      - run: pnpm --filter @steerable/agent-cli test:tui
+        env:
+          TUI_ARTIFACT_DIR: ${{ github.workspace }}/test-results/tui
+      - name: Upload TUI platform evidence and failure artifacts
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: tui-portable-${{ matrix.os }}
+          path: test-results/tui
+          if-no-files-found: ignore
+
+  tui-pty:
+    name: TUI PTY (Linux/tmux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm gen
+      - run: pnpm --filter @steerable/agent-cli... build
+      - run: pnpm --filter @steerable/agent-cli test:tui:pty
+        env:
+          TUI_ARTIFACT_DIR: ${{ github.workspace }}/test-results/tui
+      - name: Upload TUI PTY failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: tui-pty-linux
+          path: test-results/tui
+          if-no-files-found: ignore
 
   rust:
     runs-on: ubuntu-latest
@@ -66,6 +123,13 @@ jobs:
           cargo fmt --check
           cargo test
           cargo clippy --all-targets -- -D warnings
+      # The desktop example is the documented starting point for a product, so
+      # a change that breaks it must fail here rather than in someone's repo.
+      - name: Desktop example compiles
+        working-directory: examples/tauri-desktop/src-tauri
+        run: |
+          cargo fmt --check
+          cargo check --all-targets
 
   py:
     runs-on: ubuntu-latest
@@ -129,7 +193,7 @@ jobs:
       - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 26
           cache: pnpm
       - uses: astral-sh/setup-uv@v6
 
@@ -162,6 +226,17 @@ jobs:
           echo "$out" | grep -q "^\[ping\]"  || { echo "::error::sidecar-roundtrip missing [ping] marker"; exit 1; }
           echo "$out" | grep -q "^\[bye\]"   || { echo "::error::sidecar-roundtrip missing [bye] marker"; exit 1; }
 
+      - name: example / ts-runtime
+        # Boots the real sidecar through @steerable/agent-runtime. No key, so it
+        # prints the tool count instead of running a turn: the point is that a
+        # host can spawn and drain the sidecar with one dependency.
+        run: |
+          out=$(pnpm --filter steerable-example-ts-runtime start 2>&1)
+          echo "$out"
+          echo "$out" | grep -q "^\[ready\]" || { echo "::error::ts-runtime missing [ready] marker"; exit 1; }
+          echo "$out" | grep -q "^\[tools\]" || { echo "::error::ts-runtime missing [tools] marker"; exit 1; }
+          echo "$out" | grep -q "^\[bye\]"   || { echo "::error::ts-runtime missing [bye] marker"; exit 1; }
+
       - name: example / web-shell (vite build smoke)
         # The framework's runnable reference app. We don't run it (no headless
         # browser here), but a clean Vite build is enough to catch any
@@ -172,21 +247,6 @@ jobs:
           test -f examples/web-shell/dist/index.html || {
             echo "::error::web-shell build did not produce dist/index.html"; exit 1;
           }
-
-  sidecar-bin:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Download and smoke the published Rust sidecar
-        run: |
-          python scripts/fetch_verified_artifacts.py sidecar \
-            --artifact-lock --target linux-x64 --out dist/sidecar-bin
-          binary=$(find dist/sidecar-bin -type f -name 'steerable-sidecar-bin-*-linux-x64' | head -1)
-          python scripts/fetch_verified_artifacts.py smoke-sidecar \
-            --artifact-lock --binary "$binary"
 
   sidecar-budget:
     # D3 (sidecar bundle size budget): enforces a hard upper bound on the

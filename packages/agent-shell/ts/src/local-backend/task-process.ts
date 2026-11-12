@@ -70,12 +70,17 @@ export function timelineFromHistoryEntries(entries: unknown[]): PersistedTurnBlo
       if (idx < 0) {
         idx = actions.findIndex((row) => row.tool === name && row.result === undefined);
       }
+      const data = asRecord(parsed.data);
+      const approval = asRecord(data?._approval);
+      const sandbox = asRecord(data?._sandbox);
       const row: Record<string, unknown> = {
         ...(idx >= 0 ? actions[idx] : { tool: name }),
         tool: name,
         result: parsed.data ?? parsed,
         success: parsed.success !== false && parsed.error == null,
         error: typeof parsed.error === 'string' ? parsed.error : undefined,
+        ...(sandbox ? { sandbox } : {}),
+        ...(approval ? { approval } : {}),
         threw: false,
       };
       if (idx >= 0) actions[idx] = row;

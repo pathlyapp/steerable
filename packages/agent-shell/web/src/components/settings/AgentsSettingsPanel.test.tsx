@@ -9,9 +9,9 @@ const archiveChatAgent = vi.fn();
 const listChatAgentSkills = vi.fn();
 const listChatAgentTools = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
-  getElectronBridge: () => ({
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => ({
     localBackend: { request: vi.fn() },
     local: {},
   }),
@@ -101,7 +101,7 @@ describe('AgentsSettingsPanel', () => {
     render(<AgentsSettingsPanel />);
     const row = await screen.findByTestId('agent-row-local-assistant');
     expect(row.textContent).toContain('电脑操作员');
-    expect(row.textContent).toContain('内置');
+    expect(row.textContent).toContain('Built-in');
     expect(screen.queryByTestId('agent-archive-local-assistant')).toBeNull();
   });
 
@@ -203,22 +203,28 @@ describe('AgentsSettingsPanel', () => {
     listChatAgents.mockResolvedValue({ agents: [builtin, restricted], total: 2 });
     render(<AgentsSettingsPanel />);
     const summary = await screen.findByTestId('agent-capability-geo-advisor');
-    expect(summary.textContent).toContain('技能 1');
-    expect(summary.textContent).toContain('仅限所选技能');
-    expect(summary.textContent).toContain('仅 1 个工具');
+    expect(summary.textContent).toContain('Skills 1');
+    expect(summary.textContent).toContain('Selected skills only');
+    expect(summary.textContent).toContain('Only 1 tools');
     expect(screen.queryByTestId('agent-capability-local-assistant')).toBeNull();
   });
 
-  it('archives a custom agent after two-step confirm', async () => {
+  it('archives a custom agent after dialog confirm', async () => {
     listChatAgents
       .mockResolvedValueOnce({ agents: [builtin, custom], total: 2 })
       .mockResolvedValueOnce({ agents: [builtin], total: 1 });
     render(<AgentsSettingsPanel />);
     await screen.findByTestId('agent-row-geo-advisor');
-    const archive = screen.getByTestId('agent-archive-geo-advisor');
-    fireEvent.click(archive);
+    fireEvent.click(screen.getByTestId('agent-archive-geo-advisor'));
     expect(archiveChatAgent).not.toHaveBeenCalled();
-    fireEvent.click(archive);
+    expect(screen.getByTestId('agent-archive-dialog').textContent).toContain('地质顾问');
+
+    fireEvent.click(screen.getByTestId('agent-archive-dialog-cancel'));
+    expect(archiveChatAgent).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('agent-archive-dialog')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('agent-archive-geo-advisor'));
+    fireEvent.click(screen.getByTestId('agent-archive-dialog-confirm'));
     await waitFor(() => {
       expect(archiveChatAgent).toHaveBeenCalledWith('geo-advisor');
     });

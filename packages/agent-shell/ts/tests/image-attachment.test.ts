@@ -1,7 +1,28 @@
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+
+const require = createRequire(import.meta.url);
+const { PNG } = require('pngjs') as {
+  PNG: {
+    new (options: { width: number; height: number }): {
+      width: number;
+      height: number;
+      data: Buffer;
+    };
+    sync: {
+      read(buffer: Buffer): { width: number; height: number; data: Buffer };
+      write(png: { width: number; height: number; data: Buffer }): Buffer;
+    };
+  };
+};
+const jpeg = require('jpeg-js') as {
+  encode(image: { data: Buffer; width: number; height: number }, quality?: number): {
+    data: Buffer;
+  };
+};
 import {
   computeTargetSize,
   isImagePath,
@@ -10,8 +31,9 @@ import {
   processViewImage,
   IMAGE_MAX_ENCODED_BYTES,
   IMAGE_MAX_SOURCE_BYTES,
+  type DecodedImage,
+  type ImageDecoder,
 } from '../src/image-attachment.js';
-import type { NativeImageInstance, NativeImageLike } from '../src/runtime.js';
 
 function fakeNativeImage(
   width: number,
@@ -23,7 +45,7 @@ function fakeNativeImage(
     jpeg?: Buffer;
     empty?: boolean;
   } = {},
-): NativeImageInstance {
+): DecodedImage {
   return {
     isEmpty: () => options.empty ?? false,
     getSize: () => ({ width, height }),
@@ -42,6 +64,26 @@ function fakeNativeImage(
     toPNG: () => options.png ?? Buffer.from('png'),
     toJPEG: () => options.jpeg ?? Buffer.from('jpeg'),
   };
+}
+
+function writeRasterPng(
+  filePath: string,
+  width: number,
+  height: number,
+  fill: (x: number, y: number) => [number, number, number, number],
+): void {
+  const png = new PNG({ width, height });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const [r, g, b, a] = fill(x, y);
+      const i = (y * width + x) * 4;
+      png.data[i] = r;
+      png.data[i + 1] = g;
+      png.data[i + 2] = b;
+      png.data[i + 3] = a;
+    }
+  }
+  writeFileSync(filePath, PNG.sync.write(png));
 }
 
 function withImageFile(run: (imagePath: string) => void): void {
@@ -148,8 +190,8 @@ describe('processImageAttachments（非 Electron 宿主）', () => {
     try {
       const p = join(dir, 'ok.png');
       writeFileSync(p, Buffer.from([137, 80, 78, 71])); // PNG magic, 内容无所谓
-      const r = processImageAttachments([{ path: p, name: 'ok.png' }]);
-      // 无 nativeImage 时原样把字节交给模型，不再只留路径。
+      const r = processImageAttachments([{ path: p, name: 'ok.png' }], null);
+      // 无解码器时原样把字节交给模型，不再只留路径。
       expect(r.images).toEqual([{
         data: Buffer.from([137, 80, 78, 71]).toString('base64'),
         mediaType: 'image/png',
@@ -166,7 +208,7 @@ describe('processViewImage', () => {
     withImageFile((imagePath) => {
       const crops: unknown[] = [];
       const resizes: unknown[] = [];
-      const decoder: NativeImageLike = {
+      const decoder: ImageDecoder = {
         createFromPath: () => fakeNativeImage(2000, 1000, { crops, resizes }),
       };
 
@@ -264,6 +306,7 @@ describe('processViewImage', () => {
       const passed = processViewImage({ path: imagePath }, null);
       expect(passed.success).toBe(true);
       expect(passed.data?._image.b64).toBe(Buffer.from([137, 80, 78, 71]).toString('base64'));
+      expect(processViewImage({ path: imagePath }).error).toContain('可识别');
       expect(processViewImage({ path: imagePath, region: { x: 0, y: 0, w: 1, h: 1 } }, null).error).toContain(
         '不能裁剪',
       );
@@ -274,5 +317,77 @@ describe('processViewImage', () => {
         ).error,
       ).toContain('可识别');
     });
+  });
+});
+
+describe('内置 PNG/JPEG 解码器', () => {
+  it('长边超过 maxEdge 时缩放，而不是拒绝', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'view-image-raster-'));
+    try {
+      const imagePath = join(dir, 'sheet.png');
+      writeRasterPng(imagePath, 2000, 8, (x) => (x < 1000 ? [255, 0, 0, 255] : [0, 0, 255, 255]));
+
+      const scaled = processViewImage({ path: imagePath, maxEdge: 1500 });
+      expect(scaled.success).toBe(true);
+      expect(scaled.data).toMatchObject({ width: 1500, height: 6, mediaType: 'image/png' });
+      const pixels = PNG.sync.read(Buffer.from(scaled.data?._image.b64 ?? '', 'base64'));
+      expect(pixels.width).toBe(1500);
+      expect(pixels.height).toBe(6);
+      expect(pixels.data[0]).toBeGreaterThan(200);
+      expect(pixels.data[1499 * 4 + 2]).toBeGreaterThan(200);
+
+      const fallback = processViewImage({ path: imagePath }, null);
+      expect(fallback.success).toBe(false);
+      expect(fallback.error).toContain('不能缩放');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('按像素裁剪后再编码', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'view-image-crop-'));
+    try {
+      const imagePath = join(dir, 'crop.png');
+      writeRasterPng(imagePath, 40, 30, () => [10, 20, 30, 255]);
+      const result = processViewImage({
+        path: imagePath,
+        region: { x: 4, y: 6, w: 10, h: 8 },
+      });
+      expect(result.success).toBe(true);
+      expect(result.data).toMatchObject({ width: 10, height: 8, mediaType: 'image/png' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('JPEG 超长边时缩成 JPEG', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'view-image-jpeg-'));
+    try {
+      const width = 80;
+      const height = 40;
+      const rgba = Buffer.alloc(width * height * 4, 255);
+      const imagePath = join(dir, 'photo.jpg');
+      writeFileSync(imagePath, jpeg.encode({ data: rgba, width, height }, 90).data);
+
+      const result = processViewImage({ path: imagePath, maxEdge: 20 });
+      expect(result.success).toBe(true);
+      expect(result.data).toMatchObject({ width: 20, height: 10, mediaType: 'image/jpeg' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('附件里的超大 PNG 记入缩放说明', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'view-image-attach-'));
+    try {
+      const imagePath = join(dir, 'wide.png');
+      writeRasterPng(imagePath, 2000, 4, () => [0, 0, 0, 255]);
+      const attached = processImageAttachments([{ path: imagePath, name: 'wide.png' }]);
+      expect(attached.images).toHaveLength(1);
+      expect(attached.images[0]?.mediaType).toBe('image/png');
+      expect(attached.notes[0]).toContain('已缩放至 1568×3');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

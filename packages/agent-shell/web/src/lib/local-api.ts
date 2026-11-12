@@ -1,18 +1,19 @@
 /**
- * Typed wrappers around `window.electron.localBackend.request` for the
+ * Typed wrappers around `window.steerableHost.localBackend.request` for the
  * endpoints that apps/web actually consumes today. Shapes follow what
  * `src/local-backend/router.ts` returns — see the corresponding route
  * handlers there if you need to add fields.
  *
  * Conventions:
- *   - Every helper throws if the bridge is missing (caller should `isElectron()`
+ *   - Every helper throws if the bridge is missing (caller should `hasHostBridge()`
  *     check first if a graceful degradation is needed).
  *   - We deliberately keep the local return shapes (not Pydantic / protocol
  *     types) — they're the contract between local-backend and renderer, and
  *     may drift from any public cloud API. Aligning the two is out of scope.
  */
 
-import { getElectronBridge } from './electron-bridge';
+import { getLocale } from '@/i18n';
+import { getHostBridge } from './host-bridge';
 
 export interface LocalChat {
   id: string;
@@ -25,6 +26,10 @@ export interface LocalChat {
   isPinned: boolean;
   systemPrompt: string | null;
   pinnedRefs: unknown;
+  /** 是否正在流式生成/对话中。 */
+  isStreaming?: boolean;
+  /** 是否存在需要用户回答或审批的问题。 */
+  needsUserInput?: boolean;
 }
 
 /** 智能体的工具准入策略；`all` = 不限制。 */
@@ -96,10 +101,10 @@ interface CreateChatResponse {
 }
 
 function bridge() {
-  const b = getElectronBridge();
+  const b = getHostBridge();
   if (!b) {
     throw new Error(
-      'Electron bridge unavailable — local API can only be used inside the desktop shell.',
+      'Host bridge unavailable — local API can only be used inside the desktop shell.',
     );
   }
   return b;
@@ -130,6 +135,20 @@ export async function deleteChat(chatId: string) {
   }>({
     method: 'DELETE',
     path: `/api/v2/chats/${encodeURIComponent(chatId)}`,
+  });
+}
+
+/** 置顶或取消置顶指定会话。 */
+export async function setChatPinned(chatId: string, isPinned: boolean) {
+  return bridge().localBackend.request<{
+    success: boolean;
+    chatId: string;
+    isPinned: boolean;
+    message: string;
+  }>({
+    method: 'PUT',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/pin`,
+    body: { isPinned },
   });
 }
 
@@ -323,6 +342,60 @@ export async function getChatLiveStream(chatId: string) {
   });
 }
 
+export interface LocalGoal {
+  id: string;
+  chatId: string;
+  revision: number;
+  objective: string;
+  phase: 'active' | 'paused' | 'blocked' | 'complete';
+  blockedReason?: string;
+  turns: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export async function getChatGoal(chatId: string) {
+  return bridge().localBackend.request<{ goal: LocalGoal | null }>({
+    method: 'GET',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/goal`,
+  });
+}
+
+export async function updateChatGoal(
+  chatId: string,
+  body:
+    | { action: 'edit'; objective: string }
+    | { action: 'pause' | 'resume' | 'complete' | 'clear' },
+) {
+  return bridge().localBackend.request<{ goal: LocalGoal | null }>({
+    method: 'POST',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/goal`,
+    body,
+  });
+}
+
+export interface LocalMonitoredLoop {
+  id: string;
+  chatId: string;
+  terminalSessionId: string;
+  prompt: string;
+  intervalSeconds: number;
+}
+
+export async function listChatLoops(chatId: string) {
+  return bridge().localBackend.request<{ loops: LocalMonitoredLoop[] }>({
+    method: 'GET',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/loops`,
+  });
+}
+
+export async function stopChatLoop(chatId: string, loopId: string) {
+  return bridge().localBackend.request<{ success: boolean }>({
+    method: 'DELETE',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/loops/${encodeURIComponent(loopId)}`,
+  });
+}
+
 /** 按 chatId 取消运行中的回合（切回后新挂载的视图手里没有原 streamId）。 */
 export async function cancelChatTurn(chatId: string) {
   return bridge().localBackend.request<{ success: boolean; reason?: string }>({
@@ -341,6 +414,25 @@ export async function openLocalPath(targetPath: string) {
     method: 'POST',
     path: '/api/v2/local/open-path',
     body: { path: targetPath },
+  });
+}
+
+/** 回合产物下载内容：base64 字节 + 浏览器下载所需文件名与 MIME。 */
+export interface LocalFileDownload {
+  fileName: string;
+  mime: string;
+  size: number;
+  base64: string;
+}
+
+/**
+ * 读取本会话回合产物文件，交给浏览器落盘下载。CS（Tauri）与 BS（团队版）
+ * 两种宿主都经 localBackend 通道，浏览器模式不再依赖“系统应用打开”。
+ */
+export async function getLocalFileDownload(chatId: string, targetPath: string) {
+  return bridge().localBackend.request<LocalFileDownload>({
+    method: 'GET',
+    path: `/api/v2/local/download?chatId=${encodeURIComponent(chatId)}&path=${encodeURIComponent(targetPath)}`,
   });
 }
 
@@ -369,10 +461,14 @@ export interface LocalProject {
   id: string;
   name: string;
   folderPath: string;
-  /** 附加源文件夹（只读）。缺省空。 */
+  /** 附加源文件夹（可读写，含其子目录）。缺省空。 */
   sourceFolders?: string[];
   /** W6-5: 信任后该项目目录里的规则文件才会注入模型上下文。缺省 false。 */
   trusted?: boolean;
+  /** 侧边栏顺序，越小越靠前。缺省时列表顺序由服务端决定。 */
+  sortOrder?: number;
+  /** 命令行创建的项目。桌面创建的记录没有该字段。 */
+  origin?: 'cli';
   createdAt: string;
   updatedAt: string;
 }
@@ -498,6 +594,15 @@ export async function updateProject(
   });
 }
 
+/** 按 id 顺序保存侧栏项目排序。服务端忽略未知 id，没提到的项目接在后面。 */
+export async function reorderProjects(orderedIds: string[]) {
+  return bridge().localBackend.request<{ success: boolean; projects: LocalProject[] }>({
+    method: 'PUT',
+    path: '/api/v2/projects/order',
+    body: { orderedIds },
+  });
+}
+
 export async function deleteProject(projectId: string) {
   return bridge().localBackend.request<{ success: boolean; detachedChats: number }>({
     method: 'DELETE',
@@ -514,6 +619,35 @@ export async function updateChatProject(chatId: string, projectId: string | null
     method: 'PATCH',
     path: `/api/v2/chats/${encodeURIComponent(chatId)}/settings`,
     body: { projectId },
+  });
+}
+
+export async function getChat(chatId: string) {
+  return bridge().localBackend.request<{
+    id: string;
+    title: string;
+    forkedFrom: { chatId: string; title: string } | null;
+  }>({
+    method: 'GET',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}`,
+  });
+}
+
+/** 复制会话。409 表示原会话正被占用，413 表示工作区超过复制上限。 */
+export async function forkChat(chatId: string) {
+  return bridge().localBackend.request<{ chatId: string }>({
+    method: 'POST',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/fork`,
+    body: { locale: getLocale() },
+  });
+}
+
+/** 用户重命名。409 表示会话锁被占用，调用方恢复旧名。 */
+export async function updateChatTitle(chatId: string, title: string) {
+  return bridge().localBackend.request<{ id: string; title: string }>({
+    method: 'PATCH',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/settings`,
+    body: { title },
   });
 }
 
@@ -718,6 +852,49 @@ export async function getSidecarSandboxPosture() {
   });
 }
 
+/** 当前 DeepSeek / Kimi 密钥在供应商侧的真实余额。其他厂商为 unsupported。 */
+export interface LlmAccount {
+  status: 'ready' | 'unsupported' | 'missing_key' | 'failed';
+  provider: 'deepseek' | 'moonshot' | null;
+  label: string;
+  available: boolean | null;
+  currency: string | null;
+  total: string | null;
+  granted: string | null;
+  toppedUp: string | null;
+}
+
+export async function getLlmAccount(refresh = false) {
+  return bridge().localBackend.request<LlmAccount>({
+    method: 'GET',
+    path: refresh ? '/api/v2/llm/account?refresh=1' : '/api/v2/llm/account',
+  });
+}
+
+/** Why a turn can or cannot start: the credential source the host resolved. */
+export interface LlmCredentialStatus {
+  ok: boolean;
+  source: 'config' | 'env' | 'not_required' | 'missing';
+  envName?: string;
+  envNames: string[];
+  provider: string;
+  vendorId: string | null;
+  model: string;
+}
+
+/**
+ * Reads the host's credential verdict.
+ *
+ * The first-run page uses it instead of inspecting settings itself, so the web
+ * shell and the command line agree on what "configured" means.
+ */
+export async function getLlmCredential() {
+  return bridge().localBackend.request<LlmCredentialStatus>({
+    method: 'GET',
+    path: '/api/v2/llm/credential',
+  });
+}
+
 export async function getLlmSettings() {
   return bridge().localBackend.request<LlmSettings>({
     method: 'GET',
@@ -725,12 +902,17 @@ export async function getLlmSettings() {
   });
 }
 
+/** 模型设置保存后通知侧栏重新读取供应商余额。 */
+export const LLM_SETTINGS_CHANGED_EVENT = 'steerable:llm-settings-changed';
+
 export async function setLlmSettings(input: LlmSettings) {
-  return bridge().localBackend.request<LlmSettings>({
+  const saved = await bridge().localBackend.request<LlmSettings>({
     method: 'POST',
     path: '/api/v2/local-settings/llm',
     body: input,
   });
+  window.dispatchEvent(new Event(LLM_SETTINGS_CHANGED_EVENT));
+  return saved;
 }
 
 /* ---------------- LLM link diagnosis ---------------- */
@@ -747,6 +929,32 @@ export interface DiagnoseResult {
   steps: DiagnoseStep[];
   ambientProxies: string[];
   hint: string | null;
+}
+
+export async function installCommandLineTool(name: string) {
+  return bridge().localBackend.request<{ path: string; onPath: boolean }>({
+    method: 'POST',
+    path: '/api/v2/cli/install',
+    body: { name },
+  });
+}
+
+/** Reliability numbers for the settings page's network section (R4). */
+export interface ReliabilitySummary {
+  sinceDays: number;
+  total: number;
+  failed: number;
+  cancelled: number;
+  recoveredByRetry: number;
+  usedDirect: number;
+  failuresByKind: Array<{ kind: string; count: number }>;
+}
+
+export async function getReliabilitySummary(days = 7) {
+  return bridge().localBackend.request<ReliabilitySummary>({
+    method: 'GET',
+    path: `/api/v2/usage/reliability?days=${encodeURIComponent(days)}`,
+  });
 }
 
 export async function diagnoseLlmConnection(input: {

@@ -1,14 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { LuCheck, LuCopy, LuListChecks, LuLoaderCircle, LuRefreshCw, LuShare2 } from 'react-icons/lu';
+import {
+  LuCheck,
+  LuChevronDown,
+  LuChevronUp,
+  LuCopy,
+  LuListChecks,
+  LuLoaderCircle,
+  LuRefreshCw,
+  LuShare2,
+  LuTriangleAlert,
+} from 'react-icons/lu';
 import type { ChatMessage } from '@steerable/agent-protocol';
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
+import { t } from '@/i18n';
 import { Markdown } from './Markdown';
 import { ExecutedActionsCard, type ExecutedAction } from './ExecutedActionsCard';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import { collectTurnParticipants, extractMentionedAgentIds } from './executed-actions-model';
 import type { InspectTaskInput } from './executed-actions-model';
 import { StreamingStatus } from './StreamingStatus';
+import { TurnFailureCard, type TurnFailureCardProps } from './TurnFailureCard';
+import { readFailureDetail, type TurnFailureDetail } from './turn-failure';
+import type { RetryState } from './RetryStatus';
 import { getFriendlyDate } from './timestamp';
 import { useCopy } from './useCopy';
 import type { TurnBlock } from './turn-timeline';
@@ -100,6 +114,12 @@ interface AssistantMessageProps {
    * `StreamingStatus` to render "Round 2 · 继续推理..." between LLM bursts.
    */
   currentRound?: number;
+  /**
+   * Live retry state of the in-flight request. While set, the status line
+   * says "reconnecting" instead of "thinking": a seconds-scale backoff and a
+   * stalled request look the same without it.
+   */
+  retryState?: RetryState | null;
   /** True iff the message was generated in Plan mode. */
   isPlanMode?: boolean;
   /**
@@ -109,6 +129,12 @@ interface AssistantMessageProps {
    * has fully streamed; the caller then re-hydrates the message list.
    */
   onRegenerate?: (messageId: string) => Promise<void>;
+  /**
+   * Resolves a failed turn's action into a handler. The message list decides
+   * what this build can do (Continue needs a backend route, opening settings
+   * needs the modal); the card only draws what it is given.
+   */
+  failureAction?: TurnFailureCardProps['action'];
   /** Epoch ms when this turn started — live ticker while streaming. */
   startedAtMs?: number;
   /** Frozen wall-clock of a finished turn. */
@@ -187,11 +213,71 @@ function bubbleClass(isPlanMode: boolean): string {
 // 两处汇合到同一个错误气泡，失败回合不再只显示"（空消息）"。
 const STREAM_ERROR_PREFIX = '[stream error] ';
 
-function readTurnFailure(
-  message: ChatMessage,
-  content: string,
-): { reason: string; contentIsError: boolean } | null {
+interface TurnFailure {
+  reason: string;
+  contentIsError: boolean;
+  /** Classified detail; undefined for live stream errors and old records. */
+  detail?: TurnFailureDetail;
+  traceId?: string;
+}
+
+/**
+ * Terminal state of a persisted turn, for the card it should show.
+ *
+ * `failed` and `cancelled` are different for the reader even though both can
+ * be continued: one is the network's fault and comes back as a failure card,
+ * the other is the user's own Stop and reads as a neutral notice. Absent
+ * metadata means the turn finished normally (older records carry no status).
+ */
+/**
+ * Whether this failed/stopped turn was continued afterwards.
+ *
+ * The host stamps `continuedAt` when a resume starts from this turn. The card
+ * then collapses into one line: the failure is history the user already acted
+ * on, and re-showing the full card after a reload would read as "it failed
+ * again". Expanding it still yields the original diagnostics.
+ */
+function readContinued(message: ChatMessage): boolean {
+  const raw = (message as { messageMetadata?: unknown }).messageMetadata;
+  if (typeof raw !== 'string' || !raw) return false;
+  try {
+    const at = (JSON.parse(raw) as { continuedAt?: unknown }).continuedAt;
+    return typeof at === 'string' && at.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** True when the user's Stop landed while a retry was pending. */
+function readStoppedDuringRetry(message: ChatMessage): boolean {
+  const raw = (message as { messageMetadata?: unknown }).messageMetadata;
+  if (typeof raw !== 'string' || !raw) return false;
+  try {
+    const reason = (JSON.parse(raw) as { completionReason?: unknown }).completionReason;
+    return reason === 'aborted_during_retry';
+  } catch {
+    return false;
+  }
+}
+
+function readTurnStatus(message: ChatMessage): 'failed' | 'cancelled' | 'completed' {
+  const raw = (message as { messageMetadata?: unknown }).messageMetadata;
+  if (typeof raw !== 'string' || !raw) return 'completed';
+  try {
+    const status = (JSON.parse(raw) as { completionStatus?: unknown }).completionStatus;
+    if (status === 'failed') return 'failed';
+    if (status === 'cancelled') return 'cancelled';
+    return 'completed';
+  } catch {
+    // 元数据损坏按正常完成处理——落回原有的空消息展示。
+    return 'completed';
+  }
+}
+
+function readTurnFailure(message: ChatMessage, content: string): TurnFailure | null {
   if (content.startsWith(STREAM_ERROR_PREFIX)) {
+    // Live path: the framework stamped the reason into the content before the
+    // turn was persisted, so nothing structured is available yet.
     return { reason: content.slice(STREAM_ERROR_PREFIX.length), contentIsError: true };
   }
   const raw = (message as { messageMetadata?: unknown }).messageMetadata;
@@ -200,13 +286,20 @@ function readTurnFailure(
     const meta = JSON.parse(raw) as {
       completionStatus?: unknown;
       completionReason?: unknown;
+      failure?: unknown;
+      traceId?: unknown;
     };
     if (
       meta?.completionStatus === 'failed' &&
       typeof meta.completionReason === 'string' &&
       meta.completionReason
     ) {
-      return { reason: meta.completionReason, contentIsError: false };
+      return {
+        reason: meta.completionReason,
+        contentIsError: false,
+        detail: readFailureDetail(meta.failure),
+        traceId: typeof meta.traceId === 'string' && meta.traceId ? meta.traceId : undefined,
+      };
     }
   } catch {
     // 元数据损坏按无失败处理——落回原有的空消息展示。
@@ -225,10 +318,102 @@ function readPersistedAgentId(message: ChatMessage): string | undefined {
   }
 }
 
-function TurnErrorBubble({ reason }: { reason: string }) {
+function TurnErrorBubble({
+  failure,
+  completedSteps,
+  happenedAt,
+  onAction,
+}: {
+  failure: TurnFailure;
+  completedSteps: number;
+  happenedAt?: string;
+  onAction?: TurnFailureCardProps['action'];
+}) {
   return (
-    <div className="rounded-agent-lg border border-agent-destructive/40 bg-agent-destructive/5 px-2.5 py-2 text-xs leading-relaxed text-agent-destructive shadow-sm">
-      请求失败：{reason}
+    <TurnFailureCard
+      detail={failure.detail}
+      reason={failure.reason}
+      completedSteps={completedSteps}
+      happenedAt={happenedAt}
+      traceId={failure.traceId}
+      action={onAction}
+    />
+  );
+}
+
+/**
+ * One collapsed line standing in for a failure the user already continued.
+ *
+ * It stays expandable rather than disappearing: the diagnostics are the only
+ * record of what went wrong, and someone filing a report a day later still
+ * needs them. The default is collapsed so a resumed conversation reads as
+ * continuous work rather than a stack of past failures.
+ */
+function ContinuedHereLine({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div data-testid="continued-here">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="inline-flex items-center gap-1 text-[11px] text-agent-muted-foreground hover:text-agent-foreground"
+        data-action="continued-here"
+      >
+        <LuTriangleAlert className="h-3 w-3" />
+        {t('Connection failed here. Continued.')}
+        {open ? <LuChevronUp className="h-3 w-3" /> : <LuChevronDown className="h-3 w-3" />}
+      </button>
+      {open ? <div className="mt-1.5">{children}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * Neutral notice for a turn the user stopped.
+ *
+ * Deliberately not the failure card: nothing went wrong, the user chose to
+ * stop. It still offers Continue, because the usual reason to stop a turn is
+ * impatience with a retry, and the work done so far is worth keeping. The copy
+ * distinguishes a stop during reconnection — the case where "continue" is
+ * almost certainly wanted — from a stop while the model was writing.
+ */
+function TurnStoppedCard({
+  duringRetry,
+  action,
+}: {
+  duringRetry: boolean;
+  action?: TurnFailureCardProps['action'];
+}) {
+  const handler = action?.({ kind: 'retry' }) ?? null;
+  return (
+    <div
+      className="rounded-agent-lg border border-agent-border bg-agent-muted/40 px-2.5 py-2 text-xs leading-relaxed"
+      data-testid="turn-stopped"
+    >
+      <div className="flex items-start gap-2 font-medium text-agent-foreground">
+        <span className="mt-[3px] h-2 w-2 flex-shrink-0 rounded-[2px] bg-agent-muted-foreground" />
+        <span>{t('Stopped')}</span>
+      </div>
+      <p className="mt-1 ml-5 text-agent-muted-foreground">
+        {duringRetry
+          ? t('You stopped this task while it was reconnecting.')
+          : t('You stopped this task.')}
+      </p>
+      {handler ? (
+        <div className="mt-2 ml-5">
+          <button
+            type="button"
+            disabled={handler.disabled}
+            title={handler.hint}
+            onClick={handler.onClick}
+            className="rounded-agent-md border border-agent-border bg-agent-card px-3 py-1 text-xs text-agent-foreground transition hover:bg-agent-muted disabled:opacity-50"
+            data-action="continue"
+          >
+            {t('Continue')}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -262,8 +447,10 @@ export function AssistantMessage({
   orchestrationChildren,
   previousUser,
   currentRound = 1,
+  retryState,
   isPlanMode = false,
   onRegenerate,
+  failureAction,
   startedAtMs,
   durationMs,
   llmSpeed,
@@ -273,6 +460,9 @@ export function AssistantMessage({
 }: AssistantMessageProps) {
   const content = message.content || '';
   const failure = readTurnFailure(message, content);
+  const stopped = !failure && readTurnStatus(message) === 'cancelled';
+  const stoppedDuringRetry = stopped && readStoppedDuringRetry(message);
+  const continued = readContinued(message);
   // live 错误文本（"[stream error] ..."）不当正文渲染；落库的失败回合可能
   // 留有部分正文，此时正文与错误气泡都展示。
   const displayContent = failure?.contentIsError ? '' : content;
@@ -307,6 +497,10 @@ export function AssistantMessage({
     llmRequestElapsedMs(llmSpeed, now),
   );
 
+  // A continued failure renders as one line; expanding it yields the card.
+  const wrapContinued = (card: React.ReactNode) =>
+    continued ? <ContinuedHereLine>{card}</ContinuedHereLine> : card;
+
   return (
     <motion.div
       className="group/message"
@@ -339,7 +533,7 @@ export function AssistantMessage({
             {isPlanMode && (
               <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 dark:border-amber-800/50 bg-amber-100/70 dark:bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300 select-none">
                 <LuListChecks className="h-3.5 w-3.5" />
-                <span>计划模式 (Plan)</span>
+                <span>{t('Plan mode (Plan)')}</span>
               </span>
             )}
           </div>
@@ -358,18 +552,28 @@ export function AssistantMessage({
             orchestrationChildren={orchestrationChildren}
             emptyFallback={
               failure ? (
-                <TurnErrorBubble reason={failure.reason} />
+                wrapContinued(
+                  <TurnErrorBubble
+                    failure={failure}
+                    completedSteps={toolActions.length}
+                    happenedAt={message.createdAt}
+                    onAction={failureAction}
+                  />,
+                )
               ) : isStreaming ? (
                 <div className={bubbleClass(isPlanMode)}>
                   <StreamingStatus
                     round={currentRound}
                     actionCount={executedActions?.length ?? 0}
                     hasContent={false}
+                    retry={retryState ?? undefined}
                   />
                 </div>
+              ) : stopped ? (
+                <TurnStoppedCard duringRetry={stoppedDuringRetry} action={failureAction} />
               ) : (
                 <div className={`${bubbleClass(isPlanMode)} text-xs italic text-agent-muted-foreground`}>
-                  (空消息)
+                  {t('(empty message)')}
                 </div>
               )
             }
@@ -378,6 +582,7 @@ export function AssistantMessage({
                 round={currentRound}
                 actionCount={executedActions?.length ?? 0}
                 hasContent={false}
+                retry={retryState ?? undefined}
               />
             }
             renderAnswer={(block, isLast) => (
@@ -393,7 +598,19 @@ export function AssistantMessage({
               （无块时走上面的 emptyFallback，不会重复）。 */}
           {failure && blocks.length > 0 ? (
             <div className="mt-1.5">
-              <TurnErrorBubble reason={failure.reason} />
+              {wrapContinued(
+                <TurnErrorBubble
+                  failure={failure}
+                  completedSteps={toolActions.length}
+                  happenedAt={message.createdAt}
+                  onAction={failureAction}
+                />,
+              )}
+            </div>
+          ) : null}
+          {stopped && blocks.length > 0 ? (
+            <div className="mt-1.5">
+              <TurnStoppedCard duringRetry={stoppedDuringRetry} action={failureAction} />
             </div>
           ) : null}
           </>
@@ -416,23 +633,40 @@ export function AssistantMessage({
                 {isStreaming && <StreamingCursor />}
               </div>
             ) : failure ? (
-              <TurnErrorBubble reason={failure.reason} />
+              wrapContinued(
+                <TurnErrorBubble
+                  failure={failure}
+                  completedSteps={toolActions.length}
+                  happenedAt={message.createdAt}
+                  onAction={failureAction}
+                />,
+              )
             ) : isStreaming ? (
               <div className={bubbleClass(isPlanMode)}>
                 <StreamingStatus
                   round={currentRound}
                   actionCount={executedActions?.length ?? 0}
                   hasContent={false}
+                  retry={retryState ?? undefined}
                 />
               </div>
+            ) : stopped ? (
+              <TurnStoppedCard duringRetry={stoppedDuringRetry} action={failureAction} />
             ) : (
               <div className={`${bubbleClass(isPlanMode)} text-xs italic text-agent-muted-foreground`}>
-                (空消息)
+                {t('(empty message)')}
               </div>
             )}
             {displayContent && failure ? (
               <div className="mt-1.5">
-                <TurnErrorBubble reason={failure.reason} />
+                {wrapContinued(
+                  <TurnErrorBubble
+                    failure={failure}
+                    completedSteps={toolActions.length}
+                    happenedAt={message.createdAt}
+                    onAction={failureAction}
+                  />,
+                )}
               </div>
             ) : null}
           </>
@@ -441,7 +675,7 @@ export function AssistantMessage({
             回合收尾才有数据，流式期间天然为空。 */}
         {!isStreaming && turnFiles && turnFiles.length > 0 && (
           <div className="mt-2.5 mb-1">
-            <TurnFilesCard files={turnFiles} />
+            <TurnFilesCard files={turnFiles} executedActions={executedActions} chatId={chatId} />
           </div>
         )}
         <div className="mt-2 flex items-center gap-2 text-[11px] text-agent-muted-foreground/80">
@@ -458,14 +692,14 @@ export function AssistantMessage({
               type="button"
               onClick={() => void copy()}
               className={META_ACTION}
-              title={copied ? '已复制' : '复制消息'}
-              aria-label={copied ? '已复制' : '复制消息'}
+              title={copied ? t('Copied') : t('Copy message')}
+              aria-label={copied ? t('Copied') : t('Copy message')}
             >
               {copied ? (
                 <>
                   <LuCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
                   <span className="text-emerald-600 dark:text-emerald-400">
-                    已复制
+                    {t('Copied')}
                   </span>
                 </>
               ) : (
@@ -473,7 +707,11 @@ export function AssistantMessage({
               )}
             </button>
           )}
-          {content && !isStreaming && onRegenerate && (
+          {/* Regenerate is offered for a failed or stopped turn even when it
+              produced no text: the reply the user wanted is missing, and
+              regenerating from the turn's start is the alternative to
+              Continue when Continue is not the right answer. */}
+          {(content || failure || stopped) && !isStreaming && onRegenerate && (
             <button
               type="button"
               disabled={regenerating}
@@ -493,8 +731,12 @@ export function AssistantMessage({
                   .finally(() => setRegenerating(false));
               }}
               className={`${META_ACTION} disabled:cursor-not-allowed`}
-              title={regenerating ? '正在重新生成…' : '重新生成（旧回复保留为分支）'}
-              aria-label={regenerating ? '正在重新生成' : '重新生成'}
+              title={
+                regenerating
+                  ? t('Regenerating...')
+                  : t('Regenerate (start this turn over; the old reply is kept as a branch)')
+              }
+              aria-label={regenerating ? t('Regenerating') : t('Regenerate')}
               data-action="regenerate"
             >
               <LuRefreshCw
@@ -559,12 +801,12 @@ function ShareChatButton({ onShare }: { onShare: () => Promise<boolean> }) {
       }`}
       title={
         state === 'done'
-          ? '截图已复制到剪贴板'
+          ? t('Screenshot copied to clipboard')
           : state === 'error'
-            ? '截图失败，请重试'
-            : '分享对话（截图复制到剪贴板）'
+            ? t('Screenshot failed. Try again.')
+            : t('Share chat (copy a screenshot to the clipboard)')
       }
-      aria-label="分享对话截图"
+      aria-label={t('Share chat screenshot')}
     >
       {state === 'busy' ? (
         <LuLoaderCircle className="h-3 w-3 animate-spin" />

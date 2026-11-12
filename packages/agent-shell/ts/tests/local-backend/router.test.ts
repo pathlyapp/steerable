@@ -26,13 +26,34 @@ import {
   makeToolRouter,
   resetRouterTestkit,
 } from './router-testkit.js';
-import { LocalBackendRouter, userFacingCoreLoopFailure } from '../../src/local-backend/router.js';
+import {
+  LocalBackendRouter,
+  readCompletionStatus,
+  readRetryNotice,
+  readTurnFailureInfo,
+} from '../../src/local-backend/router.js';
+import { ProjectRegistry, type ProjectRecord } from '../../src/project-registry.js';
 import { SidecarSupervisor } from '../../src/sidecar/index.js';
 import type { ToolRouter } from '../../src/tool-router.js';
 import type { TaskService } from '../../src/local-backend/task-service.js';
 import { registerAuthProvider, type Principal } from '../../src/auth/index.js';
+import { registerLocale, resetI18nForTests } from '../../src/i18n.js';
 import type { ScopedStore } from '../../src/storage/scoped-store.js';
-import { setProductConfig } from '../../src/product-config.js';
+import { resetProductConfigForTests, setProductConfig } from '../../src/product-config.js';
+import { chatAttachmentsDirPath } from '../../src/attachments.js';
+import { chatWorkspacePath } from '../../src/project-home.js';
+import { acquireChatWriteLock } from '../../src/storage/process-locks.js';
+import { getUserDataDir } from '../../src/runtime.js';
+
+function memoryProjectStore() {
+  let data: ProjectRecord[] = [];
+  return {
+    get: (key: 'projects') => (key === 'projects' ? data : undefined),
+    set: (key: 'projects', value: ProjectRecord[]) => {
+      if (key === 'projects') data = value;
+    },
+  };
+}
 
 function makeRouter(options: {
   toolRouter?: Record<string, unknown>;
@@ -55,27 +76,63 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// userFacingCoreLoopFailure：底层错误 → 用户可读中文提示
+// readTurnFailureInfo：失败流上的结构化字段 → 落库的 failure 元数据
 // ---------------------------------------------------------------------------
 
-describe('userFacingCoreLoopFailure', () => {
-  it('HTTP 401/403 映射为认证失败提示', () => {
-    expect(userFacingCoreLoopFailure('HTTP 401 Unauthorized')).toContain('认证失败');
-    expect(userFacingCoreLoopFailure('HTTP 403 Forbidden')).toContain('认证失败');
+async function withForkDirs<T>(body: () => Promise<T>): Promise<T> {
+  const prevData = process.env.DEEPPATH_USER_DATA_DIR;
+  const prevDocs = process.env.STEERABLE_DOCUMENTS_DIR;
+  process.env.DEEPPATH_USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'fork-data-'));
+  process.env.STEERABLE_DOCUMENTS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'fork-docs-'));
+  try {
+    return await body();
+  } finally {
+    if (prevData === undefined) delete process.env.DEEPPATH_USER_DATA_DIR;
+    else process.env.DEEPPATH_USER_DATA_DIR = prevData;
+    if (prevDocs === undefined) delete process.env.STEERABLE_DOCUMENTS_DIR;
+    else process.env.STEERABLE_DOCUMENTS_DIR = prevDocs;
+    resetProductConfigForTests();
+  }
+}
+
+describe('readTurnFailureInfo', () => {
+  it('透传 sidecar 的错误类别、代理、尝试次数与状态码', () => {
+    const err = Object.assign(new Error('coreloop stream failed: LoopError: x'), {
+      failureInfo: {
+        errorKind: 'transport',
+        proxy: 'http://127.0.0.1:7890',
+        attempts: 5,
+        statusCode: 401,
+      },
+    });
+    expect(readTurnFailureInfo(err)).toEqual({
+      errorKind: 'transport',
+      proxy: 'http://127.0.0.1:7890',
+      attempts: 5,
+      statusCode: 401,
+    });
   });
 
-  it('HTTP 404 映射为模型/地址不存在提示', () => {
-    expect(userFacingCoreLoopFailure('HTTP 404 Not Found')).toContain('baseUrl 与 model');
+  it('没有结构化字段的失败返回 undefined，元数据里不写空对象', () => {
+    expect(readTurnFailureInfo(new Error('plain failure'))).toBeUndefined();
+    expect(
+      readTurnFailureInfo(
+        Object.assign(new Error('x'), { failureInfo: { errorKind: undefined } }),
+      ),
+    ).toBeUndefined();
   });
 
-  it('连接类错误（ECONNREFUSED/ENOTFOUND/ETIMEDOUT/fetch failed）映射为网络提示', () => {
-    for (const reason of ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'fetch failed']) {
-      expect(userFacingCoreLoopFailure(reason)).toContain('无法连接模型服务');
-    }
+  it('字段类型不对时忽略，不让脏值进元数据', () => {
+    const err = Object.assign(new Error('x'), {
+      failureInfo: { errorKind: 42, attempts: '5', proxy: '' },
+    });
+    expect(readTurnFailureInfo(err)).toBeUndefined();
   });
 
-  it('其他错误原样拼进提示', () => {
-    expect(userFacingCoreLoopFailure('some weird error')).toBe('[回复失败] some weird error');
+  it('非对象 failureInfo 被忽略', () => {
+    expect(
+      readTurnFailureInfo(Object.assign(new Error('x'), { failureInfo: 'transport' })),
+    ).toBeUndefined();
   });
 });
 
@@ -254,6 +311,239 @@ describe('会话路由', () => {
     expect(await h.store.getChat(data.chatId)).not.toBeNull();
   });
 
+  it('POST compact folds older messages, fork copies them, and rewind drops the newest user turn', async () => {
+    const prevData = process.env.DEEPPATH_USER_DATA_DIR;
+    const prevDocs = process.env.STEERABLE_DOCUMENTS_DIR;
+    process.env.DEEPPATH_USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'fork-data-'));
+    process.env.STEERABLE_DOCUMENTS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'fork-docs-'));
+    try {
+    const chat = await h.store.createChat('原对话', 'agent-a', null);
+    await h.store.addMessage(chat.id, 'user', '较早问题');
+    await h.store.addMessage(chat.id, 'assistant', '较早回答');
+    await h.store.addMessage(chat.id, 'user', '最新问题');
+    await h.store.addMessage(chat.id, 'assistant', '最新回答');
+    const router = makeRouter();
+    const compacted = await router.handle({ method: 'POST', path: `/api/v2/chats/${chat.id}/compact` });
+    expect(compacted).toMatchObject({ status: 200, data: { compacted: 2 } });
+    const folded = (await h.store.listMessages(chat.id)).map((message) => message.content);
+    expect(folded[0]).toBe('最新回答');
+    expect(folded[1]).toBe('最新问题');
+    expect(folded[2]).toContain('已压缩 2 条');
+    expect(folded[2]).toContain('较早问题');
+
+    const forked = await router.handle({ method: 'POST', path: `/api/v2/chats/${chat.id}/fork` });
+    const forkId = (forked.data as { chatId?: string }).chatId ?? '';
+    expect(forked.status).toBe(200);
+    expect((await h.store.listMessages(forkId)).map((message) => message.content)).toEqual([
+      '最新回答',
+      '最新问题',
+      folded[2],
+    ]);
+
+    const rewound = await router.handle({ method: 'POST', path: `/api/v2/chats/${forkId}/rewind` });
+    expect(rewound).toMatchObject({ status: 200, data: { removed: 2 } });
+    expect((await h.store.listMessages(forkId)).map((message) => message.content)).toEqual([folded[2]]);
+    expect((await h.store.getChat(forkId))?.title).toBe('原对话 (fork)');
+    expect((await h.store.getChat(forkId))?.forkedFrom).toBe(chat.id);
+    await h.store.addMessage(forkId, 'user', '只在新会话');
+    await h.store.addMessage(chat.id, 'assistant', '只在原会话');
+    const originalAfter = (await h.store.listMessages(chat.id)).map((message) => message.content);
+    const forkAfter = (await h.store.listMessages(forkId)).map((message) => message.content);
+    expect(originalAfter).toContain('只在原会话');
+    expect(originalAfter).not.toContain('只在新会话');
+    expect(forkAfter).toContain('只在新会话');
+    expect(forkAfter).not.toContain('只在原会话');
+    } finally {
+      if (prevData === undefined) delete process.env.DEEPPATH_USER_DATA_DIR;
+      else process.env.DEEPPATH_USER_DATA_DIR = prevData;
+      if (prevDocs === undefined) delete process.env.STEERABLE_DOCUMENTS_DIR;
+      else process.env.STEERABLE_DOCUMENTS_DIR = prevDocs;
+    }
+  });
+
+  it('fork title uses the request locale', async () => {
+    await withForkDirs(async () => {
+      resetI18nForTests();
+      registerLocale('zh', { '{title} (fork)': '{title}（分叉）' });
+      try {
+        const chat = await h.store.createChat('原对话', 'agent-a', null);
+        const router = makeRouter();
+        const chinese = await router.handle({
+          method: 'POST',
+          path: `/api/v2/chats/${chat.id}/fork`,
+          body: { locale: 'zh-CN' },
+        });
+        const chineseId = (chinese.data as { chatId?: string }).chatId ?? '';
+        expect(chinese.status).toBe(200);
+        expect((await h.store.getChat(chineseId))?.title).toBe('原对话（分叉）');
+        const english = await router.handle({
+          method: 'POST',
+          path: `/api/v2/chats/${chat.id}/fork`,
+          body: { locale: 'en' },
+        });
+        const englishId = (english.data as { chatId?: string }).chatId ?? '';
+        expect((await h.store.getChat(englishId))?.title).toBe('原对话 (fork)');
+      } finally {
+        resetI18nForTests();
+      }
+    });
+  });
+
+  it('分叉复制附件、改写路径，项目会话不复制工作区', async () => {
+    await withForkDirs(async () => {
+      const chat = await h.store.createChat('带文件', 'agent-a', null);
+      const attachments = chatAttachmentsDirPath(chat.id);
+      fs.mkdirSync(attachments, { recursive: true });
+      fs.writeFileSync(path.join(attachments, 'sample.pdf'), 'pdf');
+      const sourceWorkspace = chatWorkspacePath(chat.id);
+      fs.mkdirSync(sourceWorkspace, { recursive: true });
+      fs.writeFileSync(path.join(sourceWorkspace, 'notes.md'), 'workspace-body');
+      const sibling = `${attachments}-extra`;
+      const other = chatAttachmentsDirPath('other-chat');
+      fs.mkdirSync(other, { recursive: true });
+      fs.writeFileSync(path.join(other, 'secret.txt'), 'no');
+      const sourcePdf = path.join(attachments, 'sample.pdf');
+      const sourceNotes = path.join(sourceWorkspace, 'notes.md');
+      await h.store.addMessage(
+        chat.id,
+        'user',
+        `file ${sourcePdf} notes ${sourceNotes} keep ${sibling} other ${path.join(other, 'secret.txt')}`,
+        JSON.stringify({ file: sourcePdf, note: sourceNotes, keep: sibling }),
+      );
+      const router = makeRouter();
+      const forked = await router.handle({ method: 'POST', path: `/api/v2/chats/${chat.id}/fork` });
+      expect(forked.status).toBe(200);
+      const forkId = (forked.data as { chatId: string }).chatId;
+      const copiedMessage = (await h.store.listMessages(forkId))[0];
+      const copied = copiedMessage?.content ?? '';
+      const copiedPdf = path.join(chatAttachmentsDirPath(forkId), 'sample.pdf');
+      const copiedNotes = path.join(chatWorkspacePath(forkId), 'notes.md');
+      const copiedMeta = JSON.parse(copiedMessage?.messageMetadata ?? '{}') as {
+        file: string;
+        note: string;
+        keep: string;
+      };
+      expect(copiedMeta).toEqual({ file: copiedPdf, note: copiedNotes, keep: sibling });
+      expect(copied).toContain(copiedPdf);
+      expect(copied).toContain(copiedNotes);
+      expect(copied).toContain(sibling);
+      expect(fs.readFileSync(copiedPdf, 'utf8')).toBe('pdf');
+      expect(fs.readFileSync(copiedNotes, 'utf8')).toBe('workspace-body');
+      fs.writeFileSync(copiedPdf, 'changed-pdf');
+      fs.writeFileSync(copiedNotes, 'changed-notes');
+      expect(fs.readFileSync(path.join(attachments, 'sample.pdf'), 'utf8')).toBe('pdf');
+      expect(fs.readFileSync(path.join(sourceWorkspace, 'notes.md'), 'utf8')).toBe('workspace-body');
+      expect(fs.existsSync(path.join(chatAttachmentsDirPath(forkId), 'secret.txt'))).toBe(false);
+      expect(copied).toContain(path.join(other, 'secret.txt'));
+
+      const projectChat = await h.store.createChat('项目里', 'agent-a', 'proj-1');
+      const workspace = chatWorkspacePath(projectChat.id);
+      fs.mkdirSync(workspace, { recursive: true });
+      fs.writeFileSync(path.join(workspace, 'notes.md'), 'keep');
+      const projectFork = await router.handle({ method: 'POST', path: `/api/v2/chats/${projectChat.id}/fork` });
+      const projectForkId = (projectFork.data as { chatId: string }).chatId;
+      expect((await h.store.getChat(projectForkId))?.projectId).toBe('proj-1');
+      expect(fs.existsSync(path.join(chatWorkspacePath(projectForkId), 'notes.md'))).toBe(false);
+
+      const detail = await router.handle({ method: 'GET', path: `/api/v2/chats/${forkId}` });
+      expect(detail.status).toBe(200);
+      expect((detail.data as { forkedFrom: { chatId: string; title: string } }).forkedFrom).toEqual({
+        chatId: chat.id,
+        title: '带文件',
+      });
+      await h.store.deleteChat(chat.id);
+      const gone = await router.handle({ method: 'GET', path: `/api/v2/chats/${forkId}` });
+      expect((gone.data as { forkedFrom: null }).forkedFrom).toBeNull();
+    });
+  });
+
+  it('工作区超过上限时 413，不创建新会话', async () => {
+    await withForkDirs(async () => {
+      resetProductConfigForTests();
+      setProductConfig({ forkWorkspaceMaxBytes: 1 });
+      const chat = await h.store.createChat('很大', 'agent-a', null);
+      const workspace = chatWorkspacePath(chat.id);
+      fs.mkdirSync(workspace, { recursive: true });
+      fs.writeFileSync(path.join(workspace, 'big.bin'), '0123456789');
+      const before = (await h.store.listChats()).chats.length;
+      const forked = await makeRouter().handle({ method: 'POST', path: `/api/v2/chats/${chat.id}/fork` });
+      expect(forked.status).toBe(413);
+      expect((forked.data as { bytes: number }).bytes).toBeGreaterThan(1);
+      expect((await h.store.listChats()).chats).toHaveLength(before);
+    });
+  });
+
+  it('原会话被占用时分叉返回 409，不创建新会话', async () => {
+    await withForkDirs(async () => {
+      const chat = await h.store.createChat('忙', 'agent-a', null);
+      const lease = acquireChatWriteLock(getUserDataDir(), chat.id);
+      try {
+        const before = (await h.store.listChats()).chats.length;
+        const forked = await makeRouter().handle({ method: 'POST', path: `/api/v2/chats/${chat.id}/fork` });
+        expect(forked.status).toBe(409);
+        expect((forked.data as { code: string }).code).toBe('chat_busy');
+        expect((await h.store.listChats()).chats).toHaveLength(before);
+      } finally {
+        lease.release();
+      }
+    });
+  });
+
+  it('复制工作区失败时删掉新会话和已经复制的附件', async () => {
+    await withForkDirs(async () => {
+      const chat = await h.store.createChat('半途失败', 'agent-a', null);
+      const attachments = chatAttachmentsDirPath(chat.id);
+      fs.mkdirSync(attachments, { recursive: true });
+      fs.writeFileSync(path.join(attachments, 'sample.pdf'), 'pdf');
+      const workspace = chatWorkspacePath(chat.id);
+      fs.mkdirSync(workspace, { recursive: true });
+      fs.writeFileSync(path.join(workspace, 'notes.md'), 'body');
+      const realCp = fs.promises.cp.bind(fs.promises);
+      let copies = 0;
+      const spy = vi.spyOn(fs.promises, 'cp').mockImplementation(async (...args) => {
+        copies += 1;
+        if (copies > 1) throw new Error('workspace copy failed');
+        return realCp(...args);
+      });
+      const attachmentNames = () => fs.readdirSync(path.dirname(attachments));
+      const workspaceNames = () => fs.readdirSync(path.dirname(workspace));
+      const beforeAttachments = attachmentNames();
+      const beforeWorkspace = workspaceNames();
+      try {
+        const forked = await makeRouter().handle({ method: 'POST', path: `/api/v2/chats/${chat.id}/fork` });
+        expect(forked.status).toBe(500);
+        expect((forked.data as { detail: string }).detail).toBe('Fork failed');
+        expect(copies).toBe(2);
+        expect((await h.store.listChats()).chats.map((item) => item.title)).toEqual(['半途失败']);
+        expect(attachmentNames().filter((name) => !beforeAttachments.includes(name))).toEqual([]);
+        expect(workspaceNames().filter((name) => !beforeWorkspace.includes(name))).toEqual([]);
+        expect(fs.readFileSync(path.join(attachments, 'sample.pdf'), 'utf8')).toBe('pdf');
+        expect(fs.readFileSync(path.join(workspace, 'notes.md'), 'utf8')).toBe('body');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  it('复制失败时删掉新会话和已复制的目录', async () => {
+    await withForkDirs(async () => {
+      const chat = await h.store.createChat('会失败', 'agent-a', null);
+      const attachments = chatAttachmentsDirPath(chat.id);
+      fs.mkdirSync(attachments, { recursive: true });
+      fs.writeFileSync(path.join(attachments, 'sample.pdf'), 'pdf');
+      fs.chmodSync(path.dirname(attachments), 0o555);
+      try {
+        const forked = await makeRouter().handle({ method: 'POST', path: `/api/v2/chats/${chat.id}/fork` });
+        expect(forked.status).toBe(500);
+        expect((forked.data as { detail: string }).detail).toBe('Fork failed');
+        const titles = (await h.store.listChats()).chats.map((item) => item.title);
+        expect(titles).toEqual(['会失败']);
+      } finally {
+        fs.chmodSync(path.dirname(attachments), 0o755);
+      }
+    });
+  });
+
   it('无项目对话工作区落在 Documents/应用名/conversations/<chatId>', async () => {
     const documentsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-ws-'));
     const prev = process.env.STEERABLE_DOCUMENTS_DIR;
@@ -393,6 +683,7 @@ describe('会话路由', () => {
     });
     expect((untouched.data as Record<string, any>).projectId).toBe('proj-1');
     expect((await h.store.getChat(chat.id))?.title).toBe('新标题');
+    expect((await h.store.getChat(chat.id))?.titleSource).toBe('user');
 
     // null：移出项目
     const detached = await router.handle({
@@ -419,6 +710,51 @@ describe('会话路由', () => {
     });
     expect(invalid.status).toBe(400);
     expect((invalid.data as Record<string, any>).detail).toContain('projectId 必须是');
+  });
+
+  it('PATCH settings 改标题会广播，空白标题 400 且不改名', async () => {
+    const chat = await h.store.createChat('原标题');
+    const { broadcast, calls } = makeBroadcast();
+    const router = makeRouter({ broadcast });
+    const blank = await router.handle({
+      method: 'PATCH',
+      path: `/api/v2/chats/${chat.id}/settings`,
+      body: { title: '   ' },
+    });
+    expect(blank.status).toBe(400);
+    expect((await h.store.getChat(chat.id))?.title).toBe('原标题');
+    expect((await h.store.getChat(chat.id))?.titleSource ?? null).toBeNull();
+
+    const renamed = await router.handle({
+      method: 'PATCH',
+      path: `/api/v2/chats/${chat.id}/settings`,
+      body: { title: ' 周报 ' },
+    });
+    expect(renamed.status).toBe(200);
+    expect((await h.store.getChat(chat.id))?.title).toBe('周报');
+    expect(calls.filter((call) => call.event === 'chat-title-updated')).toEqual([
+      { event: 'chat-title-updated', payload: { chatId: chat.id, title: '周报' } },
+    ]);
+  });
+
+  it('会话被占用时 PATCH settings 返回 409，标题不变', async () => {
+    await withForkDirs(async () => {
+      const chat = await h.store.createChat('原标题');
+      const lease = acquireChatWriteLock(getUserDataDir(), chat.id);
+      try {
+        const busy = await makeRouter().handle({
+          method: 'PATCH',
+          path: `/api/v2/chats/${chat.id}/settings`,
+          body: { title: '别的名字' },
+        });
+        expect(busy.status).toBe(409);
+        expect((busy.data as { code: string }).code).toBe('chat_busy');
+        expect((await h.store.getChat(chat.id))?.title).toBe('原标题');
+        expect((await h.store.getChat(chat.id))?.titleSource ?? null).toBeNull();
+      } finally {
+        lease.release();
+      }
+    });
   });
 
   it('GET /api/v2/chats/:id/messages：tool 角色映射为 assistant，附分页形状', async () => {
@@ -633,6 +969,58 @@ describe('项目路由', () => {
     expect((list.data as Record<string, any>).projects).toHaveLength(1);
   });
 
+  it('POST /resolve 复用已有目录，再次调用不再创建', async () => {
+    const registry = new ProjectRegistry(memoryProjectStore());
+    const router = makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) });
+    const first = await router.handle({
+      method: 'POST',
+      path: '/api/v2/projects/resolve',
+      body: { folderPath: '/tmp/resolve-demo', origin: 'cli' },
+    });
+    expect(first.status).toBe(200);
+    const created = (first.data as { project: ProjectRecord; created: boolean });
+    expect(created.created).toBe(true);
+    expect(created.project.origin).toBe('cli');
+    expect(created.project.name).toBe('resolve-demo');
+
+    const second = await router.handle({
+      method: 'POST',
+      path: '/api/v2/projects/resolve',
+      body: { folderPath: '/tmp/resolve-demo', origin: 'cli' },
+    });
+    expect(second.status).toBe(200);
+    expect((second.data as { created: boolean }).created).toBe(false);
+    expect((second.data as { project: ProjectRecord }).project.id).toBe(created.project.id);
+    expect(registry.list()).toHaveLength(1);
+  });
+
+  it('删除命令行项目后，目录里的文件还在', async () => {
+    const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-project-'));
+    const file = path.join(folder, 'hello.txt');
+    fs.writeFileSync(file, 'keep');
+    const registry = new ProjectRegistry(memoryProjectStore());
+    const router = makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) });
+    try {
+      const created = await router.handle({
+        method: 'POST',
+        path: '/api/v2/projects/resolve',
+        body: { folderPath: folder, origin: 'cli' },
+      });
+      expect(created.status).toBe(200);
+      const project = (created.data as { project: ProjectRecord }).project;
+      expect(project.origin).toBe('cli');
+      const deleted = await router.handle({
+        method: 'DELETE',
+        path: `/api/v2/projects/${project.id}`,
+      });
+      expect(deleted.status).toBe(200);
+      expect(registry.list()).toEqual([]);
+      expect(fs.readFileSync(file, 'utf8')).toBe('keep');
+    } finally {
+      fs.rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
   it('产品关掉 projects 时列表/创建返回 403', async () => {
     setProductConfig({ hostTools: { projects: false } });
     const registry = makeProjectRegistry();
@@ -645,6 +1033,49 @@ describe('项目路由', () => {
       body: { name: '演示', folderPath: '/tmp/demo' },
     });
     expect(created.status).toBe(403);
+    const order = await router.handle({
+      method: 'PUT',
+      path: '/api/v2/projects/order',
+      body: { orderedIds: [] },
+    });
+    expect(order.status).toBe(403);
+  });
+
+  it('PUT /api/v2/projects/order 按 id 重排；非法名单 400；无注册表 503', async () => {
+    const missing = await makeRouter().handle({
+      method: 'PUT',
+      path: '/api/v2/projects/order',
+      body: { orderedIds: [] },
+    });
+    expect(missing.status).toBe(503);
+
+    const store = memoryProjectStore();
+    const registry = new ProjectRegistry(store);
+    const first = registry.create({ name: '甲', folderPath: '/tmp/a' });
+    const second = registry.create({ name: '乙', folderPath: '/tmp/b' });
+    const router = makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) });
+
+    const bad = await router.handle({
+      method: 'PUT',
+      path: '/api/v2/projects/order',
+      body: { orderedIds: [first.id, 2] },
+    });
+    expect(bad.status).toBe(400);
+
+    const moved = await router.handle({
+      method: 'PUT',
+      path: '/api/v2/projects/order',
+      body: { orderedIds: [second.id, first.id] },
+    });
+    expect(moved.status).toBe(200);
+    expect(
+      ((moved.data as { projects: Array<{ name: string }> }).projects).map((project) => project.name),
+    ).toEqual(['乙', '甲']);
+
+    const list = await router.handle({ method: 'GET', path: '/api/v2/projects' });
+    expect(
+      ((list.data as { projects: Array<{ id: string }> }).projects).map((project) => project.id),
+    ).toEqual([second.id, first.id]);
   });
 
   it('POST 不带 folderPath 时分配默认家目录并创建', async () => {
@@ -772,9 +1203,26 @@ describe('项目路由', () => {
     expect(data.project).toMatchObject({ id: 'proj-1', trusted: true });
     expect(data.ruleFileCount).toBe(1);
     expect(data.rulesActive).toBe(true);
+    expect(data.files).toEqual(['AGENTS.md']);
 
     const missing = await router.handle({ method: 'GET', path: '/api/v2/chats/nope/project-context' });
     expect(missing.status).toBe(404);
+  });
+
+  it('GET project-context 在未信任时只列文件名，不读取规则正文', async () => {
+    const registry = makeProjectRegistry([
+      { id: 'proj-1', name: '项目', folderPath: '/tmp/p1', trusted: false },
+    ]);
+    h.listProjectRuleFiles.mockReturnValue(['/tmp/p1/AGENTS.md']);
+    h.loadProjectRuleFiles.mockReturnValue({ files: ['/tmp/p1/AGENTS.md'], content: '秘密正文' });
+    const router = makeRouter({ toolRouter: makeToolRouter({ projectRegistry: registry }) });
+    const chat = await h.store.createChat('有项目', 'agent-a', 'proj-1');
+    const res = await router.handle({ method: 'GET', path: `/api/v2/chats/${chat.id}/project-context` });
+    const data = res.data as Record<string, unknown>;
+    expect(data.ruleFileCount).toBe(1);
+    expect(data.rulesActive).toBe(false);
+    expect(data.files).toEqual(['AGENTS.md']);
+    expect(h.loadProjectRuleFiles).not.toHaveBeenCalled();
   });
 });
 
@@ -1265,6 +1713,34 @@ describe('MCP 服务路由', () => {
     expect((invalid.data as Record<string, any>).error).toContain('command is required');
   });
 
+  it('POST HTTP MCP：传输字段归一后交给注册表', async () => {
+    const mcpRegistry = makeMcpRegistry();
+    const router = makeRouter({ toolRouter: makeToolRouter({ mcpRegistry }) });
+    const created = await router.handle({
+      method: 'POST',
+      path: '/api/v2/mcp/servers',
+      body: {
+        name: 'remote',
+        transport: 'streamable-http',
+        url: 'https://mcp.example.com/mcp',
+        headers: { 'X-Tenant': 7 },
+        headersFromEnv: { 'X-Api-Key': 'MCP_API_KEY' },
+        bearerTokenEnvVar: 'MCP_TOKEN',
+      },
+    });
+    expect(created.status).toBe(200);
+    expect(mcpRegistry.create).toHaveBeenCalledWith({
+      name: 'remote',
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/mcp',
+      headers: { 'X-Tenant': '7' },
+      headersFromEnv: { 'X-Api-Key': 'MCP_API_KEY' },
+      bearerTokenEnvVar: 'MCP_TOKEN',
+      reconnect: undefined,
+      enabled: true,
+    });
+  });
+
   it('PUT /api/v2/mcp/servers/:id：更新后 enabled 服务触发刷新；DELETE 返回 deleted', async () => {
     const mcpRegistry = makeMcpRegistry({
       servers: [{ id: 's1', name: '服务一', enabled: true }],
@@ -1625,6 +2101,29 @@ describe('Insights 与用量路由', () => {
     expect((failed.data as Record<string, any>).detail).toBe('upload_failed_kept_local');
   });
 
+  it('GET /api/v2/llm/account：未保存设置时不带着空密钥去请求 DeepSeek', async () => {
+    const res = await makeRouter().handle({ method: 'GET', path: '/api/v2/llm/account' });
+    expect(res.status).toBe(200);
+    expect(res.data).toMatchObject({
+      status: 'missing_key',
+      provider: 'deepseek',
+      label: 'DeepSeek',
+    });
+  });
+
+  it('GET /api/v2/llm/account：其他供应商不查询余额', async () => {
+    await h.store.setLlmSettings({
+      provider: 'openai-compat',
+      vendorId: 'openai',
+      model: 'gpt-4o',
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: 'sk-test',
+    });
+    const res = await makeRouter().handle({ method: 'GET', path: '/api/v2/llm/account' });
+    expect(res.status).toBe(200);
+    expect(res.data).toMatchObject({ status: 'unsupported', provider: null });
+  });
+
   it('GET /api/v2/usage/summary：days 参数透传，非法值回落 30', async () => {
     const router = makeRouter();
     const res = await router.handle({ method: 'GET', path: '/api/v2/usage/summary?days=7' });
@@ -1632,6 +2131,18 @@ describe('Insights 与用量路由', () => {
 
     const fallback = await router.handle({ method: 'GET', path: '/api/v2/usage/summary?days=abc' });
     expect((fallback.data as Record<string, any>).days).toBe(30);
+  });
+
+  it('GET /api/v2/usage/reliability：默认 7 天，days 可覆盖（R4）', async () => {
+    const router = makeRouter();
+    const byDefault = await router.handle({ method: 'GET', path: '/api/v2/usage/reliability' });
+    expect((byDefault.data as Record<string, any>).sinceDays).toBe(7);
+
+    const windowed = await router.handle({
+      method: 'GET',
+      path: '/api/v2/usage/reliability?days=30',
+    });
+    expect((windowed.data as Record<string, any>).sinceDays).toBe(30);
   });
 
   it('GET /api/v2/local/traces：缺 chatId 400；payload 经 safeJson 解析', async () => {
@@ -1862,5 +2373,65 @@ describe('resolve-paths 路由', () => {
       body: { candidates: [1, null, {}] },
     });
     expect(malformed.data).toEqual({ resolved: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readRetryNotice：重试通知 → 前端的「正在重新连接」事件
+// ---------------------------------------------------------------------------
+
+describe('readRetryNotice', () => {
+  it('重试动作带出轮次与等待时长', () => {
+    expect(
+      readRetryNotice({ kind: 'hook_action', action: 'retry', delayMs: 8000, round: 9 }),
+    ).toEqual({ delayMs: 8000, round: 9 });
+  });
+
+  it('其它 hook_action 不算重试——轮次边界逻辑不受影响', () => {
+    expect(readRetryNotice({ kind: 'hook_action', action: 'narrate' })).toBeNull();
+    expect(readRetryNotice({ kind: 'hook_action', action: 'compact' })).toBeNull();
+  });
+
+  it('非 hook_action 通知不算重试', () => {
+    expect(readRetryNotice({ kind: 'budget_exhausted' })).toBeNull();
+    expect(readRetryNotice(undefined)).toBeNull();
+  });
+
+  it('字段类型不对时丢掉该字段，不写脏值', () => {
+    expect(readRetryNotice({ kind: 'hook_action', action: 'retry', delayMs: '8s' })).toEqual({});
+  });
+
+  it('空原因不写进事件', () => {
+    expect(readRetryNotice({ kind: 'hook_action', action: 'retry', reason: '' })).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readCompletionStatus：「继续」的准入依据
+// ---------------------------------------------------------------------------
+
+describe('readCompletionStatus', () => {
+  it('读出失败回合的状态', () => {
+    expect(
+      readCompletionStatus({
+        messageMetadata: JSON.stringify({ completionStatus: 'failed' }),
+      }),
+    ).toBe('failed');
+  });
+
+  it('没有元数据时返回 null，不猜成可续跑', () => {
+    expect(readCompletionStatus({ messageMetadata: null })).toBeNull();
+    expect(readCompletionStatus({})).toBeNull();
+    expect(readCompletionStatus(undefined)).toBeNull();
+  });
+
+  it('元数据损坏时返回 null', () => {
+    expect(readCompletionStatus({ messageMetadata: '{not json' })).toBeNull();
+  });
+
+  it('状态字段类型不对时返回 null', () => {
+    expect(
+      readCompletionStatus({ messageMetadata: JSON.stringify({ completionStatus: 1 }) }),
+    ).toBeNull();
   });
 });

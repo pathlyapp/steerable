@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LuLoaderCircle, LuChartBar, LuRefreshCw } from 'react-icons/lu';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { t } from '@/i18n';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 
 /**
  * UsagePanel — W6-9 用量与成本归因的桌面面板。
@@ -40,11 +41,7 @@ interface UsageSummaryWire {
   };
 }
 
-const WINDOW_OPTIONS = [
-  { days: 7, label: '近 7 天' },
-  { days: 30, label: '近 30 天' },
-  { days: 90, label: '近 90 天' },
-] as const;
+const WINDOW_OPTIONS = [{ days: 7 }, { days: 30 }, { days: 90 }] as const;
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
@@ -69,11 +66,11 @@ export function UsagePanel() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchSummary = useCallback(async (windowDays: number) => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<UsageSummaryWire>({
+      const res = await getHostBridge()!.localBackend.request<UsageSummaryWire>({
         method: 'GET',
         path: `/api/v2/usage/summary?days=${windowDays}`,
       });
@@ -95,7 +92,7 @@ export function UsagePanel() {
         <div className="flex items-center justify-between">
           <h4 className="text-xs font-semibold text-agent-foreground flex items-center gap-1.5">
             <LuChartBar className="h-3.5 w-3.5 text-agent-muted-foreground" />
-            用量与成本
+            {t('Usage and cost')}
           </h4>
           <div className="flex items-center gap-1.5">
             {WINDOW_OPTIONS.map((opt) => (
@@ -109,7 +106,7 @@ export function UsagePanel() {
                     : 'bg-agent-canvas text-agent-muted-foreground border border-agent-border hover:bg-agent-muted/40'
                 }`}
               >
-                {opt.label}
+                {t('Last {days} days', { days: opt.days })}
               </button>
             ))}
             <button
@@ -117,7 +114,7 @@ export function UsagePanel() {
               onClick={() => void fetchSummary(days)}
               disabled={loading}
               className="h-6 w-6 rounded-full border border-agent-border bg-agent-canvas text-agent-muted-foreground hover:bg-agent-muted/40 flex items-center justify-center"
-              title="刷新"
+              title={t('Refresh')}
             >
               <LuRefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
             </button>
@@ -127,30 +124,30 @@ export function UsagePanel() {
         {loading && !summary ? (
           <div className="flex items-center gap-2 py-4 text-xs text-agent-muted-foreground">
             <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            读取用量...
+            {t('Loading usage...')}
           </div>
         ) : !summary || summary.byModel.length === 0 ? (
           <p className="text-[11px] text-agent-muted-foreground py-2">
-            该时间窗内暂无用量记录。完成一轮对话后,这里会按模型聚合 token 与成本。
+            {t('No usage in this time window yet. After a conversation turn finishes, tokens and cost are grouped by model here.')}
           </p>
         ) : (
           <>
             {/* 总计卡片 */}
             <div className="grid grid-cols-4 gap-2">
               <div className="rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 py-2">
-                <div className="text-[10px] text-agent-muted-foreground">总轮次</div>
+                <div className="text-[10px] text-agent-muted-foreground">{t('Total turns')}</div>
                 <div className="text-xs font-semibold text-agent-foreground">{summary.totals.turns}</div>
               </div>
               <div className="rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 py-2">
-                <div className="text-[10px] text-agent-muted-foreground">总 Token</div>
+                <div className="text-[10px] text-agent-muted-foreground">{t('Total tokens')}</div>
                 <div className="text-xs font-semibold text-agent-foreground">{formatTokens(summary.totals.totalTokens)}</div>
               </div>
               <div className="rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 py-2">
-                <div className="text-[10px] text-agent-muted-foreground">缓存命中</div>
+                <div className="text-[10px] text-agent-muted-foreground">{t('Cache hits')}</div>
                 <div className="text-xs font-semibold text-agent-foreground">{formatTokens(summary.totals.cachedPromptTokens)}</div>
               </div>
               <div className="rounded-agent-md border border-agent-border bg-agent-canvas px-2.5 py-2">
-                <div className="text-[10px] text-agent-muted-foreground">估算成本</div>
+                <div className="text-[10px] text-agent-muted-foreground">{t('Estimated cost')}</div>
                 <div className="text-xs font-semibold text-agent-foreground">{formatCost(summary.totals.costUsd)}</div>
               </div>
             </div>
@@ -160,11 +157,11 @@ export function UsagePanel() {
               <table className="w-full text-[11px]">
                 <thead>
                   <tr className="bg-agent-muted/40 text-agent-muted-foreground">
-                    <th className="text-left font-medium px-2.5 py-1.5">模型</th>
-                    <th className="text-right font-medium px-2.5 py-1.5">轮次</th>
-                    <th className="text-right font-medium px-2.5 py-1.5">输入</th>
-                    <th className="text-right font-medium px-2.5 py-1.5">输出</th>
-                    <th className="text-right font-medium px-2.5 py-1.5">成本</th>
+                    <th className="text-left font-medium px-2.5 py-1.5">{t('Model')}</th>
+                    <th className="text-right font-medium px-2.5 py-1.5">{t('Turns')}</th>
+                    <th className="text-right font-medium px-2.5 py-1.5">{t('Input')}</th>
+                    <th className="text-right font-medium px-2.5 py-1.5">{t('Output')}</th>
+                    <th className="text-right font-medium px-2.5 py-1.5">{t('Cost')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -184,7 +181,9 @@ export function UsagePanel() {
             </div>
 
             <p className="text-[10px] text-agent-muted-foreground">
-              成本按 framework 单价表估算后按约 1 美元 = 7.2 元换算为人民币,只统计有单价的模型;"—" 表示该模型无单价(本地/未知)。缓存命中为命中 prompt 缓存的 token 数。
+              {t(
+                'Cost is estimated from the framework price table and converted to RMB at about 1 USD = 7.2 CNY. Only models with a price are counted; "—" means the model has no price (local or unknown). Cache hits are the tokens served from the prompt cache.',
+              )}
             </p>
           </>
         )}

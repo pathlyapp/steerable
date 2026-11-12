@@ -12,6 +12,12 @@ import { AssistantMessage } from './AssistantMessage';
 
 vi.mock('@/lib/local-api', () => ({
   openLocalPath: vi.fn(async () => ({ success: true })),
+  getLocalFileDownload: vi.fn(async () => ({
+    fileName: '报告.docx',
+    mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    size: 1024,
+    base64: 'QkFTRTY0',
+  })),
 }));
 
 afterEach(cleanup);
@@ -33,7 +39,7 @@ describe('AssistantMessage 分享', () => {
         currentAgent={null}
       />,
     );
-    expect(screen.queryByRole('button', { name: '分享对话截图' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Share chat screenshot' })).toBeNull();
   });
 
   it('流式中不画分享按钮', () => {
@@ -46,7 +52,7 @@ describe('AssistantMessage 分享', () => {
         onShare={vi.fn()}
       />,
     );
-    expect(screen.queryByRole('button', { name: '分享对话截图' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Share chat screenshot' })).toBeNull();
   });
 
   it('点分享会调用 onShare，成功后提示已复制', async () => {
@@ -61,14 +67,14 @@ describe('AssistantMessage 分享', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '分享对话截图' }));
-    expect(screen.getByRole('button', { name: '分享对话截图' }).className).toContain(
+    fireEvent.click(screen.getByRole('button', { name: 'Share chat screenshot' }));
+    expect(screen.getByRole('button', { name: 'Share chat screenshot' }).className).toContain(
       'group-hover/message:opacity-100',
     );
     await waitFor(() => expect(onShare).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: '分享对话截图' }).getAttribute('title')).toBe(
-        '截图已复制到剪贴板',
+      expect(screen.getByRole('button', { name: 'Share chat screenshot' }).getAttribute('title')).toBe(
+        'Screenshot copied to clipboard',
       ),
     );
   });
@@ -119,7 +125,8 @@ describe('AssistantMessage 回合产物列表', () => {
       />,
     );
     expect(screen.getByText('自我介绍.pptx')).toBeTruthy();
-    expect(screen.getByText('本轮产生了 1 个文件，点击打开')).toBeTruthy();
+    expect(screen.getByText('Presentation · PPTX')).toBeTruthy();
+    expect(screen.getByText('Open with')).toBeTruthy();
   });
 
   it('流式中不渲染产物列表（数据要等回合收尾）', () => {
@@ -190,7 +197,7 @@ describe('AssistantMessage 顶栏智能体', () => {
     const row = screen.getByTestId('turn-agent-badges');
     expect(row.textContent).toContain('电脑操作员');
     expect(row.textContent).toContain('调研员');
-    expect(row.textContent).toContain('探索');
+    expect(row.textContent).toContain('Explore');
   });
 
   it('用户 @提及了谁，顶栏就显示谁，不显示内置探索', () => {
@@ -229,6 +236,114 @@ describe('AssistantMessage 顶栏智能体', () => {
     expect(row.textContent).toContain('电脑操作员');
     expect(row.textContent).toContain('智能助手');
     expect(row.textContent).toContain('日程规划');
-    expect(row.textContent).not.toContain('探索');
+    expect(row.textContent).not.toContain('Explore');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 失败 / 停止 / 已继续：同一个回合位置上的三种终态
+// ---------------------------------------------------------------------------
+
+function metaMessage(metadata: Record<string, unknown>): ChatMessage {
+  return {
+    id: 'm-fail',
+    role: 'assistant',
+    content: '',
+    createdAt: '2026-11-05T06:00:00.000Z',
+    messageMetadata: JSON.stringify(metadata),
+  } as ChatMessage;
+}
+
+describe('AssistantMessage 失败与停止', () => {
+  it('失败的回合：即使没有正文也有「重新生成」（P5-05）', () => {
+    render(
+      <AssistantMessage
+        message={metaMessage({ completionStatus: 'failed', completionReason: 'transport' })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+        onRegenerate={async () => {}}
+      />,
+    );
+    expect(screen.getByLabelText('Regenerate')).toBeTruthy();
+  });
+
+  it('停止的回合显示中性「已停止」，不是失败卡片', () => {
+    render(
+      <AssistantMessage
+        message={metaMessage({ completionStatus: 'cancelled', completionReason: 'aborted_by_user' })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+      />,
+    );
+    expect(screen.getByTestId('turn-stopped')).toBeTruthy();
+    expect(screen.queryByTestId('turn-failure')).toBeNull();
+    expect(screen.getByText('You stopped this task.')).toBeTruthy();
+  });
+
+  it('重新连接时点停止，文案区分开来', () => {
+    render(
+      <AssistantMessage
+        message={metaMessage({
+          completionStatus: 'cancelled',
+          completionReason: 'aborted_during_retry',
+        })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+      />,
+    );
+    expect(
+      screen.getByText('You stopped this task while it was reconnecting.'),
+    ).toBeTruthy();
+  });
+
+  it('停止的回合可以继续（P5-04）', () => {
+    const onClick = vi.fn();
+    render(
+      <AssistantMessage
+        message={metaMessage({ completionStatus: 'cancelled' })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+        failureAction={() => ({ onClick })}
+      />,
+    );
+    fireEvent.click(screen.getByText('Continue'));
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it('已继续过的失败收成一行，展开仍是原卡片（P5-03）', () => {
+    render(
+      <AssistantMessage
+        message={metaMessage({
+          completionStatus: 'failed',
+          completionReason: 'transport error: ConnectError',
+          continuedAt: '2026-11-05T06:05:00.000Z',
+        })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+      />,
+    );
+    expect(screen.getByTestId('continued-here')).toBeTruthy();
+    // 卡片本体默认收起；点开后才是失败卡片。
+    expect(screen.queryByTestId('turn-failure')).toBeNull();
+    fireEvent.click(screen.getByText('Connection failed here. Continued.'));
+    expect(screen.getByTestId('turn-failure')).toBeTruthy();
+  });
+
+  it('没有 continuing 标记的失败不收起', () => {
+    render(
+      <AssistantMessage
+        message={metaMessage({ completionStatus: 'failed', completionReason: 'boom' })}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+      />,
+    );
+    expect(screen.queryByTestId('continued-here')).toBeNull();
+    expect(screen.getByTestId('turn-failure')).toBeTruthy();
   });
 });

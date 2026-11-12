@@ -41,11 +41,11 @@ describe('modelCapabilityChips', () => {
       }),
     );
     expect(chips.map((chip) => chip.label)).toEqual([
-      '思考',
-      '图像',
+      'Thinking',
+      'Image',
       'PDF',
-      '音频',
-      '视频',
+      'Audio',
+      'Video',
       '1M',
     ]);
   });
@@ -62,7 +62,7 @@ describe('modelCapabilityChips', () => {
       }),
       { detail: true },
     );
-    expect(chips.map((chip) => chip.label)).toEqual(['思考（high / max）', '1M']);
+    expect(chips.map((chip) => chip.label)).toEqual(['Thinking (high / max)', '1M']);
   });
 
   it('does not invent thinking or image chips from heuristic unknown rows', () => {
@@ -77,7 +77,7 @@ describe('modelCapabilityChips', () => {
         }),
       ),
     ).toEqual([
-      expect.objectContaining({ key: 'unknown', label: '未识别' }),
+      expect.objectContaining({ key: 'unknown', label: 'Unrecognized' }),
     ]);
   });
 

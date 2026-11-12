@@ -1,4 +1,6 @@
 import { motion } from 'framer-motion';
+import { t } from '@/i18n';
+import { RetryStatus, type RetryState } from './RetryStatus';
 
 /**
  * StreamingStatus — informative placeholder for an assistant bubble that has
@@ -29,13 +31,21 @@ interface StreamingStatusProps {
    * nothing (the content + cursor blink is enough).
    */
   hasContent: boolean;
+  /**
+   * Set while the request is being retried. Outranks `hasContent`: a turn
+   * that already streamed text and then lost its connection is waiting, not
+   * writing, and the cursor alone would read as a stall.
+   */
+  retry?: RetryState;
 }
 
 export function StreamingStatus({
   round,
   actionCount,
   hasContent,
+  retry,
 }: StreamingStatusProps) {
+  if (retry) return <RetryStatus retry={retry} />;
   // Once tokens are flowing the parent already has plenty of visual feedback
   // (the streaming cursor); a separate status line would be noise.
   if (hasContent) return null;
@@ -71,12 +81,12 @@ export function StreamingStatus({
 
 function selectLabel(round: number, actionCount: number): string {
   if (round >= 2 && actionCount === 0) {
-    return `Round ${round} · 继续推理...`;
+    return t('Round {round} · Continuing reasoning...', { round });
   }
   if (actionCount > 0) {
-    return `已调用 ${actionCount} 个工具，正在分析...`;
+    return t('Called {count} tools, analyzing...', { count: actionCount });
   }
-  return '正在思考...';
+  return t('Now thinking...');
 }
 
 function Dots() {

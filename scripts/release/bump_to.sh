@@ -49,6 +49,8 @@ ts_pkgs = [
     # Shell 与 pack-sdk 也随 lockstep bump，并由 publish-npm.yml 发布。
     "packages/pack-sdk/ts",
     "packages/agent-shell/ts",
+    "packages/agent-client/ts",
+    "packages/agent-cli/ts",
     "packages/agent-shell/web",
     "packages/agent-shell/tauri",
 ]

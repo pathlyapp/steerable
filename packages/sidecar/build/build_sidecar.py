@@ -130,6 +130,7 @@ TARGETS: dict[str, Target] = {
     "darwin-arm64": Target("darwin-arm64", "aarch64-apple-darwin", "bin/python3"),
     "darwin-x64": Target("darwin-x64", "x86_64-apple-darwin", "bin/python3"),
     "linux-x64": Target("linux-x64", "x86_64-unknown-linux-gnu", "bin/python3"),
+    "linux-arm64": Target("linux-arm64", "aarch64-unknown-linux-gnu", "bin/python3"),
     "win32-x64": Target("win32-x64", "x86_64-pc-windows-msvc", "python.exe"),
 }
 
@@ -140,7 +141,7 @@ def host_target() -> Target:
     if sys_platform == "darwin":
         return TARGETS["darwin-arm64"] if machine in {"arm64", "aarch64"} else TARGETS["darwin-x64"]
     if sys_platform.startswith("linux"):
-        return TARGETS["linux-x64"]
+        return TARGETS["linux-arm64"] if machine in {"arm64", "aarch64"} else TARGETS["linux-x64"]
     if sys_platform == "win32":
         return TARGETS["win32-x64"]
     raise SystemExit(f"Unsupported host platform: {sys_platform}/{machine}")

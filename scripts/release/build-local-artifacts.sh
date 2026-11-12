@@ -25,21 +25,41 @@ pnpm -r --filter '@steerable/*' build
 echo "== 4/5  pack TS tarballs + build Py wheels"
 rm -rf dist
 mkdir -p dist/npm dist/py
-for pkg in agent-protocol agent-harness agent-ui; do
+# Keep this list identical to the `for dir in ...` list in
+# .github/workflows/publish-npm.yml — a package missing here never reaches the
+# local verification, so a broken tarball is only found after publishing.
+# Order matters: consumers pack after the packages they depend on so a
+# verification run installs matching versions.
+for pkg in agent-protocol agent-harness pack-sdk agent-ui agent-client agent-shell; do
   (cd "packages/$pkg/ts" && \
    pnpm pack --pack-destination "$ROOT/dist/npm" >/dev/null)
   echo "    packed @steerable/$pkg"
 done
+(cd packages/agent-shell/web && \
+ pnpm pack --pack-destination "$ROOT/dist/npm" >/dev/null)
+echo "    packed @steerable/agent-shell-web"
+
+# The published CLI must name the platform runtime packages, or a global
+# install gets a CLI that cannot start. `publish-npm.yml` injects them before
+# publishing; this script packs the same tarballs for local verification, so it
+# has to inject them too.
+CLI_VERSION=$(node -p "require('./packages/agent-cli/ts/package.json').version")
+python3 scripts/set_runtime_optional_deps.py prepare --version "$CLI_VERSION" >/dev/null
+# `pnpm pack` overwrites its own tarball, so repacking in place is enough.
+for pkg in agent-cli agent-runtime; do
+  (cd "packages/$pkg/ts" && \
+   pnpm pack --pack-destination "$ROOT/dist/npm" >/dev/null)
+done
+python3 scripts/set_runtime_optional_deps.py restore >/dev/null
+echo "    repacked agent-cli and agent-runtime with platform runtime dependencies"
 uv build --all-packages --out-dir dist/py >/dev/null
 rm -f dist/py/steerable_example_*.whl dist/py/steerable_example_*.tar.gz
 echo "    built $(ls dist/py | wc -l | tr -d ' ') Python files"
-# The native wheel and Rust sidecar are published by the private
-# repository. Download the host artifacts and verify their digests.
-mkdir -p dist/native dist/sidecar-bin
+# The native wheel is published by the private repository. Download the host
+# artifact and verify its digest.
+mkdir -p dist/native
 uv run python scripts/fetch_verified_artifacts.py wheel \
   --artifact-lock --platform host --out dist/native
-uv run python scripts/fetch_verified_artifacts.py sidecar \
-  --artifact-lock --target host --out dist/sidecar-bin
 echo "    fetched $(ls dist/native | wc -l | tr -d ' ') native files"
 
 echo "== 5/5  artifact summary"

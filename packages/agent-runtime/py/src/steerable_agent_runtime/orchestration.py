@@ -38,6 +38,7 @@ from typing import Any
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
+from .hooks import ChainHooks, CompletionAction, CompletionDraft, NoopHooks
 from .llm import LLMProvider
 from .loop import CoreLoop, LoopConfig, LoopContext, LoopHooks, ToolExecutor
 from .pool import (
@@ -51,11 +52,60 @@ from .subagent import FilteredToolsExecutor, _schema_name
 __all__ = [
     "AgentPool",
     "ChildOutcome",
+    "ChildBudgetWrapUp",
     "OrchestrationBudgetExceeded",
     "OrchestrationConfig",
     "OrchestrationExecutor",
     "orchestration_tool_descriptors",
 ]
+
+#: Terminal status of a run stopped by ``max_rounds`` or the token budget.
+_BUDGET_WALL_STATUS = "budget_exhausted"
+
+_BUDGET_WRAP_UP_REQUEST = (
+    "[system notice] This run has used its round budget and tools are now "
+    "withheld. Answer the original task now from what you have already "
+    "gathered: give your concrete findings first, then list what you could "
+    "not finish or verify. Do not describe the steps you took."
+)
+
+_RESUME_HINT = (
+    "The child stopped at its round budget; `answer` is its interim report. "
+    "To continue, agent_send this childId a message naming what is still "
+    "missing — it resumes with its prior context and a fresh budget. Do not "
+    "spawn a new child for the same task."
+)
+
+
+class ChildBudgetWrapUp(NoopHooks):
+    """``before_completion``: one no-tools answer round at a child's budget wall.
+
+    Without it a child stopped by ``max_rounds`` or the token budget returns
+    whatever text its last working round produced — usually a progress note,
+    not an answer. The parent then gets ``budget_exhausted`` with nothing
+    usable. The ``narrate`` action runs one round without tools and keeps the
+    ``budget_exhausted`` status, so the parent can still tell the answer is
+    interim and resume the child with ``agent_send``.
+
+    One instance per child loop. A resumed child runs the same loop with a new
+    ``LoopContext``, so the one-round limit applies per run.
+    """
+
+    def __init__(self) -> None:
+        self._wrapped_run: LoopContext | None = None
+
+    async def before_completion(
+        self, draft: CompletionDraft, ctx: LoopContext
+    ) -> CompletionAction:
+        """Narrate once per run when the draft stops at the budget wall."""
+        if draft.status != _BUDGET_WALL_STATUS or self._wrapped_run is ctx:
+            return CompletionAction(kind="accept")
+        self._wrapped_run = ctx
+        return CompletionAction(
+            kind="narrate",
+            message=_BUDGET_WRAP_UP_REQUEST,
+            reason="child_budget_wrap_up",
+        )
 
 
 def orchestration_tool_descriptors(
@@ -119,7 +169,10 @@ def orchestration_tool_descriptors(
         fn(
             config.wait_tool,
             "Wait for a sub-agent to finish and return its outcome. A child "
-            "still running at the timeout returns status 'running'.",
+            "still running at the timeout returns status 'running'. A child "
+            "that hit its round budget returns status 'budget_exhausted' with "
+            "an interim answer and resumable: true — continue it with "
+            "agent_send instead of spawning a new child.",
             {
                 "childId": {"type": "string"},
                 "timeoutMs": {"type": "integer"},
@@ -228,11 +281,15 @@ class OrchestrationExecutor:
                 _lineage=child_id,
             )
             schemas = [*schemas, *orchestration_tool_descriptors(self._config)]
+        wrap_up = ChildBudgetWrapUp()
         loop = CoreLoop(
             self._provider,
             base,
-            LoopConfig(max_rounds=self._config.child_max_rounds),
-            hooks=self._hooks,
+            LoopConfig(
+                max_rounds=self._config.child_max_rounds,
+                max_tool_errors=self._config.child_max_tool_errors,
+            ),
+            hooks=wrap_up if self._hooks is None else ChainHooks(self._hooks, wrap_up),
         )
         return loop, schemas or None
 
@@ -343,15 +400,17 @@ class OrchestrationExecutor:
                 error=f"unknown_child: {child_id!r}",
                 needsFollowup=True,
             )
+        payload: dict[str, Any] = {
+            "childId": outcome.child_id,
+            "status": outcome.status,
+            "answer": outcome.answer,
+        }
+        if self._pool.resumable(outcome.child_id):
+            payload["resumable"] = True
+            payload["hint"] = _RESUME_HINT
         return ToolResult(
             success=True,
-            message=json.dumps(
-                {
-                    "childId": outcome.child_id,
-                    "status": outcome.status,
-                    "answer": outcome.answer,
-                }
-            ),
+            message=json.dumps(payload),
             data={"childId": outcome.child_id, "status": outcome.status},
         )
 

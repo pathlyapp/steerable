@@ -11,7 +11,8 @@
  * 三个互相独立的执行点，任何一处漂移都会让「限制」变成假象：
  *
  *   1. 系统提示词注入   —— prompt-builder 的 `excludeSkillNames` / `pinnedSkillNames`
- *   2. sidecar 技能目录 —— `SkillTurnContext.exclude`
+ *   2. sidecar 技能面   —— `SkillTurnContext.exclude`（硬排除）+
+ *                          `SkillTurnContext.pinned`（目录去重但仍可按需加载）
  *   3. 工具面           —— 每轮 `turnTools`、`tool_search` 结果、反向通道分发复检
  *
  * 多个智能体配置按「最宽松」合并（父代理自身、或显式传入的列表）。

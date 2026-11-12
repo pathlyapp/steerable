@@ -1,8 +1,8 @@
 # Sidecar Spec
 
 `steerable-sidecar` is a **portable Python executable** that exposes the
-runtime over JSON-RPC 2.0 framed on stdin/stdout. UI shells (Electron,
-Tauri, native, …) spawn the sidecar as a subprocess, send method calls
+runtime over JSON-RPC 2.0 framed on stdin/stdout. UI shells (Tauri, native,
+or custom) spawn the sidecar as a subprocess, send method calls
 on stdin, receive responses + notifications on stdout, and observe
 log + ready markers on stderr.
 
@@ -22,7 +22,7 @@ sequenceDiagram
 
     P->>S: spawn(child, ['-m','steerable_sidecar'], stdio=pipe)
     Note over S: bootstrap …
-    S-->>P: stderr: __SIDECAR_READY__:{"status":"ok",<br/>"version":"0.6.4","protocolVersion":"0.1.0", …}
+    S-->>P: stderr: __SIDECAR_READY__:{"status":"ok",<br/>"version":"0.9.0","protocolVersion":"0.1.0", …}
     S-->>P: stdout (no id):<br/>{"jsonrpc":"2.0","method":"lifecycle.ready","params":{…}}
     Note over P: Now safe to send JSON-RPC frames.
 ```
@@ -47,7 +47,7 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 ### Successful response
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.6.4","protocolVersion":"0.1.0","uptimeMs":1234,"pid":42,"pythonVersion":"3.12.6","platform":"darwin-arm64","loadedProviders":[],"loadedTools":0,"activeTraces":0,"checks":{}}}
+{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.9.0","protocolVersion":"0.1.0","uptimeMs":1234,"pid":42,"pythonVersion":"3.12.6","platform":"darwin-arm64","loadedProviders":[],"loadedTools":0,"activeTraces":0,"checks":{}}}
 ```
 
 ### Error response
@@ -62,7 +62,11 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 {"jsonrpc":"2.0","method":"stream.chunk","params":{"streamId":"s_42","delta":"Hello"}}
 ```
 
-## Method catalog (v0.6.x)
+## Method catalog (v0.8.x)
+
+36 request methods. The list is frozen in `runtime-contract.json`, and a test
+fails when a registered method drifts from it; the table below mirrors the
+contract.
 
 | Method                  | Direction | Result                                 |
 | ----------------------- | --------- | -------------------------------------- |
@@ -86,6 +90,7 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 | `skills.list`           | request   | `{skills}` (parse + select SKILL.md from host roots) |
 | `trace.fetch`           | request   | `{"trace": HarnessTrace, "spans": TraceSpan[], "events": TraceEvent[]}` |
 | `trace.export`          | request   | `{status, traceId, privacyMode}` (OTLP/HTTP push) |
+| `metrics.export`        | request   | `{status, metrics}` — posts turn-outcome counters to an OTLP/HTTP `/v1/metrics` endpoint. Params: `{endpoint, samples, serviceName?}`; each sample is `{outcome, failureKind?, attempts?, retried?, usedDirect?}`. Counts and labels only: no message, model, or conversation id, so there is no content for a privacy mode to filter. Separate from `trace.export` because a collector may accept one and not the other. |
 | `config.get`            | request   | `Record<string, unknown>`              |
 | `config.set`            | request   | `null`                                 |
 | `models.list`           | request   | `{models, catalogStatus, fetchedAt?, current?, error?}` (live `GET /models` discovery against the configured gateway) |
@@ -100,6 +105,7 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 | `plugin.enable`         | request   | `{plugin}`                               |
 | `plugin.disable`        | request   | `{plugin}`                               |
 | `plugin.reload`         | request   | `{plugin}` (re-executes the module in place, swapping its tool registrations without a restart) |
+| `plugin.tools.describe` | request   | `{tools}` — `ToolDescriptor` (see [plugin-host.md](plugin-host.md)) for every tool of an enabled plugin; `toolsViaHost` hosts advertise these and call them through `tool.invoke` |
 
 `config.get` with `{"merged": true}` previews the layered user config — default → `~/.steerable/config.json` → selected profile → `STEERABLE_*` env → per-request RPC override → managed file — reporting each key's resolved value and the layer it came from (the `--dump-config` counterpart). A malformed user file fails loud. The defaults dict doubles as the schema: a value whose type doesn't match the declared default fails the load naming the key, the layer, and the expected type (env strings coerce). The user file may carry named `profiles` blocks, selected by `STEERABLE_PROFILE`; an unknown profile name fails loud listing the available ones. `STEERABLE_MANAGED_CONFIG_PATH` points at an enterprise-managed file applied after every other layer, so its pins (e.g. a restrictive sandbox posture) cannot be loosened from below — CC managed-settings parity.
 
@@ -111,8 +117,29 @@ Notifications emitted by the sidecar:
 | `lifecycle.shutdown` | Just before the process exits                  | `{reason}` (`"normal" \| "eof"`)                        |
 | `stream.chunk`       | LLM token / tool-call / usage during a stream  | `{streamId, delta?, toolCall?, usage?, finishReason?, rawChunk?}` |
 | `stream.done`        | Stream terminated cleanly                      | `{streamId, ok, cancelled?}`                            |
-| `stream.error`       | Stream failed (provider error, etc.)           | `{streamId, kind, message}`                             |
+| `stream.error`       | Stream failed (provider error, etc.)           | `{streamId, kind, message, traceId?, errorKind?, proxy?, attempts?, statusCode?}` |
 | `agent.child`        | Child-agent lifecycle (spawned/completed/failed/cancelled) — from the orchestration pool and from `delegate_subagent` delegations | `{streamId, kind, childId, depth?, status?, profile?}` |
+
+`stream.error.kind` stays the exception class (`"LoopError"` for a failed
+turn) for hosts written against older sidecars. The provider classification
+travels separately in `errorKind`: `transport`, `rate_limit`, `server`,
+`auth`, `invalid_request`, `context_overflow`, or `unknown`. Hosts must branch
+on `errorKind` and treat it as absent on older sidecars; `message` is
+human-readable text whose wording is not a contract.
+
+`proxy` is the proxy the failing model request went through, with credentials
+removed; absent means the request went direct. `attempts` counts the provider
+calls spent on that request including the last one. A sidecar that cannot
+determine a field omits it rather than sending an empty value.
+
+A retry that follows partial output also emits `stream.chunk` with
+`{"streamId", "restart": {reason, round?, attempt?}}` before the retry's first
+delta. The deltas already sent belong to an attempt the engine discarded and
+will never be completed, so a host must withdraw the text and reasoning it
+appended since the last `restart` before accepting more. Tool blocks stay —
+those calls ran and the retry does not repeat them. A host that ignores the
+field shows the abandoned attempt's text followed by the retry's, which is not
+what the durable record holds.
 
 ## `agent.chat.stream` payload
 
@@ -126,10 +153,22 @@ Notifications emitted by the sidecar:
     "apiKey":"sk-…",
     "temperature":0.7,
     "messages":[{"role":"user","content":"Say hi"}],
-    "tools":[{"type":"function","function":{"name":"echo","parameters":{}}}]
+    "tools":[{"type":"function","function":{"name":"echo","parameters":{}},"mode":"read","approvalCategory":"browser"}]
   }
 }
 ```
+
+`tools[]` items are OpenAI function tools. Two optional fields sit beside
+`type` / `function` (or inside `function`): `mode` and `approvalCategory`.
+`mode` is the tool's declared mode (`read`, `safe_write`, `destructive`,
+`external`, and the other host modes). `approvalCategory` is the session and
+durable approval key; tools that share it share one "this session" or
+"always" decision. The sidecar strips both fields before the provider
+request. When either field is absent, the sidecar infers `mode` from the
+tool name and uses the tool name as the category — an old host that omits
+the fields keeps that behavior. A declared `mode` of `read` with no
+filesystem target is allowed without a host prompt. Path-scoped tools still
+follow the writable-root check.
 
 The sidecar replies with `{"streamId":"s_42"}` immediately, then pushes
 `stream.chunk` notifications until `stream.done`.
@@ -171,11 +210,23 @@ no result within the budget is cancelled and returns a failed
 `ToolResult` (`error: "tool_timeout"`) instead of hanging the turn — the
 consecutive-error breaker treats it like any other tool failure. It
 applies to every executor, in-process or remote (reverse channel, future
-MCP). Default 300000 (5 min); the default is a hung-tool backstop, not a
+MCP). A host tool-approval wait is not part of that budget when the
+approval config omits `timeoutMs`: the card stays until the user answers,
+and the cap resumes for the tool body after the decision. An explicit
+`timeoutMs` still fails closed as `timed_out` and stays inside the tool
+cap. Default 300000 (5 min); the default is a hung-tool backstop, not a
 budget — set a tighter value for fast tools.
 
+`maxRounds` and `maxToolErrors` are optional walls. Unset, the turn has
+neither: a long task is not stopped for reaching a round count or a run
+of consecutive tool errors. Rust stores both as `u32` and stops at `>=`,
+so the no-cap value sent on the wire is `u32::MAX`. An explicit value,
+including `0`, is honored.
+
 `budgetTokens` is the run's cumulative token cap; exceeding it terminates
-the turn `budget_exhausted`. Unset, it defaults to
+the turn `budget_exhausted`. Unset on an uncapped turn, there is no token
+budget either — a derived budget would re-introduce the round wall. When
+`maxRounds` is set and `budgetTokens` is not, the token cap defaults to
 `max_rounds × window × cached_token_weight`, floored at `2 × window`.
 The scaling matters because the cap is cumulative while a context window
 is a per-request size: an agentic turn re-sends its prompt every round, so
@@ -266,6 +317,18 @@ being silently dropped from the wire body (EVALS 2.5.22). A vendor whose
 compat flags reject the field outright (Moonshot thinking) still drops it
 silently — the gate runs before validation.
 
+`agent.chat.stream` also accepts `directConnection`. The host sends it when
+the product config declares `directModelConnection`, and the sidecar then
+builds that request's provider with `force_direct` so it reaches
+`base_url` without any declared proxy. It is per request, not per process:
+a product can route its own model service direct while everything else
+keeps the proxy. Omitted means the proxy keeps its say, so an undeclared
+product's request bytes are unchanged. Every host path that reaches the
+same model service must send it — the chat turn, background task streams,
+and the auxiliary `SidecarLlmProvider` calls (title generation, AI
+suggestions); one path without it leaves those calls failing on a proxy
+the user turned off.
+
 `agent.chat.cancel` on a CoreLoop stream is cooperative: the loop winds
 down at the next safe point (round boundary, stream chunk, or tool-call
 slot), records the partial turn so the chat can continue, and the
@@ -298,13 +361,15 @@ like orchestration children; the `child_spawned` payload adds `profile`
 (the resolved profile name, `general-purpose` when untyped).
 
 Multi-agent orchestration (the explicit six-tool family) is opt-in via
-`orchestration: {enabled: true, maxDepth?, maxParallel?, childMaxRounds?}` in `params`: the parent model drives
+`orchestration: {enabled: true, maxDepth?, maxParallel?, childMaxRounds?, childMaxToolErrors?}` in `params` (child limits default to the parent loop's): the parent model drives
 parallel child CoreLoops through six tools — `agent_spawn` (returns a
 lineage id like `0.2`, optional `toolFilter` narrows the child's tool
 domain), `agent_send` (steers a running child; resumes a finished or
 interrupted one as a follow-up turn seeded from its preserved record),
 `agent_wait` (`timeoutMs`; a live child at timeout returns `status:
-"running"`), `agent_close` (terminal: cooperative cancel with a
+"running"`; a child stopped at its budget gets one no-tools answer round
+and returns `status: "budget_exhausted"` with `resumable: true`, and
+`agent_send` continues it with a fresh budget), `agent_close` (terminal: cooperative cancel with a
 hard-cancel backstop, rejects further sends), `agent_list` (pool
 snapshot with per-child status), and `agent_interrupt` (cooperative
 cancel that keeps the child addressable for a later `agent_send`). Budgets
@@ -319,17 +384,19 @@ are on, delegation and the six-tool family share ONE pool — one
 `maxParallel` budget and one lineage space, and delegate children appear
 in `agent_list`.
 
-Per-turn MCP servers mount via `mcp: [{name?, command, args?, env?}]` in
-`params` (CoreLoop, sidecar-local path only). Each entry spawns one stdio
-MCP server subprocess; its tools are registered on the turn's router under
-the `mcp__<name>__<tool>` prefix and are callable by the model like any
-local tool. Every entry needs a non-empty `command` — a malformed entry
-fails the request with `invalid_params` before any provider call. Clients
-are closed when the stream ends (completion, error, or cancel), so no
-server subprocess outlives its turn. The param is ignored under
+Per-turn MCP servers mount via `mcp` in `params` (CoreLoop, sidecar-local
+path only). Entries use `transport: "stdio"` with `command`, `args`, and
+`env`, or `transport: "streamable-http"` with `url`, `headers`,
+`headersFromEnv`, and `bearerTokenEnvVar`; legacy entries without
+`transport` are discriminated by `command` versus `url`. HTTP header and
+bearer environment references resolve only in memory. Tools register on
+the turn's router under the `mcp__<name>__<tool>` prefix and are callable
+by the model like any local tool. Malformed entries fail with
+`invalid_params` before any provider call. Clients close when the stream
+ends (completion, error, or cancel). The param is ignored under
 `toolsViaHost` (the host owns tool execution there) and when an embedder
 replaces the harness via a hooks factory. This mirrors the ACP adapter's
-`mcpServers` wiring; HTTP/SSE MCP transports remain an honest gap.
+`mcpServers` wiring; legacy HTTP SSE remains unsupported.
 
 ## `agent.session.tree` payload
 
@@ -376,7 +443,7 @@ corruption (a lineage cycle).
 ```json
 {
   "status": "ok",
-  "version": "0.6.4",
+  "version": "0.9.0",
   "protocolVersion": "0.1.0",
   "uptimeMs": 12345,
   "pid": 42,
@@ -431,6 +498,10 @@ options:
 - Parent processes should also send `SIGTERM` as a backstop in case
   `system.shutdown` hangs; the sidecar installs a `SIGTERM` handler that
   forces an immediate exit.
+- `SidecarSupervisor.forceShutdown()` is the host-owned crash/emergency path:
+  it sends `SIGKILL` to the supervised host child without an RPC drain and
+  waits for exit. Do not signal `system.ping.pid`; under bwrap that value is
+  from the private PID namespace and is not a host-process identifier.
 - `web_fetch` (always) and `web_search` (when a search backend is
   configured) are registered on the RPC router at boot
   (`steerable_sidecar/web_tools.py`; bounds and SSRF policy in

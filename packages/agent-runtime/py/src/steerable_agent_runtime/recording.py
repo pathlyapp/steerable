@@ -1,10 +1,9 @@
 """RecordingProvider — capture every outbound LLM request, plus the
 prompt-invariant assertions built on the recording.
 
-Wave 0 tripwire (docs/roadmap.md "Wave 0 — prerequisites"): Wave 1 rewrites
-history into typed append-only envelopes, and without a recording of what the
-model actually saw, a correct rewrite can silently regress. This module closes
-that gap:
+Wave 1 rewrites history into typed append-only envelopes. Without a
+recording of what the model actually saw, a correct rewrite can silently
+regress. This module closes that gap:
 
 - ``RecordingProvider`` wraps any ``LLMProvider`` and snapshots every outbound
   request (messages + params) into a sink *before* delegating, so a failed

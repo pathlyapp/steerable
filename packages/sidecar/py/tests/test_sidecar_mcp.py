@@ -12,8 +12,11 @@ chain — spawn → handshake → catalog registration → loop dispatch → tea
 from __future__ import annotations
 
 import json
+import socket
+import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +104,59 @@ def fake_server(tmp_path: Path) -> Path:
     script = tmp_path / "fake_mcp_server.py"
     script.write_text(_FAKE_SERVER)
     return script
+
+
+_FAKE_HTTP_SERVER = textwrap.dedent(
+    """
+    import sys
+
+    from mcp.server.fastmcp import FastMCP
+
+    server = FastMCP(
+        "fake-http-mcp",
+        host="127.0.0.1",
+        port=int(sys.argv[1]),
+        stateless_http=True,
+    )
+
+    @server.tool()
+    def echo(text: str) -> str:
+        return "echo:" + text
+
+    server.run(transport="streamable-http")
+    """
+)
+
+
+@pytest.fixture()
+def fake_http_server(tmp_path: Path) -> str:
+    script = tmp_path / "fake_http_mcp_server.py"
+    script.write_text(_FAKE_HTTP_SERVER)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    process = subprocess.Popen(
+        [sys.executable, str(script), str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("fake Streamable HTTP MCP server exited during startup")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                break
+        except OSError:
+            time.sleep(0.05)
+    else:
+        process.terminate()
+        raise RuntimeError("fake Streamable HTTP MCP server did not start")
+    try:
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
 
 
 class _ScriptedProvider:
@@ -224,6 +280,47 @@ async def test_mcp_tool_registered_and_dispatched(fake_server: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_streamable_http_mcp_registered_and_dispatched(
+    fake_http_server: str,
+) -> None:
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(id="e1", name="mcp__remote__echo", arguments={"text": "hi"})
+            ),
+            _text_round("done"),
+        ]
+    )
+    sidecar = _make_sidecar(provider)
+    params = {
+        "provider": "openai_compat",
+        "model": "fake",
+        "messages": [{"role": "user", "content": "echo something"}],
+        "useCoreLoop": True,
+        "mcp": [
+            {
+                "name": "remote",
+                "transport": "streamable-http",
+                "url": fake_http_server,
+            }
+        ],
+    }
+
+    _stream_id, events = await _run_stream(sidecar, params)
+
+    tool_results = [
+        payload["toolResult"]
+        for method, payload in events
+        if method == "stream.chunk" and "toolResult" in payload
+    ]
+    assert tool_results[0]["name"] == "mcp__remote__echo"
+    assert "echo:hi" in json.dumps(tool_results[0])
+    assert [payload for method, payload in events if method == "stream.done"][0][
+        "status"
+    ] == "completed"
+
+
+@pytest.mark.asyncio
 async def test_mcp_client_closed_after_stream(fake_server: Path) -> None:
     """Teardown: the per-turn client is aclosed in the stream's finally, so
     no server subprocess outlives the turn."""
@@ -249,11 +346,19 @@ async def test_mcp_ignored_under_tools_via_host(fake_server: Path) -> None:
     sidecar = _make_sidecar(provider)
 
     params = _mcp_params(fake_server)
+    params["mcp"] = [
+        {
+            "name": "host-remote",
+            "transport": "streamable-http",
+            "url": "https://mcp.example.test/mcp",
+            "bearerTokenEnvVar": "MISSING_IN_SIDECAR",
+        }
+    ]
     params["toolsViaHost"] = True
     _stream_id, events = await _run_stream(sidecar, params)
 
     # No mcp__ tool was registered on the sidecar's router for this turn.
-    assert sidecar.tools.get("mcp__fake__echo") is None
+    assert sidecar.tools.get("mcp__host-remote__echo") is None
     done = [p for m, p in events if m == "stream.done"]
     assert done[0]["status"] == "completed"
 

@@ -53,6 +53,28 @@ describe('createApprovalBridge', () => {
     });
   });
 
+  it('does not prompt when the dangerous-command list will block the command', async () => {
+    const sent: ApprovalPromptRequest[] = [];
+    const bridge = createApprovalBridge({
+      hasWindow: () => true,
+      broadcast: (_channel, payload) => {
+        sent.push(payload);
+      },
+      blockedCommand: (toolName, args) =>
+        toolName === 'local_exec_shell' && args.command === 'sudo reboot' ? '\\bsudo\\s' : null,
+    });
+    const decision = await bridge.handler({
+      toolName: 'local_exec_shell',
+      arguments: { command: 'sudo reboot' },
+      mode: 'destructive',
+      category: 'shell',
+      round: 0,
+    });
+    expect(decision).toEqual({ kind: 'allow_once', reason: '' });
+    expect(sent).toEqual([]);
+    expect(bridge.pending()).toEqual([]);
+  });
+
   it('fails closed (deny_once) when no renderer window exists', async () => {
     const { bridge, sent } = makeBridge({ hasWindow: false });
     const decision = (await bridge.handler({
@@ -102,6 +124,150 @@ describe('createApprovalBridge', () => {
     bridge.decide({ requestId: sent[1].requestId, kind: 'deny_once' });
     await expect(first).resolves.toMatchObject({ kind: 'allow_once' });
     await expect(second).resolves.toMatchObject({ kind: 'deny_once' });
+  });
+
+  it('stores an allowed egress grant and ignores other decisions', async () => {
+    const granted: Array<{ toolName: string; kind: string; reason: string }> = [];
+    const sent: ApprovalPromptRequest[] = [];
+    const bridge = createApprovalBridge({
+      hasWindow: () => true,
+      broadcast: (_channel, payload) => {
+        sent.push(payload);
+      },
+      recordEgressGrant: (prompt, decision) => {
+        granted.push({ toolName: prompt.toolName, kind: decision.kind, reason: decision.reason });
+      },
+    });
+    const allow = bridge.handler({
+      toolName: 'network_egress',
+      arguments: { host: 'registry.example.org', port: 443 },
+      mode: 'other',
+      category: 'network_egress',
+      round: 0,
+      chatId: 'chat-1',
+    });
+    bridge.decide({ requestId: sent[0]?.requestId, kind: 'allow_once', reason: 'unattended' });
+    await allow;
+    const deny = bridge.handler({
+      toolName: 'network_egress',
+      arguments: { host: 'no.example', port: 443 },
+      mode: 'other',
+      category: 'network_egress',
+      round: 0,
+      chatId: 'chat-1',
+    });
+    bridge.decide({ requestId: sent[1]?.requestId, kind: 'deny_once', reason: '' });
+    await deny;
+    const shell = bridge.handler({
+      toolName: 'local_exec_shell',
+      arguments: { command: 'ls' },
+      mode: 'destructive',
+      category: 'local_exec_shell',
+      round: 0,
+      chatId: 'chat-1',
+    });
+    bridge.decide({ requestId: sent[2]?.requestId, kind: 'allow_once', reason: 'unattended' });
+    await shell;
+    expect(granted).toEqual([
+      { toolName: 'network_egress', kind: 'allow_once', reason: 'unattended' },
+    ]);
+  });
+
+  it('forwards chatId so the card stays on the chat that asked', () => {
+    const { bridge, sent } = makeBridge({});
+    void bridge.handler({
+      toolName: 'present_files',
+      arguments: { files: [] },
+      mode: 'other',
+      category: 'present_files',
+      round: 1,
+      chatId: 'chat-a',
+    });
+    expect(sent[0]?.chatId).toBe('chat-a');
+    expect(bridge.pending()[0]?.chatId).toBe('chat-a');
+  });
+
+  it('adds the category label and an out-of-project shell flag', async () => {
+    const sent: ApprovalPromptRequest[] = [];
+    const labeled = createApprovalBridge({
+      hasWindow: () => true,
+      broadcast: (_channel, payload) => {
+        sent.push(payload);
+      },
+      categoryLabel: (toolName, category) => (category === 'browser' ? `label:${toolName}` : undefined),
+      outsideWorkspace: async (input) => input.arguments.cwd === '~/Downloads',
+    });
+    void labeled.handler({
+      toolName: 'browser_navigate',
+      arguments: { url: 'https://example.com' },
+      mode: 'external',
+      category: 'browser',
+      round: 0,
+    });
+    void labeled.handler({
+      toolName: 'local_exec_shell',
+      arguments: { cwd: '~/Downloads' },
+      mode: 'destructive',
+      category: 'local_exec_shell',
+      round: 0,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sent[0]?.categoryLabel).toBe('label:browser_navigate');
+    expect(sent[0]?.outsideWorkspace).toBeUndefined();
+    expect(sent[1]?.categoryLabel).toBeUndefined();
+    expect(sent[1]?.outsideWorkspace).toBe(true);
+    expect(sent[1]?.outsideWorkspaceKind).toBeUndefined();
+  });
+
+  it('marks a chat workspace cwd so the card does not mention a project source folder', async () => {
+    const sent: ApprovalPromptRequest[] = [];
+    const labeled = createApprovalBridge({
+      hasWindow: () => true,
+      broadcast: (_channel, payload) => {
+        sent.push(payload);
+      },
+      outsideWorkspace: async () => 'workspace',
+    });
+    void labeled.handler({
+      toolName: 'local_exec_shell',
+      arguments: { cwd: '~/Downloads' },
+      mode: 'destructive',
+      category: 'local_exec_shell',
+      round: 0,
+      chatId: 'chat-loose',
+    });
+    await Promise.resolve();
+    expect(sent[0]?.outsideWorkspace).toBe(true);
+    expect(sent[0]?.outsideWorkspaceKind).toBe('workspace');
+  });
+
+  it('forwards sandboxEnforced only when the sidecar sends a boolean', async () => {
+    const sent: ApprovalPromptRequest[] = [];
+    const bridge = createApprovalBridge({
+      hasWindow: () => true,
+      broadcast: (_channel, payload) => {
+        sent.push(payload);
+      },
+    });
+    void bridge.handler({
+      toolName: 'local_exec_shell',
+      arguments: { command: 'pwd' },
+      mode: 'destructive',
+      category: 'local_exec_shell',
+      round: 0,
+      sandboxEnforced: false,
+    });
+    void bridge.handler({
+      toolName: 'local_write_file',
+      arguments: { path: '/tmp/a' },
+      mode: 'destructive',
+      category: 'local_write_file',
+      round: 0,
+    });
+    await Promise.resolve();
+    expect(sent[0]?.sandboxEnforced).toBe(false);
+    expect(sent[1]?.sandboxEnforced).toBeUndefined();
   });
 
   it('covers exactly the 7 UI-decidable variants', () => {

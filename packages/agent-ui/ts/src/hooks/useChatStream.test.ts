@@ -185,6 +185,33 @@ describe('useChatStream', () => {
     expect(onUnknownEvent.mock.calls[1]?.[0].type).toBe('agent');
   });
 
+  it('stream_restart replaces the streamed text instead of appending to it', async () => {
+    // A retry after partial output discards the abandoned attempt. The host
+    // has already handed those deltas over, so the only way the live view can
+    // match the persisted reply is to take the replacement text.
+    const { transport } = makeTransport([
+      [
+        { type: 'content', content: 'half a sen' },
+        { type: 'agent', event: 'stream_restart', payload: { content: '' } },
+        { type: 'content', content: 'complete reply' },
+        { type: 'done' },
+      ],
+    ]);
+    const onUnknownEvent = vi.fn();
+    const { result } = renderHook(() => useChatStream({ transport, onUnknownEvent }));
+
+    await act(async () => {
+      await result.current.sendUserMessage({ content: 'go' });
+    });
+
+    await waitFor(() => {
+      const last = result.current.messages.at(-1);
+      expect(last?.content).toBe('complete reply');
+    });
+    // Still forwarded: callers that track agent events keep seeing them.
+    expect(onUnknownEvent.mock.calls.some(([e]) => e.event === 'stream_restart')).toBe(true);
+  });
+
   it('emits an error overlay onto the assistant message when the stream throws', async () => {
     const transport: ChatStreamTransport = {
       stream: async () => {
@@ -384,9 +411,13 @@ describe('steerOrFollowUpUserMessage', () => {
       outcome = await result.current.steerOrFollowUpUserMessage('补充一句');
     });
     expect(outcome).toBe('steered');
-    expect(
-      result.current.messages.some((m) => m.role === 'user' && m.content === '补充一句'),
-    ).toBe(true);
+    // Inserted before the in-flight assistant (matches the persisted order),
+    // so the streaming assistant stays the list tail.
+    expect(result.current.messages.map((m) => [m.role, m.content])).toEqual([
+      ['user', 'start'],
+      ['user', '补充一句'],
+      ['assistant', ''],
+    ]);
     expect(result.current.pendingFollowUps).toEqual([]);
     expect(streams).toHaveLength(1);
 

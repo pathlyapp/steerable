@@ -7,12 +7,11 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import log from 'electron-log';
+import { log } from '../log.js';
 
 import { getBrand } from '../brand.js';
 import { registerPackHttpRoutes } from '../host/http-routes.js';
 import { createHostRuntime } from '../host/runtime.js';
-import { getUserDataDir } from '../runtime.js';
 import type { TenantScope } from '../storage/driver.js';
 import {
   createBsServer,
@@ -22,15 +21,11 @@ import { SseBus } from './sse-bus.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Match the Electron entry's dotenv precedence: local file first, existing
-// process variables always win.
+// dotenv precedence: local file first, existing process variables always win.
 for (const file of ['.env.local', '.env']) {
   const fullPath = path.join(path.resolve(__dirname, '..', '..'), file);
   if (existsSync(fullPath)) dotenv.config({ path: fullPath, override: false });
 }
-
-log.transports.file.resolvePathFn = () =>
-  path.join(getUserDataDir(), 'logs', 'main.log');
 
 export interface BsHostOptions {
   host?: string;
@@ -142,12 +137,18 @@ export async function startBsHost(
     shutdown(): Promise<void> {
       shutdownPromise ??= (async () => {
         try {
-          await new Promise<void>((resolve, reject) => {
+          const closed = new Promise<void>((resolve, reject) => {
             server.close((error) => {
               if (error) reject(error);
               else resolve();
             });
           });
+          // The Tauri webview keeps HTTP/SSE connections alive while its
+          // ExitRequested handler waits for this promise. Force those
+          // connections closed so Cmd+Q does not deadlock until the outer
+          // five-second process timeout.
+          server.closeAllConnections();
+          await closed;
         } finally {
           await runtime.shutdown();
         }

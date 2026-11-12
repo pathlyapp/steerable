@@ -1,19 +1,19 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AskUserPromptRequest } from '@/lib/electron-bridge';
+import type { AskUserPromptRequest } from '@/lib/host-bridge';
 import { AskUserPromptProvider } from './AskUserPromptProvider';
 import { ChatInput } from './ChatInput';
 
 afterEach(() => {
   cleanup();
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 function installBridge(pendingRequests: AskUserPromptRequest[] = []) {
   const listeners = new Set<(request: AskUserPromptRequest) => void>();
   const answer = vi.fn().mockResolvedValue(undefined);
   const pending = vi.fn().mockResolvedValue(pendingRequests);
-  (window as { electron?: unknown }).electron = {
+  (window as { steerableHost?: unknown }).steerableHost = {
     askUser: {
       onRequest: (callback: (request: AskUserPromptRequest) => void) => {
         listeners.add(callback);
@@ -144,8 +144,8 @@ describe('AskUserPromptProvider', () => {
       bridge.emit({ ...REQUEST, requestId: 'req-2', intro: '第二组问题' });
     });
 
-    expect(screen.getByText(/还有 1 组问题待回答/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /交给AI决定/ }));
+    expect(screen.getByText(/1 more question groups to answer/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Let AI decide/ }));
 
     expect(screen.getByText('第二组问题')).toBeTruthy();
     expect(bridge.answer).toHaveBeenCalledWith({

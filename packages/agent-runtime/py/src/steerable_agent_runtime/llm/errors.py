@@ -54,6 +54,7 @@ class LLMError(Exception):
         provider: str | None = None,
         raw: Any | None = None,
         retry_after_ms: int | None = None,
+        proxy: str | None = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
@@ -61,10 +62,59 @@ class LLMError(Exception):
         self.provider = provider
         self.raw = raw
         self.retry_after_ms = retry_after_ms
+        #: Proxy the request went through, credentials stripped; None means
+        #: the request went direct. A failure report shows this so the reader
+        #: knows which hop failed without having to reproduce the settings.
+        self.proxy = proxy
 
     @property
     def retryable(self) -> bool:
         return self.kind in RETRYABLE_KINDS
+
+
+#: Cause-chain walk depth for :func:`describe_transport_error`. httpx →
+#: httpcore → anyio → ssl/socket is four; a little headroom costs nothing.
+_MAX_CAUSE_DEPTH = 6
+
+
+def describe_transport_error(exc: BaseException) -> str:
+    """Flatten a transport exception into one diagnosable string.
+
+    httpx reports a proxy that accepted ``CONNECT`` and then dropped the
+    tunnel as ``ConnectError('')`` — the empty message is httpcore's, and the
+    ``ssl.SSLEOFError`` or ``socket.gaierror`` that explains it is three
+    ``__cause__`` hops down. Logging ``str(exc)`` alone therefore produced
+    ``transport error: `` with nothing after it. This walks the chain and
+    keeps every hop that names something, outermost first.
+
+    The walk follows ``__cause__``; it falls back to ``__context__`` only
+    when the raiser did not set ``__cause__`` and did not ask for the
+    context to be suppressed (``raise ... from None``), so an explicit
+    suppression does not leak the exception it hid.
+
+    Consecutive hops of the same class with no message each collapse into
+    one: httpcore re-wraps its own ``ConnectError`` on the proxy path, and
+    ``ConnectError <- ConnectError`` names nothing the first hop did not.
+
+    A chain with no message at all still returns the class names, so the
+    line never ends in silence.
+    """
+    parts: list[tuple[str, str]] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and len(seen) < _MAX_CAUSE_DEPTH:
+        if id(current) in seen:
+            break
+        seen.add(id(current))
+        name = type(current).__name__
+        text = str(current).strip()
+        if text or not parts or parts[-1] != (name, ""):
+            parts.append((name, text))
+        cause = current.__cause__
+        if cause is None and not current.__suppress_context__:
+            cause = current.__context__
+        current = cause if cause is not None and cause is not current else None
+    return " <- ".join(f"{name}: {text}" if text else name for name, text in parts)
 
 
 #: Body substrings that mark a 400/413 as a context-window overflow rather

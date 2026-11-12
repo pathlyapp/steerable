@@ -8,7 +8,7 @@ import { TaskProcessPanel } from './TaskProcessPanel';
 
 afterEach(() => {
   cleanup();
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
   vi.restoreAllMocks();
 });
 
@@ -32,7 +32,7 @@ function installBridge(timeline: unknown[], live = false, stale = false) {
   const listeners: Array<
     (payload: { chatId: string; taskId: string; timeline: unknown; live: boolean }) => void
   > = [];
-  (window as { electron?: unknown }).electron = {
+  (window as { steerableHost?: unknown }).steerableHost = {
     localBackend: { request },
     onTaskProcess: (
       cb: (payload: { chatId: string; taskId: string; timeline: unknown; live: boolean }) => void,
@@ -65,8 +65,8 @@ describe('TaskProcessPanel', () => {
       />,
     );
     await waitFor(() => screen.getByText('问好完成。'));
-    expect(screen.getByText(/工具调用 1 次/)).toBeTruthy();
-    expect(screen.getByText(/已结束/)).toBeTruthy();
+    expect(screen.getByText(/1 tool calls/)).toBeTruthy();
+    expect(screen.getByText(/Finished/)).toBeTruthy();
   });
 
   it('task-process 推送更新时间线', async () => {
@@ -77,7 +77,7 @@ describe('TaskProcessPanel', () => {
         onClose={() => {}}
       />,
     );
-    await waitFor(() => screen.getByText(/正在推理/));
+    await waitFor(() => screen.getByText(/Reasoning/));
     emit({
       chatId: 'chat_1',
       taskId: 'task-1',
@@ -108,7 +108,7 @@ describe('TaskProcessPanel', () => {
           onClose={() => {}}
         />,
       );
-      await waitFor(() => screen.getByText(/正在推理/));
+      await waitFor(() => screen.getByText(/Reasoning/));
       pinned = 0;
 
       emit({

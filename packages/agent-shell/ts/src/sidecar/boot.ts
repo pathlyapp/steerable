@@ -8,8 +8,11 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import log from 'electron-log';
-import { SidecarSupervisor, type SidecarBootFailure } from './supervisor.js';
+import { log } from '../log.js';
+import {
+  SidecarSupervisor,
+  type SidecarBootFailure,
+} from './supervisor.js';
 import { setSidecarSupervisor, setSidecarSupervisorPending, llmService } from '../llm/index.js';
 import type { ScopedStore } from '../storage/scoped-store.js';
 import { resolveSidecarStoragePath } from './storage-path.js';
@@ -27,6 +30,9 @@ import {
   deriveWebEgressHosts,
   pickFreePort,
   recordEgressPosture,
+  seatbeltHostEntry,
+  seatbeltProfileCoversBaseUrl,
+  setPlainEndpointRestarter,
   startEgressProxy,
   type EgressProxyHandle,
 } from './egress-proxy.js';
@@ -35,6 +41,8 @@ import { sidecarWebSearchEnv } from '../storage/web-search-settings.js';
 import { executeHostedWebSearch } from '../hosted-web-search.js';
 import type { createApprovalBridge } from './reverse-approval.js';
 import type { SidecarReverseHandler } from './types.js';
+import { getProductConfig } from '../product-config.js';
+import { resolvePlatformRuntime } from '@steerable/agent-runtime';
 
 export interface HostSidecarDeps {
   store: ScopedStore;
@@ -42,10 +50,13 @@ export interface HostSidecarDeps {
   /** W4-2 围栏：chatId → 项目家目录或无项目对话工作区。 */
   resolveProjectRoot: (chatId: string) => Promise<string | null>;
   /**
-   * 项目模式之外额外放行的只读根（会话附件目录等）。文件写入仍只受
-   * projectRoot 围栏约束；这些根只放宽 local_read_file 的读取范围。
+   * 额外只读根（会话附件目录、源文件夹）。只放宽 local_read_file，含子目录。
    */
   resolveAdditionalReadRoots?: (chatId: string) => string[] | Promise<string[]>;
+  /**
+   * 额外可写根（项目源文件夹）。放宽写入、编辑和命令 cwd，含各自子目录。
+   */
+  resolveAdditionalWriteRoots?: (chatId: string) => string[] | Promise<string[]>;
   /** W4-1 审批反向通道处理器（宿主审批弹窗的应答入口）。 */
   approvalHandler: ReturnType<typeof createApprovalBridge>['handler'];
   /**
@@ -64,6 +75,66 @@ export interface HostSidecarDeps {
 
 let egressProxyRef: EgressProxyHandle | null = null;
 let supervisorRef: SidecarSupervisor | null = null;
+let sidecarGeneration = 0;
+let hostSidecarDeps: HostSidecarDeps | null = null;
+/** plain-http 端点。spawn 名单里没有它时，重启前写在这里，下一次 profile 带上。 */
+let admittedPlainBaseUrl: string | undefined;
+let spawnEgress: { hosts: string[] | undefined; webEgress: boolean } | null = null;
+let restartInFlight: Promise<void> | null = null;
+let restarting = false;
+
+function withAdmittedPlain(hosts: string[] | undefined): string[] | undefined {
+  if (!hosts) return hosts;
+  const extra = seatbeltHostEntry(admittedPlainBaseUrl);
+  if (!extra || hosts.includes(extra)) return hosts;
+  return [...hosts, extra];
+}
+
+async function restartHostSidecar(): Promise<void> {
+  const deps = hostSidecarDeps;
+  if (!deps) return;
+  if (restartInFlight) {
+    await restartInFlight;
+    return;
+  }
+  const run = (async () => {
+    restarting = true;
+    try {
+      await shutdownHostSidecar();
+      await startHostSidecar(deps);
+    } finally {
+      restarting = false;
+    }
+  })();
+  restartInFlight = run;
+  try {
+    await run;
+  } finally {
+    if (restartInFlight === run) restartInFlight = null;
+  }
+}
+
+setPlainEndpointRestarter(async (baseUrl) => {
+  if (!hostSidecarDeps || !spawnEgress) return false;
+  if (seatbeltProfileCoversBaseUrl(baseUrl, spawnEgress.hosts, spawnEgress.webEgress)) {
+    return false;
+  }
+  const extra = seatbeltHostEntry(baseUrl);
+  if (!extra) return false;
+  admittedPlainBaseUrl = baseUrl;
+  log.info(`[sidecar] restarting to admit ${extra}`);
+  try {
+    await restartHostSidecar();
+  } catch (err) {
+    log.warn('[sidecar] restart for plain endpoint failed', err);
+    return false;
+  }
+  return seatbeltProfileCoversBaseUrl(
+    baseUrl,
+    spawnEgress?.hosts,
+    spawnEgress?.webEgress ?? false,
+  );
+});
 
 async function deriveSidecarEgressAllowList(): Promise<string[] | undefined> {
   const envList = (process.env.STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS ?? '')
@@ -71,7 +142,7 @@ async function deriveSidecarEgressAllowList(): Promise<string[] | undefined> {
     .map((h) => h.trim())
     .filter(Boolean);
   if (envList.length > 0) return envList;
-  const derived = deriveEgressAllowListFromBaseUrl(llmService.getSettings().baseUrl);
+  const derived = deriveEgressAllowListFromBaseUrl(llmService.getSettings().baseUrl) ?? [];
   // W4-8: the sidecar's httpx stack honors ambient proxies (env vars, and
   // the macOS system proxy via getproxies). A configured proxy is an
   // effective egress point — without it in the allow-list, the sandbox
@@ -79,7 +150,7 @@ async function deriveSidecarEgressAllowList(): Promise<string[] | undefined> {
   // system proxy 127.0.0.1:7890 hijacked even 127.0.0.1:11434 because
   // getproxies() does not surface the system bypass list).
   const proxies = await collectAmbientProxyEndpoints();
-  const merged = [...new Set([...(derived ?? []), ...proxies])];
+  const merged = withAdmittedPlain([...new Set([...derived, ...proxies])]) ?? [];
   if (merged.length === 0) {
     log.warn('[sidecar] cannot derive egress allow-list from provider baseUrl; outbound stays open');
     return undefined;
@@ -131,8 +202,11 @@ async function startEgressProxyIfEnabled(store: ScopedStore): Promise<{
     const executable = await ensureEgressProxyExecutable(path.dirname(fileURLToPath(import.meta.url)));
     if (!executable) {
       log.warn('[egress-proxy] steerable-egress-proxy binary was not found; staying on port-level enforcement');
+      // Degraded, not disabled: the user's host allow-list is not enforced by
+      // domain any more. Recorded so the CLI can warn on the first line of run.
       recordEgressPosture({
         mode: 'port-only-fallback',
+        notice: 'egress_proxy_missing',
         reason: '未找到 steerable-egress-proxy 二进制，按主机管控未启用',
       });
       return null;
@@ -174,6 +248,9 @@ async function startEgressProxyIfEnabled(store: ScopedStore): Promise<{
         ? {
             STEERABLE_EGRESS_CONTROL_PORT: String(egressProxyRef.controlPort),
             [plan.control.tokenEnv]: plan.control.tokenValue,
+            ...(getProductConfig().egressApproval === 'off'
+              ? { STEERABLE_EGRESS_APPROVAL: 'off' }
+              : {}),
           }
         : {};
     return {
@@ -212,16 +289,71 @@ async function startEgressProxyIfEnabled(store: ScopedStore): Promise<{
 }
 
 /**
- * Default-on (2026-08-26): the sidecar hosts the CoreLoop, which is the
- * default chat path. Explicit STEERABLE_USE_SIDECAR=0 opts out (in-process
- * TS loop). Boot is registered synchronously so early RPC thin clients
- * (skill-loader et al.) can await it via whenSidecarSupervisor().
+ * Wire the sidecar plugin registry into the host tool router.
+ *
+ * The `plugin.list` probe doubles as the availability check: on failure the
+ * router is cleared (no plugin_* tools, no plugin-provided tools) and the
+ * error is rethrown for the caller to log. On success the router gets the
+ * plugin.* RPC seam plus a `tool.invoke` forwarder, then syncs the enabled
+ * plugins' tool descriptors from `plugin.tools.describe`. Plugin tools run
+ * only in the sidecar; approval already happened in its CoreLoop before a
+ * call is forwarded here, hence `consentGranted`.
+ *
+ * @param supervisor Running sidecar supervisor.
+ * @param toolRouter Host router that advertises and dispatches the tools.
+ */
+export async function wirePluginRegistry(
+  supervisor: Pick<SidecarSupervisor, 'call' | 'invokeTool'>,
+  toolRouter: ToolRouter,
+): Promise<void> {
+  try {
+    await supervisor.call('plugin.list');
+  } catch (err) {
+    toolRouter.setPluginRpc(null);
+    throw err;
+  }
+  toolRouter.setPluginRpc(
+    (method, params) => supervisor.call(method, params),
+    (name, args) =>
+      supervisor.invokeTool(name, args, {
+        consentGranted: true,
+        timeoutMs: WEB_TOOL_RPC_TIMEOUT_MS,
+      }),
+  );
+  await toolRouter.refreshPluginTools();
+}
+
+/**
+ * Interpreter for `run_code` programs: explicit `STEERABLE_PYTHON` →
+ * platform package → null (the tool stays unavailable).
+ *
+ * The platform package ships the same interpreter the sidecar uses, so an
+ * installed CLI gets `run_code` without a second setup step.
+ */
+function resolveRunCodePython(): string | undefined {
+  const explicit = process.env.STEERABLE_PYTHON?.trim();
+  if (explicit) return explicit;
+  const platform = resolvePlatformRuntime();
+  return platform.kind === 'ok' ? platform.runtime.runCodePython : undefined;
+}
+
+/**
+ * The complete Python sidecar hosts the Rust CoreLoop and is mandatory.
+ * Boot is registered synchronously so early RPC thin clients (skill-loader
+ * et al.) can await it via whenSidecarSupervisor().
  */
 export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
-  if (process.env.STEERABLE_USE_SIDECAR === '0') return;
+  hostSidecarDeps = deps;
+  const generation = ++sidecarGeneration;
+  const pythonRunner = resolveRunCodePython();
+  const runCodeEnabled = true;
   // ready 后的完整接线：注册全局 handle + reverse channels + web 工具握手。
   // 正常 boot 路径与「boot 失败后后台 restart 迟到就绪」路径共用。
   const wireSupervisor = async (supervisor: SidecarSupervisor): Promise<void> => {
+    if (generation !== sidecarGeneration) {
+      await supervisor.shutdown();
+      return;
+    }
     supervisorRef = supervisor;
     setSidecarSupervisor(supervisor);
 
@@ -238,6 +370,7 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
         // root so ToolRouter's cwd/path confinement applies.
         resolveProjectRoot: deps.resolveProjectRoot,
         resolveAdditionalReadRoots: deps.resolveAdditionalReadRoots,
+        resolveAdditionalWriteRoots: deps.resolveAdditionalWriteRoots,
       }),
     );
 
@@ -323,11 +456,9 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
     // 缺省接线）。模型面是 tool-router 的 plugin_* 工具（deferred 层，经
     // tool_search 发现）；这里注入直调缝。握手失败降级为工具缺席，不阻塞 boot。
     try {
-      await supervisor.call('plugin.list');
-      deps.toolRouter.setPluginRpc((method, params) => supervisor.call(method, params));
+      await wirePluginRegistry(supervisor, deps.toolRouter);
       log.info('[sidecar] plugin registry wired; plugin_* tools available');
     } catch (err) {
-      deps.toolRouter.setPluginRpc(null);
       log.warn('[sidecar] plugin registry unavailable; plugin_* tools hidden this session', err);
     }
 
@@ -341,6 +472,16 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
       // profile already allows writes to; userData would be denied.
       // Path is per-flavor / env-overridable — see resolveSidecarStoragePath.
       const storagePath = resolveSidecarStoragePath();
+      // W4-3: sandbox default-on. This list is fixed at spawn. HTTPS hosts
+      // are added at runtime via allowEgressForBaseUrl. plain-http (Ollama)
+      // cannot, so that path restarts the sidecar with the new host appended.
+      const sandboxAllowedHosts = withAdmittedPlain(
+        egressProxy?.sandboxAllowedHosts ?? (await deriveSidecarEgressAllowList()),
+      );
+      // egress-proxy 模式下不开 web-egress（*:80/443 会架空代理的按主机
+      // 名单）：web 工具改走代理（HTTPS_PROXY），代理白名单与 sidecar
+      // 应用层域名名单同源（3.1b/3.1d）。
+      const sandboxWebEgress = webToolsEnabled() && !egressProxy;
       const supervisor = await SidecarSupervisor.start({
         args: [
           '--storage-path',
@@ -350,17 +491,8 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
         // 测试 tmpdir、显式 STEERABLE_SIDECAR_STORAGE_PATH）时，沙箱必须显式
         // 授予该目录写权限，否则 sidecar 打不开 sessions.db/sessions.lock。
         sandboxWritableRoots: [path.dirname(storagePath)],
-        // W4-3: sandbox default-on. This list is fixed at spawn (the sandbox
-        // profile cannot be edited afterwards), so a provider change reaches it
-        // only on restart — plain-http endpoints therefore still need one. The
-        // proxy's own CONNECT list does track the setting at runtime, via
-        // allowEgressForBaseUrl.
-        sandboxAllowedHosts:
-          egressProxy?.sandboxAllowedHosts ?? (await deriveSidecarEgressAllowList()),
-        // egress-proxy 模式下不开 web-egress（*:80/443 会架空代理的按主机
-        // 名单）：web 工具改走代理（HTTPS_PROXY），代理白名单与 sidecar
-        // 应用层域名名单同源（3.1b/3.1d）。
-        sandboxWebEgress: webToolsEnabled() && !egressProxy,
+        sandboxAllowedHosts,
+        sandboxWebEgress,
         // 3.1b：代理模式下 web_fetch 的 SSRF 预检仍在沙箱内做 DNS（抓取
         // 本身走代理隧道），所以只放行解析器 socket——无 IP 可达性。
         sandboxAllowResolver: webToolsEnabled() && Boolean(egressProxy),
@@ -375,7 +507,8 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
           // P1: offer the sidecar's run_code (programmatic tool calls) to the
           // model. The sidecar registers + advertises it; the desktop's
           // tool-router forwards the call back over the reverse channel.
-          STEERABLE_RUN_CODE: '1',
+          STEERABLE_RUN_CODE: runCodeEnabled ? '1' : '0',
+          ...(pythonRunner ? { STEERABLE_PYTHON: pythonRunner } : {}),
           // P3: conversational JS PTC (run_js/wait_js). The sidecar spawns a
           // long-lived Node worker. Browser and Tauri desktop hosts both run
           // under the pinned Node runtime, so process.execPath is directly
@@ -384,23 +517,24 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
           STEERABLE_PTC_NODE: process.execPath,
         },
         onLogLine: (line) => (deps.onLogLine ?? ((l) => log.info('[sidecar]', l)))(line),
+      }, (created) => {
+        if (generation === sidecarGeneration) {
+          supervisorRef = created;
+        } else {
+          void created.shutdown();
+        }
       });
+      spawnEgress = { hosts: sandboxAllowedHosts, webEgress: sandboxWebEgress };
       await wireSupervisor(supervisor);
       return supervisor;
     } catch (err) {
-      log.error('[sidecar] failed to start, falling back to in-process providers', err);
+      log.error('[sidecar] failed to start; Python sidecar is required', err);
       setSidecarSupervisor(null);
-      // boot 失败后 supervisor 的 exit→restart 循环仍在后台重试（另一个
-      // 宿主暂时持有 sessions.lock 这类瞬态冲突会自愈）。迟到就绪时补
-      // 接线，否则 sidecar 进程活着但 router 永远 503。
       const late = (err as SidecarBootFailure).supervisor;
       if (late) {
-        late.once('ready', () => {
-          log.info('[sidecar] late ready after initial boot failure');
-          void wireSupervisor(late);
-        });
+        await late.shutdown();
       }
-      return null;
+      throw err;
     }
   })();
   setSidecarSupervisorPending(boot);
@@ -409,6 +543,16 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
 
 /** 宿主退出钩子：停 supervisor + egress proxy。幂等。 */
 export async function shutdownHostSidecar(): Promise<void> {
+  sidecarGeneration += 1;
+  // Drop the resolved boot promise before the process exits so waiters do
+  // not observe the supervisor being stopped. A restart keeps the admitted
+  // plain-http endpoint so the next spawn's profile includes it.
+  setSidecarSupervisorPending(null);
+  if (!restarting) {
+    admittedPlainBaseUrl = undefined;
+    spawnEgress = null;
+    hostSidecarDeps = null;
+  }
   if (supervisorRef) {
     const supervisor = supervisorRef;
     supervisorRef = null;

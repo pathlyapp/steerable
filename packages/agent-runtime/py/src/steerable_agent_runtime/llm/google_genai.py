@@ -23,10 +23,15 @@ from typing import Any, Literal
 from steerable_agent_protocol.generated import ToolCall
 
 from . import LLMMessage, LLMStreamChunk, LLMUsage
-from .errors import LLMError, classify_http_status, parse_retry_after_ms
+from .errors import (
+    LLMError,
+    classify_http_status,
+    describe_transport_error,
+    parse_retry_after_ms,
+)
 from .parts import ImagePart, TextPart
 from .presets import ProviderPreset, preset_for
-from .system_proxy import client_env_kwargs
+from .system_proxy import client_env_kwargs, egress_path
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +84,9 @@ class GoogleGenAIProvider:
     base_url: str = "https://generativelanguage.googleapis.com"
     api_key: str | None = None
     default_temperature: float | None = None
+    #: Send this endpoint's requests direct even when the host declares a
+    #: proxy (see `OpenAICompatProvider.force_direct`).
+    force_direct: bool = False
     preset: ProviderPreset | Literal["auto", "off"] = "auto"
 
     def __post_init__(self) -> None:
@@ -110,7 +118,7 @@ class GoogleGenAIProvider:
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(60.0),
-                **client_env_kwargs(self.base_url),
+                **client_env_kwargs(self.base_url, force_direct=self.force_direct),
             ) as client:
                 response = await client.post(
                     self._url(stream=False),
@@ -124,9 +132,10 @@ class GoogleGenAIProvider:
                 payload = response.json()
         except httpx.TransportError as exc:
             raise LLMError(
-                f"{self.name}: transport error: {exc}",
+                f"{self.name}: transport error: {describe_transport_error(exc)}",
                 kind="transport",
                 provider=self.name,
+                proxy=None if self.force_direct else egress_path(self.base_url).proxy,
             ) from exc
 
         return _decode_response(payload)
@@ -153,7 +162,7 @@ class GoogleGenAIProvider:
             async with (
                 httpx.AsyncClient(
                     timeout=_stream_timeout(),
-                    **client_env_kwargs(self.base_url),
+                    **client_env_kwargs(self.base_url, force_direct=self.force_direct),
                 ) as client,
                 client.stream(
                     "POST",
@@ -185,9 +194,10 @@ class GoogleGenAIProvider:
                         yield parsed
         except httpx.TransportError as exc:
             raise LLMError(
-                f"{self.name}: transport error: {exc}",
+                f"{self.name}: transport error: {describe_transport_error(exc)}",
                 kind="transport",
                 provider=self.name,
+                proxy=None if self.force_direct else egress_path(self.base_url).proxy,
             ) from exc
 
     # ------------------------------------------------------------------

@@ -17,6 +17,7 @@ from steerable_agent_runtime import (
 )
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk
 from steerable_agent_runtime.llm.errors import LLMError
+from steerable_agent_runtime.retry import TransportRetryPolicy
 
 
 def make_flaky_provider(*, fail_on: set[int] | None, script: list[dict[str, Any]]):
@@ -150,3 +151,132 @@ async def test_rate_limit_waits_retry_after_header() -> None:
     action = await hooks.on_request_error(err, [], ctx)
     assert action.kind == "retry"
     assert action.delay_ms == 30_000
+
+
+# ---------------------------------------------------------------------------
+# Connection failures: patient backoff under a wall-clock deadline
+# ---------------------------------------------------------------------------
+
+
+class _Clock:
+    """Monotonic stand-in so deadline tests never sleep."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _transport_hooks(clock: _Clock, **overrides: Any) -> RetryHooks:
+    overrides.setdefault("jitter", False)
+    policy = TransportRetryPolicy(**overrides)
+    return RetryHooks(
+        RetryPolicy(max_attempts=3, base_delay_ms=1, max_delay_ms=2, jitter=False),
+        transport_policy=policy,
+        clock=clock,
+    )
+
+
+def _ctx(round_index: int = 0) -> Any:
+    return type("Ctx", (), {"round_index": round_index})()
+
+
+def _transport_error() -> LLMError:
+    return LLMError("proxy dropped the tunnel", kind="transport")
+
+
+@pytest.mark.asyncio
+async def test_transport_backoff_starts_at_a_second_and_doubles() -> None:
+    """A dropped tunnel needs seconds, not the shared 200ms cadence."""
+    clock = _Clock()
+    hooks = _transport_hooks(clock)
+    ctx = _ctx()
+
+    delays = []
+    for _ in range(3):
+        action = await hooks.on_request_error(_transport_error(), [], ctx)
+        assert action.kind == "retry"
+        delays.append(action.delay_ms)
+        clock.now += action.delay_ms / 1000
+
+    assert delays == [1000, 2000, 4000]
+
+
+@pytest.mark.asyncio
+async def test_transport_retry_stops_at_the_deadline() -> None:
+    """A long outage must surface inside the deadline, not attempt by attempt."""
+    clock = _Clock()
+    hooks = _transport_hooks(clock, deadline_ms=3000)
+    ctx = _ctx()
+
+    action = await hooks.on_request_error(_transport_error(), [], ctx)
+    assert action.kind == "retry"
+    clock.now += 1.0
+    action = await hooks.on_request_error(_transport_error(), [], ctx)
+    assert action.kind == "retry"
+    # 1s elapsed + a 2s wait crosses the 3s deadline.
+    clock.now += 1.0
+    action = await hooks.on_request_error(_transport_error(), [], ctx)
+    assert action.kind == "fail"
+    assert "deadline" in (action.reason or "")
+
+
+@pytest.mark.asyncio
+async def test_transport_retry_stops_at_max_attempts() -> None:
+    clock = _Clock()
+    hooks = _transport_hooks(clock, max_attempts=2, deadline_ms=600_000)
+    ctx = _ctx()
+
+    assert (await hooks.on_request_error(_transport_error(), [], ctx)).kind == "retry"
+    action = await hooks.on_request_error(_transport_error(), [], ctx)
+    assert action.kind == "fail"
+    assert "exhausted 2 attempts" in (action.reason or "")
+
+
+@pytest.mark.asyncio
+async def test_deadline_restarts_on_the_next_round() -> None:
+    """The deadline is per request: round 9 gets its own budget."""
+    clock = _Clock()
+    hooks = _transport_hooks(clock, deadline_ms=3500)
+    assert (
+        await hooks.on_request_error(_transport_error(), [], _ctx(0))
+    ).kind == "retry"
+    clock.now += 1.0
+    assert (
+        await hooks.on_request_error(_transport_error(), [], _ctx(0))
+    ).kind == "retry"
+    clock.now += 2.0
+    assert (
+        await hooks.on_request_error(_transport_error(), [], _ctx(0))
+    ).kind == "fail"
+
+    clock.now += 60.0
+    action = await hooks.on_request_error(_transport_error(), [], _ctx(1))
+    assert action.kind == "retry"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_keeps_the_shared_policy() -> None:
+    """Only connection failures get the patient cadence."""
+    clock = _Clock()
+    hooks = _transport_hooks(clock)
+    err = LLMError("429", kind="rate_limit", status_code=429)
+
+    action = await hooks.on_request_error(err, [], _ctx())
+
+    assert action.kind == "retry"
+    assert action.delay_ms == 1  # the shared policy's base delay
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_is_still_immediate() -> None:
+    clock = _Clock()
+    hooks = _transport_hooks(clock)
+
+    action = await hooks.on_request_error(
+        LLMError("401", kind="auth", status_code=401), [], _ctx()
+    )
+
+    assert action.kind == "fail"
+    assert "non-retryable" in (action.reason or "")

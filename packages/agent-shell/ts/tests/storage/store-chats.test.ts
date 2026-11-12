@@ -115,9 +115,19 @@ describe('LocalStore / updateChat', () => {
     const chat = await store.createChat('原标题', 'agent-a', 'proj-1');
     const updated = await store.updateChat(chat.id, { title: '新标题', systemPrompt: undefined });
     expect(updated?.title).toBe('新标题');
+    expect(updated?.titleSource).toBeNull();
     expect(updated?.agentId).toBe('agent-a');
     expect(updated?.projectId).toBe('proj-1');
     expect(updated?.systemPrompt).toBeNull();
+  });
+
+  it('titleSource 往返；不传则保留原值', async () => {
+    const { store } = await createTestStore();
+    const chat = await store.createChat('新对话');
+    expect((await store.getChat(chat.id))?.titleSource).toBeNull();
+    expect((await store.updateChat(chat.id, { title: '周报', titleSource: 'user' }))?.titleSource).toBe('user');
+    expect((await store.updateChat(chat.id, { isPinned: true }))?.titleSource).toBe('user');
+    expect((await store.getChat(chat.id))?.title).toBe('周报');
   });
 
   it('projectId 显式传 null 才是移出项目', async () => {
@@ -278,5 +288,30 @@ describe('LocalStore / chat_record 与 turn_active 标记', () => {
       .prepare(`UPDATE settings_kv SET value = ? WHERE key = ?`)
       .run('{"startedAt": 123}', 'turn_active:chat-bad');
     expect(await store.getTurnActive('chat-bad')).toBeNull();
+  });
+});
+
+describe('LocalStore / 会话活动通知', () => {
+  it('写入消息或修改会话时发出最后活动时间', async () => {
+    const { store } = await createTestStore();
+    const chat = await store.createChat('活动');
+    const { subscribeChatActivity } = await import('../../src/storage/chat-activity.js');
+    const events: Array<{ chatId: string; updatedAt: string }> = [];
+    const unsubscribe = subscribeChatActivity((event) => {
+      events.push(event);
+    });
+    try {
+      await store.addMessage(chat.id, 'user', '你好');
+      const afterMessage = await store.getChat(chat.id);
+      await store.updateChat(chat.id, { title: '改名' });
+      const afterUpdate = await store.getChat(chat.id);
+      expect(events.map((event) => event.updatedAt)).toEqual([
+        afterMessage?.updatedAt,
+        afterUpdate?.updatedAt,
+      ]);
+      expect(events.every((event) => event.chatId === chat.id)).toBe(true);
+    } finally {
+      unsubscribe();
+    }
   });
 });

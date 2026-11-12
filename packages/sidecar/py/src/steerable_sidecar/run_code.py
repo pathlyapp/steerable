@@ -448,7 +448,10 @@ async def _pump_frames(
             "v": 1,
             "id": frame.get("id"),
             "ok": result.success,
-            "result": _result_payload(result) if result.success else None,
+            # 程序收到的是工具的 data，不是整个结果信封：
+            # `tools.call('read_file', path=...)` 要能直接读 `.get('content')`。
+            # 完整信封仍留在 calls 里供工具卡片与事后检查使用。
+            "result": result.data if result.success else None,
             "error": None if result.success else (result.error or "tool failed"),
         }
         await write_reply((json.dumps(reply, ensure_ascii=False) + "\n").encode("utf-8"))

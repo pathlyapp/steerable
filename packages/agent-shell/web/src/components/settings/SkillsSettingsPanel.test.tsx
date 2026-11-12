@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const request = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
-  getElectronBridge: () => ({
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => ({
     localBackend: { request },
     local: {},
   }),
@@ -36,8 +36,8 @@ describe('SkillsSettingsPanel', () => {
     });
     render(<SkillsSettingsPanel />);
     const row = await screen.findByTestId('skill-row-compute-recursion');
-    expect(row.textContent).toContain('工作区');
-    expect(row.textContent).not.toContain('内置');
+    expect(row.textContent).toContain('Workspace');
+    expect(row.textContent).not.toContain('Built-in');
     expect(screen.queryByTestId('skill-uninstall-compute-recursion')).toBeNull();
   });
 

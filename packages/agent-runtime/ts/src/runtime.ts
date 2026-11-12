@@ -71,6 +71,20 @@ export interface TraceExportResult {
   privacyMode: string;
 }
 
+/** One finished turn, as `metrics.export` accepts it. Counts and labels only. */
+export interface MetricsExportSample {
+  outcome: 'completed' | 'failed' | 'cancelled';
+  failureKind?: string | null;
+  attempts?: number | null;
+  retried?: boolean;
+  usedDirect?: boolean;
+}
+
+export interface MetricsExportResult {
+  status: string;
+  metrics: number;
+}
+
 /**
  * Wire-level descriptor of one OpenAI-compat flag, as served by
  * `compat.describe`. `kind` is `"bool"`, `"string-list"`, or
@@ -168,6 +182,18 @@ export interface PluginRecord {
   reloadable: boolean;
 }
 
+/** One enabled plugin's tool as served by `plugin.tools.describe`. */
+export interface PluginToolDescriptor {
+  name: string;
+  description: string;
+  schema: Record<string, unknown>;
+  mode: string;
+  exposure: 'direct' | 'deferred' | 'hidden';
+  requireConsent: boolean;
+  concurrencySafe: boolean;
+  plugin: string | null;
+}
+
 /** Recursive node of the `agent.session.tree` branch-family view. */
 export interface SessionTreeNode {
   recordId: string;
@@ -220,11 +246,13 @@ export interface ChatStreamParams {
   apiKey?: string;
   /** History seed window the host already rendered (see WS3 contract). */
   historySeed?: unknown[];
-  /** Orchestration opt-in: {maxDepth?, maxParallel?, childMaxRounds?}. */
+  /** Orchestration opt-in: {maxDepth?, maxParallel?, childMaxRounds?,
+   * childMaxToolErrors?}; child limits default to the parent loop's. */
   orchestration?: {
     maxDepth?: number;
     maxParallel?: number;
     childMaxRounds?: number;
+    childMaxToolErrors?: number;
   };
   /** Per-request tool domain narrowing (fail-closed on the loop side). */
   toolFilter?: string[];
@@ -573,6 +601,15 @@ export class AgentRuntime {
     return this.process.request('trace.export', { traceId });
   }
 
+  /** POST turn-outcome counters to a collector's `/v1/metrics`. */
+  exportMetrics(params: {
+    endpoint: string;
+    samples: MetricsExportSample[];
+    serviceName?: string;
+  }): Promise<MetricsExportResult> {
+    return this.process.request('metrics.export', params);
+  }
+
   getConfig(): Promise<Record<string, unknown>> {
     return this.process.request('config.get');
   }
@@ -653,6 +690,15 @@ export class AgentRuntime {
   /** Hot-reload a reloadable plugin from its source. */
   reloadPlugin(name: string): Promise<{ plugin: PluginRecord }> {
     return this.process.request('plugin.reload', { name });
+  }
+
+  /**
+   * Descriptors for every tool an enabled plugin provides. Hosts that own
+   * the model-visible tool list advertise these and call them with
+   * `tool.invoke`; disabled plugins contribute none.
+   */
+  describePluginTools(): Promise<{ tools: PluginToolDescriptor[] }> {
+    return this.process.request('plugin.tools.describe');
   }
 
   /** The framework-owned provider-preset table for host settings UIs. */

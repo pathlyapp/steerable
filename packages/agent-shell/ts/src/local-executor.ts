@@ -4,9 +4,26 @@ import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
 import { spawn, execSync } from 'child_process';
-import log from 'electron-log';
+import { log } from './log.js';
 import { constants as fsConstants } from 'fs';
+import { expandFencePath, resolveFencePath } from './fence-path.js';
 import { adaptCommandForPowerShell } from './shell-adapt.js';
+import {
+  evaluateExecPolicy,
+  planSshArgv,
+  type ExecDecisionName,
+  type ExecPolicy,
+  type ShellEndpoint,
+  type ShellProcessBackend,
+  type ShellRunSpec,
+} from './shell-exec.js';
+import { nodeShellBackend } from './shell-process.js';
+import {
+  closeShellSession,
+  readShellSession,
+  shellSessionStatus,
+  startPtySession,
+} from './shell-session.js';
 import { applyEdits, EditError, type ApplyEditsResult, type EditOp } from './local-edit.js';
 // `he` ships as CommonJS and does not expose ESM named exports, so we have to
 // take the default import and destructure at runtime in this ESM module.
@@ -59,6 +76,15 @@ export interface LocalExecRequest {
   timeout?: number;
   env?: Record<string, string>;
   shell?: ShellType;
+  /** 在伪终端里跑。缺省走管道，调用方要终端语义时显式打开。 */
+  pty?: boolean;
+  /**
+   * 设了就在这么多毫秒后返回，进程还在就留下 sessionId。
+   * 不设则跟原来一样，等到退出或超时。
+   */
+  yieldMs?: number;
+  /** 用户已经批准一次 prompt 决定。不能放过 forbidden。 */
+  execApproval?: 'allow';
 }
 
 export interface LocalExecResult {
@@ -77,6 +103,16 @@ export interface LocalExecResult {
    * "程序已启动并在运行" 对启动类命令就是成功，不能让 LLM 当失败重试。
    */
   stillRunning?: boolean;
+  /** 前缀策略的决定。forbidden 不启动进程；prompt 在批准前也不启动。 */
+  execDecision?: ExecDecisionName;
+  /** prompt 时为 true，让模型把决定交给用户而不是改写命令重试。 */
+  needsFollowup?: boolean;
+  /** 这次命令跑在本机还是 SSH 对端。 */
+  transport?: 'local' | 'ssh';
+  /** 这次启动是否分配了伪终端。 */
+  pty?: boolean;
+  /** yieldMs 留下的还在运行的伪终端。下一步用 write_stdin 写入或只取新输出。 */
+  sessionId?: string;
 }
 
 export interface LocalFileReadRequest {
@@ -319,15 +355,56 @@ export function isGuiLaunchCommand(command: string): boolean {
  */
 export function isPathWithinRoot(resolvedPath: string, resolvedRoot: string): boolean {
   const rel = path.relative(resolvedRoot, resolvedPath);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || (
+    rel !== '..' &&
+    !rel.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(rel)
+  );
+}
+
+export { canonicalFencePath, expandFencePath, resolveFencePath } from './fence-path.js';
+
+/**
+ * 可写根：项目家目录（或对话工作区）加上额外可写根（源文件夹）。
+ * 每个根都包含它自己和全部子目录。空列表表示不设围栏。
+ */
+export function writableFenceRoots(
+  projectRoot?: string | null,
+  additionalWriteRoots?: string[] | null,
+): string[] {
+  const roots: string[] = [];
+  const push = (raw: string | null | undefined) => {
+    if (!raw) return;
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const resolved = expandFencePath(trimmed);
+    if (!roots.includes(resolved)) roots.push(resolved);
+  };
+  push(projectRoot);
+  for (const extra of additionalWriteRoots ?? []) push(extra);
+  return roots;
 }
 
 /** 越界错误消息（给模型看，引导它把操作收回项目目录内）。 */
 export function buildProjectRootViolation(resolvedPath: string, resolvedRoot: string): string {
   return (
     `路径越界：${resolvedPath} 不在当前对话绑定的项目目录 ${resolvedRoot} 内。` +
-    `项目模式下文件操作被限制在项目目录中——请改用项目内的相对/绝对路径；` +
-    `如确需访问目录外文件，请告知用户该限制并请其把文件放进项目目录。`
+    `项目模式下文件操作被限制在项目目录及其子目录中——请改用项目内的相对/绝对路径；` +
+    `如确需访问目录外文件，请告知用户该限制并请其把目录附加为源文件夹。`
+  );
+}
+
+/**
+ * 路径不在任一可写根（含其子目录）内时返回给模型的错误；在围栏内或未设围栏时返回 null。
+ * `resolvedPath` 与 `roots` 都应已 resolve。
+ */
+export function writableFenceViolation(resolvedPath: string, roots: string[]): string | null {
+  if (roots.length === 0) return null;
+  if (roots.some((root) => isPathWithinRoot(resolvedPath, root))) return null;
+  if (roots.length === 1) return buildProjectRootViolation(resolvedPath, roots[0]);
+  return (
+    `路径越界：${resolvedPath} 不在可写目录内（${roots.join('、')}）。` +
+    `可写范围是这些目录及其子目录。请改用其中的路径。`
   );
 }
 
@@ -366,6 +443,15 @@ interface ResolvedShell {
   shell: string;
   args: string[];
   type: ShellType;
+}
+
+function stringEnv(extra?: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === 'string') env[key] = value;
+  }
+  if (extra) Object.assign(env, extra);
+  return env;
 }
 
 function toWslPath(input: string): string {
@@ -407,11 +493,27 @@ export class LocalExecutor {
    * 重灌此集合（与框架一致：resume 只重建 version 证据，门退化为 CAS）。
    */
   private readonly partialReadPaths = new Set<string>();
+  private execPolicy: ExecPolicy = { rules: [] };
+  private shellEndpoint: ShellEndpoint = { kind: 'local' };
+  private shellBackend: ShellProcessBackend | null = null;
 
   constructor(maxOutputBytes = DEFAULT_MAX_OUTPUT_BYTES, applyEditsFn: ApplyEditsFn = applyEdits) {
     this.maxOutputBytes = maxOutputBytes;
     this.applyEditsFn = applyEditsFn;
     this.defaultShell = this.computeDefaultShell();
+  }
+
+  setExecPolicy(policy: ExecPolicy): void {
+    this.execPolicy = policy;
+  }
+
+  setShellEndpoint(endpoint: ShellEndpoint): void {
+    this.shellEndpoint = endpoint;
+  }
+
+  /** 测试和嵌入方替换真正的进程启动。缺省用本机管道或 PTY。 */
+  setShellBackend(backend: ShellProcessBackend | null): void {
+    this.shellBackend = backend;
   }
 
   updateSafetyConfig(config: CommandSafetyConfigPayload): void {
@@ -440,15 +542,21 @@ export class LocalExecutor {
   /**
    * P2b：会话恢复时重灌 read-before-write 证据。sidecar 扫描持久记录里的
    * 文件工具结果，把 path → version 经 `read_state.seed` 推到这里——进程
-   * 重启后自动 CAS 仍然成立（CC `seed_read_state` 语义）。键是 sidecar 侧
-   * 已解析的绝对路径，原样存储；resolvePath 对绝对路径是恒等，查询能命中。
+   * 重启后自动 CAS 仍然成立（CC `seed_read_state` 语义）。
+   *
+   * 键必须过一遍 `resolvePath`：读证据的每一次读写都用规范化后的路径做键，
+   * 而 seed 来的路径是 sidecar 记录的原文。两者不一致时自动 CAS 永远查不
+   * 中，write/edit 会退回「未读先写已拒绝」。macOS 上 `/var/folders/…` 与
+   * `/private/var/folders/…` 就是这种情形（`os.tmpdir()` 返回未解析的
+   * 形式），Linux 的 `/tmp` 符号链接同理。
+   *
    * 返回实际收录的条目数（畸形条目跳过）。
    */
   seedReadState(state: Record<string, unknown>): number {
     let seeded = 0;
     for (const [p, version] of Object.entries(state)) {
       if (typeof p === 'string' && p.length > 0 && typeof version === 'string') {
-        this.readFileState.set(p, version);
+        this.readFileState.set(this.resolvePath(p), version);
         seeded += 1;
       }
     }
@@ -491,9 +599,12 @@ export class LocalExecutor {
       if (dangerousReason) {
         return { success: false, error: `Blocked dangerous command: ${dangerousReason}` };
       }
+      const held = this.holdForExecPolicy(command, request);
+      if (held) return held;
 
+      const useSsh = this.shellEndpoint.kind === 'ssh';
       const resolvedShell = this.resolveShell(request.shell);
-      if (resolvedShell.type === 'powershell') {
+      if (!useSsh && resolvedShell.type === 'powershell') {
         // LLM 经常混写 cmd / bash 方言（&&、||、%VAR%）；Windows PowerShell 5.1
         // 不支持这些语法，执行前做确定性转换，避免整条命令直接报解析错误。
         const adapted = adaptCommandForPowerShell(command);
@@ -520,6 +631,17 @@ export class LocalExecutor {
       const timeout = Math.max(1000, rawTimeout);
       const cwd = this.resolveCwd(request.cwd, resolvedShell.type);
       const env = { ...process.env, ...(request.env || {}) };
+      if (this.shellBackend || useSsh || request.pty) {
+        return await this.runPlannedShell({
+          command,
+          request,
+          resolvedShell,
+          useSsh,
+          guiCommand,
+          timeout,
+          cwd,
+        });
+      }
 
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
@@ -631,13 +753,138 @@ export class LocalExecutor {
     }
   }
 
+  private holdForExecPolicy(command: string, request: LocalExecRequest): LocalExecResult | null {
+    const evaluation = evaluateExecPolicy(command, this.execPolicy);
+    if (evaluation.decision === 'allow') return null;
+    if (evaluation.decision === 'prompt' && request.execApproval === 'allow') return null;
+    const shown = evaluation.command.join(' ');
+    const why = evaluation.rule?.justification ? ` (${evaluation.rule.justification})` : '';
+    if (evaluation.decision === 'forbidden') {
+      return {
+        success: false,
+        error: `exec policy forbids: ${shown}${why}`,
+        execDecision: 'forbidden',
+        platform: process.platform,
+      };
+    }
+    return {
+      success: false,
+      error: `exec policy requires approval: ${shown}${why}`,
+      execDecision: 'prompt',
+      needsFollowup: true,
+      platform: process.platform,
+    };
+  }
+
+  private async runPlannedShell(input: {
+    command: string;
+    request: LocalExecRequest;
+    resolvedShell: ResolvedShell;
+    useSsh: boolean;
+    guiCommand: boolean;
+    timeout: number;
+    cwd: string;
+  }): Promise<LocalExecResult> {
+    const pty = input.request.pty === true;
+    const spec: ShellRunSpec = input.useSsh
+      ? planSshArgv({
+          command: input.command,
+          cwd: input.request.cwd ? input.cwd : undefined,
+          pty,
+          shell: input.resolvedShell.type === 'powershell' ? 'powershell' : undefined,
+          endpoint: this.shellEndpoint as Extract<ShellEndpoint, { kind: 'ssh' }>,
+        })
+      : {
+          file: input.resolvedShell.shell,
+          args: [...input.resolvedShell.args, input.command],
+          cwd: input.cwd,
+          env: stringEnv(input.request.env),
+          pty,
+          transport: 'local',
+        };
+    if (input.useSsh) {
+      spec.cwd = os.homedir();
+      spec.env = stringEnv();
+    }
+    const yieldMs = input.request.yieldMs;
+    if (
+      pty &&
+      !input.useSsh &&
+      !this.shellBackend &&
+      typeof yieldMs === 'number' &&
+      Number.isFinite(yieldMs)
+    ) {
+      return await this.runYieldedPty(spec, input.resolvedShell.type, yieldMs);
+    }
+    const backend = this.shellBackend ?? nodeShellBackend;
+    const outcome = await backend.run(spec, {
+      timeoutMs: input.timeout,
+      maxOutputBytes: this.maxOutputBytes,
+      gui: input.guiCommand,
+    });
+    const launched = outcome.stillRunning === true;
+    return {
+      success: launched || (!outcome.error && outcome.exitCode === 0),
+      stdout: launched
+        ? `${outcome.stdout}\n[GUI 程序已启动，仍在运行（等待 ${input.timeout}ms 后未退出，进程未被终止）。请在打开的界面中继续操作；不要重新执行同一条启动命令。]`
+        : outcome.stdout,
+      stderr: outcome.stderr,
+      exitCode: outcome.exitCode,
+      error: launched
+        ? undefined
+        : outcome.timedOut
+          ? `Command timed out after ${input.timeout}ms (shell terminated; a launched GUI app may still be running). ` +
+            'DO NOT blindly re-run the same launch command — if this launched a GUI/long-running program, ' +
+            'first check whether it is already running, or re-run with a larger `timeout`, ' +
+            'or start it detached (e.g. PowerShell Start-Process) so it does not block.'
+          : outcome.error,
+      truncated: outcome.truncated,
+      timedOut: outcome.timedOut,
+      stillRunning: outcome.stillRunning,
+      shell: input.resolvedShell.type,
+      platform: process.platform,
+      transport: spec.transport,
+      pty: spec.pty,
+    };
+  }
+
+  private async runYieldedPty(
+    spec: ShellRunSpec,
+    shell: ShellType,
+    yieldMs: number,
+  ): Promise<LocalExecResult> {
+    const sessionId = startPtySession({
+      file: spec.file,
+      args: spec.args,
+      cwd: spec.cwd,
+      env: spec.env,
+      maxOutputBytes: this.maxOutputBytes,
+    });
+    const stdout = (await readShellSession(sessionId, yieldMs)) ?? '';
+    const status = shellSessionStatus(sessionId);
+    const base = {
+      stdout,
+      stderr: '',
+      shell,
+      platform: process.platform,
+      transport: 'local' as const,
+      pty: true,
+    };
+    if (!status?.running) {
+      const exitCode = status?.exitCode ?? -1;
+      closeShellSession(sessionId);
+      return { ...base, success: exitCode === 0, exitCode };
+    }
+    return { ...base, success: true, stillRunning: true, sessionId };
+  }
+
   async readLocalFile(
     request: LocalFileReadRequest,
     projectRoot?: string | null,
     additionalReadRoots?: string[] | null,
   ): Promise<LocalFileReadResult> {
     try {
-      const filePath = this.resolvePath(request.path);
+      const filePath = this.resolvePath(request.path, projectRoot);
       if (projectRoot) {
         const root = this.resolvePath(projectRoot);
         const inAdditionalRoot = (additionalReadRoots ?? []).some((r) =>
@@ -675,14 +922,14 @@ export class LocalExecutor {
   async writeLocalFile(
     request: LocalFileWriteRequest,
     projectRoot?: string | null,
+    additionalWriteRoots?: string[] | null,
   ): Promise<LocalFileWriteResult> {
-    const filePath = this.resolvePath(request.path);
-    if (projectRoot) {
-      const root = this.resolvePath(projectRoot);
-      if (!isPathWithinRoot(filePath, root)) {
-        return { success: false, error: buildProjectRootViolation(filePath, root) };
-      }
-    }
+    const filePath = this.resolvePath(request.path, projectRoot);
+    const violation = writableFenceViolation(
+      filePath,
+      writableFenceRoots(projectRoot, additionalWriteRoots),
+    );
+    if (violation) return { success: false, error: violation };
     // 同文件串行化：读-改-写必须排队，否则并发写会互相覆盖（pi file-mutation-queue）。
     return this.serializeFileOp(filePath, async () => {
       try {
@@ -742,14 +989,14 @@ export class LocalExecutor {
   async editLocalFile(
     request: LocalFileEditRequest,
     projectRoot?: string | null,
+    additionalWriteRoots?: string[] | null,
   ): Promise<LocalFileEditResult> {
-    const filePath = this.resolvePath(request.path);
-    if (projectRoot) {
-      const root = this.resolvePath(projectRoot);
-      if (!isPathWithinRoot(filePath, root)) {
-        return { success: false, error: buildProjectRootViolation(filePath, root) };
-      }
-    }
+    const filePath = this.resolvePath(request.path, projectRoot);
+    const violation = writableFenceViolation(
+      filePath,
+      writableFenceRoots(projectRoot, additionalWriteRoots),
+    );
+    if (violation) return { success: false, error: violation };
     return this.serializeFileOp(filePath, async () => {
       try {
         const encoding = request.encoding ?? 'utf-8';
@@ -1140,9 +1387,8 @@ export class LocalExecutor {
     });
   }
 
-  private resolvePath(inputPath: string): string {
-    const expanded = inputPath.startsWith('~') ? path.join(os.homedir(), inputPath.slice(1)) : inputPath;
-    return path.resolve(expanded);
+  private resolvePath(inputPath: string, baseDir?: string | null): string {
+    return resolveFencePath(inputPath, baseDir);
   }
 
   private resolveCwd(cwd: string | undefined, shellType: ShellType): string {

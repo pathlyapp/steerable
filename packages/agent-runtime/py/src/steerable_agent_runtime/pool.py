@@ -57,7 +57,10 @@ class OrchestrationConfig:
 
     ``max_depth`` counts loop nesting: 1 means the parent spawns children
     that cannot spawn themselves (today's depth-1 delegation). ``max_parallel``
-    caps concurrently running children per pool. ``wait_timeout_s`` bounds a
+    caps concurrently running children per pool. ``child_max_rounds`` and
+    ``child_max_tool_errors`` bound each child run; hosts pass the parent
+    loop's values so a child is not tighter than its parent.
+    ``wait_timeout_s`` bounds an
     ``agent_wait`` without an explicit ``timeoutMs`` — kept under the loop's
     per-tool backstop (default 5 min) so a hung child surfaces as a
     ``running`` outcome, not a tool timeout. The six tool names configure
@@ -67,6 +70,7 @@ class OrchestrationConfig:
     max_depth: int = 1
     max_parallel: int = 4
     child_max_rounds: int = 8
+    child_max_tool_errors: int = 3
     wait_timeout_s: float = 120.0
     spawn_tool: str = "agent_spawn"
     send_tool: str = "agent_send"
@@ -244,7 +248,13 @@ class AgentPool:
     async def _run_child(
         self, handle: _ChildHandle, seed: list[LLMMessage]
     ) -> None:
-        answer_parts: list[str] = []
+        # The answer is the text of the run's last model request, not every
+        # round's text joined: working rounds narrate progress ("let me read
+        # the file") that is not an answer. A last request without text (a
+        # tool round cut by the budget wall) falls back to the most recent
+        # request that produced text.
+        request_text: list[str] = []
+        last_text = ""
         status = "completed"
         try:
             async for event in handle.loop.run(
@@ -255,8 +265,11 @@ class AgentPool:
                     or f"subagent:{self._context_namespace}:{handle.child_id}"
                 ),
             ):
-                if event.kind == "content_delta":
-                    answer_parts.append(str(event.data.get("delta") or ""))
+                if event.kind == "llm_request":
+                    last_text = "".join(request_text).strip() or last_text
+                    request_text = []
+                elif event.kind == "content_delta":
+                    request_text.append(str(event.data.get("delta") or ""))
                 elif event.kind == "completion":
                     status = str(event.data.get("status") or "completed")
         except asyncio.CancelledError:
@@ -276,7 +289,7 @@ class AgentPool:
         # Clean finish (completion or cooperative cancel): the record has no
         # dangling tool_calls, so it is a valid resume seed for follow-ups.
         handle.resume_messages = list(handle.loop.history.projection)
-        answer = "".join(answer_parts).strip()
+        answer = "".join(request_text).strip() or last_text
         handle.outcome = ChildOutcome(handle.child_id, status, answer)
         kind = "child_completed" if status == "completed" else "child_failed"
         self._emit(kind, {"childId": handle.child_id, "status": status})
@@ -370,8 +383,22 @@ class AgentPool:
             }
             if handle.outcome is not None and handle.outcome.answer:
                 entry["answerPreview"] = handle.outcome.answer[:200]
+            if self.resumable(handle.child_id):
+                entry["resumable"] = True
             entries.append(entry)
         return entries
+
+    def resumable(self, child_id: str) -> bool:
+        """True when the child stopped at its budget wall and ``send`` can
+        continue it in place (open, finished cleanly with a resume record)."""
+        handle = self._children.get(child_id)
+        return (
+            handle is not None
+            and not handle.closed
+            and handle.outcome is not None
+            and handle.outcome.status == "budget_exhausted"
+            and handle.resume_messages is not None
+        )
 
     async def close(self, child_id: str) -> bool:
         handle = self._children.get(child_id)

@@ -9,27 +9,33 @@ import {
   LuToggleRight,
   LuTrash2,
 } from 'react-icons/lu';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { t } from '@/i18n';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 
 /**
  * McpSettingsPanel — MCP 服务管理面板（JSON 导入 / 手动增改 / 启停 / 测试 /
  * 删除）。
  *
- * 渲染在 `/settings?section=mcp` 独立页（AgentLayout 右侧内容区）。
+ * 渲染在 `/settings?section=plugins` 的 MCP 分类（AgentLayout 右侧内容区）。
  *
  * 数据与状态完全自管理：挂载时拉一次列表，操作后刷新。后端走
- * local-backend REST（`/api/v2/mcp/servers*`），注册表持久化在 main 进程的
- * electron-store（`agent-mcp-servers.json`），无专用 IPC channel。
+ * local-backend REST（`/api/v2/mcp/servers*`），注册表持久化在用户数据目录的
+ * `agent-mcp-servers.json`。
  */
 
 /** GET /api/v2/mcp/servers 返回的服务条目（含工具缓存状态）。 */
 export interface McpServerInfo {
   id: string;
   name: string;
-  command: string;
-  args: string[];
-  env: Record<string, string>;
+  transport: 'stdio' | 'streamable-http';
+  command?: string;
+  args?: string[];
+  envKeys?: string[];
   cwd?: string;
+  url?: string;
+  headerNames?: string[];
+  headersFromEnv?: Record<string, string>;
+  bearerTokenEnvVar?: string;
   enabled: boolean;
   serverKey: string;
   toolCount: number;
@@ -46,28 +52,33 @@ export function McpSettingsPanel() {
   const [mcpImportStatus, setMcpImportStatus] = useState<string | null>(null);
   const [mcpFormOpen, setMcpFormOpen] = useState(false);
   const [mcpEditingId, setMcpEditingId] = useState<string | null>(null);
+  const [mcpFormTransport, setMcpFormTransport] = useState<'stdio' | 'streamable-http'>('stdio');
   const [mcpFormName, setMcpFormName] = useState('');
   const [mcpFormCommand, setMcpFormCommand] = useState('');
   const [mcpFormArgs, setMcpFormArgs] = useState('');
   const [mcpFormEnv, setMcpFormEnv] = useState('');
   const [mcpFormCwd, setMcpFormCwd] = useState('');
+  const [mcpFormUrl, setMcpFormUrl] = useState('');
+  const [mcpFormHeaders, setMcpFormHeaders] = useState('');
+  const [mcpFormHeadersFromEnv, setMcpFormHeadersFromEnv] = useState('');
+  const [mcpFormBearerEnv, setMcpFormBearerEnv] = useState('');
   const [mcpSaving, setMcpSaving] = useState(false);
   const [mcpTestingId, setMcpTestingId] = useState<string | null>(null);
   const [mcpDeletingId, setMcpDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const fetchMcpServers = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setMcpLoading(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<{ servers: McpServerInfo[] }>({
+      const res = await getHostBridge()!.localBackend.request<{ servers: McpServerInfo[] }>({
         method: 'GET',
         path: '/api/v2/mcp/servers',
       });
       setMcpServers(res.servers || []);
     } catch (err) {
-      console.error('获取 MCP 服务列表失败:', err);
+      console.error('Failed to load MCP server list:', err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setMcpLoading(false);
@@ -80,11 +91,16 @@ export function McpSettingsPanel() {
 
   const resetMcpForm = () => {
     setMcpEditingId(null);
+    setMcpFormTransport('stdio');
     setMcpFormName('');
     setMcpFormCommand('');
     setMcpFormArgs('');
     setMcpFormEnv('');
     setMcpFormCwd('');
+    setMcpFormUrl('');
+    setMcpFormHeaders('');
+    setMcpFormHeadersFromEnv('');
+    setMcpFormBearerEnv('');
   };
 
   const parseEnvLines = (raw: string): Record<string, string> => {
@@ -100,25 +116,39 @@ export function McpSettingsPanel() {
   };
 
   const handleSaveMcpServer = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setMcpSaving(true);
     setError(null);
     try {
-      const body = {
-        name: mcpFormName.trim(),
-        command: mcpFormCommand.trim(),
-        args: mcpFormArgs.split('\n').map((s) => s.trim()).filter(Boolean),
-        env: parseEnvLines(mcpFormEnv),
-        cwd: mcpFormCwd.trim() || undefined,
-      };
+      const body = mcpFormTransport === 'stdio'
+        ? {
+            name: mcpFormName.trim(),
+            transport: 'stdio',
+            command: mcpFormCommand.trim(),
+            args: mcpFormArgs.split('\n').map((s) => s.trim()).filter(Boolean),
+            ...(!mcpEditingId || mcpFormEnv.trim()
+              ? { env: parseEnvLines(mcpFormEnv) }
+              : {}),
+            cwd: mcpFormCwd.trim() || undefined,
+          }
+        : {
+            name: mcpFormName.trim(),
+            transport: 'streamable-http',
+            url: mcpFormUrl.trim(),
+            ...(!mcpEditingId || mcpFormHeaders.trim()
+              ? { headers: parseEnvLines(mcpFormHeaders) }
+              : {}),
+            headersFromEnv: parseEnvLines(mcpFormHeadersFromEnv),
+            bearerTokenEnvVar: mcpFormBearerEnv.trim() || undefined,
+          };
       if (mcpEditingId) {
-        await getElectronBridge()!.localBackend.request({
+        await getHostBridge()!.localBackend.request({
           method: 'PUT',
           path: `/api/v2/mcp/servers/${encodeURIComponent(mcpEditingId)}`,
           body,
         });
       } else {
-        await getElectronBridge()!.localBackend.request({
+        await getHostBridge()!.localBackend.request({
           method: 'POST',
           path: '/api/v2/mcp/servers',
           body,
@@ -136,22 +166,29 @@ export function McpSettingsPanel() {
 
   const handleEditMcpServer = (server: McpServerInfo) => {
     setMcpEditingId(server.id);
+    setMcpFormTransport(server.transport ?? 'stdio');
     setMcpFormName(server.name);
-    setMcpFormCommand(server.command);
+    setMcpFormCommand(server.command ?? '');
     setMcpFormArgs((server.args || []).join('\n'));
-    setMcpFormEnv(
-      Object.entries(server.env || {})
-        .map(([k, v]) => `${k}=${v}`)
+    // Stored values never return through the settings API. Blank preserves
+    // the existing env map; entering lines replaces it deliberately.
+    setMcpFormEnv('');
+    setMcpFormCwd(server.cwd || '');
+    setMcpFormUrl(server.url || '');
+    setMcpFormHeaders('');
+    setMcpFormHeadersFromEnv(
+      Object.entries(server.headersFromEnv ?? {})
+        .map(([header, variable]) => `${header}=${variable}`)
         .join('\n'),
     );
-    setMcpFormCwd(server.cwd || '');
+    setMcpFormBearerEnv(server.bearerTokenEnvVar || '');
     setMcpFormOpen(true);
   };
 
   const handleToggleMcpServer = async (server: McpServerInfo) => {
     setError(null);
     try {
-      await getElectronBridge()!.localBackend.request({
+      await getHostBridge()!.localBackend.request({
         method: 'PUT',
         path: `/api/v2/mcp/servers/${encodeURIComponent(server.id)}`,
         body: { enabled: !server.enabled },
@@ -166,7 +203,7 @@ export function McpSettingsPanel() {
     setMcpDeletingId(server.id);
     setError(null);
     try {
-      await getElectronBridge()!.localBackend.request({
+      await getHostBridge()!.localBackend.request({
         method: 'DELETE',
         path: `/api/v2/mcp/servers/${encodeURIComponent(server.id)}`,
       });
@@ -182,7 +219,7 @@ export function McpSettingsPanel() {
     setMcpTestingId(server.id);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<{
+      const res = await getHostBridge()!.localBackend.request<{
         success: boolean;
         toolCount: number;
         tools: { name: string }[];
@@ -192,7 +229,7 @@ export function McpSettingsPanel() {
         path: `/api/v2/mcp/servers/${encodeURIComponent(server.id)}/test`,
       });
       if (!res.success && res.error) {
-        setError(`「${server.name}」连接失败：${res.error}`);
+        setError(t('"{name}" failed to connect: {error}', { name: server.name, error: res.error }));
       }
       await fetchMcpServers();
     } catch (err) {
@@ -208,7 +245,7 @@ export function McpSettingsPanel() {
     setMcpImporting(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<{
+      const res = await getHostBridge()!.localBackend.request<{
         added: { name: string }[];
         skipped: string[];
       }>({
@@ -217,9 +254,23 @@ export function McpSettingsPanel() {
         body: { json },
       });
       const parts: string[] = [];
-      if (res.added.length > 0) parts.push(`已导入 ${res.added.length} 个：${res.added.map((s) => s.name).join('、')}`);
-      if (res.skipped.length > 0) parts.push(`跳过 ${res.skipped.length} 个（重名或缺 command）：${res.skipped.join('、')}`);
-      setMcpImportStatus(parts.join('；') || '没有可导入的服务');
+      if (res.added.length > 0) {
+        parts.push(
+          t('Imported {count}: {names}', {
+            count: res.added.length,
+            names: res.added.map((s) => s.name).join(t(', ')),
+          }),
+        );
+      }
+      if (res.skipped.length > 0) {
+        parts.push(
+          t('Skipped {count} (duplicate name or missing command): {names}', {
+            count: res.skipped.length,
+            names: res.skipped.join(t(', ')),
+          }),
+        );
+      }
+      setMcpImportStatus(parts.join(t('; ')) || t('No servers to import'));
       if (res.added.length > 0) setMcpImportJson('');
       await fetchMcpServers();
     } catch (err) {
@@ -235,7 +286,7 @@ export function McpSettingsPanel() {
       <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-2.5 space-y-2">
         <h4 className="text-xs font-semibold text-agent-foreground flex items-center gap-1.5">
           <LuPlug className="h-3.5 w-3.5 text-agent-muted-foreground" />
-          粘贴 JSON 导入 (Claude Desktop 格式)
+          {t('Paste JSON to import (Claude Desktop format)')}
         </h4>
         <textarea
           value={mcpImportJson}
@@ -247,7 +298,7 @@ export function McpSettingsPanel() {
         />
         <div className="flex items-center justify-between gap-2">
           <p className="text-[10px] text-agent-muted-foreground">
-            与 Claude Desktop / Cursor 的 mcpServers 配置格式一致，可整段粘贴。
+            {t('Same mcpServers format as Claude Desktop / Cursor. You can paste the whole block.')}
           </p>
           <button
             type="button"
@@ -259,7 +310,7 @@ export function McpSettingsPanel() {
                 : 'bg-agent-foreground text-agent-canvas hover:opacity-90'
             }`}
           >
-            {mcpImporting ? <LuLoaderCircle className="h-3 w-3 animate-spin" /> : '导入'}
+            {mcpImporting ? <LuLoaderCircle className="h-3 w-3 animate-spin" /> : t('Import')}
           </button>
         </div>
         {mcpImportStatus && (
@@ -273,64 +324,130 @@ export function McpSettingsPanel() {
       {mcpFormOpen ? (
         <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-2.5 space-y-2.5">
           <h4 className="text-xs font-semibold text-agent-foreground">
-            {mcpEditingId ? '编辑 MCP 服务' : '手动添加 MCP 服务'}
+            {mcpEditingId ? t('Edit MCP server') : t('Add MCP server manually')}
           </h4>
+          <select
+            value={mcpFormTransport}
+            onChange={(event) =>
+              setMcpFormTransport(event.target.value as 'stdio' | 'streamable-http')
+            }
+            className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+          >
+            <option value="stdio">{t('Local process (stdio)')}</option>
+            <option value="streamable-http">{t('Remote server (Streamable HTTP)')}</option>
+          </select>
           <div className="grid grid-cols-2 gap-2">
             <input
               type="text"
               value={mcpFormName}
               onChange={(e) => setMcpFormName(e.target.value)}
-              placeholder="名称，如 filesystem"
+              placeholder={t('Name, e.g. filesystem')}
               className="h-8 rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
             />
-            <input
-              type="text"
-              value={mcpFormCommand}
-              onChange={(e) => setMcpFormCommand(e.target.value)}
-              placeholder="启动命令，如 npx / uvx / node"
-              className="h-8 rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
-            />
+            {mcpFormTransport === 'stdio' ? (
+              <input
+                type="text"
+                value={mcpFormCommand}
+                onChange={(e) => setMcpFormCommand(e.target.value)}
+                placeholder={t('Launch command, e.g. npx / uvx / node')}
+                className="h-8 rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+            ) : (
+              <input
+                type="url"
+                value={mcpFormUrl}
+                onChange={(e) => setMcpFormUrl(e.target.value)}
+                placeholder="https://example.com/mcp"
+                className="h-8 rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+            )}
           </div>
-          <textarea
-            value={mcpFormArgs}
-            onChange={(e) => setMcpFormArgs(e.target.value)}
-            placeholder="参数（每行一个），如：&#10;-y&#10;@modelcontextprotocol/server-filesystem&#10;C:/"
-            rows={3}
-            className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
-          />
-          <textarea
-            value={mcpFormEnv}
-            onChange={(e) => setMcpFormEnv(e.target.value)}
-            placeholder="环境变量（每行一个 KEY=VALUE，可留空）"
-            rows={2}
-            className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
-          />
-          <input
-            type="text"
-            value={mcpFormCwd}
-            onChange={(e) => setMcpFormCwd(e.target.value)}
-            placeholder="工作目录（可选）"
-            className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
-          />
+          {mcpFormTransport === 'stdio' ? (
+            <>
+              <textarea
+                value={mcpFormArgs}
+                onChange={(e) => setMcpFormArgs(e.target.value)}
+                placeholder={t('Arguments (one per line)')}
+                rows={3}
+                className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+              <textarea
+                value={mcpFormEnv}
+                onChange={(e) => setMcpFormEnv(e.target.value)}
+                placeholder={
+                  mcpEditingId
+                    ? t('Environment variables; leave blank to keep current values')
+                    : t('Environment variables (one KEY=VALUE per line)')
+                }
+                rows={2}
+                className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+              <input
+                type="text"
+                value={mcpFormCwd}
+                onChange={(e) => setMcpFormCwd(e.target.value)}
+                placeholder={t('Working directory (optional)')}
+                className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+            </>
+          ) : (
+            <>
+              <textarea
+                value={mcpFormHeaders}
+                onChange={(e) => setMcpFormHeaders(e.target.value)}
+                placeholder={
+                  mcpEditingId
+                    ? t('Plain headers; leave blank to keep current values')
+                    : t('Plain headers (one Header=Value per line)')
+                }
+                rows={2}
+                className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+              <textarea
+                value={mcpFormHeadersFromEnv}
+                onChange={(e) => setMcpFormHeadersFromEnv(e.target.value)}
+                placeholder={t('Headers from environment variables (one Header=ENV_NAME per line)')}
+                rows={2}
+                className="w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+              <input
+                type="text"
+                value={mcpFormBearerEnv}
+                onChange={(e) => setMcpFormBearerEnv(e.target.value)}
+                placeholder={t('Bearer token environment variable name (optional)')}
+                className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+              />
+            </>
+          )}
           <div className="flex justify-end gap-2">
             <button
               type="button"
               onClick={() => { resetMcpForm(); setMcpFormOpen(false); }}
               className="h-8 rounded-full px-4 text-xs font-medium text-agent-muted-foreground transition-colors hover:bg-agent-muted hover:text-agent-foreground"
             >
-              取消
+              {t('Cancel')}
             </button>
             <button
               type="button"
               onClick={handleSaveMcpServer}
-              disabled={mcpSaving || !mcpFormName.trim() || !mcpFormCommand.trim()}
+              disabled={
+                mcpSaving ||
+                !mcpFormName.trim() ||
+                (mcpFormTransport === 'stdio'
+                  ? !mcpFormCommand.trim()
+                  : !mcpFormUrl.trim())
+              }
               className={`h-8 px-4 rounded-full text-xs font-medium transition-all ${
-                mcpSaving || !mcpFormName.trim() || !mcpFormCommand.trim()
+                mcpSaving ||
+                !mcpFormName.trim() ||
+                (mcpFormTransport === 'stdio'
+                  ? !mcpFormCommand.trim()
+                  : !mcpFormUrl.trim())
                   ? 'bg-agent-muted text-agent-muted-foreground cursor-not-allowed'
                   : 'bg-agent-foreground text-agent-canvas hover:opacity-90'
               }`}
             >
-              {mcpSaving ? <LuLoaderCircle className="h-3 w-3 animate-spin" /> : '保存'}
+              {mcpSaving ? <LuLoaderCircle className="h-3 w-3 animate-spin" /> : t('Save')}
             </button>
           </div>
         </div>
@@ -342,23 +459,23 @@ export function McpSettingsPanel() {
           data-testid="mcp-add-manual"
         >
           <LuPlus className="h-3.5 w-3.5" />
-          手动添加服务
+          {t('Add server manually')}
         </button>
       )}
 
       {/* 服务列表 */}
       <div className="space-y-2">
         <h4 className="text-xs font-semibold text-agent-muted-foreground uppercase tracking-wide">
-          已注册服务
+          {t('Registered servers')}
         </h4>
         {mcpLoading ? (
           <div className="flex items-center gap-2 py-4 text-xs text-agent-muted-foreground">
             <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            获取 MCP 服务...
+            {t('Loading MCP servers...')}
           </div>
         ) : mcpServers.length === 0 ? (
           <div className="text-center py-6 text-xs text-agent-muted-foreground">
-            暂无 MCP 服务，粘贴 JSON 或手动添加
+            {t('No MCP servers yet. Paste JSON or add one manually.')}
           </div>
         ) : (
           <div className="divide-y divide-agent-border/40 pr-1">
@@ -377,25 +494,28 @@ export function McpSettingsPanel() {
                           : 'bg-agent-muted text-agent-muted-foreground'
                       }`}
                     >
-                      {server.enabled ? '已启用' : '已停用'}
+                      {server.enabled ? t('Enabled') : t('Disabled')}
                     </span>
                     {server.enabled && server.toolCount > 0 && (
                       <span className="px-1 py-0.2 rounded bg-agent-muted text-[9px] text-agent-muted-foreground font-medium flex-shrink-0 scale-95 origin-left">
-                        {server.toolCount} 个工具
+                        {t('{count} tools', { count: server.toolCount })}
                       </span>
                     )}
                   </div>
                   <p className="text-[11px] text-agent-muted-foreground font-mono truncate">
-                    {server.command} {(server.args || []).join(' ')}
+                    {server.transport === 'streamable-http'
+                      ? server.url
+                      : `${server.command ?? ''} ${(server.args ?? []).join(' ')}`}
                   </p>
                   {server.lastError && (
                     <p className="text-[10px] text-agent-destructive line-clamp-2">
-                      连接失败：{server.lastError}
+                      {t('Connection failed: {error}', { error: server.lastError })}
                     </p>
                   )}
                   {!server.lastError && server.toolsPreview.length > 0 && (
                     <p className="text-[10px] text-agent-muted-foreground/80 line-clamp-1">
-                      工具：{server.toolsPreview.join('、')}{server.toolCount > server.toolsPreview.length ? ' …' : ''}
+                      {t('Tools: {names}', { names: server.toolsPreview.join(t(', ')) })}
+                      {server.toolCount > server.toolsPreview.length ? ' …' : ''}
                     </p>
                   )}
                 </div>
@@ -405,7 +525,7 @@ export function McpSettingsPanel() {
                     onClick={() => handleTestMcpServer(server)}
                     disabled={mcpTestingId === server.id}
                     className="text-agent-muted-foreground hover:text-agent-foreground p-1 rounded-full hover:bg-agent-muted transition-colors"
-                    title="测试连接并刷新工具列表"
+                    title={t('Test connection and refresh tool list')}
                   >
                     {mcpTestingId === server.id ? (
                       <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
@@ -417,7 +537,7 @@ export function McpSettingsPanel() {
                     type="button"
                     onClick={() => handleEditMcpServer(server)}
                     className="text-agent-muted-foreground hover:text-agent-foreground p-1 rounded-full hover:bg-agent-muted transition-colors"
-                    title="编辑"
+                    title={t('Edit')}
                   >
                     <LuPencil className="h-3.5 w-3.5" />
                   </button>
@@ -425,7 +545,7 @@ export function McpSettingsPanel() {
                     type="button"
                     onClick={() => handleToggleMcpServer(server)}
                     className="text-agent-muted-foreground hover:text-agent-foreground p-1 rounded-full hover:bg-agent-muted transition-colors"
-                    title={server.enabled ? '停用' : '启用'}
+                    title={server.enabled ? t('Disable') : t('Enable')}
                   >
                     {server.enabled ? (
                       <LuToggleRight className="h-3.5 w-3.5" />
@@ -438,7 +558,7 @@ export function McpSettingsPanel() {
                     onClick={() => handleDeleteMcpServer(server)}
                     disabled={mcpDeletingId === server.id}
                     className="text-agent-muted-foreground hover:text-agent-destructive p-1 rounded-full hover:bg-agent-muted transition-colors"
-                    title="删除"
+                    title={t('Delete')}
                   >
                     {mcpDeletingId === server.id ? (
                       <LuLoaderCircle className="h-3 w-3 animate-spin" />
@@ -453,7 +573,9 @@ export function McpSettingsPanel() {
         )}
       </div>
       <p className="text-[10px] text-agent-muted-foreground">
-        已启用服务的工具会以 mcp__服务名__工具名 的形式直接提供给助手调用；新导入或修改后点「测试连接」即可生效。
+        {t(
+          'Supports stdio and Streamable HTTP. Enter secrets as environment variable names, not in plain headers. Tools from enabled servers reach the assistant through tool_search.',
+        )}
       </p>
 
       {error && (

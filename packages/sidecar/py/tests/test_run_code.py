@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import json
+
 import pytest
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 from steerable_agent_runtime import CoreLoop, LoopConfig, RouterToolExecutor, ToolRouter
@@ -189,7 +191,8 @@ async def test_two_stub_tools_one_coreloop_round(
     code = (
         "a = tools.call('stub_a')\n"
         "b = tools.call('stub_b')\n"
-        "return {'a': a, 'b': b}\n"
+        # 程序拿到的是工具的 data，不是整个信封：字段可以直接读。
+        "return {'a': a['who'], 'b': b['who']}\n"
     )
     provider = _make_provider(
         [
@@ -224,6 +227,10 @@ async def test_two_stub_tools_one_coreloop_round(
     assert len(tool_msgs) == 1
     body = tool_msgs[0].content_text
     assert "stub_a" in body and "stub_b" in body
+    # 程序读到的是 data 里的字段，所以 value 必须是 {"a": "a", "b": "b"}；
+    # 若 reply 回的是整个 {success, data} 信封，这里会是 None。
+    payload = json.loads(body)
+    assert payload["data"]["value"] == {"a": "a", "b": "b"}
 
 
 def test_child_environ_is_an_allowlist() -> None:

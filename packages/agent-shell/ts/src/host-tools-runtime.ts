@@ -56,6 +56,42 @@ export function resolveTurnChatMode(requested: unknown): ChatModeId {
   return clampChatMode(requested, resolveChatModes(getProductConfig().chatModes));
 }
 
+/** 解析当前产品是否启用多智能体编排六件套（STEERABLE_ORCHESTRATION 环境变量与回合 payload 优先）。 */
+export function resolveTurnOrchestration(
+  payload?: Record<string, unknown>,
+): { enabled: boolean; maxDepth: number; maxParallel: number } | undefined {
+  if (process.env.STEERABLE_ORCHESTRATION === '0') return undefined;
+  if (process.env.STEERABLE_ORCHESTRATION === '1') {
+    return { enabled: true, maxDepth: 1, maxParallel: 4 };
+  }
+  // 回合请求体优先（用户在前端设置中打开/关闭，随 metadata/payload 透传）
+  if (payload) {
+    if (payload.orchestration === false) return undefined;
+    if (payload.orchestration === true) {
+      return { enabled: true, maxDepth: 1, maxParallel: 4 };
+    }
+    const meta = payload.metadata as Record<string, unknown> | undefined;
+    if (meta && typeof meta === 'object') {
+      if (meta.orchestration === false) return undefined;
+      if (meta.orchestration === true) {
+        return { enabled: true, maxDepth: 1, maxParallel: 4 };
+      }
+    }
+  }
+  const config = getProductConfig().orchestration;
+  if (config === true) {
+    return { enabled: true, maxDepth: 1, maxParallel: 4 };
+  }
+  if (typeof config === 'object' && config !== null && config.enabled !== false) {
+    return {
+      enabled: true,
+      maxDepth: typeof config.maxDepth === 'number' ? config.maxDepth : 1,
+      maxParallel: typeof config.maxParallel === 'number' ? config.maxParallel : 4,
+    };
+  }
+  return undefined;
+}
+
 export function isProductLlmLocked(): boolean {
   return !resolveSettingsChrome(getProductConfig().settings).llm;
 }

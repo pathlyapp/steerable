@@ -26,8 +26,8 @@ from .tools import RegisteredTool, ToolRouter
 
 TOOL_SEARCH_NAME = "tool_search"
 
-#: Default matches per call. 8 matches codex's tool_discovery cap
-#: (docs/roadmap.md's tier comparison); the per-call ceiling below bounds
+#: Default matches per call. 8 matches codex's tool_discovery cap.
+#: The per-call ceiling below bounds
 #: the schema payload regardless of what a call requests.
 DEFAULT_MAX_RESULTS = 8
 #: Hard ceiling per call: every match carries a full schema, so an

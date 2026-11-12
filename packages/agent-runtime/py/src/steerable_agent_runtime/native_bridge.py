@@ -33,6 +33,7 @@ from steerable_agent_runtime.loop import (
 from steerable_agent_runtime.pseudo import (
     PseudoStreamStripper,
     extract_inline_tool_calls,
+    reply_text_from_call,
     split_trailing_high_surrogate,
 )
 from steerable_agent_runtime.replay import build_step_decision_event
@@ -307,6 +308,7 @@ async def _collect_stream(
             status_code=getattr(exc, "status_code", None),
             provider=getattr(exc, "provider", None),
             retry_after_ms=getattr(exc, "retry_after_ms", None),
+            proxy=getattr(exc, "proxy", None),
         )
         return
     display_tail = stripper.feed(content_carry) + stripper.flush()
@@ -316,7 +318,8 @@ async def _collect_stream(
         send("chunk", chunk={"finish_reason": cut_finish_reason})
     elif not tool_seen:
         recovered, _ = extract_inline_tool_calls("".join(raw_content))
-        for index, call in enumerate(recovered):
+        actionable = [call for call in recovered if reply_text_from_call(call) is None]
+        for index, call in enumerate(actionable):
             send(
                 "chunk",
                 chunk={
@@ -468,6 +471,7 @@ async def _on_request_error(
         status_code=error_raw.get("status_code"),
         provider=error_raw.get("provider"),
         retry_after_ms=error_raw.get("retry_after_ms"),
+        proxy=error_raw.get("proxy"),
     )
     transcript = [_msg_from_json(item) for item in raw.get("transcript", [])]
     loop._run_context.round_index = int(raw.get("round_index") or 0)

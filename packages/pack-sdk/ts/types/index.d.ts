@@ -2,9 +2,9 @@
  * @steerable/pack-sdk —— 场景智能体包契约（纯类型，零运行时）。
  *
  * 一个「场景包」把一个垂直场景（如某行业的专业工具链……）需要的全部
- * 扩展声明集中在一处：主进程服务/工具/表/技能/智能体种子/IPC/HTTP 路由、
- * preload 桥、渲染层插槽、品牌与打包覆盖。宿主（CS Electron 主进程与
- * BS headless server）按产品组装时选中的包集合，逐个槽位消费这些声明。
+ * 扩展声明集中在一处：Node 宿主服务/工具/表/技能/智能体种子/HTTP 路由、
+ * 渲染层插槽、品牌与打包覆盖。宿主（Tauri 监督的 Node 宿主与 BS
+ * headless server）按产品组装时选中的包集合，逐个槽位消费这些声明。
  *
  * 设计约束：
  *  - 本包是零依赖纯类型：不允许 import 宿主内部模块（tool-router、
@@ -13,7 +13,7 @@
  *  - 槽位只开有真实场景代码论证的（既有场景包 diff 的并集），
  *    不凭空膨胀。新槽位 = 新场景的真实需求驱动。
  *  - 组合发生在构建期：产品的 composition root 静态 import 自己的包；
- *    渲染层受 Electron CSP + preload 白名单约束，不做运行时动态加载。
+ *    渲染层不做运行时动态加载。
  *
  * 渲染层贡献类型在 './web' 子路径（依赖 React 类型，主进程侧勿引）。
  *
@@ -40,6 +40,17 @@ export type ToolMode =
 export type ToolExposure = 'direct' | 'deferred' | 'hidden';
 
 /**
+ * 会话与本机审批记录的分组。同一 `category` 共享「本会话」「始终」决定。
+ * `category` 匹配 `^[a-z][a-z0-9_]{0,63}$`，且不得与内置类别
+ * `network_egress`、`sandbox_escalation` 同名；宿主在装配时校验。
+ */
+export interface ToolApprovalSpec {
+  readonly category: string;
+  /** 审批卡上的类别显示名，由包提供本地化文本。 */
+  readonly label: Readonly<Record<string, string>>;
+}
+
+/**
  * 工具执行上下文（与宿主 ToolExecContext 结构对齐的最小声明）。
  * 宿主在分发时注入；包不应假设字段以外的任何宿主状态。
  */
@@ -64,12 +75,14 @@ export interface ToolContribution {
   readonly mode: ToolMode;
   /** 缺省 'direct'。 */
   readonly exposure?: ToolExposure;
+  /** 缺省时审批类别等于工具名。 */
+  readonly approval?: ToolApprovalSpec;
   readonly handler: PackToolHandler;
 }
 
 /**
  * 主进程长驻领域服务（如 DomainService / DocumentEditService）。
- * 宿主在装配期调用 create，把返回值交给包内工具/IPC/路由使用；
+ * 宿主在装配期调用 create，把返回值交给包内工具/路由使用；
  * 宿主不感知服务类型——包内部通过闭包共享。
  */
 export interface ServiceFactory {
@@ -81,7 +94,7 @@ export interface ServiceFactory {
 }
 
 export interface ServiceCreateContext {
-  /** 向用户面广播事件（CS=IPC webContents.send，BS=SSE 总线）。 */
+  /** 向用户面广播事件（SSE 总线）。 */
   broadcast: (channel: string, payload: unknown) => void;
 }
 
@@ -142,14 +155,7 @@ export interface AgentSeed {
   readonly previousIdentities?: readonly AgentSeedIdentity[];
 }
 
-/** IPC 贡献：channel 必须以前缀 '<packId>:' 开头（注册表强制）。 */
-export interface IpcContribution {
-  readonly channel: string;
-  /** 参数为 renderer 经 preload 透传的序列化载荷。 */
-  readonly handler: (payload: unknown) => Promise<unknown> | unknown;
-}
-
-/** BS 模式 HTTP 路由贡献（/host/<packId>/* 命名空间，见 host/http-routes.ts）。 */
+/** HTTP 路由贡献（/host/<packId>/* 命名空间，见 host/http-routes.ts）。 */
 export interface HttpRouteContribution {
   readonly method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** 路径模式，如 '/api/v2/ppt-edits/:id'。必须带包前缀路径段。 */
@@ -170,17 +176,7 @@ export interface MainContribution {
   readonly migrations?: readonly MigrationContribution[];
   readonly skills?: readonly SkillContribution[];
   readonly agentSeeds?: readonly AgentSeed[];
-  readonly ipc?: readonly IpcContribution[];
   readonly httpRoutes?: readonly HttpRouteContribution[];
-}
-
-/**
- * preload 桥白名单：包在 window.electron 下挂 '<packId>' 命名空间。
- * 具体桥接函数由包的 preload 模块实现；这里只声明命名空间占用，
- * 宿主据此做 CSP/白名单装配。
- */
-export interface PreloadContribution {
-  readonly namespace: string;
 }
 
 /**
@@ -235,8 +231,29 @@ export interface BrandSpec {
   readonly agentName: string;
   /** 一句话定位（fallback prompt 用）。 */
   readonly tagline: string;
+  /**
+   * 新对话落地页 / 空会话首屏副文案。省略用 shell 默认句；
+   * 空字符串表示不显示。只进渲染层，不进系统提示词。
+   */
+  readonly homeHint?: string;
   /** 新对话未显式选智能体时绑定的内置智能体 id。 */
   readonly defaultAgentId: string;
+}
+
+/**
+ * 包贡献给产品命令行的一个子命令。产品组装根在启动 CLI 时注册。
+ * `request` 走进程内宿主，和桌面版同一套路由。
+ */
+export interface CliCommandIO {
+  write(text: string): void;
+  writeError(text: string): void;
+  request(method: string, path: string, body?: unknown): Promise<{ status: number; data: unknown }>;
+}
+
+export interface CliCommandSpec {
+  readonly name: string;
+  readonly summary: string;
+  readonly run: (args: readonly string[], io: CliCommandIO) => number | Promise<number>;
 }
 
 /** 打包覆盖：产品组装期消费，不进运行时。 */
@@ -258,9 +275,10 @@ export interface ScenarioPack {
   readonly id: ScenarioId;
   readonly brand: BrandSpec;
   readonly main?: MainContribution;
-  readonly preload?: PreloadContribution;
   readonly renderer?: RendererContribution;
   readonly packaging?: PackagingSpec;
+  /** 命令行子命令。产品组装根注册后，由 agent-cli 在内置命令之后分发。 */
+  readonly cliCommands?: () => readonly CliCommandSpec[];
 }
 
 // ─── local-backend 包路由（/api/v2/<包前缀>/*）契约 ───

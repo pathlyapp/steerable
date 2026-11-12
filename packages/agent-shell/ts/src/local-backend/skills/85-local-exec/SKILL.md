@@ -19,6 +19,7 @@ match: any
 | 写入 / 修改文件 | `local_write_file`（`path` + `content`） |
 | 打开文件 / URL | `local_open_path` |
 | 调用已注册脚本 | `local_list_scripts` → `local_run_script` |
+| 声明本轮交付给用户的最终文件 | `present_files`（`files: [{ path, description? }]`，最多 4 个） |
 
 ## 规则
 
@@ -26,10 +27,12 @@ match: any
 - 命令可能改文件、装包、删数据时（destructive 类操作），**先**简单告诉用户你要执行什么，**再**发 tool_call；不要中间停手等用户确认（用户已经请求了）。
 - `local_exec_shell` 返回包含 `stdout` / `stderr` / `exitCode`。非 0 退出码视为失败：把 stderr 摘要给用户，并建议下一步。
 - 路径不存在 / 权限不足时，把 fs 错误原文告诉用户，**不要**反复重试同一个路径。
+- **交付文件要声明**：用户要的产出（表格、幻灯片、文档、报告、图片、导出包）写好后，在最终回复前调用 `present_files`。每份独立交付文件都写 `purpose: "output"`；需要记录预览或中间文件时分别写 `purpose: "preview"` / `"intermediate"`，它们不会生成交付卡片。脚本、命令生成的文件也一样。最终回复用行内代码写出每份独立交付文件的完整路径。辅助脚本、临时文件、只为自查渲染效果导出的预览图和中间导出副本不要标为 output。
 
 
 - **超时 ≠ 失败，严禁原样重跑启动命令**：返回里出现 `timedOut: true` 时，只是 shell 等待被掐断——如果命令是启动 GUI / 长时间运行的程序（如 Qt 界面软件），该程序**很可能仍在运行**，用户可能正在里面操作。此时**不要**再次执行同一条启动命令（会把程序重复启动多次）。正确做法：先确认进程是否在运行（如 `Get-Process`）；确实需要长时间等待时传更大的 `timeout` 参数；启动 GUI 程序时优先用不阻塞的方式（PowerShell `Start-Process "app.exe"`），启动成功即视为完成，不要等它退出。
 - **GUI 启动命令的特殊约定**：命令行里带独立的 `gui` 字样（如 `xxx.exe gui replay ...`、`--gui`）会被识别为"启动 GUI 程序"。这类命令等待一小段时间后若程序仍在运行，会返回 `success: true` + `stillRunning: true`（程序不会被终止）——这**就是成功**，表示界面已拉起、等用户操作。看到 `stillRunning: true` 后直接向用户汇报"程序已启动，请在界面中操作"，**绝对不要**再次执行同一条命令。
+- **交互命令续同一会话**：需要读提示再输入（安装向导、REPL、`ssh` 口令之外的交互程序）时，给 `local_exec_shell` 传 `yieldMs`（毫秒）。进程还在跑时返回 `stillRunning: true` 和 `sessionId`，**不要**把这次返回当成超时失败，也**不要**再开一条新命令重跑。下一步用 `write_stdin`：`sessionId` 原样带回，`chars` 是要写入的输入（含回车），`yieldMs` 等新输出。只想看新输出时 `chars` 传空字符串。`write_stdin` 只返回上次之后的新输出。会话不存在时停止重试。不传 `yieldMs` 的命令仍等到退出或超时，超时行为不变。
 
 ## 真实执行纪律
 

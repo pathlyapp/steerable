@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LuLoaderCircle, LuSearch } from 'react-icons/lu';
-import { isElectron } from '@/lib/electron-bridge';
+import { t } from '@/i18n';
+import { hasHostBridge } from '@/lib/host-bridge';
 import {
   listChatAgentSkills,
   listChatAgentTools,
@@ -43,16 +44,16 @@ const TOOL_POLICY_MODES: Array<{
   label: string;
   hint: string;
 }> = [
-  { mode: 'all', label: '全部工具', hint: '不限制，可调用所有已接线的工具。' },
+  { mode: 'all', label: 'All tools', hint: 'No restriction. The agent can call every wired tool.' },
   {
     mode: 'allowlist',
-    label: '仅允许勾选',
-    hint: '只有勾选的工具进入工具列表，其余连名字都看不到。',
+    label: 'Only checked',
+    hint: 'Only checked tools enter the tool list. The agent cannot even see the names of the rest.',
   },
   {
     mode: 'denylist',
-    label: '禁用勾选',
-    hint: '勾选的工具被拒绝，其余照常可用。',
+    label: 'Block checked',
+    hint: 'Checked tools are refused. The rest stay available.',
   },
 ];
 
@@ -153,7 +154,7 @@ export function AgentCapabilityFields({
   const [toolFilter, setToolFilter] = useState('');
 
   const fetchCatalogs = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     try {
       const [skillRes, toolRes] = await Promise.all([
@@ -203,24 +204,26 @@ export function AgentCapabilityFields({
     <div className="space-y-3 rounded-agent-md border border-agent-border/50 bg-agent-canvas/60 p-3">
       <section className="space-y-1.5">
         <div className="flex items-center justify-between gap-2">
-          <h5 className="text-[11px] font-semibold text-agent-foreground">技能</h5>
+          <h5 className="text-[11px] font-semibold text-agent-foreground">{t('Skills')}</h5>
           {value.skillIds.length > 0 && (
             <span className="text-[10px] text-agent-muted-foreground">
-              已选 {value.skillIds.length}
+              {t('{count} selected', { count: value.skillIds.length })}
             </span>
           )}
         </div>
         <p className="text-[10px] text-agent-muted-foreground">
-          勾选的技能正文会常驻该智能体的系统提示词，不必等触发条件命中。
+          {t(
+            "Checked skills stay in this agent's system prompt without waiting for their triggers to match.",
+          )}
         </p>
         {loading ? (
           <div className="flex items-center gap-2 py-3 text-[11px] text-agent-muted-foreground">
             <LuLoaderCircle className="h-3 w-3 animate-spin" />
-            获取技能目录...
+            {t('Loading skill catalog...')}
           </div>
         ) : skills.length === 0 ? (
           <p className="py-2 text-[11px] text-agent-muted-foreground">
-            暂无可勾选的技能，可在「Skill 设置」里导入。
+            {t('No skills to check yet. Import them in "Skill settings".')}
           </p>
         ) : (
           <>
@@ -231,7 +234,7 @@ export function AgentCapabilityFields({
                   type="text"
                   value={skillFilter}
                   onChange={(event) => setSkillFilter(event.target.value)}
-                  placeholder="筛选技能"
+                  placeholder={t('Filter skills')}
                   className="h-7 w-full rounded-agent-md border border-agent-border bg-agent-canvas pl-7 pr-2 text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                   data-testid="agent-form-skill-filter"
                 />
@@ -247,7 +250,7 @@ export function AgentCapabilityFields({
                   }
                   testId={`agent-form-skill-${skill.id}`}
                   title={skill.displayName || skill.name}
-                  badge={skill.layer === 'eager' ? '常驻' : '按需'}
+                  badge={skill.layer === 'eager' ? t('Always on') : t('On demand')}
                   description={skill.description}
                 />
               ))}
@@ -261,21 +264,21 @@ export function AgentCapabilityFields({
               onChange({ ...value, allowExternalSkills: !value.allowExternalSkills })
             }
             testId="agent-form-allow-external-skills"
-            label="允许使用未勾选的技能"
-            hint="关掉后这个智能体只能用上面勾选的技能，其余一律加载不到。"
+            label={t('Allow unchecked skills')}
+            hint={t('When off, this agent can only use the skills checked above. No other skill can load.')}
           />
           <SwitchRow
             checked={value.loadAllSkills}
             onChange={() => onChange({ ...value, loadAllSkills: !value.loadAllSkills })}
             testId="agent-form-load-all-skills"
-            label="无视触发条件，加载全部技能"
-            hint="内置「智能助手」就是这个模式。会显著增加每轮提示词长度。"
+            label={t('Ignore triggers and load all skills')}
+            hint={t('The built-in "Assistant" uses this mode. It makes every turn\'s prompt much longer.')}
           />
         </div>
       </section>
 
       <section className="space-y-1.5 border-t border-agent-border/40 pt-3">
-        <h5 className="text-[11px] font-semibold text-agent-foreground">工具权限</h5>
+        <h5 className="text-[11px] font-semibold text-agent-foreground">{t('Tool permissions')}</h5>
         <div className="flex flex-wrap gap-1" data-testid="agent-form-tool-modes">
           {TOOL_POLICY_MODES.map((item) => (
             <button
@@ -290,12 +293,12 @@ export function AgentCapabilityFields({
                   : 'bg-agent-muted text-agent-muted-foreground hover:text-agent-foreground'
               }`}
             >
-              {item.label}
+              {t(item.label)}
             </button>
           ))}
         </div>
         {activeMode && (
-          <p className="text-[10px] text-agent-muted-foreground">{activeMode.hint}</p>
+          <p className="text-[10px] text-agent-muted-foreground">{t(activeMode.hint)}</p>
         )}
         {policy.mode !== 'all' && (
           <>
@@ -304,7 +307,7 @@ export function AgentCapabilityFields({
                 className="text-[10px] text-agent-destructive"
                 data-testid="agent-form-tool-policy-empty"
               >
-                一个工具都没勾选——保存后按「全部工具」处理。
+                {t('No tool is checked. Saving treats this as "All tools".')}
               </p>
             )}
             <div className="relative">
@@ -313,7 +316,7 @@ export function AgentCapabilityFields({
                 type="text"
                 value={toolFilter}
                 onChange={(event) => setToolFilter(event.target.value)}
-                placeholder="筛选工具"
+                placeholder={t('Filter tools')}
                 className="h-7 w-full rounded-agent-md border border-agent-border bg-agent-canvas pl-7 pr-2 text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                 data-testid="agent-form-tool-filter"
               />

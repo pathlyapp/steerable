@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const request = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
-  getElectronBridge: () => ({
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => ({
     localBackend: { request },
   }),
 }));
@@ -27,7 +27,7 @@ describe('WebSearchSettingsPanel', () => {
 
     fireEvent.click(screen.getByTestId('web-search-provider-ddg'));
     expect(screen.queryByText('Tavily API Key')).toBeNull();
-    expect(screen.getByText(/DuckDuckGo 公开搜索页/)).toBeTruthy();
+    expect(screen.getByText(/public DuckDuckGo search page/)).toBeTruthy();
   });
 
   it('POSTs provider=ddg and shows the restart copy', async () => {
@@ -38,7 +38,7 @@ describe('WebSearchSettingsPanel', () => {
     render(<WebSearchSettingsPanel />);
     await screen.findByTestId('web-search-provider-ddg');
     fireEvent.click(screen.getByTestId('web-search-provider-ddg'));
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
       expect(request).toHaveBeenCalledWith(
@@ -49,7 +49,7 @@ describe('WebSearchSettingsPanel', () => {
         }),
       );
     });
-    expect(await screen.findByText(/重启应用后 sidecar 会注册免费搜索/)).toBeTruthy();
+    expect(await screen.findByText(/the sidecar registers free search/)).toBeTruthy();
   });
 
   it('keeps 免费 selected when the save echo omits provider', async () => {
@@ -58,9 +58,9 @@ describe('WebSearchSettingsPanel', () => {
     render(<WebSearchSettingsPanel />);
     await screen.findByTestId('web-search-provider-ddg');
     fireEvent.click(screen.getByTestId('web-search-provider-ddg'));
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByText(/重启应用后 sidecar 会注册免费搜索/)).toBeTruthy();
+    expect(await screen.findByText(/the sidecar registers free search/)).toBeTruthy();
     expect(screen.queryByText('Tavily API Key')).toBeNull();
     expect(screen.getByTestId('web-search-provider-ddg').className).toContain('border-agent-foreground/40');
   });
@@ -71,9 +71,9 @@ describe('WebSearchSettingsPanel', () => {
       .mockResolvedValueOnce({ provider: 'tavily', apiKey: 'tvly-k' });
 
     render(<WebSearchSettingsPanel />);
-    const keyInput = await screen.findByPlaceholderText('tvly-...（留空 = 不注册 Tavily）');
+    const keyInput = await screen.findByPlaceholderText('tvly-... (leave blank = do not register Tavily)');
     fireEvent.change(keyInput, { target: { value: ' tvly-k ' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
       expect(request).toHaveBeenCalledWith(
@@ -84,7 +84,7 @@ describe('WebSearchSettingsPanel', () => {
         }),
       );
     });
-    expect(await screen.findByText(/重启应用后 sidecar 会注册 web_search/)).toBeTruthy();
+    expect(await screen.findByText(/the sidecar registers web_search/)).toBeTruthy();
     expect(screen.getByText('Tavily API Key')).toBeTruthy();
   });
 });

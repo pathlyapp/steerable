@@ -11,8 +11,9 @@ vi.mock('@/lib/host-tools', () => ({
   settingsChrome: (id: string) => !hidden.has(id),
 }));
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => null,
 }));
 
 vi.mock('@/components/settings/LlmSettingsPanel', () => ({

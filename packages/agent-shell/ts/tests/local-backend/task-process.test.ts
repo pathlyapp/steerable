@@ -95,4 +95,45 @@ describe('timelineFromHistoryEntries', () => {
       actions: [{ id: 'a', tool: 'local_exec_shell', success: false, error: 'tool_timeout' }],
     });
   });
+
+  it('lifts a cached session allow from the stored tool result', () => {
+    const blocks = timelineFromHistoryEntries([
+      {
+        kind: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [],
+          tool_calls: [{ id: 'c1', name: 'browser_click', arguments: { ref: 'e1' } }],
+        },
+      },
+      {
+        kind: 'tool',
+        message: {
+          role: 'tool',
+          name: 'browser_click',
+          tool_call_id: 'c1',
+          content: JSON.stringify({
+            success: true,
+            data: {
+              clicked: true,
+              _sandbox: { enforcement: 'none' },
+              _approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+            },
+          }),
+        },
+      },
+    ]);
+    expect(blocks[0]).toMatchObject({
+      type: 'tools',
+      actions: [
+        {
+          id: 'c1',
+          tool: 'browser_click',
+          success: true,
+          sandbox: { enforcement: 'none' },
+          approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+        },
+      ],
+    });
+  });
 });

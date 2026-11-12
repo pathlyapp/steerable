@@ -58,11 +58,80 @@ describe('createTauriBridge', () => {
     });
   });
 
+  it('reads the release snapshot and listens for updater events', async () => {
+    const snapshot = {
+      version: '0.2.2',
+      enabled: true,
+      phase: 'idle' as const,
+    };
+    mocks.invoke.mockResolvedValue(snapshot);
+    const bridge = createTauriBridge();
+    await expect(bridge.app!.snapshot()).resolves.toEqual(snapshot);
+    expect(mocks.invoke).toHaveBeenCalledWith('app_release_snapshot');
+
+    const onState = vi.fn();
+    const off = bridge.app!.onState(onState);
+    expect(mocks.listen).toHaveBeenCalledWith('app-update-state', expect.any(Function));
+    off();
+  });
+
   it('forwards native menu events with the existing channel names', () => {
     const bridge = createTauriBridge();
-    const callback = vi.fn();
-    bridge.onMenuNewChat!(callback);
+    const newChat = vi.fn();
+    const paste = vi.fn();
+    bridge.onMenuNewChat!(newChat);
+    bridge.onMenuPaste!(paste);
 
     expect(mocks.listen).toHaveBeenCalledWith('menu:new-chat', expect.any(Function));
+    expect(mocks.listen).toHaveBeenCalledWith('menu:paste', expect.any(Function));
+    const pasteListener = mocks.listen.mock.calls.find(([event]) => event === 'menu:paste')?.[1];
+    pasteListener?.({
+      payload: {
+        text: '粘贴文本',
+        files: [],
+      },
+    });
+    expect(paste).toHaveBeenCalledWith({ text: '粘贴文本', files: [] });
+  });
+
+  it('gets and sets the desktop zoom', async () => {
+    mocks.invoke.mockResolvedValue(1.5);
+    const bridge = createTauriBridge();
+    await expect(bridge.getZoom!()).resolves.toBe(1.5);
+    expect(mocks.invoke).toHaveBeenCalledWith('ui_get_zoom');
+    await bridge.setZoom!(1.2);
+    expect(mocks.invoke).toHaveBeenCalledWith('ui_set_zoom', { scale: 1.2 });
+    const seen: number[] = [];
+    bridge.onZoomChanged!(({ scale }) => seen.push(scale));
+    expect(mocks.listen).toHaveBeenCalledWith('ui:zoom-changed', expect.any(Function));
+    const listener = mocks.listen.mock.calls.find(([event]) => event === 'ui:zoom-changed')?.[1];
+    listener?.({ payload: { scale: 1.2 } });
+    expect(seen).toEqual([1.2]);
+  });
+
+  it('sends the page locale so the view menu can change language', () => {
+    const bridge = createTauriBridge();
+    bridge.setLocale!('en');
+    expect(mocks.invoke).toHaveBeenCalledWith('ui_set_locale', { locale: 'en' });
+  });
+
+  it('reads plain text from the host clipboard', async () => {
+    mocks.invoke.mockResolvedValue('粘贴文本');
+    const bridge = createTauriBridge();
+    await expect(bridge.readClipboardText!()).resolves.toBe('粘贴文本');
+    expect(mocks.invoke).toHaveBeenCalledWith('host_read_clipboard_text');
+  });
+
+  it('reads copied files from the host clipboard', async () => {
+    mocks.invoke.mockResolvedValue({
+      text: '',
+      files: [{ name: '纪要.docx', path: '/tmp/纪要.docx' }],
+    });
+    const bridge = createTauriBridge();
+    await expect(bridge.readClipboard!()).resolves.toEqual({
+      text: '',
+      files: [{ name: '纪要.docx', path: '/tmp/纪要.docx' }],
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith('host_read_clipboard');
   });
 });

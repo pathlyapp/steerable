@@ -11,7 +11,9 @@ while the spec and the other entrypoints said 16, and nothing failed.
 
 Precedence, highest first: the caller's explicit override, the spec's `loop:`
 field, then the baseline below. The baseline answers only a field a custom
-spec omits — the bundled default pins all three.
+spec omits. The bundled default leaves `max_rounds` and `max_tool_errors`
+unset, so the baseline — no cap — is what a chat turn runs with. A caller
+that wants a wall passes `maxRounds` / `maxToolErrors` or `--max-rounds`.
 """
 
 from __future__ import annotations
@@ -19,11 +21,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-#: Entrypoint baseline for a field the spec leaves unset. Equal by value to
-#: the bundled `default.harness.yaml`, so an omission cannot quietly change
-#: behavior (`test_baseline_matches_the_bundled_spec` pins the equality).
-BASELINE_MAX_ROUNDS = 80
-BASELINE_MAX_TOOL_ERRORS = 16
+#: Rust CoreLoop stores both caps as `u32` and stops when the counter is
+#: `>=` the cap (`engine.rs`). `u32::MAX` does not trip on a real turn, so
+#: it is the no-cap value. `0` is a real cap (stop immediately) and must
+#: not be reused to mean "unset".
+UNLIMITED_LOOP_LIMIT = 2**32 - 1
+
+#: Entrypoint baseline for a field the spec leaves unset. The bundled
+#: default omits both caps, so these are the values a chat turn runs with
+#: (`test_baseline_matches_the_bundled_spec` pins that).
+BASELINE_MAX_ROUNDS = UNLIMITED_LOOP_LIMIT
+BASELINE_MAX_TOOL_ERRORS = UNLIMITED_LOOP_LIMIT
 BASELINE_TOOL_DEDUP = False
 
 

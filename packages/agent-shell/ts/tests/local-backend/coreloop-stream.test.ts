@@ -63,6 +63,25 @@ describe('streamCoreLoopTurn', () => {
     expect(sent[1].reasoningEffort).toBeUndefined();
   });
 
+  it('carries the product direct-connection switch to the wire, and omits it when off', async () => {
+    const { supervisor, sent } = makeSupervisor([
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+
+    await streamCoreLoopTurn({
+      ...BASE_OPTIONS,
+      supervisor,
+      directConnection: true,
+      onText: () => {},
+    });
+    expect(sent[0].directConnection).toBe(true);
+
+    // An undeclared product's request must stay byte-identical to before the
+    // switch existed, so the key is absent rather than `false`.
+    await streamCoreLoopTurn({ ...BASE_OPTIONS, supervisor, onText: () => {} });
+    expect(sent[1]).not.toHaveProperty('directConnection');
+  });
+
   it('sends useCoreLoop + toolsViaHost with fc-shaped tools', async () => {
     const { supervisor, sent } = makeSupervisor([
       { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
@@ -84,6 +103,40 @@ describe('streamCoreLoopTurn', () => {
           description: 'read',
           parameters: { type: 'object' },
         },
+      },
+    ]);
+  });
+
+  it('forwards declared mode and approvalCategory beside the function schema', async () => {
+    const { supervisor, sent } = makeSupervisor([
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+
+    await streamCoreLoopTurn({
+      ...BASE_OPTIONS,
+      supervisor,
+      onText: () => {},
+      tools: [
+        {
+          name: 'browser_scroll',
+          description: 'scroll',
+          inputSchema: { type: 'object' },
+          mode: 'read',
+          approvalCategory: 'browser',
+        },
+      ],
+    });
+
+    expect(sent[0].tools).toEqual([
+      {
+        type: 'function',
+        function: {
+          name: 'browser_scroll',
+          description: 'scroll',
+          parameters: { type: 'object' },
+        },
+        mode: 'read',
+        approvalCategory: 'browser',
       },
     ]);
   });
@@ -223,6 +276,33 @@ describe('streamCoreLoopTurn', () => {
     expect(sent[0].worldState).toBeUndefined();
   });
 
+  it('forwards pinned skill context separately from hard excludes', async () => {
+    const { supervisor, sent } = makeSupervisor([
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+
+    await streamCoreLoopTurn({
+      ...BASE_OPTIONS,
+      supervisor,
+      onText: () => {},
+      skills: {
+        roots: ['/skills'],
+        conditions: ['has-tools'],
+        exclude: ['plan-mode'],
+        pinned: ['ppt-master'],
+        ignoreConditions: false,
+      },
+    });
+
+    expect(sent[0].skills).toEqual({
+      roots: ['/skills'],
+      conditions: ['has-tools'],
+      exclude: ['plan-mode'],
+      pinned: ['ppt-master'],
+      ignoreConditions: false,
+    });
+  });
+
   it('W6-10: forwards the full notice payload so hosts can detect a framework compaction', async () => {
     const { supervisor } = makeSupervisor([
       {
@@ -340,7 +420,130 @@ describe('streamCoreLoopTurn', () => {
       error: undefined,
       durationMs: 5,
       sandbox: undefined,
+      approval: undefined,
     });
+  });
+
+  it('forwards a cached session allow onto the tool action', async () => {
+    const approval = { kind: 'allow_for_session', category: 'browser', cached: true };
+    const { supervisor } = makeSupervisor([
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolCall: { id: 'c1', name: 'browser_click', arguments: { ref: 'e1' } },
+        },
+      },
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolResult: {
+            id: 'c1',
+            name: 'browser_click',
+            success: true,
+            resultPreview: 'clicked',
+            approval,
+          },
+        },
+      },
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+    const onToolAction = vi.fn();
+
+    await streamCoreLoopTurn({ ...BASE_OPTIONS, supervisor, onText: () => {}, onToolAction });
+
+    expect(onToolAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'c1',
+        tool: 'browser_click',
+        approval,
+      }),
+    );
+  });
+
+  it('lifts a cached session allow left inside the result preview', async () => {
+    const preview = JSON.stringify({
+      success: true,
+      data: {
+        clicked: true,
+        _sandbox: { enforcement: 'workspace' },
+        _approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+      },
+    });
+    const { supervisor } = makeSupervisor([
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolCall: { id: 'c1', name: 'browser_click', arguments: { ref: 'e1' } },
+        },
+      },
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolResult: {
+            id: 'c1',
+            name: 'browser_click',
+            success: true,
+            resultPreview: preview,
+          },
+        },
+      },
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+    const onToolAction = vi.fn();
+
+    await streamCoreLoopTurn({ ...BASE_OPTIONS, supervisor, onText: () => {}, onToolAction });
+
+    expect(onToolAction).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'c1',
+      sandbox: { enforcement: 'workspace' },
+      approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+    }));
+  });
+
+  it('lifts a session allow from a preview cut at 300 characters', async () => {
+    const full = JSON.stringify({
+      success: true,
+      data: {
+        _sandbox: { enforcement: 'workspace' },
+        _approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+        blob: 'x'.repeat(500),
+      },
+    });
+    const { supervisor } = makeSupervisor([
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolCall: { id: 'c1', name: 'browser_click', arguments: { ref: 'e1' } },
+        },
+      },
+      {
+        method: 'chunk',
+        payload: {
+          streamId: 'stream-1',
+          toolResult: {
+            id: 'c1',
+            name: 'browser_click',
+            success: true,
+            resultPreview: `${full.slice(0, 300)}…`,
+          },
+        },
+      },
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+    const onToolAction = vi.fn();
+
+    await streamCoreLoopTurn({ ...BASE_OPTIONS, supervisor, onText: () => {}, onToolAction });
+
+    expect(onToolAction).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'c1',
+      sandbox: { enforcement: 'workspace' },
+      approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+    }));
   });
 
   it('forwards reasoning deltas and tool-start before the result', async () => {

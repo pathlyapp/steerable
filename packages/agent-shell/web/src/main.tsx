@@ -2,12 +2,15 @@ import { StrictMode, lazy, Suspense, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createHashRouter, RouterProvider } from 'react-router-dom';
 import { AppShell } from './AppShell';
+import { I18nProvider, configureI18n, getLocale, notifyHostLocale } from './i18n';
 import { AgentLayout } from './layouts/AgentLayout';
 import { AgentPage } from './pages/AgentPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { SetupPage } from './pages/SetupPage';
 import { getPackRoutes } from './packs/registry';
-import { getBrandLogoUrl, BRAND_NAME } from './brand';
+import { BRAND_FIRST_RUN, getBrandMarkUrl, BRAND_NAME } from './brand';
 import { getAppShellGate } from './auth/gate';
+import { installHostPaste } from './lib/host-paste';
 import './styles/index.css';
 
 // 浏览器 dev mock 的安装在 bootstrap() 开头（动态 import + DEV 门）。
@@ -50,7 +53,9 @@ function renderApplication(root: Root): void {
         {
           element: <AgentLayout />,
           children: [
-            { index: true, element: <AgentPage /> },
+            // The framework's own shell has no credential yet, so its first
+            // screen configures one. A product brand keeps its own first run.
+            { index: true, element: BRAND_FIRST_RUN ? <SetupPage /> : <AgentPage /> },
             { path: 'agent', element: <AgentPage /> },
             { path: 'agent/:chatId', element: <AgentPage /> },
             { path: 'settings', element: <SettingsPage /> },
@@ -81,7 +86,9 @@ function renderApplication(root: Root): void {
 
   root.render(
     <StrictMode>
-      <RouterProvider router={router} />
+      <I18nProvider>
+        <RouterProvider router={router} />
+      </I18nProvider>
     </StrictMode>,
   );
 }
@@ -90,14 +97,25 @@ export async function bootstrap(): Promise<void> {
   if (import.meta.env.DEV) {
     // 动态 import：prod 构建里 Rollup 把 DEV 分支连同 mock（含其 fixtures）
     // 整体树摇掉，浏览器 dev mock 数据不进产物。
-    const { installBrowserDevElectronMock } = await import('./lib/browser-dev-electron-mock');
-    installBrowserDevElectronMock();
+    const { installBrowserDevHostMock } = await import('./lib/browser-dev-host-mock');
+    installBrowserDevHostMock();
   }
 
   // 标题与 favicon 在 bootstrap 时设置——此刻产品入口已完成包注册
   // （品牌 logo 由包经 setBrandLogoUrl 注入，见 brand.ts）。
+  configureI18n({
+    locales: parseLocales(import.meta.env.VITE_LOCALES),
+    defaultLocale: import.meta.env.VITE_DEFAULT_LOCALE || 'en',
+  });
+  document.documentElement.lang = getLocale() === 'zh' ? 'zh-CN' : getLocale();
+  notifyHostLocale(getLocale());
   document.title = BRAND_NAME;
-  document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.setAttribute('href', getBrandLogoUrl());
+  const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  if (icon) {
+    icon.type = 'image/png';
+    icon.href = getBrandMarkUrl();
+  }
+  installHostPaste();
 
   const rootEl = document.getElementById('root');
   if (!rootEl) {
@@ -115,11 +133,25 @@ export async function bootstrap(): Promise<void> {
     const Gate = gate.Component;
     root.render(
       <StrictMode>
-        <Gate onAuthenticated={onAuthenticated} />
+        <I18nProvider>
+          <Gate onAuthenticated={onAuthenticated} />
+        </I18nProvider>
       </StrictMode>,
     );
     return;
   }
 
   renderApplication(root);
+}
+
+function parseLocales(raw: string | undefined): string[] {
+  if (!raw) return ['en'];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return ['en'];
+    const locales = parsed.filter((item): item is string => typeof item === 'string' && item.length > 0);
+    return locales.length > 0 ? locales : ['en'];
+  } catch {
+    return ['en'];
+  }
 }

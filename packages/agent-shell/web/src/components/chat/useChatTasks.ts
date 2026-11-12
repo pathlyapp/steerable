@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listChatTasks, type LocalTask } from '@/lib/local-api';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 
 export interface ChatTaskSummary {
   total: number;
@@ -68,7 +68,7 @@ export function useChatTasks(chatId: string | null): ChatTasksState {
   const seenRef = useRef<Map<string, LocalTask['status']> | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!chatId || !isElectron()) {
+    if (!chatId || !hasHostBridge()) {
       setTasks(NO_TASKS);
       return;
     }
@@ -105,7 +105,7 @@ export function useChatTasks(chatId: string | null): ChatTasksState {
 
   useEffect(() => {
     if (!chatId) return;
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     if (!bridge?.onTaskUpdated) return;
     return bridge.onTaskUpdated((payload) => {
       if (payload.chatId === chatId) void refresh();

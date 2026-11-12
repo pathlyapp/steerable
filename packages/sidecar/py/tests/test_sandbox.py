@@ -8,11 +8,14 @@ sandbox-exec smoke tests on macOS (skipped elsewhere).
 
 from __future__ import annotations
 
+import os
+import shutil
 import socket
 import subprocess
 import sys
 import threading
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from steerable_sidecar.landlock import landlock_available
@@ -119,6 +122,87 @@ def test_profile_actually_confines_a_child_process() -> None:
         check=False,
     )
     assert denied.returncode != 0
+
+
+@pytest.mark.skipif(not seatbelt_available(), reason="macOS sandbox-exec only")
+def test_project_writable_root_still_denies_bashrc_and_hosts(tmp_path: Path) -> None:
+    """allow-all only answers approval. A project writable root does not open these files."""
+    targets = [Path.home() / ".bashrc", Path("/etc/hosts")]
+    snapshots: dict[Path, bytes | None] = {
+        target: target.read_bytes() if target.exists() else None for target in targets
+    }
+    profile = build_seatbelt_profile(writable_roots=[str(tmp_path)], network=False)
+    assert str(Path.home() / ".bashrc") not in profile
+    assert "/etc/hosts" not in profile
+    script = (
+        "import pathlib,sys\n"
+        "targets=[pathlib.Path.home()/'.bashrc', pathlib.Path('/etc/hosts')]\n"
+        "failed=0\n"
+        "for target in targets:\n"
+        "    try:\n"
+        "        target.open('a').write('\\n# phase1-should-not-land\\n')\n"
+        "    except OSError:\n"
+        "        failed += 1\n"
+        "sys.exit(0 if failed == len(targets) else 2)\n"
+    )
+    try:
+        denied = subprocess.run(
+            seatbelt_argv(profile, [sys.executable, "-c", script]),
+            capture_output=True,
+            check=False,
+        )
+        assert denied.returncode == 0, denied.stderr.decode()
+        for target, snapshot in snapshots.items():
+            if snapshot is None:
+                assert not target.exists()
+            else:
+                assert target.read_bytes() == snapshot
+    finally:
+        for target, snapshot in snapshots.items():
+            if snapshot is None:
+                if target.exists():
+                    target.unlink()
+                continue
+            if target.exists() and target.read_bytes() != snapshot:
+                target.write_bytes(snapshot)
+
+
+@pytest.mark.skipif(not seatbelt_available(), reason="macOS sandbox-exec only")
+def test_outside_cwd_cannot_create_a_file(tmp_path: Path) -> None:
+    """A shell whose cwd is outside the project still runs, and the write fails."""
+    outside = Path.home() / f".phase1-cwd-deny-{os.getpid()}"
+    outside.mkdir()
+    planted = outside / "planted.txt"
+    planted.write_text("keep\n", encoding="utf-8")
+    created = outside / "new.txt"
+    inside = tmp_path / "ok.txt"
+    profile = build_seatbelt_profile(writable_roots=[str(tmp_path)], network=False)
+    try:
+        denied = subprocess.run(
+            seatbelt_argv(
+                profile,
+                [sys.executable, "-c", "open('new.txt','w').write('no\\n')"],
+            ),
+            cwd=outside,
+            capture_output=True,
+            check=False,
+        )
+        assert denied.returncode != 0, denied.stderr.decode()
+        assert not created.exists()
+        assert planted.read_text(encoding="utf-8") == "keep\n"
+        allowed = subprocess.run(
+            seatbelt_argv(
+                profile,
+                [sys.executable, "-c", "open('ok.txt','w').write('yes\\n')"],
+            ),
+            cwd=tmp_path,
+            capture_output=True,
+            check=False,
+        )
+        assert allowed.returncode == 0, allowed.stderr.decode()
+        assert inside.read_text(encoding="utf-8") == "yes\n"
+    finally:
+        shutil.rmtree(outside, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +578,54 @@ class TestBwrapExecBackend:
         # Scratch is a private tmpfs, not the host's /tmp.
         tmpfs_at = args.index("--tmpfs")
         assert args[tmpfs_at + 1] == "/tmp"
+
+    def test_appimage_extract_under_tmp_is_rebound(self) -> None:
+        extract = Path("/tmp") / f"appimage_extracted_steerable_test_{os.getpid()}"
+        extract.mkdir()
+        try:
+            binary = str(extract / "usr/lib/Aroli/engine/steerable-sidecar")
+            args = BwrapExecBackend(executable="/usr/bin/bwrap").argv_for_exec([binary])
+        finally:
+            extract.rmdir()
+        sep = args.index("--")
+        assert args[sep - 5 : sep] == [
+            "--dir",
+            str(extract),
+            "--ro-bind",
+            str(extract),
+            str(extract),
+        ]
+        assert args[sep + 1] == binary
+
+    def test_writable_root_under_tmp_is_bound_after_readonly_rebind(self) -> None:
+        root = Path("/tmp") / f"steerable_writable_{os.getpid()}"
+        root.mkdir()
+        try:
+            db = str(root / "sessions.db")
+            args = BwrapExecBackend(
+                writable_roots=[str(root)],
+                executable="/usr/bin/bwrap",
+                network=True,
+            ).argv_for_exec(["python", "--storage-path", db])
+        finally:
+            root.rmdir()
+        sep = args.index("--")
+        head = args[:sep]
+        # macOS /tmp is a symlink; the writable root is the resolved path,
+        # while the argv rebind uses the /tmp path the command named.
+        normalized = str(root.resolve())
+        top = f"/tmp/{root.name}"
+        ro_at = next(
+            index
+            for index, flag in enumerate(head)
+            if flag == "--ro-bind" and head[index + 1] == top
+        )
+        bind_at = max(
+            index
+            for index, flag in enumerate(head)
+            if flag == "--bind" and head[index + 1] == normalized
+        )
+        assert bind_at > ro_at
 
     def test_writable_root_must_exist(self, tmp_path) -> None:
         with pytest.raises(ValueError, match="does not exist"):

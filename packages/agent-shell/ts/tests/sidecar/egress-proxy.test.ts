@@ -9,6 +9,7 @@ import {
   decideEgressProxy,
   deriveWebEgressHosts,
   egressAllowEntry,
+  seatbeltProfileCoversBaseUrl,
   egressBinaryCacheDir,
   ensureEgressProxyExecutable,
   resolveEgressProxyExecutable,
@@ -257,6 +258,35 @@ describe('decideEgressProxy', () => {
         reason: '检测到系统/环境代理（127.0.0.1:7890, 127.0.0.1:7891），按主机管控已退回端口级',
       },
     });
+  });
+});
+
+describe('seatbeltProfileCoversBaseUrl', () => {
+  it('requires an explicit localhost port for Ollama', () => {
+    expect(
+      seatbeltProfileCoversBaseUrl(
+        'http://127.0.0.1:11434',
+        ['api.deepseek.com', '127.0.0.1:7890', '127.0.0.1:7891'],
+        true,
+      ),
+    ).toBe(false);
+    expect(
+      seatbeltProfileCoversBaseUrl(
+        'http://127.0.0.1:11434/v1',
+        ['api.deepseek.com', '127.0.0.1:11434'],
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  it('treats web egress as covering remote http(s) ports only', () => {
+    expect(
+      seatbeltProfileCoversBaseUrl('https://api.openai.com/v1', ['api.deepseek.com'], true),
+    ).toBe(true);
+    expect(
+      seatbeltProfileCoversBaseUrl('http://192.168.1.8:8000/v1', ['api.deepseek.com'], true),
+    ).toBe(false);
+    expect(seatbeltProfileCoversBaseUrl('http://127.0.0.1:11434', undefined, false)).toBe(true);
   });
 });
 

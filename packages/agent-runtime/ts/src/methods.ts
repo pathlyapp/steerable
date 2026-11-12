@@ -32,6 +32,7 @@ export const SIDECAR_METHODS = [
   'skills.list',
   'trace.fetch',
   'trace.export',
+  'metrics.export',
   'config.get',
   'config.set',
   'compat.describe',
@@ -45,6 +46,7 @@ export const SIDECAR_METHODS = [
   'plugin.enable',
   'plugin.disable',
   'plugin.reload',
+  'plugin.tools.describe',
 ] as const;
 
 export type SidecarMethod = (typeof SIDECAR_METHODS)[number];

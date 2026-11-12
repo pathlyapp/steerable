@@ -9,7 +9,8 @@
  *   - BS/browser：File 没有路径，这里把字节读成 base64 走 HTTP 端点落盘。
  * 返回的落盘路径会重写消息正文里的文件引用与图像附件元数据。
  */
-import { getElectronBridge } from './electron-bridge';
+import { t } from '@/i18n';
+import { getHostBridge } from './host-bridge';
 
 export interface AttachmentFile {
   name: string;
@@ -17,6 +18,14 @@ export interface AttachmentFile {
   path: string;
   /** 原始 File 对象，用于浏览器模式在提交时读取字节。 */
   file?: File;
+}
+
+/** 宿主拖放 / 粘贴只给出绝对路径时，用最后一段作为展示名。 */
+export function attachmentFromPath(path: string): AttachmentFile {
+  const trimmed = path.trim();
+  const parts = trimmed.split(/[/\\]/).filter((part) => part.length > 0);
+  const name = parts[parts.length - 1] ?? trimmed;
+  return { name, path: trimmed };
 }
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
@@ -74,7 +83,7 @@ export async function saveChatAttachments(
   files: AttachmentFile[],
 ): Promise<SaveChatAttachmentsResult> {
   if (!chatId || files.length === 0) return { files, failures: [] };
-  const bridge = getElectronBridge();
+  const bridge = getHostBridge();
   if (!bridge?.attachments?.save) return { files, failures: [] };
   try {
     // 有真实路径走 path 拷贝（Electron）；没有则读字节走 data 上传（BS/browser）。
@@ -101,7 +110,7 @@ export async function saveChatAttachments(
         kept.push(file);
         return;
       }
-      failures.push({ name: file.name, error: entry?.error || '上传失败', file });
+      failures.push({ name: file.name, error: entry?.error || t('Upload failed'), file });
     });
     return { files: kept, failures };
   } catch (err) {
@@ -115,13 +124,21 @@ export async function saveChatAttachments(
   }
 }
 
-/** 把失败项拼成一条给用户看的中文提示（供各提交入口复用）。 */
+/** 把失败项拼成一条给用户看的提示（供各提交入口复用）。 */
 export function formatAttachmentFailures(failures: AttachmentSaveFailure[]): string {
   if (failures.length === 0) return '';
-  const detail = failures.map((f) => `${f.name}（${f.error}）`).join('；');
+  const detail = failures
+    .map((f) => t('{name} ({error})', { name: f.name, error: f.error }))
+    .join(t('; '));
   return failures.length === 1
-    ? `文件「${failures[0].name}」未能上传，本条消息未包含它：${failures[0].error}`
-    : `${failures.length} 个文件未能上传，本条消息未包含它们：${detail}`;
+    ? t('File "{name}" failed to upload and is not included in this message: {error}', {
+        name: failures[0].name,
+        error: failures[0].error,
+      })
+    : t('{count} files failed to upload and are not included in this message: {detail}', {
+        count: failures.length,
+        detail,
+      });
 }
 
 /**
@@ -134,8 +151,8 @@ export function appendAttachmentRefs(rawText: string, files: AttachmentFile[]): 
   if (files.length === 0) return rawText;
   const refs = files.map((f) => `- \`${f.path}\``).join('\n');
   return rawText
-    ? `${rawText}\n\n---\n关联文件:\n${refs}`
-    : `关联文件:\n${refs}`;
+    ? `${rawText}\n\n---\n${t('Related files:')}\n${refs}`
+    : `${t('Related files:')}\n${refs}`;
 }
 
 /**

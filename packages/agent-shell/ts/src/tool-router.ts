@@ -3,17 +3,23 @@ import path from 'node:path';
 import {
   LocalExecutor,
   buildProjectRootViolation,
+  canonicalFencePath,
+  expandFencePath,
+  resolveFencePath,
   isPathWithinRoot,
+  writableFenceRoots,
+  writableFenceViolation,
   type LocalExecRequest,
   type LocalExecResult,
 } from './local-executor.js';
+import { writeShellStdin } from './shell-session.js';
 import { LocalScriptRegistry } from './local-script-registry.js';
 import { mcpExecutor, type McpServerConfig } from './mcp-executor.js';
 import type { McpServerRegistry } from './mcp-server-registry.js';
 import type { ProjectRegistry } from './project-registry.js';
 import type { TaskService } from './local-backend/task-service.js';
 import type { WorktreeService } from './local-backend/worktree-service.js';
-import type { ToolContribution, ToolMode, ToolExposure } from './scenario/pack.js';
+import type { ToolApprovalSpec, ToolContribution, ToolMode, ToolExposure } from './scenario/pack.js';
 
 export type { ToolMode, ToolExposure } from './scenario/pack.js';
 import {
@@ -28,8 +34,16 @@ import {
   type AgentToolPolicy,
 } from './local-backend/agent-capability.js';
 import { processViewImage } from './image-attachment.js';
+import {
+  PRESENT_FILES_SCHEMA,
+  PRESENT_FILES_TOOL_NAME,
+  executePresentFiles,
+} from './present-files.js';
 import { isHostToolCapabilityEnabled } from './host-tools.js';
 import { getResolvedHostTools } from './host-tools-runtime.js';
+import { GoalStore, MODEL_GOAL_ACTIONS } from './goal-store.js';
+import type { LoopPtyMonitor } from './local-backend/loop-pty-monitor.js';
+import { searchGlob, searchGrep } from './workspace-search.js';
 
 /** 已注册 MCP 服务的动态工具名前缀：`mcp__<serverKey>__<toolName>`。 */
 export const MCP_DYNAMIC_TOOL_PREFIX = 'mcp__';
@@ -55,17 +69,25 @@ export interface ToolCall {
  * 单次工具执行的调用上下文（按 chat 解析，随每次 execute 传入）。
  *
  * `projectRoot` 是项目模式的硬沙箱根：非空时
- *   - local_read_file / local_write_file 的路径必须落在根内（LocalExecutor 围栏）
- *   - local_exec_shell 的 cwd 默认改为项目根；显式给的 cwd 越界则直接拒绝
+ *   - 读路径必须落在根内，或落在 additionalReadRoots 内（含各自子目录）
+ *   - 写路径必须落在根内，或落在 additionalWriteRoots 内（含各自子目录）
+ *   - local_exec_shell 的 cwd 默认改为项目根；显式 cwd 可以落在可写根外，
+ *     命令仍启动。命令沙箱开着时，写入由 exec 沙箱拒绝；沙箱关掉时这次写入不会被沙箱拦住。
+ *     pwsh 与 local_run_snippet 的 cwd 仍必须落在可写根内
  * 无项目对话（null/缺省）行为与之前完全一致。
  */
 export interface ToolExecContext {
   projectRoot?: string | null;
   /**
-   * 项目模式之外额外放行的只读根（会话附件目录等）。只放宽
-   * local_read_file 的读取范围，写入/编辑仍只受 projectRoot 围栏约束。
+   * 额外只读根（会话附件目录、源文件夹）。只放宽 local_read_file。
+   * 每个根包含其全部子目录。
    */
   additionalReadRoots?: string[] | null;
+  /**
+   * 额外可写根（项目源文件夹）。放宽写入、编辑和命令 cwd。
+   * 每个根包含其全部子目录。附件目录不在这里。
+   */
+  additionalWriteRoots?: string[] | null;
   /**
    * 4.6a：调用发生的 chat。task_run / task_status / task_result 需要它把
    * 任务绑定到来源对话（任务表按 chatId 归组）；reverse-tools 从
@@ -88,6 +110,34 @@ export interface ToolSchema {
   mode: ToolMode;
   /** 曝光层；缺省 `direct`。MCP 动态工具默认 `deferred`。 */
   exposure?: ToolExposure;
+  /** 审批分组。缺省时 sidecar 用工具名做类别。 */
+  approval?: ToolApprovalSpec;
+}
+
+/** 审批类别：小写开头，最长 64，且不占用内置类别。 */
+export const APPROVAL_CATEGORY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+
+export const RESERVED_APPROVAL_CATEGORIES: ReadonlySet<string> = new Set([
+  'network_egress',
+  'sandbox_escalation',
+]);
+
+/**
+ * 装配期校验包工具的审批类别。非法或与内置类别同名时抛错，宿主不装上该包。
+ */
+export function assertToolApproval(contribution: Pick<ToolContribution, 'name' | 'approval'>): void {
+  const approval = contribution.approval;
+  if (approval == null) return;
+  const category = approval.category;
+  if (
+    typeof category !== 'string'
+    || !APPROVAL_CATEGORY_PATTERN.test(category)
+    || RESERVED_APPROVAL_CATEGORIES.has(category)
+  ) {
+    throw new Error(
+      `[tool-router] tool ${contribution.name} has invalid approval category '${String(category)}'`,
+    );
+  }
 }
 
 type ShellExecutor = (request: LocalExecRequest) => Promise<LocalExecResult>;
@@ -113,9 +163,35 @@ export const WEB_TOOL_RPC_TIMEOUT_MS = 130_000;
  * 不同，这些是普通 RPC 而非 tool.invoke（不经过模型工具分发层）。
  */
 export type PluginRpcDelegate = (
-  method: 'plugin.list' | 'plugin.enable' | 'plugin.disable' | 'plugin.reload',
+  method:
+    | 'plugin.list'
+    | 'plugin.enable'
+    | 'plugin.disable'
+    | 'plugin.reload'
+    | 'plugin.tools.describe',
   params?: Record<string, unknown>,
 ) => Promise<unknown>;
+
+/**
+ * 插件自带工具的执行缝：唯一实现在 sidecar 的插件路由上，宿主只持
+ * `plugin.tools.describe` 给出的 schema，调用经 `tool.invoke` 前转（与 web
+ * 工具同一模式）。审批已在 sidecar CoreLoop 的 ApprovalExecutor 完成。
+ */
+export type PluginToolDelegate = (
+  name: string,
+  args: Record<string, unknown>,
+) => Promise<unknown>;
+
+/** sidecar `plugin.tools.describe` 的单条描述（见 docs/spec/plugin-host.md）。 */
+interface PluginToolDescriptor {
+  name: string;
+  description?: string;
+  schema?: Record<string, unknown>;
+  mode?: string;
+  plugin?: string | null;
+}
+
+const PLUGIN_TOOL_MODES: ReadonlySet<string> = new Set(['read', 'safe_write', 'destructive']);
 
 /**
  * 本机是否提供网络读取工具（`STEERABLE_WEB_TOOLS=0` 关闭）。
@@ -156,6 +232,7 @@ export class ToolRouter {
       if (existing.has(contribution.name)) {
         throw new Error(`[tool-router] duplicate tool name from contribution: ${contribution.name}`);
       }
+      assertToolApproval(contribution);
       this.contributedTools.set(contribution.name, contribution);
       existing.add(contribution.name);
     }
@@ -184,10 +261,37 @@ export class ToolRouter {
    */
   private taskService: TaskService | null = null;
   private worktreeService: WorktreeService | null = null;
+  private loopMonitor: Pick<LoopPtyMonitor, 'start' | 'list' | 'stop'> | null = null;
 
   setTaskServices(services: { taskService: TaskService; worktreeService: WorktreeService } | null): void {
     this.taskService = services?.taskService ?? null;
     this.worktreeService = services?.worktreeService ?? null;
+  }
+
+  setLoopMonitor(monitor: Pick<LoopPtyMonitor, 'start' | 'list' | 'stop'> | null): void {
+    this.loopMonitor = monitor;
+  }
+
+  listMonitoredLoops(chatId: string) {
+    return this.loopMonitor?.list(chatId) ?? [];
+  }
+
+  stopMonitoredLoop(chatId: string, loopId: string): boolean {
+    if (!this.loopMonitor?.list(chatId).some((loop) => loop.id === loopId)) return false;
+    return this.loopMonitor.stop(loopId);
+  }
+
+  /** 会话目标的持久化。缺省写到用户数据目录；测试注入临时文件。 */
+  private goalStore: GoalStore | null = null;
+
+  setGoalStore(store: GoalStore | null): void {
+    this.goalStore = store;
+  }
+
+  /** 目标工具使用的存储；LocalBackendRouter 的续跑与目标路由共用同一实例。 */
+  goals(): GoalStore {
+    if (!this.goalStore) this.goalStore = GoalStore.default();
+    return this.goalStore;
   }
 
   setWebTools(delegate: WebToolDelegate | null, names: readonly string[] = []): void {
@@ -206,15 +310,72 @@ export class ToolRouter {
    * plugin_* 工具一个 schema 都不出——模型看不到不可用的工具。
    */
   private pluginRpc: PluginRpcDelegate | null = null;
-  setPluginRpc(delegate: PluginRpcDelegate | null): void {
+  private pluginToolInvoke: PluginToolDelegate | null = null;
+  /** 已启用插件的工具（名字 → schema），由 refreshPluginTools 从 sidecar 同步。 */
+  private pluginToolSchemas = new Map<string, ToolSchema>();
+
+  setPluginRpc(
+    delegate: PluginRpcDelegate | null,
+    invokeTool: PluginToolDelegate | null = null,
+  ): void {
     this.pluginRpc = delegate;
+    this.pluginToolInvoke = delegate ? invokeTool : null;
+    if (!delegate) this.pluginToolSchemas = new Map();
+  }
+
+  private pluginToolsEnabled(): boolean {
+    return getResolvedHostTools().plugins.capability;
+  }
+
+  /**
+   * 从 sidecar 拉取已启用插件的工具描述，替换宿主侧的插件工具集。
+   * 启动握手后和每次 plugin_enable / plugin_disable / plugin_reload 成功后
+   * 调用，保证模型看到的集合与 sidecar 路由上可分发的集合一致。
+   * 与内置 / 场景包工具重名的插件工具被跳过并告警——内置工具优先。
+   */
+  async refreshPluginTools(): Promise<void> {
+    if (!this.pluginRpc || !this.pluginToolInvoke) {
+      this.pluginToolSchemas = new Map();
+      return;
+    }
+    const result = (await this.pluginRpc('plugin.tools.describe')) as {
+      tools?: PluginToolDescriptor[];
+    } | null;
+    this.pluginToolSchemas = new Map();
+    const taken = new Set(this.listSchemas().map((s) => s.name));
+    const next = new Map<string, ToolSchema>();
+    for (const tool of result?.tools ?? []) {
+      if (!tool || typeof tool.name !== 'string' || !tool.name) continue;
+      if (taken.has(tool.name)) {
+        console.warn(
+          `[tool-router] plugin tool ${tool.name} (${tool.plugin ?? 'unknown plugin'}) shadows a host tool; skipped`,
+        );
+        continue;
+      }
+      const owner = tool.plugin ? `[plugin:${tool.plugin}] ` : '';
+      next.set(tool.name, {
+        name: tool.name,
+        description: `${owner}${tool.description || tool.name}`,
+        inputSchema:
+          tool.schema && typeof tool.schema === 'object'
+            ? tool.schema
+            : { type: 'object', properties: {} },
+        mode: (tool.mode && PLUGIN_TOOL_MODES.has(tool.mode) ? tool.mode : 'external') as ToolMode,
+        exposure: 'deferred',
+      });
+    }
+    this.pluginToolSchemas = next;
   }
 
   listSchemas(): ToolSchema[] {
     return [
       {
         name: 'local_exec_shell',
-        description: 'Execute a local shell command',
+        description:
+          'Execute a shell command in a pseudo-terminal. Set pty to false for a plain pipe. ' +
+          'Set yieldMs to return while the command is still running; the result includes sessionId. ' +
+          'Continue that same session with write_stdin (write input, or pass empty chars to poll new output). ' +
+          'When this host is configured with a remote endpoint, the command runs on that host instead of this machine.',
         mode: 'destructive',
         inputSchema: {
           type: 'object',
@@ -222,8 +383,34 @@ export class ToolRouter {
             command: { type: 'string' },
             cwd: { type: 'string' },
             timeout: { type: 'number', description: 'Timeout in milliseconds (e.g. 30000). If a small number like 15 or 30 is provided, it is assumed to be in seconds and automatically multiplied by 1000.' },
+            pty: { type: 'boolean', description: 'Run in a pseudo-terminal. Defaults to true.' },
+            yieldMs: {
+              type: 'number',
+              description:
+                'Return after this many milliseconds if the command is still running, and include sessionId for write_stdin. Omit to wait until exit or timeout.',
+            },
           },
           required: ['command'],
+        },
+      },
+      {
+        name: 'write_stdin',
+        description:
+          'Write more input to a running local_exec_shell session, or poll its new output. ' +
+          'Pass the sessionId from that command. chars is sent to the terminal; omit it or pass an empty string to only collect output that arrived since the last call. ' +
+          'Does not start a new command and does not ask for approval again.',
+        mode: 'local',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            sessionId: { type: 'string', description: 'sessionId returned by local_exec_shell.' },
+            chars: { type: 'string', description: 'Input to write. Empty string polls new output only.' },
+            yieldMs: {
+              type: 'number',
+              description: 'How long to wait for new output, in milliseconds. Defaults to 1000.',
+            },
+          },
+          required: ['sessionId'],
         },
       },
       {
@@ -346,6 +533,7 @@ export class ToolRouter {
           required: ['path', 'edits'],
         },
       },
+      PRESENT_FILES_SCHEMA,
       {
         name: 'local_open_path',
         description: 'Open local path or URL',
@@ -429,32 +617,37 @@ export class ToolRouter {
       },
       {
         name: 'mcp_list_tools',
-        description: 'List tools from one MCP server',
+        description:
+          'List tools from one MCP server. Pass command for stdio or url for unauthenticated Streamable HTTP.',
         mode: 'external',
         inputSchema: {
           type: 'object',
           properties: {
             command: { type: 'string' },
+            url: { type: 'string' },
             args: { type: 'array', items: { type: 'string' } },
             cwd: { type: 'string' },
           },
-          required: ['command'],
+          additionalProperties: false,
         },
       },
       {
         name: 'mcp_tool_exec',
-        description: 'Execute one MCP tool',
+        description:
+          'Execute one MCP tool. Pass command for stdio or url for unauthenticated Streamable HTTP.',
         mode: 'external',
         inputSchema: {
           type: 'object',
           properties: {
             command: { type: 'string' },
+            url: { type: 'string' },
             args: { type: 'array', items: { type: 'string' } },
             cwd: { type: 'string' },
             toolName: { type: 'string' },
             toolArgs: { type: 'object' },
           },
-          required: ['command', 'toolName'],
+          required: ['toolName'],
+          additionalProperties: false,
         },
       },
       // deferred 层的发现缝（Wave 2 工具分层）：MCP 动态工具不占每轮
@@ -481,12 +674,17 @@ export class ToolRouter {
           additionalProperties: false,
         },
       },
+      ...this.listParityToolSchemas(),
+      ...this.listLoopToolSchemas(),
       // ─── 4.6a/4.6b 跨 turn 后台任务 + git worktree 隔离 ─────────────
       // 服务未接线（CLI/test）时一个 schema 都不出——模型看不到不可用的工具。
       ...this.listTaskAndWorktreeSchemas(),
       ...this.listWebToolSchemas(),
       ...this.listRegisteredMcpToolSchemas(),
       ...this.listPluginToolSchemas(),
+      // 插件自带的工具：与 MCP 动态工具同在 deferred 层，经 tool_search 发现。
+      // 名字不带族前缀，按名归族会漏过 plugins 能力开关，这里显式判定。
+      ...(this.pluginToolsEnabled() ? this.pluginToolSchemas.values() : []),
       // ─── 场景包贡献的工具（0.3a 开槽） ─────────────────
       ...[...this.contributedTools.values()].map((c) => ({
         name: c.name,
@@ -494,6 +692,7 @@ export class ToolRouter {
         inputSchema: c.inputSchema,
         mode: c.mode,
         ...(c.exposure ? { exposure: c.exposure } : {}),
+        ...(c.approval ? { approval: c.approval } : {}),
       })),
     ];
   }
@@ -546,6 +745,113 @@ export class ToolRouter {
         mode: 'destructive',
         exposure: 'deferred',
         inputSchema: nameParam,
+      },
+    ];
+  }
+
+  /**
+   * 内容搜索、PowerShell、会话目标。后台任务的 job_* 跟 task 服务一起出场。
+   */
+  private listParityToolSchemas(): ToolSchema[] {
+    return [
+      {
+        name: 'grep',
+        description:
+          'Search file contents under the project (or an optional subdirectory). '
+          + 'pattern is a JavaScript regular expression. Optional glob limits which relative paths are scanned. '
+          + 'Skips dependency and VCS directories. Returns {path, line, text} hits. Prefer this over shell rg/grep.',
+        mode: 'read',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'JavaScript regular expression matched per line.' },
+            path: { type: 'string', description: 'Directory to search. Defaults to the project root.' },
+            glob: { type: 'string', description: 'Optional fnmatch, e.g. "*.ts" or "src/**/*.py".' },
+          },
+          required: ['pattern'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'glob',
+        description:
+          'List project files whose relative path matches a glob. A pattern without "/" matches any directory. '
+          + 'Prefer this over shell find or ls.',
+        mode: 'read',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'Glob, e.g. "*.ts" or "src/**/*.py".' },
+            path: { type: 'string', description: 'Directory to search. Defaults to the project root.' },
+          },
+          required: ['pattern'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'pwsh',
+        description:
+          'Run a PowerShell command. On Windows this is powershell.exe; elsewhere it runs pwsh '
+          + '(PowerShell 7) and fails clearly when that binary is not installed. '
+          + 'Use local_exec_shell for the platform default shell.',
+        mode: 'destructive',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            command: { type: 'string' },
+            cwd: { type: 'string' },
+            timeout: {
+              type: 'number',
+              description: 'Timeout in milliseconds. A small number like 30 is treated as seconds.',
+            },
+          },
+          required: ['command'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'get_goal',
+        description:
+          'Read this chat\'s persisted goal, including the id and revision that update_goal requires. '
+          + 'goal is null when none exists.',
+        mode: 'read',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      },
+      {
+        name: 'create_goal',
+        description:
+          'Create a persisted goal for this chat. Only when the user explicitly asks to track a goal; never infer one from an ordinary task. '
+          + 'While the goal is active the host keeps starting follow-up turns until you mark it complete or blocked. '
+          + 'Fails if an unfinished goal already exists.',
+        mode: 'safe_write',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            objective: { type: 'string', description: 'What done looks like, as a result rather than an activity.' },
+          },
+          required: ['objective'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'update_goal',
+        description:
+          'Change the current goal\'s status. Pass the id and revision from get_goal; a stale revision is rejected, re-read and retry. '
+          + 'complete: only after checking every requirement of the objective against current evidence (files, command output, test results) and no required work remains. '
+          + 'blocked (needs reason): only after the same blocker has recurred for at least three consecutive goal turns and no safe next action exists; never because the work is hard or slow. '
+          + 'pause: only when the user explicitly asks. Resuming and editing the objective are user-only.',
+        mode: 'safe_write',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            revision: { type: 'integer' },
+            action: { type: 'string', enum: [...MODEL_GOAL_ACTIONS] },
+            reason: { type: 'string', description: 'Required for action=blocked.' },
+          },
+          required: ['id', 'revision', 'action'],
+          additionalProperties: false,
+        },
       },
     ];
   }
@@ -670,6 +976,49 @@ export class ToolRouter {
         },
       },
       {
+        name: 'job_list',
+        description:
+          'List this chat\'s background jobs (the same records task_run creates). '
+          + 'Each row includes job_id (the taskId), status, and the task text.',
+        mode: 'read',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'job_output',
+        description:
+          'Read the final answer of a background job. job_id is the taskId from task_run or job_list. '
+          + 'Fails with needsFollowup while the job is still running.',
+        mode: 'read',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            job_id: { type: 'string', description: 'taskId of the background job.' },
+          },
+          required: ['job_id'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'job_kill',
+        description:
+          'Stop a running or blocked background job. A finished job cannot be killed. '
+          + 'job_id is the taskId from task_run or job_list.',
+        mode: 'destructive',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            job_id: { type: 'string', description: 'taskId of the background job.' },
+            reason: { type: 'string', description: 'Optional note stored on the job.' },
+          },
+          required: ['job_id'],
+          additionalProperties: false,
+        },
+      },
+      {
         name: 'worktree_remove',
         description:
           'Remove a managed worktree and delete its branch — the DISCARD path, any unmerged changes are lost. '
@@ -681,6 +1030,53 @@ export class ToolRouter {
             name: { type: 'string', description: 'Worktree name or path.' },
           },
           required: ['name'],
+          additionalProperties: false,
+        },
+      },
+    ];
+  }
+
+  private listLoopToolSchemas(): ToolSchema[] {
+    if (!this.loopMonitor) return [];
+    return [
+      {
+        name: 'loop_create',
+        description:
+          'Start recurring local work for this chat after running it once in the current turn. '
+          + 'Each interval wakes this chat until the loop is stopped or the host exits.',
+        mode: 'safe_write',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            prompt: {
+              type: 'string',
+              description:
+                'Self-contained work to run on every wake. Include the terminal condition for finite monitoring; '
+                + 'omit a terminal condition for open-ended recurring work.',
+            },
+            intervalSeconds: {
+              type: 'integer',
+              description: 'Positive fixed interval in seconds.',
+            },
+          },
+          required: ['prompt', 'intervalSeconds'],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: 'loop_list',
+        description: 'List recurring local loops owned by this chat.',
+        mode: 'read',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      },
+      {
+        name: 'loop_stop',
+        description: 'Stop one recurring local loop owned by this chat.',
+        mode: 'safe_write',
+        inputSchema: {
+          type: 'object',
+          properties: { id: { type: 'string' } },
+          required: ['id'],
           additionalProperties: false,
         },
       },
@@ -821,9 +1217,19 @@ export class ToolRouter {
             command: String(args.command || ''),
             cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
             timeout: typeof args.timeout === 'number' ? args.timeout : undefined,
+            pty: args.pty !== false,
+            yieldMs: typeof args.yieldMs === 'number' ? args.yieldMs : undefined,
           },
           projectRoot,
+          context?.additionalWriteRoots ?? null,
+          { allowOutside: true },
         );
+      case 'write_stdin':
+        return await writeShellStdin({
+          sessionId: typeof args.sessionId === 'string' ? args.sessionId : '',
+          chars: typeof args.chars === 'string' ? args.chars : '',
+          yieldMs: typeof args.yieldMs === 'number' ? args.yieldMs : 1000,
+        });
       case 'local_read_file':
         return await this.localExecutor.readLocalFile(
           {
@@ -874,6 +1280,7 @@ export class ToolRouter {
               typeof args.expectedVersion === 'string' ? args.expectedVersion : undefined,
           },
           projectRoot,
+          context?.additionalWriteRoots ?? null,
         );
         this.autoInstallSkillOnSuccess(written, args.path);
         return written;
@@ -895,19 +1302,23 @@ export class ToolRouter {
               typeof args.expectedVersion === 'string' ? args.expectedVersion : undefined,
           },
           projectRoot,
+          context?.additionalWriteRoots ?? null,
         );
         this.autoInstallSkillOnSuccess(edited, args.path);
         return edited;
       }
+      case PRESENT_FILES_TOOL_NAME:
+        return await executePresentFiles(args, projectRoot);
       case 'local_open_path':
         return await this.localExecutor.openLocalTarget({
           target: String(args.target || ''),
         });
       case 'local_run_snippet': {
-        // 与 local_exec_shell 同款项目沙箱：cwd 默认项目根，显式越界拒绝。
+        // cwd 默认项目根。代码片段不走 exec 沙箱，显式越界 cwd 直接拒绝。
         const sandboxed = this.applyProjectCwdSandbox(
           { cwd: typeof args.cwd === 'string' ? args.cwd : undefined },
           projectRoot,
+          context?.additionalWriteRoots ?? null,
         );
         if ('error' in sandboxed) return sandboxed.error;
         return await this.localExecutor.runCode({
@@ -960,8 +1371,61 @@ export class ToolRouter {
           | 'plugin.disable'
           | 'plugin.reload';
         const params = call.name === 'plugin_list' ? undefined : { name: String(args.name || '') };
-        return await this.pluginRpc(method, params);
+        const result = await this.pluginRpc(method, params);
+        if (call.name !== 'plugin_list') await this.refreshPluginTools();
+        return result;
       }
+
+      case 'grep':
+      case 'glob': {
+        const requested = typeof args.path === 'string' ? args.path.trim() : '';
+        const start = requested
+          ? this.resolveReadablePath(requested, projectRoot, context?.additionalReadRoots ?? null)
+          : { path: projectRoot ? expandFencePath(projectRoot) : process.cwd() };
+        if ('error' in start) {
+          return { success: false, error: start.error, needsFollowup: true };
+        }
+        if (call.name === 'grep') {
+          return searchGrep({
+            root: start.path,
+            pattern: String(args.pattern || ''),
+            glob: typeof args.glob === 'string' ? args.glob : undefined,
+          });
+        }
+        return searchGlob({ root: start.path, pattern: String(args.pattern || '') });
+      }
+      case 'pwsh': {
+        const script = String(args.command || '');
+        if (!script.trim()) {
+          return { success: false, error: 'command is required', needsFollowup: true };
+        }
+        const command =
+          process.platform === 'win32'
+            ? script
+            : `pwsh -NoProfile -NonInteractive -Command ${JSON.stringify(script)}`;
+        return await this.executeShell(
+          {
+            command,
+            cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
+            timeout: typeof args.timeout === 'number' ? args.timeout : undefined,
+            shell: process.platform === 'win32' ? 'powershell' : undefined,
+          },
+          projectRoot,
+          context?.additionalWriteRoots ?? null,
+        );
+      }
+      case 'get_goal':
+      case 'create_goal':
+      case 'update_goal':
+        return this.executeGoalTool(call.name, args, context);
+      case 'loop_create':
+      case 'loop_list':
+      case 'loop_stop':
+        return this.executeLoopTool(call.name, args, context);
+      case 'job_list':
+      case 'job_output':
+      case 'job_kill':
+        return this.executeJobTool(call.name, args, context);
 
       case 'task_run': {
         const chatId = this.requireTaskContext(context);
@@ -1030,6 +1494,12 @@ export class ToolRouter {
         if (contributed) {
           return await contributed.handler(args, context ?? {});
         }
+        if (this.pluginToolSchemas.has(call.name) && this.pluginToolInvoke) {
+          if (!this.pluginToolsEnabled()) {
+            throw new Error(`工具 ${call.name} 未在本产品引入`);
+          }
+          return await this.pluginToolInvoke(call.name, args);
+        }
         return { success: false, error: `Unknown tool: ${call.name}` };
       }
     }
@@ -1040,6 +1510,88 @@ export class ToolRouter {
    * 项目围栏按 chat 解析）。schema 出场 ⇒ 服务已接线，这里只缺 chatId 时
    * 抛错（reverse-tools 总是透传；缺了就是接线 bug，响亮失败）。
    */
+  private async executeGoalTool(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecContext,
+  ): Promise<unknown> {
+    const chatId = context?.chatId;
+    if (!chatId) {
+      return { success: false, error: '目标工具需要 chatId 调用上下文', needsFollowup: true };
+    }
+    const store = this.goals();
+    if (name === 'get_goal') return store.get(chatId);
+    if (name === 'create_goal') return store.create(chatId, String(args.objective || ''));
+    return store.update({
+      chatId,
+      id: String(args.id || ''),
+      revision: typeof args.revision === 'number' ? args.revision : Number.NaN,
+      action: String(args.action || ''),
+      actor: 'model',
+      reason: typeof args.reason === 'string' ? args.reason : undefined,
+    });
+  }
+
+  private executeLoopTool(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecContext,
+  ): unknown {
+    const chatId = this.requireChatContext(context, 'loop tools');
+    if (!this.loopMonitor) {
+      return { success: false, error: 'loop monitor unavailable', needsFollowup: true };
+    }
+    if (name === 'loop_list') {
+      return { success: true, loops: this.loopMonitor.list(chatId) };
+    }
+    if (name === 'loop_stop') {
+      const id = String(args.id || '');
+      const owned = this.loopMonitor.list(chatId).some((loop) => loop.id === id);
+      if (!owned) return { success: false, error: 'loop not found', needsFollowup: true };
+      return { success: this.loopMonitor.stop(id) };
+    }
+    try {
+      const loop = this.loopMonitor.start({
+        chatId,
+        prompt: String(args.prompt || ''),
+        intervalSeconds:
+          typeof args.intervalSeconds === 'number' ? args.intervalSeconds : Number.NaN,
+        cwd: context?.projectRoot ?? undefined,
+      });
+      return { success: true, loop };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        needsFollowup: true,
+      };
+    }
+  }
+
+  private async executeJobTool(
+    name: string,
+    args: Record<string, unknown>,
+    context?: ToolExecContext,
+  ): Promise<unknown> {
+    const chatId = this.requireTaskContext(context);
+    const jobId = String(args.job_id || '');
+    if (name === 'job_list') {
+      const listed = await this.taskService!.status(chatId);
+      const tasks = Array.isArray(listed.tasks) ? listed.tasks : [];
+      return {
+        ...listed,
+        jobs: tasks.map((task) => {
+          const row = task as { taskId?: string };
+          return { ...row, job_id: row.taskId };
+        }),
+      };
+    }
+    if (!jobId) return { success: false, error: 'job_id 不能为空', needsFollowup: true };
+    if (name === 'job_output') return this.taskService!.result(chatId, jobId);
+    const reason = typeof args.reason === 'string' && args.reason.trim() ? args.reason.trim() : undefined;
+    return this.taskService!.kill(chatId, jobId, reason);
+  }
+
   private requireTaskContext(context?: ToolExecContext): string {
     if (!this.taskService || !this.worktreeService) {
       throw new Error('任务/worktree 服务未接线（main.ts setTaskServices）');
@@ -1048,6 +1600,12 @@ export class ToolRouter {
     if (!chatId) {
       throw new Error('任务/worktree 工具需要 chatId 调用上下文');
     }
+    return chatId;
+  }
+
+  private requireChatContext(context: ToolExecContext | undefined, owner: string): string {
+    const chatId = context?.chatId;
+    if (!chatId) throw new Error(`${owner} 需要 chatId 调用上下文`);
     return chatId;
   }
 
@@ -1068,49 +1626,61 @@ export class ToolRouter {
   }
 
   /**
-   * 项目模式硬沙箱（cwd 维度）：projectRoot 非空时，cwd 默认收到项目根；
-   * 模型显式给的 cwd 越界则返回错误结果。相对 cwd 按项目根解析（而不是
-   * 进程 cwd），符合"在项目里干活"的直觉。
+   * 项目模式的 cwd 解析：有可写根时，缺省 cwd 收到项目家目录。
+   * 相对 cwd 按家目录解析（而不是进程 cwd）。`~` 与命令围栏同一规则。
    *
-   * 注意边界：shell 命令文本里内嵌的绝对路径无法可靠解析，围栏只覆盖
-   * cwd 与文件读写工具——系统提示里已告知模型只在项目目录内操作。
+   * `allowOutside` 为真时，落在可写根外的 cwd 仍原样交给执行器。只有
+   * `local_exec_shell` 走这条路。命令沙箱开着时，审批卡说明写入该目录会被拒绝；
+   * 沙箱关掉时卡片不说这句话，这次写入也不会被沙箱拦住。
+   * `pwsh` 与代码片段不走这条路，越界 cwd 继续返回路径越界。
    *
-   * local_exec_shell 与 local_run_snippet 共用本 helper。
+   * 命令文本里内嵌的绝对路径无法可靠解析。文件读写工具另有路径围栏，
+   * 不随命令沙箱开关放行。命令沙箱开着时，shell 的实际写盘还受 exec 沙箱的
+   * writableRoots 约束，那些根含其子目录。
    */
   private applyProjectCwdSandbox<T extends { cwd?: string }>(
     request: T,
     projectRoot?: string | null,
+    additionalWriteRoots?: string[] | null,
+    options?: { allowOutside?: boolean },
   ): { request: T } | { error: LocalExecResult } {
-    if (!projectRoot) return { request };
-    const root = path.resolve(
-      projectRoot.startsWith('~') ? path.join(os.homedir(), projectRoot.slice(1)) : projectRoot,
-    );
+    const roots = writableFenceRoots(projectRoot, additionalWriteRoots);
+    if (roots.length === 0) return { request };
+    const home = projectRoot ? expandFencePath(projectRoot) : roots[0];
     if (request.cwd) {
       const expanded = request.cwd.startsWith('~')
         ? path.join(os.homedir(), request.cwd.slice(1))
         : request.cwd;
-      const resolvedCwd = path.isAbsolute(expanded)
+      const resolvedCwd = canonicalFencePath(path.isAbsolute(expanded)
         ? path.resolve(expanded)
-        : path.resolve(root, expanded);
-      if (!isPathWithinRoot(resolvedCwd, root)) {
+        : path.resolve(home, expanded));
+      const violation = writableFenceViolation(resolvedCwd, roots);
+      if (violation && !options?.allowOutside) {
         return {
           error: {
             success: false,
-            error: buildProjectRootViolation(resolvedCwd, root),
+            error: violation,
             platform: process.platform,
           },
         };
       }
       return { request: { ...request, cwd: resolvedCwd } };
     }
-    return { request: { ...request, cwd: root } };
+    return { request: { ...request, cwd: home } };
   }
 
   private async executeShell(
     request: LocalExecRequest,
     projectRoot?: string | null,
+    additionalWriteRoots?: string[] | null,
+    options?: { allowOutside?: boolean },
   ): Promise<LocalExecResult> {
-    const sandboxed = this.applyProjectCwdSandbox(request, projectRoot);
+    const sandboxed = this.applyProjectCwdSandbox(
+      request,
+      projectRoot,
+      additionalWriteRoots,
+      options,
+    );
     if ('error' in sandboxed) return sandboxed.error;
     if (this.shellExecutor) {
       return this.shellExecutor(sandboxed.request);
@@ -1124,22 +1694,11 @@ export class ToolRouter {
     additionalReadRoots?: string[] | null,
   ): { path: string } | { error: string } {
     if (!inputPath.trim()) return { error: 'path 不能为空' };
-    const expanded = inputPath.startsWith('~')
-      ? path.join(os.homedir(), inputPath.slice(1))
-      : inputPath;
-    const resolved = path.resolve(expanded);
+    const resolved = resolveFencePath(inputPath, projectRoot);
     if (!projectRoot) return { path: resolved };
-    const root = path.resolve(
-      projectRoot.startsWith('~')
-        ? path.join(os.homedir(), projectRoot.slice(1))
-        : projectRoot,
-    );
-    const inAdditionalRoot = (additionalReadRoots ?? []).some((candidate) => {
-      const expandedCandidate = candidate.startsWith('~')
-        ? path.join(os.homedir(), candidate.slice(1))
-        : candidate;
-      return isPathWithinRoot(resolved, path.resolve(expandedCandidate));
-    });
+    const root = expandFencePath(projectRoot);
+    const inAdditionalRoot = (additionalReadRoots ?? []).some((candidate) =>
+      isPathWithinRoot(resolved, expandFencePath(candidate)));
     if (!isPathWithinRoot(resolved, root) && !inAdditionalRoot) {
       return { error: buildProjectRootViolation(resolved, root) };
     }
@@ -1147,8 +1706,14 @@ export class ToolRouter {
   }
 
   private resolveMcpConfig(args: Record<string, unknown>): McpServerConfig {
+    const command = typeof args.command === 'string' ? args.command.trim() : '';
+    const url = typeof args.url === 'string' ? args.url.trim() : '';
+    if (command && url) throw new Error('MCP 调用只能提供 command 或 url 之一');
+    if (url) return { transport: 'streamable-http', url };
+    if (!command) throw new Error('MCP 调用需要 command（stdio）或 url（Streamable HTTP）');
     return {
-      command: String(args.command || ''),
+      transport: 'stdio',
+      command,
       args: Array.isArray(args.args) ? args.args.map(item => String(item)) : undefined,
       cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
     };

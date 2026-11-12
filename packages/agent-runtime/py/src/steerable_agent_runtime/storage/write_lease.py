@@ -1,23 +1,23 @@
-"""Cross-process write lease for one sqlite database file.
+"""Cross-process leases for one sqlite database file.
 
-``SqliteStorage`` is asyncio-safe, not process-safe, without this lease.
-The desktop sidecar and a second CLI on the same ``--storage-path`` would
-otherwise both write WAL. DSH's session JSONL lease is the model: the
-kernel is the arbiter, contention fails loud, process death releases the
-lock, and there is no TTL that could steal from a live but wedged writer.
+Several processes may hold a shared lease on the sibling ``*.lock`` file
+(``sessions.db`` → ``sessions.lock``) while they have the database open.
+Schema migration takes an exclusive lease and fails immediately when any
+other process holds the file. Process death releases the kernel lock.
+There is no TTL that could steal from a live process. The lock file is
+never deleted: it keeps a stable inode for later lockers.
 
-POSIX takes a non-blocking ``fcntl.flock`` on a sibling ``*.lock`` file
-(``sessions.db`` → ``sessions.lock``). Windows holds a named mutex derived
-from the absolute path. The lock file is never deleted: it keeps a stable
-inode for later lockers (an unlinked-and-recreated file would be a
-different inode). Readers and offline maintenance open the database itself
-and do not take this lease; WAL lets them proceed while a writer holds it.
+POSIX uses non-blocking ``fcntl.flock`` (``LOCK_SH`` to register an open
+database, ``LOCK_EX`` to migrate). Windows uses the lock file's share mode,
+the same rule as the Rust sidecar: shared openers allow read and write
+sharing, and an exclusive opener allows none. SQLite byte-range locks do
+not see this file, so only this flock/share-mode pair coordinates Python
+and Rust.
 """
 
 from __future__ import annotations
 
 import errno
-import hashlib
 import os
 import sys
 from pathlib import Path
@@ -33,19 +33,38 @@ def lock_path_for_db(db_path: str | os.PathLike[str]) -> Path:
     return Path(db_path).expanduser().resolve().with_suffix(".lock")
 
 
-def acquire_write_lease(db_path: str | os.PathLike[str]) -> "WriteLease":
-    """Acquire the process write lease for ``db_path``.
+def _is_memory(db_path: str) -> bool:
+    return db_path == ":memory:" or db_path.startswith("file::memory:")
 
+
+def acquire_shared_lease(db_path: str | os.PathLike[str]) -> "WriteLease":
+    """Register that this process has ``db_path`` open.
+
+    Other shared holders succeed. An exclusive holder (a migration, or an
+    older sidecar that still locks the whole database) fails loud.
     ``:memory:`` databases have no file and take no lease.
     """
+    return _acquire(db_path, shared=True)
+
+
+def acquire_write_lease(db_path: str | os.PathLike[str]) -> "WriteLease":
+    """Acquire the exclusive lease for ``db_path``.
+
+    Used for schema migration. A shared or exclusive holder fails loud.
+    ``:memory:`` databases have no file and take no lease.
+    """
+    return _acquire(db_path, shared=False)
+
+
+def _acquire(db_path: str | os.PathLike[str], *, shared: bool) -> "WriteLease":
     raw = os.fspath(db_path)
-    if raw == ":memory:" or raw.startswith("file::memory:"):
+    if _is_memory(raw):
         return WriteLease._unheld()
     lock_path = lock_path_for_db(raw)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     if sys.platform == "win32":
-        return WriteLease._acquire_win32(lock_path)
-    return WriteLease._acquire_posix(lock_path)
+        return WriteLease._acquire_win32(lock_path, shared=shared)
+    return WriteLease._acquire_posix(lock_path, shared=shared)
 
 
 class WriteLease:
@@ -62,13 +81,14 @@ class WriteLease:
         return cls(_fd=None, _handle=None, _lock_path=None)
 
     @classmethod
-    def _acquire_posix(cls, lock_path: Path) -> "WriteLease":
+    def _acquire_posix(cls, lock_path: Path, *, shared: bool) -> "WriteLease":
         import fcntl
 
+        mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
         for _ in range(_LOCK_ATTEMPTS):
             fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, mode | fcntl.LOCK_NB)
             except OSError as exc:
                 os.close(fd)
                 if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
@@ -86,27 +106,46 @@ class WriteLease:
         raise StoreAlreadyOwnedError(str(lock_path))
 
     @classmethod
-    def _acquire_win32(cls, lock_path: Path) -> "WriteLease":
+    def _acquire_win32(cls, lock_path: Path, *, shared: bool) -> "WriteLease":
         import ctypes
         from ctypes import wintypes
 
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        create_mutex = kernel32.CreateMutexW
-        create_mutex.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
-        create_mutex.restype = wintypes.HANDLE
-        close_handle = kernel32.CloseHandle
-        close_handle.argtypes = [wintypes.HANDLE]
-        close_handle.restype = wintypes.BOOL
-
-        digest = hashlib.sha256(str(lock_path).encode("utf-8")).hexdigest()
-        name = f"Local\\steerable-store-{digest}"
-        error_already_exists = 183
-        handle = create_mutex(None, True, name)
-        if not handle:
-            raise ctypes.WinError(ctypes.get_last_error())
-        if ctypes.get_last_error() == error_already_exists:
-            close_handle(handle)
-            raise StoreAlreadyOwnedError(str(lock_path))
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        create_file.restype = wintypes.HANDLE
+        generic_read = 0x80000000
+        generic_write = 0x40000000
+        file_share_read = 0x00000001
+        file_share_write = 0x00000002
+        open_always = 4
+        file_attribute_normal = 0x80
+        error_sharing = 32
+        error_lock = 33
+        invalid = wintypes.HANDLE(-1).value
+        share = file_share_read | file_share_write if shared else 0
+        handle = create_file(
+            str(lock_path),
+            generic_read | generic_write,
+            share,
+            None,
+            open_always,
+            file_attribute_normal,
+            None,
+        )
+        if handle is None or int(handle) == int(invalid):
+            err = ctypes.get_last_error()
+            if err in (error_sharing, error_lock):
+                raise StoreAlreadyOwnedError(str(lock_path))
+            raise ctypes.WinError(err)
         return cls(_fd=None, _handle=handle, _lock_path=lock_path)
 
     def release(self) -> None:

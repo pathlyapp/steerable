@@ -9,9 +9,7 @@
  *
  * This is the only chat path (the TS loop was deleted 2026-08-26). If the
  * sidecar failed to start, the router fails loud with a 503 — there is no
- * in-process fallback loop anymore. `STEERABLE_USE_SIDECAR=0` still
- * disables the sidecar process itself (auxiliary LLM calls then fall back
- * to the in-proc providers), but chat requires the sidecar.
+ * in-process fallback loop or sidecar opt-out.
  */
 
 import type {
@@ -21,6 +19,97 @@ import type {
   SidecarSupervisor,
 } from '../sidecar/index.js';
 import type { LlmMessage } from '../llm/types.js';
+
+/** Markers an older engine left inside the tool-result preview JSON. */
+function markersFromToolPreview(preview: string | undefined): {
+  sandbox?: CoreLoopToolAction['sandbox'];
+  approval?: CoreLoopToolAction['approval'];
+} {
+  if (!preview || preview[0] !== '{') return {};
+  const record = previewData(preview);
+  if (!record) return {};
+  const sandbox = record._sandbox;
+  const approval = record._approval;
+  return {
+    ...(sandbox && typeof sandbox === 'object' && !Array.isArray(sandbox)
+      && typeof (sandbox as { enforcement?: unknown }).enforcement === 'string'
+      ? { sandbox: sandbox as CoreLoopToolAction['sandbox'] }
+      : {}),
+    ...(approval && typeof approval === 'object' && !Array.isArray(approval)
+      ? { approval: approval as CoreLoopToolAction['approval'] }
+      : {}),
+  };
+}
+
+function previewData(preview: string): { _sandbox?: unknown; _approval?: unknown } | undefined {
+  try {
+    const parsed = JSON.parse(preview) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const data = (parsed as { data?: unknown }).data;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return undefined;
+    return data as { _sandbox?: unknown; _approval?: unknown };
+  } catch {
+    // The published loop cuts the preview at 300 characters and appends an
+    // ellipsis. The marker objects are placed first so they are still intact.
+    return {
+      _sandbox: objectAfterKey(preview, '_sandbox'),
+      _approval: objectAfterKey(preview, '_approval'),
+    };
+  }
+}
+
+function objectAfterKey(text: string, key: string): Record<string, unknown> | undefined {
+  const needle = `"${key}"`;
+  let from = 0;
+  while (from < text.length) {
+    const found = text.indexOf(needle, from);
+    if (found < 0) return undefined;
+    const colon = text.indexOf(':', found + needle.length);
+    if (colon < 0) return undefined;
+    let index = colon + 1;
+    while (text[index] === ' ' || text[index] === '\n' || text[index] === '\t') index += 1;
+    if (text[index] !== '{') {
+      from = found + needle.length;
+      continue;
+    }
+    const end = matchingBrace(text, index);
+    if (end < 0) return undefined;
+    try {
+      const value = JSON.parse(text.slice(index, end + 1)) as unknown;
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return value as Record<string, unknown>;
+      }
+    } catch {
+      // The cut landed inside this object. A later copy of the key will not
+      // be more complete.
+      return undefined;
+    }
+    from = found + needle.length;
+  }
+  return undefined;
+}
+
+function matchingBrace(text: string, open: number): number {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let index = open; index < text.length; index += 1) {
+    const char = text[index] ?? '';
+    if (inString) {
+      if (escape) escape = false;
+      else if (char === '\\') escape = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
 
 export interface CoreLoopToolAction {
   id?: string;
@@ -37,6 +126,26 @@ export interface CoreLoopToolAction {
    * is user-visible.
    */
   sandbox?: { backend?: string; enforcement: string };
+  /** Session-allow reuse lifted onto the stream chunk. */
+  approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number; auto?: boolean };
+}
+
+/**
+ * What the sidecar knew about a failed model request, beyond its text.
+ *
+ * The host renders user-facing copy per `errorKind` and never parses
+ * `message` for it: the provider taxonomy is structured data, and message
+ * text is for the diagnostics panel.
+ */
+export interface TurnFailureInfo {
+  /** Provider classification; `undefined` when the sidecar did not send one. */
+  errorKind?: string;
+  /** Proxy the request used, credentials stripped; `undefined` means direct. */
+  proxy?: string;
+  /** Provider attempts spent on the failing request, including the last. */
+  attempts?: number;
+  /** HTTP status when the provider answered with one. */
+  statusCode?: number;
 }
 
 export interface CoreLoopTurnOutcome {
@@ -65,13 +174,50 @@ export interface SkillTurnContext {
   /** 活跃条件串(tool:* / has-tools / plan-mode),与提示词拼装同源。 */
   conditions: string[];
   /**
-   * 目录里不出现的技能:模式级排除(plan 模式排掉执行类技能)、智能体关闭
-   * 「允许其他技能」时的未勾选项、以及已随系统提示词常驻的勾选项(避免
-   * 模型再调 `skill` 工具加载第二遍)。
+   * 硬排除:模式级排除(plan 模式排掉执行类技能)、智能体关闭「允许其他
+   * 技能」时的未勾选项。sidecar 的 `skill` 工具会直接用
+   * `not available in this mode` 拒绝这些名字。
    */
   exclude: string[];
+  /**
+   * 已由宿主 eager 注入正文的 pinned 技能。sidecar 不应再把它们列进
+   * catalog(避免重复),但 `skill` 工具仍必须能按需加载完整正文——
+   * 大技能可能被 system prompt cap 截断,模型重载是合法恢复路径。
+   */
+  pinned: string[];
   /** 智能体的「加载全部技能」:catalog 无视条件全量列出。 */
   ignoreConditions: boolean;
+}
+
+/** 一轮发给 sidecar 的工具。`mode` 与 `approvalCategory` 是可选线协议字段。 */
+export interface TurnToolWire {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  mode?: string;
+  approvalCategory?: string;
+}
+
+/**
+ * 把宿主工具 schema 收成线协议上的一项。未声明审批类别时不带 `approvalCategory`，
+ * sidecar 按工具名做类别。
+ */
+export function toTurnTool(schema: {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  mode?: string;
+  approval?: { category?: string } | null;
+}): TurnToolWire {
+  const tool: TurnToolWire = {
+    name: schema.name,
+    description: schema.description,
+    inputSchema: schema.inputSchema,
+  };
+  if (schema.mode) tool.mode = schema.mode;
+  const category = schema.approval?.category;
+  if (category) tool.approvalCategory = category;
+  return tool;
 }
 
 export interface StreamCoreLoopTurnOptions {
@@ -89,7 +235,7 @@ export interface StreamCoreLoopTurnOptions {
    */
   resume?: boolean;
   messages: LlmMessage[];
-  tools: Array<{ name: string; description: string; inputSchema: unknown }>;
+  tools: TurnToolWire[];
   provider: string;
   model: string;
   baseUrl?: string;
@@ -109,6 +255,11 @@ export interface StreamCoreLoopTurnOptions {
    * entry, so an unsupportable level fails the turn at stream start
    * (invalid_params) instead of being silently dropped. */
   reasoningEffort?: string;
+  /**
+   * 产品声明模型服务是否直连（跳过系统代理）。只在产品显式打开时下发，
+   * 未声明的产品线上字节与旧版完全一致。
+   */
+  directConnection?: boolean;
   /** Forwarded on every reverse tool.invoke (host enforces plan-mode etc.). */
   toolContext?: Record<string, unknown>;
   /**
@@ -172,6 +323,13 @@ export interface StreamCoreLoopTurnOptions {
   onToolStart?: (call: { id: string; tool: string; arguments: Record<string, unknown> }) => void;
   /** Fired when a tool finishes on the host (for tool-card rendering). */
   onToolAction?: (action: CoreLoopToolAction) => void;
+  /**
+   * Fired when the sidecar abandons the attempt it was streaming and starts
+   * the request again (a retry after partial output). Everything emitted via
+   * `onText` / `onReasoning` since the last restart belongs to a reply the
+   * user will never see in full and must be withdrawn from the display.
+   */
+  onRestart?: () => void;
   /** soft_timeout / budget_exhausted notices from the loop. */
   onNotice?: (kind: string, notice?: { kind: string; [key: string]: unknown }) => void;
   /**
@@ -303,6 +461,9 @@ export async function streamCoreLoopTurn(
     compat: options.compat,
     presets: options.presets,
     ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+    // Omitted unless the product declared direct model connections: an
+    // undeclared product's wire bytes stay identical to before.
+    ...(options.directConnection ? { directConnection: true } : {}),
     chatId: options.chatId,
     recordId: options.recordId,
     resume: options.resume,
@@ -364,6 +525,8 @@ export async function streamCoreLoopTurn(
         description: t.description,
         parameters: t.inputSchema ?? { type: 'object', properties: {} },
       },
+      ...(t.mode ? { mode: t.mode } : {}),
+      ...(t.approvalCategory ? { approvalCategory: t.approvalCategory } : {}),
     })),
   };
 
@@ -407,6 +570,9 @@ export async function streamCoreLoopTurn(
           // The user cancelled — swallow any in-flight deltas while we wait
           // for the sidecar's cancelled done.
           if (cancelling) return;
+          if (chunk.restart) {
+            options.onRestart?.();
+          }
           if (chunk.delta) {
             options.onText(chunk.delta);
           }
@@ -427,6 +593,7 @@ export async function streamCoreLoopTurn(
           if (chunk.toolResult) {
             const started = pendingCalls.get(chunk.toolResult.id);
             pendingCalls.delete(chunk.toolResult.id);
+            const lifted = markersFromToolPreview(chunk.toolResult.resultPreview);
             options.onToolAction?.({
               id: chunk.toolResult.id,
               tool: chunk.toolResult.name,
@@ -435,7 +602,8 @@ export async function streamCoreLoopTurn(
               result: chunk.toolResult.resultPreview,
               error: chunk.toolResult.error,
               durationMs: chunk.toolResult.durationMs,
-              sandbox: chunk.toolResult.sandbox,
+              sandbox: chunk.toolResult.sandbox ?? lifted.sandbox,
+              approval: chunk.toolResult.approval ?? lifted.approval,
             });
           }
           if (chunk.notice) {
@@ -469,7 +637,17 @@ export async function streamCoreLoopTurn(
           // persist the partial trace — failed turns are the ones dogfooding
           // most needs to inspect.
           const failure = new Error(`coreloop stream failed: ${err.kind}: ${err.message}`);
-          if (err.traceId) (failure as Error & { traceId?: string }).traceId = err.traceId;
+          const annotated = failure as Error & {
+            traceId?: string;
+            failureInfo?: TurnFailureInfo;
+          };
+          if (err.traceId) annotated.traceId = err.traceId;
+          annotated.failureInfo = {
+            errorKind: err.errorKind,
+            proxy: err.proxy,
+            attempts: err.attempts,
+            statusCode: err.statusCode,
+          };
           reject(failure);
         },
       })

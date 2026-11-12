@@ -22,9 +22,9 @@ Three roles (capability seam):
 - **Consumer** — ``skill_tool_descriptor()`` (OpenAI schema to append to
   the tools list), ``SkillExecutor`` (``ToolExecutor`` decorator answering
   ``skill`` calls with the body wrapped in ``<skill_content>`` markers),
-  and ``SkillHooks`` (``pre_step`` injects the catalog into the system
-  message on the first round — a transcript rewrite, so the injection is
-  recorded as a ``hook_action`` event: model-visible ⟺ logged).
+  and ``SkillHooks`` (``pre_step`` injects the catalog as a user message on
+  the first round — a transcript rewrite, so the injection is recorded as a
+  ``hook_action`` event: model-visible ⟺ logged).
 
 Opt-in: hosts that don't want skills pass no provider and nothing changes.
 """
@@ -121,13 +121,32 @@ def matches_conditions(skill: SkillSummary, active: set[str]) -> bool:
     return any(c in active for c in skill.conditions)
 
 
+def _matches_any_name(skill: SkillSummary, names: set[str]) -> bool:
+    """Host-supplied name matching by skill name / dir name / display name.
+
+    The caller normalizes ``names`` to lower-case, trimmed strings.
+    """
+    return (
+        skill.name.lower() in names
+        or skill.dir_name.lower() in names
+        or (skill.display_name != "" and skill.display_name.lower() in names)
+    )
+
+
 def _is_excluded(skill: SkillSummary, excluded: set[str]) -> bool:
     """Host exclusion by name / dir name / display name (case-insensitive)."""
-    return (
-        skill.name.lower() in excluded
-        or skill.dir_name.lower() in excluded
-        or (skill.display_name != "" and skill.display_name.lower() in excluded)
-    )
+    return _matches_any_name(skill, excluded)
+
+
+def _is_pinned(skill: SkillSummary, pinned: set[str]) -> bool:
+    """Pinned skills are host-injected/eager; keep them out of the catalog.
+
+    Unlike ``exclude``, pinning is *not* an access-control decision: the
+    skill tool may still load the body if the model asks for it. This split
+    is what lets the host avoid duplicate catalog entries without turning a
+    pinned skill into a hard "not available in this mode" error.
+    """
+    return _matches_any_name(skill, pinned)
 
 
 def select_catalog(
@@ -135,14 +154,17 @@ def select_catalog(
     conditions: set[str] | frozenset[str] = frozenset(),
     exclude: Sequence[str] = (),
     ignore_conditions: bool = False,
+    pinned: Sequence[str] = (),
 ) -> list[SkillSummary]:
     """The model-visible catalog: catalog-layer, condition-matching,
-    model-invocable skills, minus the host's exclusions (e.g. plan mode
-    drops execution-oriented skills). ``ignore_conditions`` lists every
+    model-invocable skills, minus hard ``exclude`` names and host-``pinned``
+    names (pinned bodies are already in the system prompt, so listing them
+    again only invites a duplicate load). ``ignore_conditions`` lists every
     catalog skill regardless of conditions (the desktop's all-round
     assistant persona opts into everything)."""
     active = set(conditions)
     excluded = {e.lower().strip() for e in exclude}
+    pinned_set = {p.lower().strip() for p in pinned}
 
     return [
         s
@@ -150,7 +172,31 @@ def select_catalog(
         if s.layer == "catalog"
         and s.model_invocable
         and not _is_excluded(s, excluded)
+        and not _is_pinned(s, pinned_set)
         and (ignore_conditions or matches_conditions(s, active))
+    ]
+
+
+def select_pinned_loadable(
+    skills: Sequence[SkillSummary],
+    pinned: Sequence[str],
+    exclude: Sequence[str] = (),
+) -> list[SkillSummary]:
+    """Pinned, model-invocable skills that are not hard-excluded.
+
+    Pinning deliberately bypasses conditions (the host already injected the
+    body unconditionally). The sidecar uses this as the "advertise the skill
+    tool" probe, so a turn whose only visible skill is pinned still has a
+    way to reload the full body after a system-prompt truncation.
+    """
+    excluded = {e.lower().strip() for e in exclude}
+    pinned_set = {p.lower().strip() for p in pinned}
+    return [
+        s
+        for s in skills
+        if s.model_invocable
+        and not _is_excluded(s, excluded)
+        and _is_pinned(s, pinned_set)
     ]
 
 
@@ -212,7 +258,7 @@ def render_skill_catalog(
     tool_name: str = "skill",
     max_skills: int = DEFAULT_MAX_CATALOG_SKILLS,
 ) -> str:
-    """System-prompt section listing the catalog layer, one line per skill.
+    """Catalog section listing the skills, one line per skill.
 
     Bounded at ``max_skills`` entries (highest priority first); an overflow
     line names the cut so the model knows the list is partial and can ask.
@@ -252,7 +298,12 @@ class SkillCatalogFragment(ContextFragment):
     go first — instead of cutting mid-line.
     """
 
-    role = "system"
+    # Strict chat templates (the yizhuang Qwen deployment behind the LiteLLM
+    # proxy) accept exactly one system message, at index 0. The catalog is
+    # injected on every turn, so a second system message anywhere made the
+    # upstream return HTTP 400 ("System message must be at the beginning").
+    # Ride as a user message instead; the transcript keeps a single system.
+    role = "user"
     content_kind = "skills.catalog"
     max_tokens = 4096
     review_note = (
@@ -539,6 +590,7 @@ class SkillExecutor:
         conditions: set[str] | frozenset[str] = frozenset(),
         exclude: Sequence[str] = (),
         ignore_conditions: bool = False,
+        pinned: Sequence[str] = (),
     ) -> None:
         self._inner = inner
         self._provider = provider
@@ -546,6 +598,7 @@ class SkillExecutor:
         self._conditions = conditions
         self._exclude = tuple(exclude)
         self._ignore_conditions = ignore_conditions
+        self._pinned = tuple(pinned)
 
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         if call.name != self._config.tool_name:
@@ -566,6 +619,7 @@ class SkillExecutor:
                     self._conditions,
                     self._exclude,
                     self._ignore_conditions,
+                    self._pinned,
                 )
             ]
             error = f"Unknown skill: {name}"
@@ -578,11 +632,7 @@ class SkillExecutor:
                 data={"unknownSkill": name},
             )
         excluded = {e.lower().strip() for e in self._exclude}
-        if (
-            skill.name.lower() in excluded
-            or skill.dir_name.lower() in excluded
-            or (skill.display_name != "" and skill.display_name.lower() in excluded)
-        ):
+        if _is_excluded(skill, excluded):
             return ToolResult(
                 success=False,
                 error=f"Skill '{skill.name}' is not available in this mode.",
@@ -617,14 +667,12 @@ class SkillExecutor:
 
 
 class SkillHooks(NoopHooks):
-    """LoopHooks: inject the skill catalog as a system message, once.
+    """LoopHooks: inject the skill catalog as a user message, once.
 
     The injection is a first-round ``pre_step`` append (Wave 1: hooks never
     rewrite in place), so the loop records it as a ``hook_action`` event
     (``action: skill_catalog``) and the catalog is reconstructable from the
-    trace. The appended message lands right after the first user message,
-    where compaction's head rule (leading system messages + first user)
-    preserves it across later rewrites.
+    trace. The appended message lands right after the first user message.
     """
 
     def __init__(
@@ -636,6 +684,7 @@ class SkillHooks(NoopHooks):
         config: SkillConfig | None = None,
         ignore_conditions: bool = False,
         max_catalog_skills: int = DEFAULT_MAX_CATALOG_SKILLS,
+        pinned: Sequence[str] = (),
     ) -> None:
         self._provider = provider
         self._conditions = conditions
@@ -643,6 +692,7 @@ class SkillHooks(NoopHooks):
         self._config = config or SkillConfig()
         self._ignore_conditions = ignore_conditions
         self._max_catalog_skills = max_catalog_skills
+        self._pinned = tuple(pinned)
         self._injected = False
 
     async def pre_step(
@@ -652,7 +702,11 @@ class SkillHooks(NoopHooks):
             return PreStepAction(kind="proceed")
         self._injected = True
         catalog = select_catalog(
-            self._provider.list(), self._conditions, self._exclude, self._ignore_conditions
+            self._provider.list(),
+            self._conditions,
+            self._exclude,
+            self._ignore_conditions,
+            self._pinned,
         )
         if not catalog:
             return PreStepAction(kind="proceed")

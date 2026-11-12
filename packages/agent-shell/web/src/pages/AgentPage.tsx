@@ -2,13 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 import { useChatStream, type SteerOutcome } from "@steerable/agent-ui";
 import type { ChatMessage, SSEEvent } from "@steerable/agent-protocol";
-import { getElectronBridge, isElectron } from "@/lib/electron-bridge";
+import { getHostBridge, hasHostBridge } from "@/lib/host-bridge";
 import { trackBehavior } from "@/lib/insights";
 import {
-  createElectronChatTransport,
+  createHostChatTransport,
   regenerateChatMessage,
 } from "@/lib/chat-transport";
 import { ChatHeader } from "@/components/ChatHeader";
+import { EmptyChatHero } from "@/components/chat/EmptyChatHero";
+import type { RetryState } from "@/components/chat/RetryStatus";
+import type { FailureAction } from "@/components/chat/turn-failure";
 import { LocalChatPanel } from "@/components/chat/LocalChatPanel";
 import { ModelPicker } from "@/components/chat/ModelPicker";
 import {
@@ -42,6 +45,8 @@ import {
   type SuggestedRepliesState,
 } from "@/components/chat/suggested-replies-model";
 import { useChatTasks } from "@/components/chat/useChatTasks";
+import { useGoalAndLoops } from "@/components/chat/useGoalAndLoops";
+import { GoalLoopStatusBar } from "@/components/chat/GoalLoopStatusBar";
 import { LuListChecks, LuArrowRight } from "react-icons/lu";
 import { LocalLlmSettingsModal } from "@/components/LocalLlmSettingsModal";
 import {
@@ -51,17 +56,18 @@ import {
 import { ProjectTrustBanner } from "@/components/chat/ProjectTrustBanner";
 import {
   getChatLiveStream,
-  listProjects,
   type ChatLiveStream,
   type LocalChatMessage,
-  type LocalProject,
 } from "@/lib/local-api";
+import { useProjects } from "@/hooks/useProjects";
 import type { AgentOutletContext } from "@/layouts/AgentLayout";
 import {
   setPendingFirstMessage,
   takePendingFirstMessage,
 } from "@/lib/pending-first-message";
-import { BRAND_NAME, pickDefaultAgentId } from "@/brand";
+import { isOrchestrationSettingEnabled } from "@/lib/orchestration-settings";
+import { pickDefaultAgentId } from "@/brand";
+import { t } from "@/i18n";
 import {
   appendAttachmentRefs,
   collectImageAttachments,
@@ -95,6 +101,31 @@ const CHAT_MODE_STORAGE_KEY = "agent-chat-mode";
 function readStoredMode(): ChatMode {
   if (typeof localStorage === "undefined") return clampWebChatMode("agent");
   return clampWebChatMode(localStorage.getItem(CHAT_MODE_STORAGE_KEY));
+}
+
+interface ComposerTurnSettings {
+  execPolicy: ExecPolicy;
+  mode: ChatMode;
+  modelOverride: string | null;
+  effortOverride: string | null;
+}
+
+/**
+ * 排队和插队失败后的新回合不经过输入框的正常提交，这里在真正开流时
+ * 补上当前输入框的命令沙箱、模式、模型和编排开关。
+ */
+function applyComposerTurnSettings<T extends { metadata?: Record<string, unknown> }>(
+  input: T,
+  settings: ComposerTurnSettings,
+): T {
+  const metadata: Record<string, unknown> = { ...(input.metadata ?? {}) };
+  metadata.execPolicy = settings.execPolicy;
+  if (settings.mode === "plan") metadata.mode = "plan";
+  else delete metadata.mode;
+  if (settings.modelOverride) metadata.model = settings.modelOverride;
+  if (settings.effortOverride) metadata.reasoningEffort = settings.effortOverride;
+  metadata.orchestration = isOrchestrationSettingEnabled();
+  return { ...input, metadata };
 }
 
 function extractPersistedActions(
@@ -262,12 +293,12 @@ function AgentChatLoader({
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      if (!isElectron()) {
+      if (!hasHostBridge()) {
         if (!cancelled) setInitialMessages([]);
         return;
       }
       try {
-        const bridge = getElectronBridge()!;
+        const bridge = getHostBridge()!;
         const [response, live] = await Promise.all([
           bridge.localBackend.request<{
             messages?: ChatMessageWithMetadata[];
@@ -317,7 +348,7 @@ function AgentChatLoader({
   if (initialMessages === null) {
     return (
       <div className="flex h-full w-full items-center justify-center text-xs text-agent-muted-foreground">
-        加载对话历史…
+        {t("Loading chat history…")}
       </div>
     );
   }
@@ -379,27 +410,34 @@ function AgentChatView({
 
   // 当前会话绑定的项目 — Codex 式 cwd 指示：输入框上方显示项目名徽章，
   // 点击可关联到其他项目 / 修改项目目录 / 移出项目。无项目会话不显示。
-  const [projects, setProjects] = useState<LocalProject[]>([]);
   const showProjectsChrome = hostToolChrome("projects");
-  const fetchProjects = useCallback(async () => {
-    if (!isElectron() || !hostToolChrome("projects")) return;
-    try {
-      const res = await listProjects();
-      setProjects(res.projects ?? []);
-    } catch {
-      /* 列表失败保持旧数据 */
-    }
-  }, []);
-  useEffect(() => {
-    void fetchProjects();
-  }, [fetchProjects]);
+  const { projects, refresh: fetchProjects } = useProjects();
   const chatProject = chat?.projectId
     ? (projects.find((p) => p.id === chat.projectId) ?? null)
     : null;
-  const transport = useMemo(
-    () => createElectronChatTransport(chatId),
-    [chatId],
-  );
+  // 插队 / 排队在开流或注入时读这里，而不是排队那一刻的闭包。
+  const composerSettingsRef = useRef<ComposerTurnSettings>({
+    execPolicy: readStoredExecPolicy(),
+    mode: readStoredMode(),
+    modelOverride: null,
+    effortOverride: null,
+  });
+  const transport = useMemo(() => {
+    const inner = createHostChatTransport(chatId);
+    return {
+      cancelActive: () => inner.cancelActive(),
+      stream: (
+        input: { content: string; metadata?: Record<string, unknown> },
+        onEvent: (event: SSEEvent) => void,
+      ) => inner.stream(applyComposerTurnSettings(input, composerSettingsRef.current), onEvent),
+      steer: (content: string) => {
+        if (!inner.steer) return Promise.resolve(false);
+        return inner.steer(content, {
+          execPolicy: composerSettingsRef.current.execPolicy,
+        });
+      },
+    };
+  }, [chatId]);
 
   // 4.6a 后台任务：header 角标与消息列尾部的终态卡共用这一份订阅，两处
   // 因此不会各拉一次任务表、也不会显示互相错位的状态。
@@ -408,6 +446,12 @@ function AgentChatView({
     finished: finishedTasks,
     dismissFinished,
   } = useChatTasks(chatId);
+  const {
+    goal,
+    loops,
+    refreshGoal,
+    refreshLoops,
+  } = useGoalAndLoops(chatId);
   const handleInspectTask = useCallback(
     (task: InspectTaskInput) => {
       ctx.inspectTask({
@@ -426,6 +470,7 @@ function AgentChatView({
   // 把「正在运行 + 部分产出」恢复出来。initialLiveStream 是挂载时同步拿到的
   // 首帧，之后由轮询持续刷新。
   const [liveStream, setLiveStream] = useState<ChatLiveStream>(initialLiveStream);
+  const liveStreamEpochRef = useRef(0);
 
   // ── executed_actions plumbing ────────────────────────────────────────
   // Local-backend emits `{type: 'executed_actions', actions: [...]}` AFTER each
@@ -497,6 +542,11 @@ function AgentChatView({
   // before this signal, the UI looked frozen whenever the model paused to
   // wait for tool results.
   const [currentRound, setCurrentRound] = useState(1);
+  // Live "reconnecting" state for the in-flight turn. Set by the backend's
+  // `turn_retry` notice, cleared when the round ends or the stream settles —
+  // a retry that succeeded leaves no trace in the UI or in history.
+  const [retryState, setRetryState] = useState<RetryState | null>(null);
+  const navigate = useNavigate();
   // Holds the latest in-flight actions for the `message_id` reconciliation
   // — `useState`'s setter sees the latest value via the functional update
   // form, but we keep this ref so the reconciliation event handler can read
@@ -581,6 +631,21 @@ function AgentChatView({
       // 这不是新一轮，跳过计数。
       if (ev.payload?.status === "cancelled") return;
       setCurrentRound((r) => r + 1);
+      // A new round means the previous request finished (or was replaced), so
+      // any "reconnecting" line belongs to the round that is now over.
+      setRetryState(null);
+      return;
+    }
+    if (ev.event === "turn_retry") {
+      // The backend announces each retry; the first one starts the clock the
+      // status line counts from. Later ones keep it so the count is the whole
+      // wait, not just the latest attempt.
+      const delayMs =
+        typeof ev.payload?.delayMs === "number" ? ev.payload.delayMs : undefined;
+      setRetryState((prev) => ({
+        startedAt: prev?.startedAt ?? Date.now(),
+        ...(delayMs !== undefined ? { delayMs } : {}),
+      }));
       return;
     }
     if (ev.event === "orchestration_child") {
@@ -693,7 +758,7 @@ function AgentChatView({
     followUpUserMessage,
     pendingFollowUps,
     removeFollowUp,
-    cancel,
+    setMessages,
     appendMessage,
   } = useChatStream({
     transport,
@@ -701,12 +766,57 @@ function AgentChatView({
     onUnknownEvent: handleUnknownEvent,
     onStreamError: handleStreamError,
   });
+  const awaitingRemoteActiveSnapshotRef = useRef(false);
+  useEffect(() => {
+    awaitingRemoteActiveSnapshotRef.current = false;
+  }, [chatId]);
+
+  useEffect(() => {
+    const bridge = getHostBridge();
+    if (!bridge?.onPackEvent) return;
+    const offStarted = bridge.onPackEvent('chat-turn-started', (value) => {
+      const payload = value as { chatId?: string };
+      if (payload.chatId === chatId) {
+        awaitingRemoteActiveSnapshotRef.current = true;
+        liveStreamEpochRef.current += 1;
+        setLiveStream((current) => ({ ...current, active: true }));
+      }
+    });
+    const offFinished = bridge.onPackEvent('chat-turn-finished', (value) => {
+      const payload = value as { chatId?: string };
+      if (payload.chatId !== chatId) return;
+      awaitingRemoteActiveSnapshotRef.current = false;
+      liveStreamEpochRef.current += 1;
+      setLiveStream({ active: false });
+      void bridge.localBackend.request<{
+        messages?: LocalChatMessage[];
+      }>({
+        method: "GET",
+        path: `/api/v2/chats/${encodeURIComponent(chatId)}/messages?limit=200`,
+      }).then((response) => {
+        if (response.messages) setMessages(chronological(response.messages));
+      });
+    });
+    return () => {
+      offStarted();
+      offFinished();
+    };
+  }, [chatId, setMessages]);
 
   // ── 切回恢复：远端回合仍在跑，但本 mount 不是发起者 ──────────────────
   // useChatStream.isStreaming 只在本 mount 自己发起的流时为 true；切回后的
   // 新 mount 没发起流，所以 isStreaming=false，但后端快照 liveStream.active
   // 为 true —— 此时用快照叠出「正在运行」的助手气泡 + 部分工具卡片/时间线。
   const remoteStreaming = liveStream.active === true && !isStreaming;
+  // 切回运行中的远端回合时，本 mount 没有 useChatStream 的本地队列。显式
+  // 保留 Enter 排队的消息，等远端回合结束后再由本 mount 依次发出。
+  const [remoteFollowUps, setRemoteFollowUps] = useState<string[]>([]);
+  const remoteFollowUpsRef = useRef<string[]>([]);
+  const updateRemoteFollowUps = useCallback((update: (current: string[]) => string[]) => {
+    const next = update(remoteFollowUpsRef.current);
+    remoteFollowUpsRef.current = next;
+    setRemoteFollowUps(next);
+  }, []);
 
   // 远端轮中转向：transport.steer 按 chatId 找活跃流，天然支持「切回后注入」
   // ——不像 useChatStream.steerOrFollowUpUserMessage 那样被本地 isStreamingRef
@@ -724,8 +834,8 @@ function AgentChatView({
         });
         return "steered";
       }
-      // 回合可能恰好已结束——回落 queued 让 ChatInput 给出提示，紧跟着的
-      // re-hydrate 会把最终消息拉出来。
+      // 回合可能恰好已结束——回落 queued，由 handleSteer 放进远端待发
+      // 队列；轮询确认回合结束后先对账历史，再启动下一轮。
       return "queued";
     },
     [transport, appendMessage],
@@ -735,10 +845,18 @@ function AgentChatView({
   useEffect(() => {
     if (!remoteStreaming) return;
     let cancelled = false;
+    const epoch = liveStreamEpochRef.current;
     const poll = async () => {
       try {
         const next = await getChatLiveStream(chatId);
-        if (!cancelled) setLiveStream(next ?? { active: false });
+        if (!cancelled && liveStreamEpochRef.current === epoch) {
+          if (next?.active) {
+            awaitingRemoteActiveSnapshotRef.current = false;
+          } else if (awaitingRemoteActiveSnapshotRef.current) {
+            return;
+          }
+          setLiveStream(next ?? { active: false });
+        }
       } catch {
         /* 保持上一帧快照 */
       }
@@ -751,16 +869,9 @@ function AgentChatView({
     };
   }, [chatId, remoteStreaming]);
 
-  // 快照从 active=true → false 的边沿：远端回合结束了，re-hydrate 出最终
-  // 落库消息（含真实 message id / executedActions / timeline）。
+  // 快照从 active=true → false 的边沿在 handleSubmit 声明后处理：没有排队
+  // 消息时重新水合，有排队消息时直接启动下一轮。
   const wasLiveActiveRef = useRef(liveStream.active === true);
-  useEffect(() => {
-    const nowActive = liveStream.active === true;
-    if (wasLiveActiveRef.current && !nowActive) {
-      onBranchTick();
-    }
-    wasLiveActiveRef.current = nowActive;
-  }, [liveStream.active, onBranchTick]);
 
   // W7-1: 中断提示卡的可见性。初值来自 messages 响应的 interrupted 标记；
   // 点击「继续」/「忽略」或用户手动发起新一轮时本地清除（继续成功后后端的
@@ -814,13 +925,12 @@ function AgentChatView({
     wasStreamingRef.current = isStreaming;
   }, [isStreaming, messages]);
 
-  // 真正能中断后端 agent 循环的取消：框架 hook 的 cancel 只重置前端状态
-  // （cancel 句柄在流结束后才被保存，是已知的上游缺陷），这里补上
-  // transport.cancelActive() 让主进程 abort LLM / 工具循环。
+  // 真正中断后端 agent 循环；流保持运行态直到后端发回 cancelled done，
+  // 避免界面提前恢复发送后，新回合被仍在清理的旧回合以 409 拒绝。
   const handleCancel = useCallback(() => {
     transport.cancelActive();
-    cancel();
-  }, [transport, cancel]);
+    updateRemoteFollowUps(() => []);
+  }, [transport, updateRemoteFollowUps]);
 
   // Reset the in-flight queue on every new user submit. We do this in a
   // wrapper rather than directly in `handleUnknownEvent`, because there's no
@@ -830,6 +940,12 @@ function AgentChatView({
   // ModelPicker 自取（GET /api/v2/llm/models → sidecar models.list）。
   const [modelOverride, setModelOverride] = useState<string | null>(null);
   const [effortOverride, setEffortOverride] = useState<string | null>(null);
+  composerSettingsRef.current = {
+    execPolicy,
+    mode,
+    modelOverride,
+    effortOverride,
+  };
 
   const handleSubmit = useCallback(
     (input: { content: string; metadata?: Record<string, unknown> }) => {
@@ -848,6 +964,7 @@ function AgentChatView({
       pendingTurnFilesRef.current = [];
       setCurrentTurnFiles([]);
       setCurrentRound(1);
+      setRetryState(null);
       const started = Date.now();
       turnStartedAtRef.current = started;
       setCurrentTurnStartedAtMs(started);
@@ -869,6 +986,7 @@ function AgentChatView({
         ...(modelOverride ? { model: modelOverride } : {}),
         ...(effortOverride ? { reasoningEffort: effortOverride } : {}),
         ...(execPolicy === "full" ? { execPolicy: "full" } : {}),
+        orchestration: isOrchestrationSettingEnabled(),
       };
       return sendUserMessage({
         ...input,
@@ -885,8 +1003,50 @@ function AgentChatView({
     [handleSubmit],
   );
 
+  // 远端回合结束时，优先发送用户在等待期间排队的内容。第一条启动新回合，
+  // 其余条目进入 useChatStream 的本地队列；没有排队内容才重新水合历史。
   useEffect(() => {
-    const bridge = getElectronBridge();
+    const nowActive = liveStream.active === true;
+    if (wasLiveActiveRef.current && !nowActive) {
+      const queued = remoteFollowUpsRef.current;
+      if (queued.length > 0) {
+        updateRemoteFollowUps(() => []);
+        void (async () => {
+          try {
+            const response = await getHostBridge()?.localBackend.request<{
+              messages?: ChatMessageWithMetadata[];
+            }>({
+              method: "GET",
+              path: `/api/v2/chats/${encodeURIComponent(chatId)}/messages?limit=200`,
+            });
+            if (response?.messages) {
+              setMessages(chronological(response.messages));
+            }
+          } catch {
+            // 排队内容仍须发出；后续刷新会补齐刚结束的远端回复。
+          }
+          void handleSubmit({ content: queued[0] });
+          for (const content of queued.slice(1)) {
+            followUpUserMessage({ content });
+          }
+        })();
+      } else {
+        onBranchTick();
+      }
+    }
+    wasLiveActiveRef.current = nowActive;
+  }, [
+    followUpUserMessage,
+    chatId,
+    handleSubmit,
+    liveStream.active,
+    onBranchTick,
+    setMessages,
+    updateRemoteFollowUps,
+  ]);
+
+  useEffect(() => {
+    const bridge = getHostBridge();
     if (!bridge?.onSuggestedReplies) return;
     return bridge.onSuggestedReplies((payload) => {
       if (payload.chatId !== chatId) return;
@@ -922,6 +1082,7 @@ function AgentChatView({
     pendingTurnFilesRef.current = [];
     setCurrentTurnFiles([]);
     setCurrentRound(1);
+    setRetryState(null);
     const started = Date.now();
     turnStartedAtRef.current = started;
     setCurrentTurnStartedAtMs(started);
@@ -944,28 +1105,95 @@ function AgentChatView({
     setInterrupted(false);
   }, []);
 
-  // 轮中转向 + 失败兜底（W6-2）：streaming 期间 Enter 优先注入运行中的
+  // 「新建对话」失败时的就地提示；点一次清一次。
+  const [newChatError, setNewChatError] = useState<string | null>(null);
+
+  /**
+   * 失败卡片的按钮。和「继续上次回复」走同一条 resume 通道：sidecar 回放
+   * durable record，已完成的工具调用不会再执行一遍——这正是失败后点
+   * 「继续」想要的语义。本轮正在跑时按钮禁用（同一会话不能同时两轮）。
+   */
+  const failureAction = useCallback(
+    (action: FailureAction) => {
+      switch (action.kind) {
+        case "retry":
+          return {
+            onClick: () => void handleContinueInterrupted(),
+            disabled: isStreaming,
+            hint: isStreaming ? t("This chat is running. Continue when it finishes.") : undefined,
+          };
+        case "network-diagnostics":
+          // 诊断区挂在设置页「通用」下（settingsChrome('diagnose') 控制显隐）。
+          return settingsChrome("diagnose")
+            ? { onClick: () => navigate("/settings") }
+            : null;
+        case "open-model-settings":
+          return settingsChrome("llm") && hasHostBridge()
+            ? { onClick: () => setLlmSettingsOpen(true) }
+            : null;
+        case "new-chat":
+          // 同项目的空会话：对话过长时的新出路，而不是把用户丢回落地页再
+          // 重选项目、重填输入。失败时提示并留在原地，不吞掉这次点击。
+          return {
+            onClick: () => {
+              void ctx
+                .createChat({
+                  ...(chat?.projectId ? { projectId: chat.projectId } : {}),
+                  ...(chat?.agentId ? { agentId: chat.agentId } : {}),
+                })
+                .then((id) => {
+                  if (id) navigate(`/agent/${id}`);
+                  else setNewChatError(t("Failed to create the chat. Please try again."));
+                })
+                .catch((err: unknown) =>
+                  setNewChatError(err instanceof Error ? err.message : String(err)),
+                );
+            },
+          };
+      }
+    },
+    [
+      chat?.agentId,
+      chat?.projectId,
+      ctx,
+      handleContinueInterrupted,
+      isStreaming,
+      navigate,
+    ],
+  );
+
+  // 轮中插队 + 失败兜底（W6-2）：streaming 期间 ⌘/Ctrl+Enter 优先注入运行中的
   // CoreLoop 回合；注入不了时 hook 按回合实况降级——仍在跑则排入待发队列
   // （'queued'，ChatInput 提示"已改为排队"），恰好已结束则作为新回合直发
   // （'sent'）。消息不会丢，ChatInput 对任何结果都清草稿。
   const handleSteer = useCallback(
-    (text: string) =>
-      remoteStreaming ? steerRemote(text) : steerOrFollowUpUserMessage(text),
-    [remoteStreaming, steerRemote, steerOrFollowUpUserMessage],
+    async (text: string) => {
+      if (!remoteStreaming) return steerOrFollowUpUserMessage(text);
+      const outcome = await steerRemote(text);
+      if (outcome === "queued") {
+        updateRemoteFollowUps((current) => [...current, text]);
+      }
+      return outcome;
+    },
+    [
+      remoteStreaming,
+      steerRemote,
+      steerOrFollowUpUserMessage,
+      updateRemoteFollowUps,
+    ],
   );
 
-  // follow-up 排队（W6-2）：streaming 期间 ⌘/Ctrl+Enter 把文本排入待发
-  // 队列，本轮结束后自动作为下一轮发出。与转向（注入当前回合）相对。
-  // 切回后的远端回合没有本地 follow-up 队列可挂，降级为注入当前回合。
+  // follow-up 排队（W6-2）：streaming 期间 Enter 把文本排入待发队列，
+  // 本轮结束后自动作为下一轮发出。与 ⌘/Ctrl+Enter 插队相对。
   const handleFollowUp = useCallback(
     (text: string) => {
       if (remoteStreaming) {
-        void steerRemote(text);
+        updateRemoteFollowUps((current) => [...current, text]);
         return;
       }
       followUpUserMessage({ content: text });
     },
-    [remoteStreaming, steerRemote, followUpUserMessage],
+    [remoteStreaming, followUpUserMessage, updateRemoteFollowUps],
   );
 
   // 首页输入框接力：EmptyChatGate 建好 chat 并跳转后，首条消息暂存在
@@ -995,14 +1223,14 @@ function AgentChatView({
   const handleExecutePlan = useCallback(() => {
     handleModeChange("agent");
     setPlanReady(false);
-    void handleSubmit({ content: "请按照上面的计划开始执行。" });
+    void handleSubmit({ content: t("Start executing the plan above.") });
   }, [handleModeChange, handleSubmit]);
 
   // 分享当前对话：截取整个聊天面板区域（含 header + 消息 + 输入框），
   // 由主进程 capturePage 后写入系统剪贴板，用户可直接粘贴到任何地方。
   const handleShare = useCallback(async (): Promise<boolean> => {
-    if (!isElectron()) return false;
-    const bridge = getElectronBridge()!;
+    if (!hasHostBridge()) return false;
+    const bridge = getHostBridge()!;
     const panel = document.querySelector('.chat-panel-container');
     const rect = panel?.getBoundingClientRect();
     const result = await bridge.local?.captureScreenshot(
@@ -1042,6 +1270,26 @@ function AgentChatView({
     ];
   }, [messages, remoteContent, chatId]);
   const effectiveIsStreaming = isStreaming || remoteStreaming;
+
+  useEffect(() => {
+    if (!chatId) return;
+    window.dispatchEvent(
+      new CustomEvent("chat:streaming-change", {
+        detail: { chatId, isStreaming: effectiveIsStreaming },
+      }),
+    );
+    return () => {
+      // 切走不取消回合。正在流式时卸载不要把侧栏指示清掉，侧栏会轮询
+      // live-stream，等回合结束后再摘。本页确认已结束时，下一次 effect
+      // 会带 isStreaming:false。
+      if (effectiveIsStreaming) return;
+      window.dispatchEvent(
+        new CustomEvent("chat:streaming-change", {
+          detail: { chatId, isStreaming: false },
+        }),
+      );
+    };
+  }, [chatId, effectiveIsStreaming]);
   const effectiveCurrentTurnActions: ExecutedAction[] = remoteStreaming
     ? ((liveStream.executedActions as ExecutedAction[] | undefined) ?? [])
     : currentTurnActions;
@@ -1069,12 +1317,32 @@ function AgentChatView({
       suggestedReplies.messageId === tailAssistantDbId)
       ? suggestedReplies.suggestions
       : undefined;
+  const visiblePendingFollowUps = [
+    ...pendingFollowUps.map((message) => message.content),
+    ...remoteFollowUps,
+  ];
+  const chatOutputs = useMemo(() => {
+    const merged: TurnFile[] = [];
+    for (const files of Object.values(turnFilesByMessageId)) merged.push(...files);
+    merged.push(...currentTurnFiles);
+    return merged;
+  }, [turnFilesByMessageId, currentTurnFiles]);
+  const handleRemovePendingFollowUp = (index: number) => {
+    if (index < pendingFollowUps.length) {
+      removeFollowUp(index);
+      return;
+    }
+    const remoteIndex = index - pendingFollowUps.length;
+    updateRemoteFollowUps((current) =>
+      current.filter((_, itemIndex) => itemIndex !== remoteIndex),
+    );
+  };
 
   return (
     <div className="flex h-full w-full flex-col">
       {hydrationError && (
         <div className="border-b border-agent-border bg-agent-muted/60 px-2.5 py-1 text-xs text-agent-destructive">
-          加载对话历史失败：{hydrationError}
+          {t("Failed to load chat history: {error}", { error: hydrationError })}
         </div>
       )}
       <LocalChatPanel
@@ -1085,26 +1353,29 @@ function AgentChatView({
         onCancel={handleCancel}
         onSteer={handleSteer}
         onFollowUp={handleFollowUp}
-        pendingFollowUps={pendingFollowUps.map((m) => m.content)}
-        onRemoveFollowUp={removeFollowUp}
+        pendingFollowUps={visiblePendingFollowUps}
+        onRemoveFollowUp={handleRemovePendingFollowUp}
         className="flex-1"
-        emptyHero={{
-          title: BRAND_NAME,
-          subtitle: '输入消息，直接开始一段新对话。',
-        }}
+        emptyHero
         header={
           <ChatHeader
             chat={chat}
-            onBranchSwitched={isElectron() ? onBranchTick : undefined}
+            onBranchSwitched={hasHostBridge() ? onBranchTick : undefined}
             onInspectTask={ctx.inspectTask}
             tasks={tasks}
             chatSlots={ctx.chatSlots}
             rightPanel={ctx.rightPanel}
-            onToggleChatSlot={ctx.onToggleChatSlot}
+            openPanelIds={ctx.openPanelIds}
+            onOpenRightPanel={ctx.onOpenRightPanel}
+            showProject={showProjectsChrome}
+            project={chatProject}
+            outputs={chatOutputs}
+            onShare={hasHostBridge() ? handleShare : undefined}
+            onChatChanged={ctx.refreshChats}
           />
         }
         onRegenerate={
-          isElectron()
+          hasHostBridge()
             ? async (messageId) => {
                 // 后端 regenerate 流跑完后桌面 store 已是新分支投影；
                 // bump tick 重挂消息列表。
@@ -1113,7 +1384,7 @@ function AgentChatView({
               }
             : undefined
         }
-        inputPlaceholder="向本地 Agent 发送消息…"
+        inputPlaceholder={t("Message the local Agent…")}
         agents={ctx.agents}
         chats={ctx.chats}
         currentAgent={agent}
@@ -1132,17 +1403,19 @@ function AgentChatView({
         currentTurnChildren={effectiveCurrentTurnChildren}
         orchestrationChildrenByMessageId={orchestrationChildrenByMessageId}
         currentRound={currentRound}
+        retryState={retryState}
+        failureAction={failureAction}
         interrupted={interrupted}
         onContinueInterrupted={handleContinueInterrupted}
         onDismissInterrupted={handleDismissInterrupted}
         finishedTasks={finishedTasks}
         onInspectTask={handleInspectTask}
         onDismissFinishedTask={dismissFinished}
-        onShare={isElectron() ? handleShare : undefined}
+        onShare={hasHostBridge() ? handleShare : undefined}
         suggestedReplies={visibleSuggestedReplies}
         onSelectSuggestion={handleSelectSuggestion}
         onOpenSettings={
-          isElectron() && settingsChrome("llm")
+          hasHostBridge() && settingsChrome("llm")
             ? () => setLlmSettingsOpen(true)
             : undefined
         }
@@ -1152,6 +1425,11 @@ function AgentChatView({
             reasoningEffort={effortOverride}
             onSelectModel={setModelOverride}
             onSelectEffort={setEffortOverride}
+            onOpenSettings={
+              hasHostBridge() && settingsChrome("llm")
+                ? () => setLlmSettingsOpen(true)
+                : undefined
+            }
             disabled={isStreaming}
           />
         }
@@ -1174,6 +1452,32 @@ function AgentChatView({
         }
         inputBanner={
           <>
+            {newChatError ? (
+              <div
+                role="status"
+                data-testid="new-chat-error"
+                className="mb-1 flex items-center justify-between gap-2 rounded-agent-md border border-agent-destructive/20 bg-agent-destructive/10 px-2.5 py-1.5 text-xs text-agent-destructive"
+              >
+                <span>{newChatError}</span>
+                <button
+                  type="button"
+                  onClick={() => setNewChatError(null)}
+                  className="rounded px-1 hover:bg-agent-destructive/10"
+                  aria-label={t("Dismiss")}
+                >
+                  ✕
+                </button>
+              </div>
+            ) : null}
+            <GoalLoopStatusBar
+              chatId={chatId}
+              goal={goal}
+              loops={loops}
+              onChanged={() => {
+                void refreshGoal();
+                void refreshLoops();
+              }}
+            />
             {/* W6-5 项目信任门控：项目含规则文件但未信任时提示授权。 */}
             {showProjectsChrome ? (
             <ProjectTrustBanner
@@ -1186,7 +1490,9 @@ function AgentChatView({
             <div className="mx-2.5 mb-1 flex items-center justify-between gap-2 rounded-agent-md border border-amber-400/50 bg-amber-400/10 px-2.5 py-1.5 text-xs">
               <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
                 <LuListChecks className="h-4 w-4 shrink-0" />
-                <span>计划已生成。确认无误后可切换到 Agent 模式开始执行。</span>
+                <span>
+                  {t("The plan is ready. Once it looks right, switch to Agent mode to execute it.")}
+                </span>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -1195,7 +1501,7 @@ function AgentChatView({
                   className="rounded-full px-2 py-1 text-agent-muted-foreground transition-colors hover:text-agent-foreground"
                   data-testid="plan-dismiss"
                 >
-                  忽略
+                  {t("Dismiss")}
                 </button>
                 <button
                   type="button"
@@ -1203,7 +1509,7 @@ function AgentChatView({
                   className="inline-flex items-center gap-1 rounded-full bg-agent-foreground px-3 py-1 font-medium text-agent-canvas transition hover:opacity-90"
                   data-testid="plan-execute"
                 >
-                  开始执行计划
+                  {t("Execute plan")}
                   <LuArrowRight className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -1212,7 +1518,7 @@ function AgentChatView({
           </>
         }
       />
-      {isElectron() && settingsChrome("llm") && (
+      {hasHostBridge() && settingsChrome("llm") && (
         <LocalLlmSettingsModal
           open={llmSettingsOpen}
           onClose={() => setLlmSettingsOpen(false)}
@@ -1256,7 +1562,6 @@ function EmptyChatGate() {
 
   // 落地页项目选择：还没有 chat 可绑，选中的 projectId 在首次提交
   // createChat 时一并传入。侧栏项目组「+」会带 ?projectId= 预选。
-  const [projects, setProjects] = useState<LocalProject[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     projectIdFromUrl,
   );
@@ -1264,18 +1569,7 @@ function EmptyChatGate() {
     setSelectedProjectId(projectIdFromUrl);
   }, [projectIdFromUrl]);
   const showProjectsChrome = hostToolChrome("projects");
-  const fetchProjects = useCallback(async () => {
-    if (!isElectron() || !hostToolChrome("projects")) return;
-    try {
-      const res = await listProjects();
-      setProjects(res.projects ?? []);
-    } catch {
-      /* 列表失败保持旧数据 */
-    }
-  }, []);
-  useEffect(() => {
-    void fetchProjects();
-  }, [fetchProjects]);
+  const { projects, refresh: fetchProjects } = useProjects();
 
   useEffect(() => {
     inputRef.current?.focusAtEnd();
@@ -1345,7 +1639,7 @@ function EmptyChatGate() {
         ...(selectedProjectId && showProjectsChrome ? { projectId: selectedProjectId } : {}),
         ...(ctx.selectedAgentId ? { agentId: ctx.selectedAgentId } : {}),
       });
-      if (!id) throw new Error("创建对话失败，请重试");
+      if (!id) throw new Error(t("Failed to create the chat. Please try again."));
       // 会话已建，把附件落进会话空间（与 LocalChatPanel 同一套语义）：
       // 所有文件都写落盘路径引用（agent 用 local_read_file 读回）；仅图片
       // 额外进 metadata.images 走多模态，非图片文件不会被图片逻辑吞掉。
@@ -1385,25 +1679,18 @@ function EmptyChatGate() {
       data-testid="empty-chat-home"
     >
       <div className="flex w-full max-w-3xl flex-col items-center gap-4">
-        <div className="text-center">
-          <h1 className="text-xl font-semibold tracking-tight text-agent-foreground">
-            {BRAND_NAME}
-          </h1>
-          <p className="mt-1.5 text-xs text-agent-muted-foreground">
-            输入消息，直接开始一段新对话。
-          </p>
-        </div>
+        <EmptyChatHero />
         <div className="w-full">
           <ChatInput
             ref={inputRef}
             value={inputValue}
             onChange={setInputValue}
             onSubmit={handleSubmit}
-            disabled={!isElectron() || isCreating}
+            disabled={!hasHostBridge() || isCreating}
             placeholder={
               mode === "plan"
-                ? "描述你的目标，Agent 将先制定计划…"
-                : "向本地 Agent 发送消息…"
+                ? t("Describe your goal. The Agent will make a plan first…")
+                : t("Message the local Agent…")
             }
             currentAgent={selectedAgent}
             agents={ctx.agents}
@@ -1411,7 +1698,7 @@ function EmptyChatGate() {
             selectedAgentId={ctx.selectedAgentId}
             onSelectAgent={handleSelectAgent}
             onOpenSettings={
-              isElectron() && settingsChrome("llm")
+              hasHostBridge() && settingsChrome("llm")
                 ? () => setLlmSettingsOpen(true)
                 : undefined
             }
@@ -1421,11 +1708,16 @@ function EmptyChatGate() {
                 reasoningEffort={effortOverride}
                 onSelectModel={setModelOverride}
                 onSelectEffort={setEffortOverride}
-                disabled={!isElectron() || isCreating}
+                onOpenSettings={
+                  hasHostBridge() && settingsChrome("llm")
+                    ? () => setLlmSettingsOpen(true)
+                    : undefined
+                }
+                disabled={!hasHostBridge() || isCreating}
               />
             }
             leadingChrome={
-              isElectron() && showProjectsChrome ? (
+              hasHostBridge() && showProjectsChrome ? (
                 <ProjectPickerButton
                   projects={projects}
                   value={selectedProjectId}
@@ -1447,7 +1739,7 @@ function EmptyChatGate() {
         </div>
         {isCreating && (
           <p className="text-xs text-agent-muted-foreground">
-            正在创建对话…
+            {t("Creating chat…")}
           </p>
         )}
         {createError && (
@@ -1455,13 +1747,15 @@ function EmptyChatGate() {
             {createError}
           </p>
         )}
-        {!isElectron() && (
+        {!hasHostBridge() && (
           <p className="text-xs text-agent-destructive">
-            浏览器预览模式 — 没有 Electron IPC 桥接，聊天列表与流式响应不可用。
+            {t(
+              "Browser preview mode: no host bridge, so the chat list and streaming responses are unavailable.",
+            )}
           </p>
         )}
       </div>
-      {isElectron() && settingsChrome("llm") && (
+      {hasHostBridge() && settingsChrome("llm") && (
         <LocalLlmSettingsModal
           open={llmSettingsOpen}
           onClose={() => setLlmSettingsOpen(false)}

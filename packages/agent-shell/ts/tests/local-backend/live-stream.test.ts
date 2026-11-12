@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getLiveStream,
   liveStreamCount,
+  recordGrantedEgress,
   registerLiveStream,
   removeLiveStream,
 } from '../../src/local-backend/live-stream';
@@ -61,5 +62,40 @@ describe('live-stream registry', () => {
 
   it('未注册的 chat 返回 undefined', () => {
     expect(getLiveStream('missing')).toBeUndefined();
+  });
+
+  it('stores an allowed egress grant on the running turn', () => {
+    const executedActions: Array<Record<string, unknown>> = [];
+    const timeline: PersistedTurnBlock[] = [];
+    const live = registerLiveStream('chat-egress', { executedActions, timeline, children: [] });
+    let notified = 0;
+    live.notify = () => {
+      notified += 1;
+    };
+    recordGrantedEgress(live, {
+      requestId: 'req-1',
+      arguments: { host: 'registry.example.org', port: 443 },
+      kind: 'allow_once',
+      reason: 'unattended',
+    });
+    expect(executedActions).toEqual([{
+      id: 'egress-req-1',
+      tool: 'network_egress',
+      arguments: { host: 'registry.example.org', port: 443 },
+      success: true,
+      approval: { kind: 'allow_once', auto: true },
+    }]);
+    expect(timeline).toEqual([{ type: 'tools', actions: [executedActions[0]] }]);
+    expect(notified).toBe(1);
+    recordGrantedEgress(live, {
+      requestId: 'req-2',
+      arguments: { host: 'example.com', port: 443 },
+      kind: 'allow_once',
+      reason: '',
+    });
+    const userGrant = executedActions[1] as { approval?: { auto?: boolean } };
+    expect(userGrant.approval?.auto).toBeUndefined();
+    expect(notified).toBe(2);
+    removeLiveStream('chat-egress');
   });
 });

@@ -42,6 +42,25 @@ function seedToolCache(
 }
 
 describe('tool-router / 注册的 MCP 动态工具', () => {
+  it('ad-hoc MCP 工具接受 stdio command 或 Streamable HTTP url', async () => {
+    const router = makeToolRouter();
+    const listSchema = router.getSchemaByName('mcp_list_tools');
+    expect(listSchema?.inputSchema).toMatchObject({
+      properties: {
+        command: { type: 'string' },
+        url: { type: 'string' },
+      },
+    });
+    await expect(router.execute({
+      name: 'mcp_list_tools',
+      arguments: { command: 'node', url: 'https://mcp.example.com/mcp' },
+    })).rejects.toThrow(/之一/);
+    await expect(router.execute({
+      name: 'mcp_list_tools',
+      arguments: {},
+    })).rejects.toThrow(/command.*url/);
+  });
+
   it('已启用且有缓存工具的服务，其工具以 mcp__key__tool 一等工具出场', () => {
     const registry = makeRegistry();
     const server = registry.create({ name: 'filesystem', command: 'npx' });

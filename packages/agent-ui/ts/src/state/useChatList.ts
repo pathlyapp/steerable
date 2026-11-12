@@ -88,6 +88,9 @@ export function useChatList<TChat, TAgent>(
   const [error, setError] = useState<Error | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const pageRef = useRef(1);
+  const hasMoreRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const failedPageRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -104,7 +107,9 @@ export function useChatList<TChat, TAgent>(
       if (!mountedRef.current) return;
       setChats(res.chats);
       setHasMore(res.hasMore);
+      hasMoreRef.current = res.hasMore;
       pageRef.current = 1;
+      failedPageRef.current = null;
       setError(null);
     } catch (err) {
       if (mountedRef.current) setError(err instanceof Error ? err : new Error(String(err)));
@@ -123,21 +128,42 @@ export function useChatList<TChat, TAgent>(
   }, []);
 
   const loadMoreChats = useCallback(async () => {
-    if (!hasMoreChats || isLoadingMoreChats) return;
+    const next = pageRef.current + 1;
+    if (
+      !hasMoreRef.current ||
+      loadingMoreRef.current ||
+      failedPageRef.current === next
+    ) {
+      return;
+    }
+    loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
-      const next = pageRef.current + 1;
       const res = await transportRef.current.listChats({ page: next, pageSize });
       if (!mountedRef.current) return;
-      setChats((prev) => prev.concat(res.chats));
+      setChats((prev) => {
+        const ids = new Set(prev.map(transportRef.current.getChatId));
+        return prev.concat(
+          res.chats.filter((chat) => {
+            const id = transportRef.current.getChatId(chat);
+            if (ids.has(id)) return false;
+            ids.add(id);
+            return true;
+          }),
+        );
+      });
       setHasMore(res.hasMore);
+      hasMoreRef.current = res.hasMore;
       pageRef.current = next;
+      failedPageRef.current = null;
     } catch (err) {
+      failedPageRef.current = next;
       if (mountedRef.current) setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
+      loadingMoreRef.current = false;
       if (mountedRef.current) setLoadingMore(false);
     }
-  }, [hasMoreChats, isLoadingMoreChats, pageSize]);
+  }, [pageSize]);
 
   const createChat = useCallback(
     async (input?: { agentId?: string; projectId?: string }) => {

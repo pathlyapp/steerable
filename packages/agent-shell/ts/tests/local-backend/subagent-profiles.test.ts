@@ -371,3 +371,18 @@ describe('mergeTurnSubagentParam', () => {
     expect(param.maxParallel).toBe(5);
   });
 });
+
+describe('BUILTIN_SUBAGENT_PROFILES / 只读域', () => {
+  it('探索画像能搜和读目标，碰不到写、命令和结束任务', () => {
+    const tools = BUILTIN_SUBAGENT_PROFILES.explore.toolFilter ?? [];
+    expect(tools).toEqual(expect.arrayContaining(['grep', 'glob', 'get_goal', 'view_image']));
+    for (const name of ['pwsh', 'local_exec_shell', 'create_goal', 'update_goal', 'job_kill', 'local_write_file']) {
+      expect(tools).not.toContain(name);
+    }
+  });
+
+  it('调研画像在探索域上只多一个写文件', () => {
+    const explore = BUILTIN_SUBAGENT_PROFILES.explore.toolFilter ?? [];
+    expect(BUILTIN_SUBAGENT_PROFILES.research.toolFilter).toEqual([...explore, 'local_write_file']);
+  });
+});

@@ -2,7 +2,7 @@
  * TaskOutcomeCards 契约：后台任务的终态要出现在用户正在看的对话里。
  *   - 完成显示 answer、失败显示 error，任务名都在；
  *   - 「查看过程」把任务交给右侧推理面板，「忽略」只发出 taskId；
- *   - worktree 待合并的任务提示去任务按钮处理（卡片不重复那套操作）；
+ *   - worktree 待合并的任务提示去标题栏的对话资源处理（卡片不重复那套操作）；
  *   - 一次结束太多任务时只留前几张，其余折成一行汇总。
  */
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -65,14 +65,14 @@ describe('TaskOutcomeCards', () => {
     const task = makeTask();
     const { onInspect, onDismiss } = renderCards([task]);
 
-    fireEvent.click(screen.getByRole('button', { name: '查看过程' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View process' }));
     expect(onInspect).toHaveBeenCalledWith(task);
 
-    fireEvent.click(screen.getByRole('button', { name: '忽略' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(onDismiss).toHaveBeenCalledWith('task-1');
   });
 
-  it('worktree 待合并时指回任务按钮，卡片自己不放合并操作', () => {
+  it('worktree 待合并时指回对话资源，卡片自己不放合并操作', () => {
     renderCards([
       makeTask({
         worktreeState: 'pending',
@@ -82,8 +82,21 @@ describe('TaskOutcomeCards', () => {
     ]);
 
     expect(screen.getByText('steerable/fix')).toBeTruthy();
-    expect(screen.getByText(/待合并 — 在标题栏的任务按钮里处理/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /合并/ })).toBeNull();
+    expect(screen.getByText(/Awaiting merge. Handle it from Chat resources in the title bar/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /merge/i })).toBeNull();
+  });
+
+  it('长任务说明和结果都只留两行，避免把通知撑满', () => {
+    const longTask = '你是甲方'.repeat(80);
+    const longAnswer = '复核结论'.repeat(80);
+    renderCards([makeTask({ task: longTask, answer: longAnswer })]);
+
+    const title = document.querySelector('[data-task-outcome-title]');
+    const detail = document.querySelector('[data-task-outcome-detail]');
+    expect(title?.className).toContain('line-clamp-2');
+    expect(detail?.className).toContain('line-clamp-2');
+    expect(title?.textContent).toContain(longTask);
+    expect(detail?.textContent).toContain(longAnswer);
   });
 
   it('超过三个时只留前三张，其余折成一行汇总', () => {
@@ -92,6 +105,6 @@ describe('TaskOutcomeCards', () => {
     );
 
     expect(document.querySelectorAll('[data-task-outcome]')).toHaveLength(3);
-    expect(screen.getByText(/另有 2 个后台任务已结束/)).toBeTruthy();
+    expect(screen.getByText(/2 more background tasks finished/)).toBeTruthy();
   });
 });

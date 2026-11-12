@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
+import { t } from '@/i18n';
 
 // 把 xterm 那一坨 (~300KB) 拆到独立 chunk —— 用户没打开终端就不下载。
 // 跟原 Next.js 版本里 `dynamic(() => import('./TerminalView'), {ssr:false})`
@@ -16,7 +17,7 @@ const TerminalView = lazy(() =>
  * xterm 视图，不杀 shell；重新打开时通过 `terminal:ensure` 的 replay
  * buffer 补回面板关闭期间的输出。
  *
- * Electron 检测保留给浏览器预览 / dev 模式（没有 `window.electron` 就
+ * Electron 检测保留给浏览器预览 / dev 模式（没有 `window.steerableHost` 就
  * 连不到本地 PTY）。延迟到首个 effect 再渲染，避免检测闪烁。
  */
 export function TerminalPanel({
@@ -32,7 +33,7 @@ export function TerminalPanel({
   const [hasElectron, setHasElectron] = useState<boolean | null>(null);
 
   useEffect(() => {
-    setHasElectron(isElectron() && !!getElectronBridge()?.terminal);
+    setHasElectron(hasHostBridge() && !!getHostBridge()?.terminal);
   }, []);
 
   if (hasElectron === null) {
@@ -42,9 +43,9 @@ export function TerminalPanel({
     return (
       <div className="flex h-full w-full items-center justify-center bg-black p-4 text-center font-mono text-xs text-white">
         <div>
-          <p className="mb-2">⚠️ 此面板需要桌面客户端或 BS server 连接。</p>
+          <p className="mb-2">⚠️ {t('This panel needs the desktop client or a BS server connection.')}</p>
           <p className="text-white/60">
-            当前页面没有可用的宿主 bridge，无法连接到本地 PTY。
+            {t('This page has no host bridge, so it cannot connect to a local PTY.')}
           </p>
         </div>
       </div>

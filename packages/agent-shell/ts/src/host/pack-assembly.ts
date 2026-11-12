@@ -1,7 +1,7 @@
 /**
  * 包装配注册表（阶段 2.3）——纯构建期组合的宿主侧机制。
  *
- * 宿主（host/runtime.ts、main.ts、server/index.ts）不再静态 import 任何
+ * 宿主（host/runtime.ts、server/index.ts）不再静态 import 任何
  * 包代码：产品组装根（products/<id>/active.ts）把包的装配函数注册进本
  * 注册表，宿主在装配期逐个调用。产品的 tsc 编译单元只 include 自己的包，
  * 他包代码物理上不进产品 dist。
@@ -10,14 +10,12 @@
  *  - import 期（active.ts 顶层）：迁移/种子/品牌等无宿主依赖的注册；
  *  - 装配期（createHostRuntime 内）：服务/工具/路由等需要宿主能力的部分，
  *    经 {@link PackAssemblyDeps} 注入。
- * 入口差异：CS（main.ts）额外消费 handle.ipc，BS（server/index.ts）额外
- * 消费 handle.httpRoutes——包的入口面贡献由宿主循环驱动，宿主代码里
- * 不出现任何包名。
+ * server/index.ts 消费 handle.httpRoutes——包的入口面贡献由宿主循环驱动，
+ * 宿主代码里不出现任何包名。
  */
 
 import type {
   HttpRouteContribution,
-  IpcContribution,
   ToolContribution,
 } from '../scenario/pack.js';
 import type { PackDbAccess } from '../storage/driver.js';
@@ -30,7 +28,7 @@ export interface PackAssemblyDeps {
   readonly listTools: () => { name: string; description: string; inputSchema: unknown }[];
   /** chatId → 绑定项目（无项目对话返回 null）。与 router.resolveChatProject 同源。 */
   readonly resolveChatProject: (chatId: string) => Promise<{ name: string; folderPath: string } | null>;
-  /** 面向全部用户面的事件广播（CS=所有窗口 IPC，BS=SSE 总线）。 */
+  /** 面向全部用户面的事件广播（SSE 总线）。 */
   readonly broadcast: (channel: string, payload: unknown) => void;
   /** 工具贡献注册口（toolRouter.registerToolContributions 的收窄面）。 */
   readonly registerTools: (tools: readonly ToolContribution[]) => void;
@@ -61,19 +59,11 @@ export interface PackAssemblyDeps {
   readonly onLog: (line: string) => void;
 }
 
-/** CS 宿主的窗口能力：打开一个加载应用内路由的独立窗口。 */
-export interface PackHostWindowCapabilities {
-  /** route 如 '/<pack>-debug-log'；title 为窗口副标题（宿主拼品牌名）。 */
-  openRouteWindow(route: string, options: { title: string }): Promise<void>;
-}
-
 /** 装配产物：宿主按入口面消费。全部槽位可选。 */
 export interface PackAssemblyHandle {
   /** 宿主关停钩子（进程退出时按装配逆序调用）。 */
   readonly dispose?: () => void | Promise<void>;
-  /** CS：包 IPC 贡献（需要宿主窗口能力时经 caps 注入）。 */
-  readonly ipc?: (caps: PackHostWindowCapabilities) => readonly IpcContribution[];
-  /** BS：/host/<packId>/* 路由贡献。 */
+  /** /host/<packId>/* 路由贡献。 */
   readonly httpRoutes?: () => readonly HttpRouteContribution[];
 }
 

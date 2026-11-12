@@ -3,7 +3,7 @@
  * sentinel 抓不住的形态回退 headless。Electron main 与 BS server 共用。
  * 命令进入 PTY 时不通知 renderer 展开面板——终端只由用户手动打开。
  */
-import log from 'electron-log';
+import { log } from '../log.js';
 import {
   GUI_LAUNCH_WAIT_MS,
   getConfiguredExecTimeoutMs,

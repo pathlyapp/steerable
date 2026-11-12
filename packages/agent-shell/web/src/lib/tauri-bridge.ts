@@ -8,20 +8,25 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import html2canvas from 'html2canvas';
-import type { HostBridge } from './electron-bridge';
+import type {
+  AppReleaseSnapshot,
+  HostClipboard,
+  HostBridge,
+  PythonRunnerSnapshot,
+} from './host-bridge';
 import { createHttpBridge } from './http-bridge';
 
-type VoidCallback = () => void;
+type EventCallback<T> = (payload: T) => void;
 
-function createMenuSubscription(event: string): {
-  on(callback: VoidCallback): void;
+function createMenuSubscription<T = void>(event: string): {
+  on(callback: EventCallback<T>): void;
   off(): void;
 } {
-  const subscriptions = new Map<VoidCallback, Promise<UnlistenFn>>();
+  const subscriptions = new Map<EventCallback<T>, Promise<UnlistenFn>>();
   return {
     on(callback) {
       if (subscriptions.has(callback)) return;
-      const subscription = listen(event, () => callback());
+      const subscription = listen<T>(event, ({ payload }) => callback(payload));
       subscriptions.set(callback, subscription);
     },
     off() {
@@ -38,6 +43,7 @@ export function createTauriBridge(): HostBridge {
   const bridge = createHttpBridge();
   const newChatMenu = createMenuSubscription('menu:new-chat');
   const terminalMenu = createMenuSubscription('menu:open-terminal');
+  const pasteMenu = createMenuSubscription<HostClipboard>('menu:paste');
 
   return {
     ...bridge,
@@ -85,6 +91,83 @@ export function createTauriBridge(): HostBridge {
     offMenuNewChat: newChatMenu.off,
     onMenuOpenTerminal: terminalMenu.on,
     offMenuOpenTerminal: terminalMenu.off,
+    onMenuPaste: pasteMenu.on,
+    offMenuPaste: pasteMenu.off,
+    readClipboard: () => invoke<HostClipboard>('host_read_clipboard'),
+    readClipboardText: () => invoke<string>('host_read_clipboard_text'),
+    getZoom: () => invoke<number>('ui_get_zoom'),
+    setZoom: (scale) => invoke<number>('ui_set_zoom', { scale }),
+    setLocale: (locale) => {
+      void invoke('ui_set_locale', { locale });
+    },
+    onZoomChanged(callback) {
+      let unlisten: UnlistenFn | undefined;
+      let cancelled = false;
+      const pending = listen<{ scale: number }>('ui:zoom-changed', (event) => {
+        callback(event.payload);
+      });
+      void pending.then((stop) => {
+        if (cancelled) stop();
+        else unlisten = stop;
+      });
+      return () => {
+        cancelled = true;
+        if (unlisten) unlisten();
+        else void pending.then((stop) => stop());
+      };
+    },
+    app: {
+      snapshot: () => invoke<AppReleaseSnapshot>('app_release_snapshot'),
+      check: () => invoke<AppReleaseSnapshot>('app_release_check'),
+      install: () => invoke<AppReleaseSnapshot>('app_release_install'),
+      onState(callback) {
+        let unlisten: UnlistenFn | undefined;
+        let cancelled = false;
+        const pending = listen<AppReleaseSnapshot>('app-update-state', (event) => {
+          callback(event.payload);
+        });
+        void pending.then((stop) => {
+          if (cancelled) stop();
+          else unlisten = stop;
+        });
+        return () => {
+          cancelled = true;
+          if (unlisten) unlisten();
+          else void pending.then((stop) => stop());
+        };
+      },
+    },
+    pythonRunner: {
+      snapshot: () => invoke<PythonRunnerSnapshot>('python_runner_snapshot'),
+      download: (url) =>
+        invoke<PythonRunnerSnapshot>('python_runner_download', {
+          url: url ?? null,
+        }),
+      cancel: () => invoke<PythonRunnerSnapshot>('python_runner_cancel'),
+      pickLocal: () => invoke<string | null>('python_runner_pick_local'),
+      useLocal: (path) =>
+        invoke<PythonRunnerSnapshot>('python_runner_use_local', { path }),
+      useDefault: () =>
+        invoke<PythonRunnerSnapshot>('python_runner_use_default'),
+      restart: () => invoke<void>('python_runner_restart'),
+      onState(callback) {
+        let unlisten: UnlistenFn | undefined;
+        let cancelled = false;
+        const pending = listen<PythonRunnerSnapshot>(
+          'python-runner-state',
+          (event) => callback(event.payload),
+        );
+        void pending.then((stop) => {
+          if (cancelled) stop();
+          else unlisten = stop;
+        });
+        return () => {
+          cancelled = true;
+          if (unlisten) unlisten();
+          else void pending.then((stop) => stop());
+        };
+      },
+    },
   };
 }
 

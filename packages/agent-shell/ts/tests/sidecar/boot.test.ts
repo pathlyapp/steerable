@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   webToolsEnabled: vi.fn(() => true),
   sidecarWebSearchEnv: vi.fn(() => ({ STEERABLE_WEB_SEARCH_PROVIDER: 'host' }) as Record<string, string>),
   executeHostedWebSearch: vi.fn(async () => ({ results: [] })),
+  getProductConfig: vi.fn(() => ({})),
 }));
 
 vi.mock('../../src/sidecar/supervisor.js', () => ({
@@ -61,27 +62,36 @@ vi.mock('../../src/sidecar/reverse-spawn.js', () => ({
 vi.mock('../../src/sidecar/proxy-detect.js', () => ({
   collectAmbientProxyEndpoints: mocks.collectAmbientProxyEndpoints,
 }));
-vi.mock('../../src/sidecar/egress-proxy.js', () => ({
-  buildEgressProxyPlan: mocks.buildEgressProxyPlan,
-  decideEgressProxy: mocks.decideEgressProxy,
-  ensureEgressProxyExecutable: mocks.ensureEgressProxyExecutable,
-  deriveWebEgressHosts: mocks.deriveWebEgressHosts,
-  pickFreePort: mocks.pickFreePort,
-  recordEgressPosture: mocks.recordEgressPosture,
-  startEgressProxy: mocks.startEgressProxy,
-}));
+vi.mock('../../src/sidecar/egress-proxy.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/sidecar/egress-proxy.js')>();
+  return {
+    ...actual,
+    buildEgressProxyPlan: mocks.buildEgressProxyPlan,
+    decideEgressProxy: mocks.decideEgressProxy,
+    ensureEgressProxyExecutable: mocks.ensureEgressProxyExecutable,
+    deriveWebEgressHosts: mocks.deriveWebEgressHosts,
+    pickFreePort: mocks.pickFreePort,
+    recordEgressPosture: mocks.recordEgressPosture,
+    startEgressProxy: mocks.startEgressProxy,
+  };
+});
 vi.mock('../../src/tool-router.js', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../../src/tool-router.js')>();
   return { ...mod, webToolsEnabled: mocks.webToolsEnabled };
 });
 vi.mock('../../src/storage/web-search-settings.js', () => ({
   sidecarWebSearchEnv: mocks.sidecarWebSearchEnv,
+  defaultSearchBaseUrl: () => 'https://search.example',
 }));
 vi.mock('../../src/hosted-web-search.js', () => ({
   executeHostedWebSearch: mocks.executeHostedWebSearch,
 }));
+vi.mock('../../src/product-config.js', () => ({
+  getProductConfig: mocks.getProductConfig,
+}));
 
 import { startHostSidecar, shutdownHostSidecar } from '../../src/sidecar/boot.js';
+import { allowEgressForBaseUrl } from '../../src/sidecar/egress-proxy.js';
 
 /** 假 supervisor：EventEmitter（once/emit）+ 测试期可断言的 RPC 桩。 */
 function fakeSupervisor(overrides: Record<string, unknown> = {}) {
@@ -102,6 +112,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     setWebTools: vi.fn(),
     setHostedWebSearch: vi.fn(),
     setPluginRpc: vi.fn(),
+    refreshPluginTools: vi.fn(async () => {}),
   };
   const deps = {
     store: { getWebSearchSettings: mocks.storeGetWebSearchSettings },
@@ -115,7 +126,11 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
   return Object.assign(deps, toolRouter) as never;
 }
 
-const ENV_KEYS = ['STEERABLE_USE_SIDECAR', 'STEERABLE_EGRESS_PROXY', 'STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS'];
+const ENV_KEYS = [
+  'STEERABLE_EGRESS_PROXY',
+  'STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS',
+  'STEERABLE_PYTHON',
+];
 let savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -127,13 +142,14 @@ beforeEach(() => {
   mocks.ensureEgressProxyExecutable.mockResolvedValue('/usr/bin/steerable-egress-proxy');
   mocks.webToolsEnabled.mockReturnValue(true);
   mocks.sidecarWebSearchEnv.mockReturnValue({ STEERABLE_WEB_SEARCH_PROVIDER: 'host' });
+  mocks.getProductConfig.mockReturnValue({});
   mocks.storeGetWebSearchSettings.mockReturnValue(undefined);
   mocks.llmGetSettings.mockReturnValue({ baseUrl: 'https://llm.example/v1', apiKey: 'k' });
   mocks.deriveEgressAllowListFromBaseUrl.mockReturnValue(['llm.example']);
   savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
-  delete process.env.STEERABLE_USE_SIDECAR;
   delete process.env.STEERABLE_EGRESS_PROXY;
   delete process.env.STEERABLE_SIDECAR_SANDBOX_ALLOWED_HOSTS;
+  delete process.env.STEERABLE_PYTHON;
 });
 
 afterEach(async () => {
@@ -145,13 +161,6 @@ afterEach(async () => {
 });
 
 describe('startHostSidecar · 开关与 spawn 计划', () => {
-  it('STEERABLE_USE_SIDECAR=0 → 完全不启动（opt-out）', async () => {
-    process.env.STEERABLE_USE_SIDECAR = '0';
-    await startHostSidecar(makeDeps());
-    expect(mocks.supervisorStart).not.toHaveBeenCalled();
-    expect(mocks.setSidecarSupervisorPending).not.toHaveBeenCalled();
-  });
-
   it('正常启动：storage path 参数、可写根、PTC/run_code 环境、全局句柄与 pending 登记', async () => {
     const sup = fakeSupervisor();
     mocks.supervisorStart.mockResolvedValue(sup);
@@ -169,6 +178,28 @@ describe('startHostSidecar · 开关与 spawn 计划', () => {
     expect(plan.env.ELECTRON_RUN_AS_NODE).toBeUndefined();
     expect(mocks.setSidecarSupervisor).toHaveBeenCalledWith(sup);
     expect(mocks.setSidecarSupervisorPending).toHaveBeenCalledOnce();
+  });
+
+  it('启动尚未 ready 时退出会立即关闭已创建的 supervisor', async () => {
+    const sup = fakeSupervisor();
+    let resolveStart: ((supervisor: ReturnType<typeof fakeSupervisor>) => void) | undefined;
+    mocks.supervisorStart.mockImplementation(
+      async (_options: unknown, onCreate?: (supervisor: ReturnType<typeof fakeSupervisor>) => void) => {
+        onCreate?.(sup);
+        return await new Promise((resolve) => {
+          resolveStart = resolve;
+        });
+      },
+    );
+
+    const starting = startHostSidecar(makeDeps());
+    await vi.waitFor(() => expect(resolveStart).toBeDefined());
+    await shutdownHostSidecar();
+    expect(sup.shutdown).toHaveBeenCalled();
+
+    resolveStart!(sup);
+    await starting;
+    expect(mocks.setSidecarSupervisor).not.toHaveBeenCalledWith(sup);
   });
 
   it('反向通道全接线：tool.invoke / approval / ask_user / read_state.seed / host.process.spawn', async () => {
@@ -292,10 +323,20 @@ describe('startHostSidecar · web 工具与插件握手', () => {
     const deps = makeDeps();
     await startHostSidecar(deps);
     const setPluginRpc = (deps as never as { setPluginRpc: ReturnType<typeof vi.fn> }).setPluginRpc;
-    expect(setPluginRpc).toHaveBeenCalledWith(expect.any(Function));
+    expect(setPluginRpc).toHaveBeenCalledWith(expect.any(Function), expect.any(Function));
     const rpc = setPluginRpc.mock.calls[0][0];
     await rpc('plugin.get', { id: 'p1' });
     expect(sup.call).toHaveBeenCalledWith('plugin.get', { id: 'p1' });
+    const invoke = setPluginRpc.mock.calls[0][1];
+    await invoke('plugin_echo', { x: 1 });
+    expect(sup.invokeTool).toHaveBeenCalledWith(
+      'plugin_echo',
+      { x: 1 },
+      expect.objectContaining({ consentGranted: true }),
+    );
+    expect(
+      (deps as never as { refreshPluginTools: ReturnType<typeof vi.fn> }).refreshPluginTools,
+    ).toHaveBeenCalled();
 
     // 失败分支
     vi.clearAllMocks();
@@ -353,6 +394,32 @@ describe('startHostSidecar · egress 代理', () => {
     expect(mocks.recordEgressPosture).toHaveBeenCalledWith({ mode: 'per-host-proxy', reason: null });
   });
 
+  it('产品关闭出网审批时向 sidecar 下发自动会话放行模式', async () => {
+    mocks.getProductConfig.mockReturnValue({ egressApproval: 'off' });
+    mocks.decideEgressProxy.mockReturnValue({ start: true, posture: { mode: 'per-host-proxy', reason: null } });
+    mocks.buildEgressProxyPlan.mockReturnValue({
+      proxyEndpoint: 'http://127.0.0.1:41000',
+      proxyUrl: 'http://127.0.0.1:41000',
+      proxiedHosts: ['llm.example'],
+      sandboxAllowedHosts: ['proxy.local'],
+      broker: null,
+      control: {
+        tokenEnv: 'STEERABLE_EGRESS_CONTROL_TOKEN',
+        tokenValue: 'control-token',
+      },
+    });
+    mocks.startEgressProxy.mockResolvedValue({ stop: vi.fn(), controlPort: 41001 });
+    const sup = fakeSupervisor();
+    mocks.supervisorStart.mockResolvedValue(sup);
+    await startHostSidecar(makeDeps());
+
+    expect(mocks.supervisorStart.mock.calls[0][0].env).toMatchObject({
+      STEERABLE_EGRESS_CONTROL_PORT: '41001',
+      STEERABLE_EGRESS_CONTROL_TOKEN: 'control-token',
+      STEERABLE_EGRESS_APPROVAL: 'off',
+    });
+  });
+
   it('代理启动抛错 → 回退端口级管控，boot 继续（加固不能弄断 LLM 通路）', async () => {
     mocks.decideEgressProxy.mockReturnValue({ start: true, posture: { mode: 'per-host-proxy', reason: null } });
     mocks.buildEgressProxyPlan.mockReturnValue({
@@ -381,8 +448,11 @@ describe('startHostSidecar · egress 代理', () => {
     mocks.supervisorStart.mockResolvedValue(sup);
     await startHostSidecar(makeDeps());
     expect(mocks.startEgressProxy).not.toHaveBeenCalled();
+    // The notice flag is what makes the CLI warn on the first line of a run:
+    // without the proxy the host allow-list is not enforced by domain.
     expect(mocks.recordEgressPosture).toHaveBeenCalledWith({
       mode: 'port-only-fallback',
+      notice: 'egress_proxy_missing',
       reason: '未找到 steerable-egress-proxy 二进制，按主机管控未启用',
     });
   });
@@ -400,26 +470,21 @@ describe('startHostSidecar · egress 代理', () => {
   });
 });
 
-describe('startHostSidecar · boot 失败与迟到补接线', () => {
-  it('start 拒绝且无 supervisor → setSidecarSupervisor(null)，不抛', async () => {
+describe('startHostSidecar · boot 失败', () => {
+  it('start 拒绝且无 supervisor → 清空句柄并拒绝启动', async () => {
     mocks.supervisorStart.mockRejectedValue(new Error('spawn ENOENT'));
-    await expect(startHostSidecar(makeDeps())).resolves.toBeUndefined();
+    await expect(startHostSidecar(makeDeps())).rejects.toThrow('spawn ENOENT');
     expect(mocks.setSidecarSupervisor).toHaveBeenCalledWith(null);
   });
 
-  it('start 失败但带 supervisor（SidecarBootFailure）→ 迟到 ready 时补接线', async () => {
+  it('start 失败但带 supervisor（SidecarBootFailure）→ 停止后台重试并拒绝启动', async () => {
     const late = fakeSupervisor();
     const failure = Object.assign(new Error('first boot failed'), { supervisor: late });
     mocks.supervisorStart.mockRejectedValue(failure);
-    await startHostSidecar(makeDeps());
+    await expect(startHostSidecar(makeDeps())).rejects.toThrow('first boot failed');
     expect(mocks.setSidecarSupervisor).toHaveBeenCalledWith(null);
     expect(late.onReverseRequest).not.toHaveBeenCalled();
-
-    late.emit('ready');
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
-    expect(mocks.setSidecarSupervisor).toHaveBeenCalledWith(late);
-    expect(late.onReverseRequest).toHaveBeenCalledWith('tool.invoke', 'tool-invoke-handler');
+    expect(late.shutdown).toHaveBeenCalledOnce();
   });
 });
 
@@ -455,5 +520,26 @@ describe('shutdownHostSidecar', () => {
     await startHostSidecar(makeDeps());
     await shutdownHostSidecar();
     expect(stop).toHaveBeenCalledOnce();
+  });
+});
+
+describe('plain-http endpoint admit', () => {
+  it('restarts the sidecar so a local Ollama port joins the spawn allow-list', async () => {
+    const sup = fakeSupervisor();
+    mocks.supervisorStart.mockResolvedValue(sup);
+    await startHostSidecar(makeDeps());
+
+    expect(await allowEgressForBaseUrl('http://127.0.0.1:11434')).toBe(true);
+    expect(mocks.supervisorStart).toHaveBeenCalledTimes(2);
+    expect(mocks.supervisorStart.mock.calls[1][0].sandboxAllowedHosts).toEqual([
+      'llm.example',
+      '127.0.0.1:11434',
+    ]);
+
+    expect(await allowEgressForBaseUrl('http://127.0.0.1:11434')).toBe(false);
+    expect(mocks.supervisorStart).toHaveBeenCalledTimes(2);
+    // Remote 443 is already open via web egress; no second restart.
+    expect(await allowEgressForBaseUrl('https://api.openai.com/v1')).toBe(false);
+    expect(mocks.supervisorStart).toHaveBeenCalledTimes(2);
   });
 });

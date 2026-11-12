@@ -19,9 +19,21 @@ export const THINKING_DISPLAY_OPTIONS: ReadonlyArray<{
   label: string;
   hint: string;
 }> = [
-  { mode: 'hidden', label: '隐藏', hint: '不展示思考正文，只保留工作状态行。' },
-  { mode: 'peek', label: '显示5行', hint: '当前轮思考最多露出 5 行，不足不撑开；该轮结束后自动折叠。完整正文请用「完整显示」。' },
-  { mode: 'full', label: '完整显示', hint: '当前轮思考完整展开，该轮结束后自动折叠；工作行结束后仍自动折叠。' },
+  {
+    mode: 'hidden',
+    label: 'Hide',
+    hint: 'Hide the thinking text and keep only the work status line.',
+  },
+  {
+    mode: 'peek',
+    label: 'Show 5 lines',
+    hint: 'Show at most 5 lines of the current turn\'s thinking. Do not stretch the row when there is less, and collapse it when the turn ends. Use "Show all" for the full text.',
+  },
+  {
+    mode: 'full',
+    label: 'Show all',
+    hint: 'Expand the current turn\'s thinking, then collapse it when the turn ends. The work row still collapses when it finishes.',
+  },
 ];
 
 export function isThinkingDisplayMode(value: unknown): value is ThinkingDisplayMode {

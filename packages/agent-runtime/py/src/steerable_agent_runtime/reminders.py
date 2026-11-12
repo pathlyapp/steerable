@@ -119,6 +119,29 @@ class CompactionThrashingReminder(ContextFragment):
         return ("[system notice] Context thrashing:", "")
 
 
+class TodoPlanningReminder(ContextFragment):
+    """A turn has run many tool calls without ever writing a task list."""
+
+    content_kind = "reminder.todo_planning"
+    max_tokens = 200
+
+    def __init__(self, calls: int) -> None:
+        self._calls = calls
+
+    def body(self) -> str:
+        return (
+            f"[system notice] {self._calls} tool calls into this turn and no "
+            "task list yet. If several steps remain, call todo_write now "
+            "with the remaining steps (the current one in_progress) and keep "
+            "it updated as you go. If the work is a single step or nearly "
+            "done, ignore this notice and continue."
+        )
+
+    @classmethod
+    def type_markers(cls) -> tuple[str, str]:
+        return ("[system notice]", "ignore this notice and continue.")
+
+
 # ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
@@ -191,6 +214,11 @@ REMINDER_CATALOG: tuple[ReminderEntry, ...] = (
         id="compaction.thrashing",
         failure_mode="压缩后 3 轮内又填满、连续 3 次（rapid refill）——继续压只毁缓存",
         fragment=CompactionThrashingReminder,
+    ),
+    ReminderEntry(
+        id="planning.todo_missing",
+        failure_mode="多步长任务全程不建 todo 清单，进度只存在于模型的注意力里",
+        fragment=TodoPlanningReminder,
     ),
 )
 

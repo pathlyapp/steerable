@@ -28,6 +28,14 @@ interface PendingAskUser {
   resolve: (result: { answers: Record<string, string | string[]> }) => void;
 }
 
+/** One answered ask, kept so the tool row can store the full text. */
+export interface ResolvedAsk {
+  intro: string;
+  questions: Array<Record<string, unknown>>;
+  answers: Record<string, string | string[]>;
+  unattended?: boolean;
+}
+
 export interface AskUserBridgeDeps {
   broadcast: (channel: 'ask-user:request', payload: AskUserPromptRequest) => void;
   /** 是否有能应答的窗口/浏览器连接；没有则立即空答。 */
@@ -42,30 +50,81 @@ export interface AskUserBridge {
   pending: () => AskUserPromptRequest[];
   /** renderer `ask-user:answer` 的入口；返回是否匹配到待应答请求。 */
   answer: (payload: unknown) => { ok: boolean };
+  /**
+   * The next answered ask for this chat. The tool result that follows only
+   * carries a short preview, so the turn stores this instead.
+   */
+  takeResolved: (chatId: string) => ResolvedAsk | undefined;
 }
 
 const EMPTY_REPLY = { answers: {} } as const;
 
+function rememberAsk(
+  resolved: Map<string, ResolvedAsk[]>,
+  chatId: string | undefined,
+  intro: string,
+  questions: Array<Record<string, unknown>>,
+  answers: Record<string, string | string[]>,
+  unattended: boolean,
+): void {
+  if (questions.length === 0) return;
+  const key = chatId ?? '';
+  const queue = resolved.get(key) ?? [];
+  queue.push({
+    intro,
+    questions,
+    answers,
+    ...(unattended ? { unattended: true } : {}),
+  });
+  resolved.set(key, queue);
+}
+
+function shiftAsk(resolved: Map<string, ResolvedAsk[]>, key: string): ResolvedAsk | undefined {
+  const queue = resolved.get(key);
+  if (!queue || queue.length === 0) return undefined;
+  const next = queue.shift();
+  if (queue.length === 0) resolved.delete(key);
+  return next;
+}
+
+/** The tool-row result stored in place of the truncated preview. */
+export function storedAskResult(ask: ResolvedAsk): {
+  intro: string;
+  questions: Array<Record<string, unknown>>;
+  answers: Record<string, string | string[]>;
+  unattended?: true;
+} {
+  return {
+    intro: ask.intro,
+    questions: ask.questions,
+    answers: ask.answers,
+    ...(ask.unattended ? { unattended: true } : {}),
+  };
+}
+
 export function createAskUserBridge(deps: AskUserBridgeDeps): AskUserBridge {
   const pending = new Map<string, PendingAskUser>();
+  const resolved = new Map<string, ResolvedAsk[]>();
 
   return {
     handler: (params) => {
       const p = (params ?? {}) as Partial<AskUserPromptRequest>;
       const questions = Array.isArray(p.questions) ? p.questions : [];
       const chatId = typeof p.chatId === 'string' && p.chatId ? p.chatId : undefined;
+      const intro = typeof p.intro === 'string' ? p.intro : '';
       if (questions.length === 0) {
         deps.onLog?.('ask_user: malformed request (no questions); answering empty');
         return Promise.resolve({ ...EMPTY_REPLY });
       }
       if (!deps.hasWindow()) {
         deps.onLog?.('ask_user: no renderer window; answering empty');
+        rememberAsk(resolved, chatId, intro, questions as Array<Record<string, unknown>>, {}, false);
         return Promise.resolve({ ...EMPTY_REPLY });
       }
       const requestId = randomUUID();
       const prompt: AskUserPromptRequest = {
         requestId,
-        intro: typeof p.intro === 'string' ? p.intro : '',
+        intro,
         questions: questions as Array<Record<string, unknown>>,
         ...(chatId ? { chatId } : {}),
       };
@@ -76,6 +135,7 @@ export function createAskUserBridge(deps: AskUserBridgeDeps): AskUserBridge {
         } catch (err) {
           pending.delete(requestId);
           deps.onLog?.(`ask_user: broadcast failed: ${String(err)}`);
+          rememberAsk(resolved, chatId, intro, prompt.questions, {}, false);
           resolve({ ...EMPTY_REPLY });
         }
       });
@@ -84,7 +144,7 @@ export function createAskUserBridge(deps: AskUserBridgeDeps): AskUserBridge {
     pending: () => Array.from(pending.values(), ({ prompt }) => prompt),
 
     answer: (payload) => {
-      const p = (payload ?? {}) as { requestId?: unknown; answers?: unknown };
+      const p = (payload ?? {}) as { requestId?: unknown; answers?: unknown; unattended?: unknown };
       const entry = typeof p.requestId === 'string' ? pending.get(p.requestId) : undefined;
       if (!entry) return { ok: false };
       pending.delete(p.requestId as string);
@@ -92,8 +152,18 @@ export function createAskUserBridge(deps: AskUserBridgeDeps): AskUserBridge {
         p.answers && typeof p.answers === 'object' && !Array.isArray(p.answers)
           ? (p.answers as Record<string, string | string[]>)
           : {};
+      rememberAsk(
+        resolved,
+        entry.prompt.chatId,
+        entry.prompt.intro,
+        entry.prompt.questions,
+        answers,
+        p.unattended === true,
+      );
       entry.resolve({ answers });
       return { ok: true };
     },
+
+    takeResolved: (chatId) => shiftAsk(resolved, chatId) ?? (chatId ? shiftAsk(resolved, '') : undefined),
   };
 }

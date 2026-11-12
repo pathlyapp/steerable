@@ -22,6 +22,7 @@ from steerable_agent_runtime import (
 )
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk
 from steerable_agent_runtime.orchestration import (
+    ChildOutcome,
     OrchestrationConfig,
     OrchestrationExecutor,
     orchestration_tool_descriptors,
@@ -274,6 +275,251 @@ async def test_parallel_cap_fails_closed_not_queued() -> None:
     assert spawns[0]["success"] is True
     assert spawns[1]["success"] is False
     assert "orchestration_budget_exceeded" in _error(spawns[1])
+
+
+class _BudgetWallProvider:
+    """The parent follows ``parent_script``. The child calls ``work`` while
+    tools are offered, answers when they are withheld, and finishes once a
+    resume message arrives."""
+
+    name = "fake"
+    model = "fake-model"
+
+    def __init__(self, parent_script: list[dict[str, Any]]) -> None:
+        self._parent_script = parent_script
+        self._parent_index = 0
+        self._work_calls = 0
+        self.child_requests: list[tuple[list[LLMMessage], bool]] = []
+
+    async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+        raise NotImplementedError
+
+    def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+        if messages[0].content_text == "go":
+            entry = self._parent_script[self._parent_index]
+            self._parent_index += 1
+        else:
+            self.child_requests.append((list(messages), tools is not None))
+            if tools is None:
+                entry = {"content": "interim findings"}
+            elif "continue" in messages[-1].content_text:
+                entry = {"content": "final answer"}
+            else:
+                self._work_calls += 1
+                entry = {
+                    "content": f"Reading part {self._work_calls}.",
+                    "tool_calls": [
+                        _tc(
+                            "work",
+                            {"n": self._work_calls},
+                            call_id=f"wk{self._work_calls}",
+                        )
+                    ]
+                }
+
+        async def _gen() -> AsyncIterator[LLMStreamChunk]:
+            for call in entry.get("tool_calls") or []:
+                yield LLMStreamChunk(tool_call_delta=call)
+            if entry.get("content"):
+                yield LLMStreamChunk(content_delta=entry["content"])
+            yield LLMStreamChunk(finish_reason="stop")
+
+        return _gen()
+
+
+@pytest.mark.asyncio
+async def test_child_at_round_wall_answers_and_resumes_in_place() -> None:
+    router = ToolRouter()
+
+    async def work(n: int) -> str:
+        return f"step {n}"
+
+    router.register(work)
+    work_schema = {
+        "type": "function",
+        "function": {
+            "name": "work",
+            "parameters": {
+                "type": "object",
+                "properties": {"n": {"type": "integer"}},
+            },
+        },
+    }
+    provider = _BudgetWallProvider(
+        [
+            {"tool_calls": [_tc("agent_spawn", {"task": "child task"}, call_id="s1")]},
+            {"tool_calls": [_tc("agent_wait", {"childId": "0.1"}, call_id="w1")]},
+            {"tool_calls": [_tc("agent_list", {}, call_id="l1")]},
+            {
+                "tool_calls": [
+                    _tc(
+                        "agent_send",
+                        {"childId": "0.1", "message": "continue and finish"},
+                        call_id="sd1",
+                    )
+                ]
+            },
+            {"tool_calls": [_tc("agent_wait", {"childId": "0.1"}, call_id="w2")]},
+            {"content": "parent done"},
+        ]
+    )
+    executor = OrchestrationExecutor(
+        RouterToolExecutor(router),
+        provider,
+        OrchestrationConfig(child_max_rounds=2),
+        tools=[*_orch_tools(), work_schema],
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    events = await asyncio.wait_for(
+        collect(
+            loop.run(
+                [LLMMessage.text_of("user", "go")], tools=[*_orch_tools(), work_schema]
+            )
+        ),
+        timeout=10,
+    )
+    await executor.shutdown()
+
+    assert final_completion(events)["status"] == "completed"
+
+    def recorded(call_id: str) -> dict[str, Any]:
+        # The hint outgrows the 300-char event preview; read the full record.
+        envelope = next(
+            item.message.content_text
+            for item in loop.history.record
+            if item.message.tool_call_id == call_id
+        )
+        return json.loads(json.loads(envelope)["message"])
+
+    interim = recorded("w1")
+    assert interim["status"] == "budget_exhausted"
+    assert interim["answer"] == "interim findings"
+    assert interim["resumable"] is True
+    assert "agent_send" in interim["hint"]
+
+    assert recorded("l1")["children"] == [
+        {
+            "childId": "0.1",
+            "status": "budget_exhausted",
+            "task": "child task",
+            "answerPreview": "interim findings",
+            "resumable": True,
+        }
+    ]
+
+    assert recorded("sd1")["delivery"] == "resumed"
+    assert recorded("w2") == {
+        "childId": "0.1",
+        "status": "completed",
+        "answer": "final answer",
+    }
+
+    # Two working rounds, one tool-less wrap-up round, one resumed round
+    # whose transcript still holds the first run's work.
+    assert [offered for _, offered in provider.child_requests] == [
+        True,
+        True,
+        False,
+        True,
+    ]
+    wrap_up_request = provider.child_requests[2][0]
+    assert "round budget" in wrap_up_request[-1].content_text
+    resumed_request = provider.child_requests[3][0]
+    assert any("step 2" in m.content_text for m in resumed_request)
+
+
+def _progress_then_answer_provider(rounds: list[dict[str, Any]]):
+    """Single-child provider serving ``rounds`` in order; each working round
+    carries a progress note alongside its tool call."""
+    served = {"n": 0}
+
+    class _Provider:
+        name = "fake"
+        model = "fake-model"
+
+        async def complete(self, messages, *, tools=None, **kw):  # pragma: no cover
+            raise NotImplementedError
+
+        def stream(self, messages, *, tools=None, **kw) -> AsyncIterator[LLMStreamChunk]:
+            entry = rounds[min(served["n"], len(rounds) - 1)]
+            served["n"] += 1
+
+            async def _gen() -> AsyncIterator[LLMStreamChunk]:
+                if entry.get("content"):
+                    yield LLMStreamChunk(content_delta=entry["content"])
+                for call in entry.get("tool_calls") or []:
+                    yield LLMStreamChunk(tool_call_delta=call)
+                yield LLMStreamChunk(finish_reason="stop")
+
+            return _gen()
+
+    return _Provider()
+
+
+def _work_pool(provider, *, max_rounds: int):
+    from steerable_agent_runtime.orchestration import AgentPool
+
+    router = ToolRouter()
+
+    async def work(n: int) -> str:
+        return f"step {n}"
+
+    router.register(work)
+    work_schema = {
+        "type": "function",
+        "function": {
+            "name": "work",
+            "parameters": {
+                "type": "object",
+                "properties": {"n": {"type": "integer"}},
+            },
+        },
+    }
+
+    def loop_factory(child_id, tool_filter):
+        loop = CoreLoop(
+            provider, RouterToolExecutor(router), LoopConfig(max_rounds=max_rounds)
+        )
+        return loop, [work_schema]
+
+    return AgentPool(
+        config=OrchestrationConfig(), depth=0, lineage="0", loop_factory=loop_factory
+    )
+
+
+@pytest.mark.asyncio
+async def test_child_answer_is_the_final_request_text() -> None:
+    provider = _progress_then_answer_provider(
+        [
+            {"content": "Let me read it.", "tool_calls": [_tc("work", {"n": 1}, call_id="w1")]},
+            {"content": "Now the rest.", "tool_calls": [_tc("work", {"n": 2}, call_id="w2")]},
+            {"content": "final answer"},
+        ]
+    )
+    pool = _work_pool(provider, max_rounds=8)
+    pool.spawn("child task", None)
+    outcome = await pool.wait("0.1", 5)
+    await pool.shutdown()
+
+    assert outcome == ChildOutcome("0.1", "completed", "final answer")
+
+
+@pytest.mark.asyncio
+async def test_child_cut_mid_tool_round_keeps_its_latest_note() -> None:
+    # No wrap-up hook on this pool: the run ends on a tool round whose
+    # request carried no text, so the answer falls back to the latest note.
+    provider = _progress_then_answer_provider(
+        [
+            {"content": "note 1", "tool_calls": [_tc("work", {"n": 1}, call_id="w1")]},
+            {"tool_calls": [_tc("work", {"n": 2}, call_id="w2")]},
+        ]
+    )
+    pool = _work_pool(provider, max_rounds=2)
+    pool.spawn("child task", None)
+    outcome = await pool.wait("0.1", 5)
+    await pool.shutdown()
+
+    assert outcome == ChildOutcome("0.1", "budget_exhausted", "note 1")
 
 
 @pytest.mark.asyncio

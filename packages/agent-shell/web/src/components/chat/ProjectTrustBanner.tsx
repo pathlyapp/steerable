@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { LuShieldAlert, LuShieldCheck } from 'react-icons/lu';
+import { t } from '@/i18n';
 import type { LocalProject } from '@/lib/local-api';
 import { getChatProjectContext, setProjectTrusted } from '@/lib/local-api';
 
@@ -51,13 +52,21 @@ export function ProjectTrustBanner({ chatId, project, onTrustChanged }: ProjectT
   };
 
   if (!trusted) {
+    const [untrustedBefore, untrustedAfter] = t(
+      'Until trusted, these project instructions {willNot} be injected into the model.',
+    ).split('{willNot}');
     return (
       <div className="mx-3 mb-1 flex items-center justify-between gap-3 rounded-agent-md border border-sky-400/40 bg-sky-400/10 px-3 py-2 text-xs">
         <div className="flex items-center gap-2 text-sky-700 dark:text-sky-300">
           <LuShieldAlert className="h-4 w-4 shrink-0" />
           <span>
-            项目「{project.name}」包含 {ruleFileCount} 个规则文件（AGENTS.md / CLAUDE.md）。
-            信任前这些项目方指令<strong>不会</strong>注入模型。
+            {t('Project "{name}" has {count} rule files (AGENTS.md / CLAUDE.md).', {
+              name: project.name,
+              count: ruleFileCount,
+            })}{' '}
+            {untrustedBefore}
+            <strong>{t('will not')}</strong>
+            {untrustedAfter}
           </span>
         </div>
         <button
@@ -66,7 +75,7 @@ export function ProjectTrustBanner({ chatId, project, onTrustChanged }: ProjectT
           onClick={() => void toggle()}
           className="inline-flex shrink-0 items-center gap-1 rounded-full bg-agent-foreground px-3 py-1 font-medium text-agent-canvas transition hover:opacity-90 disabled:opacity-50"
         >
-          信任并加载
+          {t('Trust and load')}
         </button>
       </div>
     );
@@ -76,7 +85,12 @@ export function ProjectTrustBanner({ chatId, project, onTrustChanged }: ProjectT
     <div className="mx-3 mb-1 flex items-center justify-between gap-3 rounded-agent-md border border-agent-border bg-agent-muted/30 px-3 py-1.5 text-[11px] text-agent-muted-foreground">
       <div className="flex items-center gap-1.5">
         <LuShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-        <span>已加载项目「{project.name}」的 {ruleFileCount} 个规则文件</span>
+        <span>
+          {t('Loaded {count} rule files from project "{name}"', {
+            name: project.name,
+            count: ruleFileCount,
+          })}
+        </span>
       </div>
       <button
         type="button"
@@ -84,7 +98,7 @@ export function ProjectTrustBanner({ chatId, project, onTrustChanged }: ProjectT
         onClick={() => void toggle()}
         className="shrink-0 rounded px-1.5 py-0.5 transition-colors hover:text-agent-destructive disabled:opacity-50"
       >
-        撤销信任
+        {t('Revoke trust')}
       </button>
     </div>
   );

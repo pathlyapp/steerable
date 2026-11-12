@@ -18,9 +18,9 @@ const resolveProviderPreset = vi.fn();
 const getCatalogProviders = vi.fn();
 const getLlmModels = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
-  getElectronBridge: () => undefined,
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => undefined,
 }));
 vi.mock('@/lib/local-api', () => ({
   getLlmSettings: () => getLlmSettings(),
@@ -39,6 +39,10 @@ vi.mock('@/lib/local-api', () => ({
 }));
 
 const { LocalLlmSettingsModal } = await import('./LocalLlmSettingsModal');
+import {
+  LlmSettingsPanel,
+  type LlmSettingsPanelHandle,
+} from '@/components/settings/LlmSettingsPanel';
 
 const DEEPSEEK: ProviderPresetDescriptor = {
   host: 'api.deepseek.com',
@@ -68,14 +72,14 @@ const BASE_SETTINGS: LlmSettings = {
 };
 
 function presetSection(): HTMLElement {
-  return screen.getByText('厂商参数预制').closest('div')!.parentElement as HTMLElement;
+  return screen.getByText('Vendor parameter presets').closest('div')!.parentElement as HTMLElement;
 }
 
 async function renderOpen(settings: Partial<LlmSettings> = {}) {
   getLlmSettings.mockResolvedValue({ ...BASE_SETTINGS, ...settings });
   const utils = render(<LocalLlmSettingsModal open onClose={() => {}} />);
   // 等 reload 完成：预制区出现即数据就绪。
-  await screen.findByText('厂商参数预制');
+  await screen.findByText('Vendor parameter presets');
   return utils;
 }
 
@@ -129,7 +133,7 @@ describe('LocalLlmSettingsModal — 遮罩关闭', () => {
 describe('LocalLlmSettingsModal — 厂商参数预制', () => {
   it('openai-compat 显示预制区；ollama 不显示', async () => {
     const { unmount } = await renderOpen();
-    expect(screen.getByText('厂商参数预制')).toBeTruthy();
+    expect(screen.getByText('Vendor parameter presets')).toBeTruthy();
     expect(screen.queryByText('本地技能管理')).toBeNull();
     expect(screen.queryByText('MCP 服务')).toBeNull();
     unmount();
@@ -142,13 +146,13 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
     });
     render(<LocalLlmSettingsModal open onClose={() => {}} />);
     await screen.findByText('Temperature');
-    expect(screen.queryByText('厂商参数预制')).toBeNull();
+    expect(screen.queryByText('Vendor parameter presets')).toBeNull();
   });
 
   it('「自动」档预览命中参数，保存不写 presets（注册表自动匹配）', async () => {
     await renderOpen();
     // 防抖 300ms 后展示 resolve 结果。
-    const preview = await screen.findByText(/命中预制：temperature 0/, undefined, {
+    const preview = await screen.findByText(/Matched preset: temperature 0/, undefined, {
       timeout: 3000,
     });
     expect(preview).toBeTruthy();
@@ -157,7 +161,7 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
       'deepseek-chat',
     );
 
-    fireEvent.click(screen.getByText('保存'));
+    fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(setLlmSettings).toHaveBeenCalled());
     expect(setLlmSettings.mock.calls[0][0].presets).toBeUndefined();
   });
@@ -165,9 +169,9 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
   it('「关闭」保存 {enabled:false}，预览说明不下发', async () => {
     await renderOpen();
     fireEvent.click(document.querySelector('[data-preset-mode="off"]')!);
-    expect(screen.getByText('已关闭：不下发厂商预制参数。')).toBeTruthy();
+    expect(screen.getByText('Off: vendor preset parameters are not sent.')).toBeTruthy();
 
-    fireEvent.click(screen.getByText('保存'));
+    fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(setLlmSettings).toHaveBeenCalled());
     expect(setLlmSettings.mock.calls[0][0].presets).toEqual({ enabled: false });
   });
@@ -181,10 +185,10 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
     // 选中 qwen3 行（注册表第二个条目）。
     fireEvent.change(select, { target: { value: '1' } });
     expect(
-      screen.getByText(/生效参数：temperature 0.6 · top_p 0.95 · top_k 20/),
+      screen.getByText(/Effective parameters: temperature 0.6 · top_p 0.95 · top_k 20/),
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByText('保存'));
+    fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(setLlmSettings).toHaveBeenCalled());
     expect(setLlmSettings.mock.calls[0][0].presets).toEqual({
       override: { temperature: 0.6, topP: 0.95, extraBody: { top_k: 20 } },
@@ -203,13 +207,13 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
   it('Temperature 默认自动（无滑杆、保存不下发），切手动出滑杆并持久化', async () => {
     await renderOpen();
     // 自动：提示文案在，滑杆不在；命中预览带入当前温度。
-    await screen.findByText(/自动：命中厂商预制时用预制温度/, undefined, {
+    await screen.findByText(/Auto: uses the preset temperature when a vendor preset matches/, undefined, {
       timeout: 3000,
     });
-    await screen.findByText(/（当前命中：0）/, undefined, { timeout: 3000 });
+    await screen.findByText(/\(current match: 0\)/, undefined, { timeout: 3000 });
     expect(document.querySelector('input[type="range"]')).toBeNull();
 
-    fireEvent.click(screen.getByText('保存'));
+    fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(setLlmSettings).toHaveBeenCalled());
     expect(setLlmSettings.mock.calls[0][0].temperature).toBeUndefined();
 
@@ -221,7 +225,7 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
     expect(slider.value).toBe('0');
 
     fireEvent.change(slider, { target: { value: '0.5' } });
-    fireEvent.click(screen.getByText('保存'));
+    fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(setLlmSettings).toHaveBeenCalled());
     expect(setLlmSettings.mock.calls[0][0].temperature).toBe(0.5);
   });
@@ -231,7 +235,7 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
     fireEvent.change(screen.getByTestId('llm-vendor-select'), { target: { value: 'anthropic' } });
     const url = screen.getByPlaceholderText('https://api.anthropic.com') as HTMLInputElement;
     expect(url.value).toBe('https://api.anthropic.com');
-    expect(screen.queryByText('厂商参数预制')).toBeNull();
+    expect(screen.queryByText('Vendor parameter presets')).toBeNull();
     expect((screen.getByTestId('llm-model-input') as HTMLInputElement).value).toBe(
       'claude-sonnet-4-6',
     );
@@ -247,7 +251,7 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
   it('保存时写入 vendorId 与对应的 sidecar provider', async () => {
     await renderOpen();
     fireEvent.change(screen.getByTestId('llm-vendor-select'), { target: { value: 'anthropic' } });
-    fireEvent.click(screen.getByText('保存'));
+    fireEvent.click(screen.getByText('Save'));
     await waitFor(() => expect(setLlmSettings).toHaveBeenCalled());
     expect(setLlmSettings.mock.calls[0][0]).toMatchObject({
       provider: 'anthropic',
@@ -263,7 +267,7 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
     });
     await renderOpen();
     await waitFor(() =>
-      expect(screen.getByText(/已从网关拉取 2 个模型/)).toBeTruthy(),
+      expect(screen.getByText(/Fetched 2 models from the gateway/)).toBeTruthy(),
     );
     fireEvent.focus(screen.getByTestId('llm-model-input'));
     expect(screen.getByRole('option', { name: 'deepseek-reasoner' })).toBeTruthy();
@@ -277,7 +281,7 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
     });
     await renderOpen();
     await waitFor(() =>
-      expect(screen.getByText(/已从网关拉取 1 个模型/)).toBeTruthy(),
+      expect(screen.getByText(/Fetched 1 models from the gateway/)).toBeTruthy(),
     );
     getLlmModels.mockClear();
     getLlmModels.mockResolvedValue({
@@ -288,7 +292,7 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
     await waitFor(() => expect(getLlmModels).toHaveBeenCalled());
     expect(getLlmModels.mock.calls.at(-1)?.[0]).toMatchObject({ refresh: true });
     await waitFor(() =>
-      expect(screen.getByText(/已从网关拉取 2 个模型/)).toBeTruthy(),
+      expect(screen.getByText(/Fetched 2 models from the gateway/)).toBeTruthy(),
     );
   });
 
@@ -308,7 +312,7 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
     await waitFor(() => expect(getLlmModels).toHaveBeenCalled());
     expect(getLlmModels.mock.calls.at(-1)?.[0]).toMatchObject({ refresh: true });
     await waitFor(() =>
-      expect(screen.getByText(/凭证可用，网关返回 2 个模型/)).toBeTruthy(),
+      expect(screen.getByText(/Credentials work. The gateway returned 2 models/)).toBeTruthy(),
     );
   });
 
@@ -322,7 +326,7 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
     await waitFor(() => expect(screen.getByTestId('llm-key-test')).toBeTruthy());
     fireEvent.click(screen.getByTestId('llm-key-test'));
     await waitFor(() =>
-      expect(screen.getByText(/验证失败：401 unauthorized/)).toBeTruthy(),
+      expect(screen.getByText(/Verification failed: 401 unauthorized/)).toBeTruthy(),
     );
   });
 
@@ -358,15 +362,54 @@ describe('LocalLlmSettingsModal — 厂商参数预制', () => {
     });
     await renderOpen({ model: 'deepseek-v4-pro' });
     const summary = await screen.findByTestId('llm-model-capabilities');
-    expect(summary.textContent).toContain('思考（high / max）');
+    expect(summary.textContent).toContain('Thinking (high / max)');
     expect(summary.textContent).toContain('1M');
-    expect(summary.textContent).not.toContain('未识别');
+    expect(summary.textContent).not.toContain('Unrecognized');
 
     fireEvent.focus(screen.getByTestId('llm-model-input'));
     fireEvent.click(screen.getByRole('option', { name: 'deepseek-flash' }));
     await waitFor(() =>
-      expect(screen.getByTestId('llm-model-capabilities').textContent).toContain('未识别'),
+      expect(screen.getByTestId('llm-model-capabilities').textContent).toContain('Unrecognized'),
     );
     expect(screen.getByTestId('llm-model-capabilities').textContent).not.toContain('131K');
+  });
+});
+
+// 失败卡片的「打开模型设置」把用户带到这里，光标必须落在 API Key 上：认证
+// 失败要改的就是这个字段。
+//
+// 这里断言的是面板对外暴露的聚焦契约，而不是 portal 里的 document.activeElement：
+// 弹窗经 createPortal 挂到 body 之外的容器，面板又要等异步设置到达才渲染字段，
+// 在 jsdom 里追这两件事的时序会让用例比被测行为还复杂。契约本身是实打实的——
+// 返回 false 就意味着弹窗会继续轮询。
+describe('LocalLlmSettingsPanel — focusApiKey 契约（T-ERR-12）', () => {
+  it('字段存在时聚焦并返回 true', async () => {
+    getLlmSettings.mockResolvedValue({ ...BASE_SETTINGS });
+    const ref = { current: null as LlmSettingsPanelHandle | null };
+    render(<LlmSettingsPanel ref={ref} />);
+
+    // 面板挂载后自取设置，字段随数据出现。
+    await waitFor(() => {
+      expect(
+        document.querySelector('[data-settings-field="llm-api-key"]'),
+      ).toBeTruthy();
+    });
+
+    const ok = ref.current!.focusApiKey();
+    expect(ok).toBe(true);
+    const field = document.querySelector<HTMLInputElement>(
+      '[data-settings-field="llm-api-key"]',
+    )!;
+    expect(field.ownerDocument.activeElement).toBe(field);
+  });
+
+  it('字段还没渲染时返回 false，让弹窗继续轮询', async () => {
+    // 面板挂载后要等异步设置到达才渲染表单；在那之前没有字段可聚焦。
+    // 返回 false 是弹窗继续轮询的依据——返回 true 会让它以为已完成而放弃。
+    getLlmSettings.mockReturnValue(new Promise(() => {})); // 永不 resolve
+    const ref = { current: null as LlmSettingsPanelHandle | null };
+    render(<LlmSettingsPanel ref={ref} />);
+
+    expect(ref.current!.focusApiKey()).toBe(false);
   });
 });

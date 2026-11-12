@@ -2,7 +2,7 @@
 
 `SSEEvent` is the universal stream envelope for agent runtime updates.
 Every event flowing from the runtime to a UI client (whether over HTTP
-SSE, Electron IPC, or sidecar `stream.chunk` notifications) is a member
+SSE, a native host bridge, or sidecar `stream.chunk` notifications) is a member
 of this union.
 
 ## Schema

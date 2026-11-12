@@ -2,10 +2,6 @@
  * `LlmProvider` implementation that delegates to the steerable-sidecar's
  * `agent.chat.stream` JSON-RPC method.
  *
- * Activation:
- *   Default-on once the sidecar is supervised (see `llm/index.ts`);
- *   `STEERABLE_USE_SIDECAR=0` opts back out to in-process providers.
- *
  * The sidecar must already be supervised by the main process (see
  * `src/sidecar/supervisor.ts`); this provider just routes calls through the
  * supplied supervisor handle and aggregates streamed chunks back into the
@@ -34,6 +30,12 @@ export interface SidecarProviderOptions {
   baseUrl?: string;
   apiKey?: string;
   temperature?: number;
+  /**
+   * 产品的 `directModelConnection`：这台机器上的每一次模型请求都跳过代理。
+   * 标题生成、AI 建议与对话回合打的是同一个模型服务，路由必须同源——否则
+   * 打开直连只修好了对话，辅助调用仍在代理上失败。
+   */
+  directConnection?: boolean;
 }
 
 export class SidecarLlmProvider implements LlmProvider {
@@ -104,6 +106,7 @@ export class SidecarLlmProvider implements LlmProvider {
             baseUrl: this.options.baseUrl,
             apiKey: this.options.apiKey,
             temperature: request.temperature ?? this.options.temperature,
+            ...(this.options.directConnection ? { directConnection: true } : {}),
             messages: request.messages.map((m) => ({
               role: m.role,
               content: m.content,

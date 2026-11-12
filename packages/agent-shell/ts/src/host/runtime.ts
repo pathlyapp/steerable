@@ -11,6 +11,7 @@
  * 这也是阶段 3 上提框架后 `@steerable/agent-shell` 的核心装配件：场景包
  * （ScenarioPack）的服务/工具贡献在 0.3 逐槽接入本模块。
  */
+import { homedir } from 'node:os';
 import {
   LocalExecutor,
   setDefaultExecTimeoutMs,
@@ -24,30 +25,43 @@ import {
   McpServerRegistry,
   type McpServerEntry,
 } from '../mcp-server-registry.js';
+import { mcpExecutor } from '../mcp-executor.js';
 import { ProjectRegistry, type ProjectRecord } from '../project-registry.js';
 import { getProductConfig } from '../product-config.js';
 import { LocalBackendRouter } from '../local-backend/router.js';
+import { getLiveStream, recordGrantedEgress } from '../local-backend/live-stream.js';
 import { WorktreeService } from '../local-backend/worktree-service.js';
 import { TaskService } from '../local-backend/task-service.js';
+import { LoopPtyMonitor } from '../local-backend/loop-pty-monitor.js';
 import {
   LOCAL_SCOPE,
   closeStorage,
   getPackDbAccess,
   getScopedStore,
   initializeStorage,
+  watchStorageChanges,
   type PackDbAccess,
   type PackDbParams,
   type PackDbRunResult,
   type TenantScope,
 } from '../storage/driver.js';
+import { subscribeChatActivity } from '../storage/chat-activity.js';
+import { getUserDataDir } from '../runtime.js';
+import {
+  acquireInstanceLease,
+  bindStorageInstance,
+  type InstanceLease,
+} from '../storage/process-locks.js';
+import { approvalCwdFence, hostApprovalCategoryLabel } from '../sidecar/approval-label.js';
 import { createApprovalBridge } from '../sidecar/reverse-approval.js';
 import { createAskUserBridge } from '../sidecar/reverse-ask-user.js';
 import { startHostSidecar, shutdownHostSidecar } from '../sidecar/boot.js';
 import { createVisibleTerminalExec } from './visible-terminal-exec.js';
 import { createJsonStore } from '../json-store.js';
-import { bindWorkspaceSkillRoots } from '../local-backend/skill-loader.js';
+import { bindWorkspaceSkillRoots, listSkillRoots } from '../local-backend/skill-loader.js';
+import { collectPackExecWritableRoots } from '../local-backend/pack-turn-hooks.js';
 import { getChatAttachmentsDir } from '../attachments.js';
-import { ensureChatWorkspace } from '../project-home.js';
+import { ensureChatWorkspace, ensureWritableRoots } from '../project-home.js';
 import { recordInsightTurn } from '../insights/record.js';
 import { llmService } from '../llm/index.js';
 import { isProductLlmLocked, resolveRuntimeLlmSettings } from '../host-tools-runtime.js';
@@ -56,6 +70,7 @@ import {
   type PackAssemblyDeps,
   type PackAssemblyHandle,
 } from './pack-assembly.js';
+import { registerPackHttpRoutes } from './http-routes.js';
 
 export interface HostRuntimeOptions {
   /** Storage ownership for this host process. Defaults to local personal use. */
@@ -105,10 +120,30 @@ export interface HostRuntime {
   shutdown(): Promise<void>;
 }
 
+/**
+ * spill 目录作为只读根：工具输出超过内联上限时 sidecar 会把全文落到
+ * ``STEERABLE_SPILL_DIR``（BS 宿主由 run-bs-server.mjs 设为
+ * ``<userDataDir>/sidecar/steerable-spill``），并告诉模型去哪读全文。
+ * 只把它加进 shell 沙箱而不加进文件工具读根，模型就会「读自己刚被指到的
+ * 文件」而报路径越界——实测事故里正是如此。只读，不授予写入。
+ *
+ * 未设置该 env 时返回空表：sidecar 的回退目录是系统临时目录，把它整片
+ * 开给文件工具得不偿失，那种部署继续走 shell cat。
+ */
+function spillReadRoots(): string[] {
+  const dir = process.env.STEERABLE_SPILL_DIR?.trim();
+  return dir ? [dir] : [];
+}
+
 export async function createHostRuntime(options: HostRuntimeOptions): Promise<HostRuntime> {
   const { broadcast, hasWindow, onLog } = options;
   const broadcastMain = options.broadcastMain ?? broadcast;
   await initializeStorage();
+  watchStorageChanges(() => broadcast('store:changed', {}));
+  // 本连接写入会话不会推动 data_version。活动时间单独广播，侧边栏据此重排。
+  const unsubscribeChatActivity = subscribeChatActivity((activity) => {
+    broadcast('chat-activity', activity);
+  });
   const scope = options.scope ?? LOCAL_SCOPE;
   const defaultStore = getScopedStore(scope);
   let localBackendRouter: LocalBackendRouter | undefined;
@@ -200,11 +235,19 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
   // 4.6a/4.6b：跨 turn 后台任务 + git worktree 隔离。任务流由宿主独立驱动
   // （不绑父 turn 生命周期，见 task-service.ts 模块头）；终态经广播推到
   // 用户面任务面板。
-  const resolveChatProjectRoot = async (chatId: string): Promise<{ name: string; folderPath: string } | null> => {
+  const resolveChatProjectRoot = async (
+    chatId: string,
+  ): Promise<{ name: string; folderPath: string; sourceFolders: string[] } | null> => {
     const projectId = (await defaultStore.getChat(chatId))?.projectId;
     if (!projectId) return null;
     const project = projectRegistry.get(projectId);
-    return project ? { name: project.name, folderPath: project.folderPath } : null;
+    return project
+      ? {
+          name: project.name,
+          folderPath: project.folderPath,
+          sourceFolders: project.sourceFolders ?? [],
+        }
+      : null;
   };
   // 场景包装配（2.3）：产品组装根（products/<id>/active.ts）在 import 期
   // 把包装配函数注册进 pack-assembly 注册表；这里统一装配。宿主不 import
@@ -232,6 +275,10 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
       if (handle) packHandles.set(packId, handle);
     }
   }
+  for (const [packId, handle] of packHandles) {
+    const routes = handle.httpRoutes?.();
+    if (routes && routes.length > 0) registerPackHttpRoutes(packId, routes);
+  }
   const worktreeService = new WorktreeService({ resolveProject: resolveChatProjectRoot });
   const taskService = new TaskService({
     store: () => localBackendRouter?.activeStore ?? defaultStore,
@@ -255,20 +302,71 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
     taskService,
     broadcast: broadcastMain,
   });
+  const loopMonitor = new LoopPtyMonitor(
+    terminalManager,
+    (chatId, input) => localBackendRouter!.wakeChat(chatId, input),
+    (chatId, loops) => broadcastMain('loop-changed', { chatId, loops }),
+  );
+  toolRouter.setLoopMonitor(loopMonitor);
 
   // W4-1 / W8：sidecar 反向通道的审批桥与提问桥。
   const approvalBridge = createApprovalBridge({
     broadcast,
     hasWindow,
     onLog: (line) => onLog(line),
+    categoryLabel: (toolName, category) => {
+      const declaredLabel = toolRouter.getSchemaByName(toolName)?.approval?.label;
+      return hostApprovalCategoryLabel({
+        category,
+        toolName,
+        ...(declaredLabel ? { declaredLabel } : {}),
+      });
+    },
+    recordEgressGrant: (prompt, decision) => {
+      if (!prompt.chatId) {
+        onLog('approval: egress grant has no chatId; not stored');
+        return;
+      }
+      const live = getLiveStream(prompt.chatId);
+      if (!live || live.status !== 'running') return;
+      recordGrantedEgress(live, {
+        requestId: prompt.requestId,
+        arguments: prompt.arguments,
+        kind: decision.kind,
+        reason: decision.reason,
+      });
+    },
+    blockedCommand: (toolName, args) => {
+      if (toolName !== 'local_exec_shell') return null;
+      const command = typeof args.command === 'string' ? args.command : '';
+      return localExecutor.detectDangerousCommand(command);
+    },
+    outsideWorkspace: async ({ toolName, arguments: args, chatId }) => {
+      if (!chatId || !localBackendRouter) return false;
+      const project = await localBackendRouter.resolveChatProject(chatId);
+      const workspaceRoot = project
+        ? null
+        : await localBackendRouter.resolveChatWorkspaceRoot(chatId);
+      return approvalCwdFence({
+        toolName,
+        cwd: args.cwd,
+        projectRoot: project?.folderPath ?? null,
+        workspaceRoot,
+        sourceFolders: project?.sourceFolders ?? [],
+        home: homedir(),
+      });
+    },
   });
   const askUserBridge = createAskUserBridge({
     broadcast,
     hasWindow,
     onLog: (line) => onLog(line),
   });
+  localBackendRouter.setAskReplay((chatId) => askUserBridge.takeResolved(chatId));
 
   let started = false;
+  let instanceLease: InstanceLease | null = null;
+  let warmTimer: ReturnType<typeof setTimeout> | null = null;
 
   return {
     store: defaultStore,
@@ -290,28 +388,47 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
       if (started) return;
       started = true;
 
-      // 4.6a：上次进程崩溃/强杀留下的 running 任务不是真相——任务流随进程
-      // 一起死了，启动时落成 failed，任务面板据此显示"重启中断"。
+      instanceLease = acquireInstanceLease(getUserDataDir());
+      bindStorageInstance(instanceLease.instanceId);
+      // 只清扫所属进程已经退出的任务。本进程的实例锁还在，不会扫到自己。
       const sweptTasks = await defaultStore.failRunningTasks(options.taskSweepReason);
       if (sweptTasks > 0) {
         onLog(`[task] swept ${sweptTasks} stale running task(s)`);
       }
       void localExecutor.init();
-      // Not awaited: sidecar boot (python import) must not delay readiness.
-      // A turn that races the boot falls back for that turn only.
-      void startHostSidecar({
+      // The complete Python sidecar is mandatory. Do not report host
+      // readiness or fall back to an in-process loop when it cannot start.
+      await startHostSidecar({
         store: defaultStore,
         toolRouter,
         resolveProjectRoot: async (chatId) =>
           localBackendRouter.resolveChatWorkspaceRoot(chatId),
-        // 项目模式下文件读写被围栏在项目目录内；会话附件目录是额外放行的
-        // 只读根，保证用户上传的文件即使在项目会话里也能被 agent 读回。
+        // 读：附件目录、源文件夹、包声明的可写根，以及只读参考面（技能根 /
+        // spill 根）。凡运行时"会写进去、模型需要读回来"的目录都必须可读；
+        // 否则 local_read_file 一律「路径越界」，模型只能退回 shell cat 绕行。
+        // 读集合不越出模型本就能读/本就被允许写入的范围。
         resolveAdditionalReadRoots: async (chatId) => {
           const project = await localBackendRouter.resolveChatProject(chatId);
           return [
             getChatAttachmentsDir(chatId),
             ...(project?.sourceFolders ?? []),
+            ...collectPackExecWritableRoots(chatId),
+            // 技能根：workflows/references/templates 是只读参考，模型必须能读
+            // （技能包里的版式说明曾因读不到而被拒）。
+            ...listSkillRoots(),
+            // spill 根：工具输出过大时 sidecar 落到这里，模型要读回全文。
+            ...spillReadRoots(),
           ];
+        },
+        // 写：源文件夹、包声明的可写根，以及各自的子目录。附件目录保持只读。
+        // ensureWritableRoots 让这些名字先落成目录：Landlock/bwrap 在安装沙箱
+        // 规则时要 open 它们，声明了却还没建过的目录会让子进程起不来。
+        resolveAdditionalWriteRoots: async (chatId) => {
+          const project = await localBackendRouter.resolveChatProject(chatId);
+          return ensureWritableRoots([
+            ...(project?.sourceFolders ?? []),
+            ...collectPackExecWritableRoots(chatId),
+          ]);
         },
         approvalHandler: approvalBridge.handler,
         askUserHandler: askUserBridge.handler,
@@ -331,7 +448,8 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
       // 后台刷新已启用 MCP 服务的工具列表（连接慢的 server 不阻塞启动）。
       void mcpServerRegistry.refreshAllEnabled();
       // 预热共享可见 PTY：首条 agent 命令不必付 shell 启动成本。
-      setTimeout(() => {
+      // 短命进程在这两秒内退出时必须取消，否则定时器会在关停之后再拉起一个 shell。
+      warmTimer = setTimeout(() => {
         try {
           terminalManager.ensurePrimary();
         } catch (err) {
@@ -341,12 +459,22 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
     },
 
     async shutdown(): Promise<void> {
+      unsubscribeChatActivity();
+      if (warmTimer) {
+        clearTimeout(warmTimer);
+        warmTimer = null;
+      }
+      loopMonitor.dispose();
       terminalManager.killAll();
       // 包装配逆序关停（后装配的先停）。
       for (const handle of [...packHandles.values()].reverse()) {
         await handle.dispose?.();
       }
+      await mcpExecutor.shutdownAll();
       await shutdownHostSidecar();
+      instanceLease?.release();
+      instanceLease = null;
+      bindStorageInstance(null);
       await closeStorage();
     },
   };

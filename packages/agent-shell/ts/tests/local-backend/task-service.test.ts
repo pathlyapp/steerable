@@ -8,12 +8,16 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TaskRecord } from '../../src/storage/index.js';
 import type { WorktreeService } from '../../src/local-backend/worktree-service.js';
 import type { CoreLoopTurnOutcome } from '../../src/local-backend/coreloop-stream.js';
 import type { StreamCoreLoopTurnOptions } from '../../src/local-backend/coreloop-stream.js';
+import {
+  resetProductConfigForTests,
+  setProductConfig,
+} from '../../src/product-config.js';
 
 // task-service 的模块级依赖在这里全部替掉：llm 设置、sidecar 句柄、
 // egress 代理、coreloop-stream（buildWorldState）。
@@ -34,6 +38,13 @@ vi.mock('../../src/sidecar/egress-proxy.js', () => ({
 }));
 vi.mock('../../src/local-backend/coreloop-stream.js', () => ({
   buildWorldState: () => ({ mocked: true }),
+  toTurnTool: (schema: { name: string; description: string; inputSchema: unknown; mode?: string; approval?: { category?: string } | null }) => ({
+    name: schema.name,
+    description: schema.description,
+    inputSchema: schema.inputSchema,
+    ...(schema.mode ? { mode: schema.mode } : {}),
+    ...(schema.approval?.category ? { approvalCategory: schema.approval.category } : {}),
+  }),
   streamCoreLoopTurn: async () => ({ status: 'completed' }),
 }));
 
@@ -196,6 +207,25 @@ describe('task-service / runTask', () => {
     h = makeService();
   });
 
+  afterEach(() => {
+    resetProductConfigForTests();
+  });
+
+  it('任务流继承产品的直连开关', async () => {
+    // 直连是产品级的（跳过系统代理），后台任务与前台回合必须同一路由：
+    // 一个跳过代理、一个还在代理上，等于同一个产品两条网络行为。
+    setProductConfig({ directModelConnection: true });
+    const result = await h.service.runTask({ chatId: 'chat-1', task: '统计行数' });
+    await waitTaskTerminal(h.store, result.taskId);
+    expect(h.streamCalls[0].directConnection).toBe(true);
+  });
+
+  it('未声明直连的产品不下发该字段', async () => {
+    const result = await h.service.runTask({ chatId: 'chat-1', task: '统计行数' });
+    await waitTaskTerminal(h.store, result.taskId);
+    expect(h.streamCalls[0]).not.toHaveProperty('directConnection');
+  });
+
   it('立即返回 running，落任务表，独立流带独立身份', async () => {
     // 流启动那一刻任务行必须是 running（runTask 返回后 stub 流可能已
     // 完成，事后读行会撞上终态——在流内采样才是确定性的）。
@@ -247,6 +277,9 @@ describe('task-service / runTask', () => {
     expect(call.toolContext).toMatchObject({ chatId: 'chat-1', taskId: result.taskId });
     // 后台任务不挂 ask_user。
     expect(call.askUser).toBe(false);
+    // 相对路径先接到项目家目录，不接到源文件夹。
+    expect(call.approval).toMatchObject({ mode: 'host', pathBase: '/repo' });
+    expect(call.approval?.timeoutMs).toBeUndefined();
     // 创建与终态各广播一次 task-updated；推理增量另走 task-process。
     expect(
       h.broadcasts.filter((b) => b.eventName === 'task-updated'),
@@ -292,6 +325,43 @@ describe('task-service / runTask', () => {
     expect(snapshot?.stale).toBe(false);
     expect(snapshot?.timeline.map((b) => b.type)).toEqual(['reasoning', 'tools', 'text']);
     expect((await h.store.getTask(result.taskId))?.processJson).toContain('先跑命令');
+  });
+
+  it('本会话允许记在任务过程的工具行上', async () => {
+    const sampling = new TaskService({
+      store: h.store,
+      worktreeService: h.worktree,
+      toolRouter: {
+        listModelSchemas: () => [{ name: 'browser_click', description: '', inputSchema: {} }],
+      } as never,
+      resolveChatProject: async () => null,
+      broadcast: (eventName, payload) => h.broadcasts.push({ eventName, payload }),
+      getSupervisor: () => ({}) as never,
+      runStream: async (options) => {
+        options.onToolStart?.({
+          id: 'c1',
+          tool: 'browser_click',
+          arguments: { ref: 'e1' },
+        });
+        options.onToolAction?.({
+          id: 'c1',
+          tool: 'browser_click',
+          arguments: { ref: 'e1' },
+          success: true,
+          result: 'clicked',
+          approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+        });
+        return { status: 'completed', traceId: 'trace-allow' };
+      },
+    });
+    const result = await sampling.runTask({ chatId: 'chat-1', task: '点一下' });
+    await waitTaskTerminal(h.store, result.taskId);
+    const snapshot = await sampling.getProcess(result.taskId);
+    const tools = snapshot?.timeline.find((block) => block.type === 'tools');
+    expect(tools?.type === 'tools' ? tools.actions[0] : null).toMatchObject({
+      tool: 'browser_click',
+      approval: { kind: 'allow_for_session', category: 'browser', cached: true },
+    });
   });
 
   it('depth-1：任务回合的工具列表没有 task_run', async () => {
@@ -376,6 +446,7 @@ describe('task-service / Task×Worktree', () => {
     });
     // writableRoots 收窄到 worktree（不是项目根）。
     expect(call.execSandbox?.writableRoots).toEqual(['/repo/.steerable/worktrees/demo']);
+    expect(call.approval).toMatchObject({ pathBase: '/repo/.steerable/worktrees/demo' });
   });
 
   it('worktree 建不起来 → 同步抛错，不落任务行', async () => {
@@ -484,6 +555,100 @@ describe('task-service / status & result（模型面）', () => {
     };
     expect(result.success).toBe(true);
     expect(result.answer).toBe('任务答案');
+  });
+
+  it('kill 取消运行中的流，终态保持 failed', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started: () => void = () => {};
+    const startedGate = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const cancelled: string[] = [];
+    const hanging = new TaskService({
+      store: h.store,
+      worktreeService: h.worktree,
+      toolRouter: { listModelSchemas: () => [] } as never,
+      resolveChatProject: async () => null,
+      getSupervisor: () => ({
+        cancelChat: async (id: string) => {
+          cancelled.push(id);
+        },
+      }) as never,
+      runStream: async (options) => {
+        options.onStreamId?.('stream-9');
+        started();
+        await gate;
+        return { status: 'completed', traceId: 't' };
+      },
+    });
+    const running = await hanging.runTask({ chatId: 'chat-1', task: '慢任务' });
+    await startedGate;
+    const killed = await hanging.kill('chat-1', running.taskId);
+    expect(killed).toMatchObject({ success: true, killed: true, job_id: running.taskId });
+    expect(cancelled).toEqual(['stream-9']);
+    release();
+    const settled = await waitTaskTerminal(h.store, running.taskId);
+    expect(settled.status).toBe('failed');
+    expect(settled.error).toBe('killed by job_kill');
+  });
+
+  it('kill 结束 blocked 任务并记下原因；已终态的任务拒绝再杀', async () => {
+    const parent = await h.service.runTask({ chatId: 'chat-1', task: '先做这个' });
+    await waitTaskTerminal(h.store, parent.taskId);
+    await h.store.updateTask(parent.taskId, { status: 'running', error: null });
+    const child = await h.service.runTask({
+      chatId: 'chat-1',
+      task: '等它',
+      dependsOn: [parent.taskId],
+    });
+    expect(child.status).toBe('blocked');
+
+    const killed = await h.service.kill('chat-1', child.taskId, ' 不再需要 ');
+    expect(killed).toMatchObject({ success: true, killed: true });
+    expect(h.store.rows.get(child.taskId)).toMatchObject({
+      status: 'failed',
+      error: '不再需要',
+    });
+
+    const done = await h.service.runTask({ chatId: 'chat-1', task: '已经做完' });
+    await waitTaskTerminal(h.store, done.taskId);
+    const again = await h.service.kill('chat-1', done.taskId);
+    expect(again.success).toBe(false);
+  });
+
+  it('任务过程里的工具行带上声明的 view', async () => {
+    const service = new TaskService({
+      store: h.store,
+      worktreeService: h.worktree,
+      toolRouter: { listModelSchemas: () => [] } as never,
+      resolveChatProject: async () => null,
+      getSupervisor: () => ({}) as never,
+      runStream: async (options) => {
+        options.onToolStart?.({ id: 'c1', tool: 'grep', arguments: { pattern: 'alpha' } });
+        options.onToolAction?.({
+          id: 'c1',
+          tool: 'grep',
+          arguments: { pattern: 'alpha' },
+          success: true,
+        });
+        return { status: 'completed', traceId: 't' };
+      },
+    });
+    const task = await service.runTask({ chatId: 'chat-1', task: '搜一下' });
+    await waitTaskTerminal(h.store, task.taskId);
+    const timeline = JSON.parse(h.store.rows.get(task.taskId)?.processJson ?? '[]') as Array<{
+      type: string;
+      actions?: Array<{ view?: { card: string; title: string; declared: boolean } }>;
+    }>;
+    const tools = timeline.find((block) => block.type === 'tools');
+    expect(tools?.actions?.[0].view).toMatchObject({
+      card: 'search',
+      title: 'alpha',
+      declared: true,
+    });
   });
 });
 

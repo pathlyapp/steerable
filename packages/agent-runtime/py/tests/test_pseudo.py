@@ -118,6 +118,70 @@ def test_extract_plain_text_returns_no_calls() -> None:
     assert cleaned == "Just a normal answer, no tools."
 
 
+_QWEN_FENCE = (
+    "```json\n"
+    '{"name": "ask_user", "arguments": {"intro questions": "请问您的位置和姓名。", '
+    '"outro": "谢谢您的帮助。", "questions": [{"header": "是否提供更多信息? (请选择)", '
+    '"id": "location", "text": "位置", "multiSelect": false}, '
+    '{"id": "name", "text": "姓名", "multiSelect": false}]}}\n'
+    "```"
+)
+
+
+def test_extract_qwen_json_fence() -> None:
+    calls, cleaned = extract_inline_tool_calls(_QWEN_FENCE)
+    assert len(calls) == 1
+    assert calls[0]["name"] == "ask_user"
+    assert calls[0]["arguments"]["intro questions"] == "请问您的位置和姓名。"
+    assert cleaned == ""
+
+
+def test_extract_json_fence_keeps_surrounding_narration() -> None:
+    text = (
+        "Checking the weather.\n"
+        '```json\n{"name": "get_weather", "arguments": {"city": "Berlin"}}\n```\n'
+        "Thanks."
+    )
+    calls, cleaned = extract_inline_tool_calls(text)
+    assert calls == [{"name": "get_weather", "arguments": {"city": "Berlin"}}]
+    assert "```" not in cleaned
+    assert "Checking the weather." in cleaned and "Thanks." in cleaned
+
+
+def test_extract_json_arguments_string() -> None:
+    text = '```json\n{"name": "ping", "arguments": "{\\"host\\": \\"local\\"}"}\n```'
+    calls, _ = extract_inline_tool_calls(text)
+    assert calls == [{"name": "ping", "arguments": {"host": "local"}}]
+
+
+def test_extract_bare_json_tool_object() -> None:
+    text = '{"name": "ping", "arguments": {"host": "local"}}'
+    calls, cleaned = extract_inline_tool_calls(text)
+    assert calls == [{"name": "ping", "arguments": {"host": "local"}}]
+    assert cleaned == ""
+
+
+def test_extract_ignores_json_mentioned_in_prose() -> None:
+    text = 'The payload is {"name": "ask_user", "arguments": {}} today.'
+    calls, cleaned = extract_inline_tool_calls(text)
+    assert calls == []
+    assert cleaned == text
+
+
+def test_extract_ignores_fenced_config_json() -> None:
+    text = '```json\n{"host": "127.0.0.1", "port": 11434}\n```'
+    calls, cleaned = extract_inline_tool_calls(text)
+    assert calls == []
+    assert cleaned == text
+
+
+def test_extract_tool_call_tag_json() -> None:
+    text = '<tool_call>\n{"name": "ping", "arguments": {}}\n</tool_call>'
+    calls, cleaned = extract_inline_tool_calls(text)
+    assert calls == [{"name": "ping", "arguments": {}}]
+    assert "<tool_call>" not in cleaned
+
+
 @pytest.mark.asyncio
 async def test_loop_recovers_markdown_pseudo_and_executes() -> None:
     # Round 1: model emits a markdown pseudo tool-call as *content* (no real

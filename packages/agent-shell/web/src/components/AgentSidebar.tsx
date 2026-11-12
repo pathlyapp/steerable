@@ -41,7 +41,7 @@
  *
  *   • Active chat id comes from the URL (`useParams().chatId`) rather than
  *     a Context (we drive navigation, not vice versa).
- *   • Agent CRUD lives on `/settings?section=agents`（侧栏「智能体管理」），
+ *   • Agent CRUD lives on `/settings?section=plugins`（侧栏「插件」里的智能体分类），
  *     not a modal. Custom agents show up in ChatInput's expert picker.
  *   • Cmd+N / Cmd+T trigger `menu:new-chat` / `menu:open-terminal` via the
  *     preload bridge; we subscribe here so the shortcuts work regardless of
@@ -53,28 +53,20 @@
  *   ┌─────────────────────────────────┐
  *   │ ✨ Product Agent          +•   │ ← + has a color dot of the selected agent
  *   ├─────────────────────────────────┤
- *   │  v 专家团队 · 3                 │
- *   │   ● 教练         (selected)     │ ← highlight = selectedAgentId
- *   │   ● 文学顾问            · 当前  │ ← "当前" pill = activeChatAgentId
- *   │   ● 哲学家                      │
- *   │   + 用「教练」新建对话          │ ← inline CTA when sel ≠ current
- *   ├──── divider ────────────────────┤
- *   │ ＋ 新对话                       │  ← 只打开落地页，有内容才落库
- *   │ ⬡ 智能体管理                     │ ← /settings?section=agents（独立页）
- *   │ ⬡ Skill 设置                    │ ← /settings?section=skills（独立页）
- *   │ 🔌 MCP 设置                     │ ← /settings?section=mcp（独立页）
+ *   │ ✎ 新对话                        │  ← 只打开落地页，有内容才落库
+ *   │ 🧩 插件                         │ ← /settings?section=plugins（智能体 / Skills / MCP / 网络搜索）
  *   │  会话 v                     📁+ │ ← 📁+ 打开新建项目弹窗
- *   │  v 📁 项目A · 3      (hover: +··)│ ← + 新建对话；·· 菜单：重命名/换目录/访达/删
- *   │   ...（项目内对话）              │
+ *   │  v 📁 项目A          (hover: ✎··)│ ← 拖拽组头排序；✎ 新建对话；·· 菜单：重命名/换目录/访达/删
+ *   │   ...（项目内对话，超过 5 条再展开）│
  *   │   今天                          │
  *   │   ...（无项目对话，按日期分组）  │ ← 无项目排在项目分组之后
  *   ├─────────────────────────────────┤
- *   │ ▢_ 终端                 ⌘T     │
- *   │ ⚙ 设置                          │ ← /settings（模型 + 洞察/遥测/用量/搜索/安全）
+ *   │ DeepSeek           可用 ↻   │ ← DeepSeek / Kimi 时显示供应商账户余额
+ *   │ ⚙ 设置                   v0.2.2 │ ← /settings；右侧是当前版本，检查更新在设置页
  *   └─────────────────────────────────┘
  *
  * 项目模式：项目 = 名字 + 托管家目录（Documents/<应用名>/<项目名>/）+
- * 可选源文件夹。写入/命令围栏在家目录；源文件夹只放宽读取。
+ * 可选源文件夹。家目录与源文件夹（含各自子目录）都可读写。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -82,66 +74,103 @@ import { createPortal } from "react-dom";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   LuChevronDown,
-  LuChevronUp,
+  LuChevronRight,
   LuMessageSquare,
   LuCloudCog,
   LuTrash2,
   LuLoaderCircle,
-  LuTerminal,
   LuSettings,
-  LuPlus,
+  LuSquarePen,
   LuPanelLeftClose,
   LuBlocks,
-  LuBot,
   LuFolder,
   LuFolderOpen,
   LuFolderPlus,
   LuPencil,
-  LuPlug,
   LuEllipsis,
+  LuGitBranch,
+  LuCircleHelp,
+  LuTerminal,
 } from "react-icons/lu";
+import { RiPushpin2Fill, RiPushpin2Line } from "react-icons/ri";
 import { parseChatTitle } from "@/lib/chat-title";
+import { chatRowKeys } from "@/lib/chat-row-keys";
 import { getDateGroupLabel, getDateGroupPriority } from "@/lib/date-groups";
-import { getElectronBridge, isElectron } from "@/lib/electron-bridge";
+import { getHostBridge, hasHostBridge } from "@/lib/host-bridge";
 import { hasGeneralSettingsChrome, hostToolChrome, settingsChrome } from "@/lib/host-tools";
 import {
   createProject,
   deleteProject,
-  listProjects,
+  getChatLiveStream,
   openLocalPath,
+  forkChat,
+  setChatPinned,
+  updateChatTitle,
   updateProject,
   type LocalChat,
   type LocalChatAgent,
   type LocalProject,
 } from "@/lib/local-api";
+import { usePendingAskUserChatIds } from "@/components/chat/AskUserPromptProvider";
+import { usePendingApprovalChatIds } from "@/components/chat/ApprovalPromptProvider";
 import type { UseChatsAndAgentsResult } from "@/hooks/useChatsAndAgents";
+import { persistProjectOrder, useProjects } from "@/hooks/useProjects";
+import {
+  nextProjectOrder,
+  type ProjectDropPlace,
+} from "@/lib/project-order";
+import { chatActivityTime, latestActivityTime } from "@/lib/sidebar-order";
 import type { RightPanelState } from "@/layouts/AgentLayout";
 import { BrandLockup } from "@/components/BrandLockup";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import {
+  SidebarVersionLabel,
+  useAppRelease,
+} from "@/components/SidebarRelease";
+import { SidebarAccount } from "@/components/SidebarAccount";
 import { CreateProjectModal } from "@/components/CreateProjectModal";
+import { t } from "@/i18n";
 
-const DEFAULT_DOT_COLOR = "#7c3aed";
-
-function agentInitial(agent: LocalChatAgent | null): string {
-  const name = (agent?.name || "").trim();
-  return name ? name[0].toUpperCase() : "A";
+function projectDropPlace(element: HTMLElement, clientY: number): ProjectDropPlace {
+  const rect = element.getBoundingClientRect();
+  return clientY < rect.top + rect.height / 2 ? "before" : "after";
 }
 
-function AgentDot({
-  agent,
-  size = 18,
-}: {
-  agent: LocalChatAgent | null;
-  size?: number;
-}) {
-  const color = agent?.color || DEFAULT_DOT_COLOR;
-  return (
-    <span
-      className="inline-flex flex-shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white shadow-sm"
-      style={{ width: size, height: size, backgroundColor: color }}
-    >
-      {agentInitial(agent)}
-    </span>
-  );
+/** 项目里先露出的普通会话条数。每一次「显示更多」再露出同样多条。 */
+const PROJECT_CHAT_PAGE = 5;
+
+/**
+ * 进行中、等待输入的会话保持原位，不占用这 5 条名额。
+ * 当前打开的会话如果落在名额之外，仍单独留在列表里。
+ */
+function visibleProjectChats<T extends { id: string }>(
+  items: readonly T[],
+  limit: number,
+  options: {
+    currentId?: string;
+    isAlwaysVisible: (chat: T) => boolean;
+  },
+): { rows: T[]; hiddenCount: number } {
+  let ordinary = 0;
+  const kept = new Set<string>();
+  for (const chat of items) {
+    if (options.isAlwaysVisible(chat)) {
+      kept.add(chat.id);
+      continue;
+    }
+    if (ordinary < limit) {
+      kept.add(chat.id);
+      ordinary += 1;
+    }
+  }
+  if (
+    options.currentId &&
+    items.some((chat) => chat.id === options.currentId)
+  ) {
+    kept.add(options.currentId);
+  }
+  const rows = items.filter((chat) => kept.has(chat.id));
+  return { rows, hiddenCount: items.length - rows.length };
 }
 
 function placeProjectMenu(anchor: HTMLElement): { top: number; left: number } {
@@ -151,13 +180,108 @@ function placeProjectMenu(anchor: HTMLElement): { top: number; left: number } {
   return { top: Math.max(8, box.top), left };
 }
 
+function formatForkBytes(bytes: number | undefined): string {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes)) return "";
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function ChatRowMenu({
+  anchor,
+  onClose,
+  onRename,
+  onFork,
+  onDelete,
+}: {
+  anchor: HTMLElement;
+  onClose: () => void;
+  onRename: () => void;
+  onFork: () => void;
+  onDelete: () => void;
+}) {
+  const pos = placeProjectMenu(anchor);
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [index, setIndex] = useState(0);
+  const actions = [
+    { testId: "sidebar-chat-rename", label: t("Rename"), run: onRename, danger: false, ariaLabel: undefined as string | undefined },
+    { testId: "sidebar-chat-fork", label: t("Fork"), run: onFork, danger: false, ariaLabel: undefined as string | undefined },
+    { testId: "sidebar-chat-delete", label: t("Delete"), run: onDelete, danger: true, ariaLabel: t("Delete chat") },
+  ];
+  useEffect(() => {
+    buttonRefs.current[index]?.focus();
+  }, [index]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const count = actions.length;
+        setIndex((current) =>
+          event.key === "ArrowDown" ? (current + 1) % count : (current - 1 + count) % count,
+        );
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, actions.length]);
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-[90]" onClick={onClose} />
+      <div
+        role="menu"
+        className="fixed z-[91] w-44 overflow-hidden rounded-2xl border border-agent-border bg-agent-canvas p-1 shadow-lg"
+        style={pos}
+        data-testid="sidebar-chat-menu"
+      >
+        {actions.map((action, actionIndex) => (
+          <button
+            key={action.testId}
+            ref={(node) => {
+              buttonRefs.current[actionIndex] = node;
+            }}
+            type="button"
+            role="menuitem"
+            data-testid={action.testId}
+            title={action.ariaLabel}
+            aria-label={action.ariaLabel}
+            onClick={action.run}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              action.run();
+            }}
+            className={[
+              "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-agent-foreground/5",
+              action.danger ? "text-agent-destructive" : "text-agent-foreground",
+              actionIndex === actions.length - 1 ? "mt-1 border-t border-agent-border/60" : "",
+            ].join(" ")}
+          >
+            {actionIndex === 0 ? (
+              <LuPencil className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
+            ) : action.danger ? (
+              <LuTrash2 className="h-3.5 w-3.5 shrink-0" />
+            ) : (
+              <LuGitBranch className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
+            )}
+            {action.label}
+          </button>
+        ))}
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 function ProjectOverflowMenu({
   project,
   chatCount,
   anchor,
   revealLabel,
-  confirmDelete,
-  deleting,
   onClose,
   onRename,
   onChangeFolder,
@@ -168,8 +292,6 @@ function ProjectOverflowMenu({
   chatCount: number;
   anchor: HTMLElement;
   revealLabel: string;
-  confirmDelete: boolean;
-  deleting: boolean;
   onClose: () => void;
   onRename: () => void;
   onChangeFolder: () => void;
@@ -199,7 +321,7 @@ function ProjectOverflowMenu({
             <span className="min-w-0 truncate">{project.name}</span>
           </div>
           <div className="mt-0.5 pl-[22px] text-[10px] text-agent-muted-foreground">
-            {chatCount} 个会话
+            {t("Chats: {count}", { count: chatCount })}
           </div>
           <div
             className="mt-0.5 truncate pl-[22px] font-mono text-[10px] text-agent-muted-foreground/70"
@@ -212,22 +334,22 @@ function ProjectOverflowMenu({
         <button
           type="button"
           role="menuitem"
-          title="重命名项目"
+          title={t("Rename project")}
           onClick={onRename}
           className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-agent-foreground hover:bg-agent-foreground/5"
         >
           <LuPencil className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
-          重命名
+          {t("Rename")}
         </button>
         <button
           type="button"
           role="menuitem"
-          title="编辑项目"
+          title={t("Edit project")}
           onClick={onChangeFolder}
           className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-agent-foreground hover:bg-agent-foreground/5"
         >
           <LuFolderOpen className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
-          编辑项目
+          {t("Edit project")}
         </button>
         {onReveal && (
         <button
@@ -245,19 +367,12 @@ function ProjectOverflowMenu({
         <button
           type="button"
           role="menuitem"
-          disabled={deleting}
-          title={
-            confirmDelete
-              ? "再次点击确认删除（会话会保留为无项目对话）"
-              : "删除项目（会话保留为无项目对话）"
-          }
+          title={t("Delete project (its chats stay as chats without a project)")}
           onClick={onDelete}
-          className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-agent-destructive/10 ${
-            confirmDelete ? "text-agent-destructive" : "text-agent-foreground"
-          }`}
+          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-agent-foreground hover:bg-agent-destructive/10"
         >
-          <LuTrash2 className={`h-3.5 w-3.5 shrink-0 ${deleting ? "animate-pulse" : ""}`} />
-          {confirmDelete ? "再次点击确认删除" : "删除项目"}
+          <LuTrash2 className="h-3.5 w-3.5 shrink-0" />
+          {t("Delete project")}
         </button>
       </div>
     </>,
@@ -265,46 +380,98 @@ function ProjectOverflowMenu({
   );
 }
 
+/** 置顶 / 项目 / 最近 的展开状态。缺省键走组件内默认。 */
+const SIDEBAR_SECTIONS_KEY = "deeppath.agent.sidebarSections";
+
+type SidebarSectionId = "pinned" | "projects" | "recents";
+
+function readStoredSidebarSections(): Partial<Record<SidebarSectionId, boolean>> {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_SECTIONS_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const record = parsed as Record<string, unknown>;
+    const out: Partial<Record<SidebarSectionId, boolean>> = {};
+    for (const id of ["pinned", "projects", "recents"] as const) {
+      if (typeof record[id] === "boolean") out[id] = record[id];
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** 切走后对后台会话轮询 live-stream 的间隔，与对话页恢复轮询同级。 */
+const BACKGROUND_STREAM_POLL_MS = 750;
+/**
+ * 标记成正在生成之后，快照可能还没注册。这段时间内 live-stream 报
+ * inactive 不摘指示；见过 active，或超过这段时间仍 inactive，才摘掉。
+ */
+const BACKGROUND_STREAM_GRACE_MS = 3_000;
+
+function writeSidebarSectionExpanded(id: SidebarSectionId, expanded: boolean) {
+  try {
+    const current = readStoredSidebarSections();
+    window.localStorage.setItem(
+      SIDEBAR_SECTIONS_KEY,
+      JSON.stringify({ ...current, [id]: expanded }),
+    );
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 interface AgentSidebarProps {
   data: UseChatsAndAgentsResult;
   /** 右侧栏当前打开的面板：null / 'terminal' / 包槽位 id（互斥）。 */
-  rightPanel: RightPanelState;
+  rightPanel?: RightPanelState;
   /** 切换右侧栏面板显隐——面板不是路由也不是独立窗口，只是布局里的一栏。 */
-  onToggleRightPanel: (kind: string) => void;
+  onToggleRightPanel?: (kind: string) => void;
   /** 收起侧边栏（AgentLayout 换成窄 rail，展开按钮在 rail 上）。 */
   onCollapse: () => void;
 }
 
 export function AgentSidebar({
   data,
-  rightPanel,
-  onToggleRightPanel,
+  rightPanel: _rightPanel,
+  onToggleRightPanel: _onToggleRightPanel,
   onCollapse,
 }: AgentSidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { chatId: currentChatId } = useParams<{ chatId?: string }>();
-  const bridge = getElectronBridge();
+  const bridge = getHostBridge();
+  const release = useAppRelease();
   const onSettingsPage = location.pathname === "/settings";
-  // /settings?section=skills|mcp|agents|（缺省 = 综合设置）—— 各自高亮。
+  // 插件页（及旧的 agents/skills/mcp 深链）高亮「插件」；其余 /settings 高亮底部综合设置。
   const settingsSection = useMemo(
     () => new URLSearchParams(location.search).get("section"),
     [location.search],
   );
-  const onGeneralSettings =
+  const pluginsAvailable =
+    settingsChrome("agents") ||
+    settingsChrome("skills") ||
+    settingsChrome("mcp") ||
+    settingsChrome("web-search");
+  const onPluginsSettings =
+    pluginsAvailable &&
     onSettingsPage &&
-    settingsSection !== "skills" &&
-    settingsSection !== "mcp" &&
-    settingsSection !== "agents";
+    (settingsSection === "plugins" ||
+      settingsSection === "agents" ||
+      settingsSection === "skills" ||
+      settingsSection === "mcp");
+  const onGeneralSettings = onSettingsPage && !onPluginsSettings;
   const onNewChatHome = !currentChatId && !onSettingsPage;
 
   const {
     chats,
-    agents,
     isLoading: isChatLoading,
     error,
+    refreshChats,
     setSelectedAgentId,
     deleteChat,
+    patchChatTitle,
     isLoadingMoreChats,
     hasMoreChats,
     loadMoreChats,
@@ -317,28 +484,211 @@ export function AgentSidebar({
       setIsMac(/Mac|iPod|iPhone|iPad/.test(navigator.platform));
     }
   }, []);
-  const [confirmDeleteChatId, setConfirmDeleteChatId] = useState<string | null>(
-    null,
-  );
+  const [pendingDeleteChat, setPendingDeleteChat] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
-  const [chatsExpanded, setChatsExpanded] = useState(true);
+  const [pinningChatId, setPinningChatId] = useState<string | null>(null);
+  const [streamingChatIds, setStreamingChatIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  // 回合已经开始、列表里的 updatedAt 还没刷新时，用这个时间把会话抬到前面。
+  const [liveActivityAt, setLiveActivityAt] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
+  );
+  const pendingAskUserChatIds = usePendingAskUserChatIds();
+  const pendingApprovalChatIds = usePendingApprovalChatIds();
+
+  useEffect(() => {
+    const handleStreamingChange = (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        chatId: string;
+        isStreaming: boolean;
+      }>;
+      const { chatId, isStreaming } = customEvent.detail || {};
+      if (!chatId) return;
+      setStreamingChatIds((prev) => {
+        const next = new Set(prev);
+        if (isStreaming) {
+          next.add(chatId);
+        } else {
+          next.delete(chatId);
+        }
+        return next;
+      });
+      if (isStreaming) {
+        setLiveActivityAt((prev) => {
+          if (prev.has(chatId)) return prev;
+          const next = new Map(prev);
+          next.set(chatId, Date.now());
+          return next;
+        });
+      }
+    };
+    window.addEventListener("chat:streaming-change", handleStreamingChange);
+    return () => {
+      window.removeEventListener(
+        "chat:streaming-change",
+        handleStreamingChange,
+      );
+    };
+  }, []);
+
+  // 列表里的 updatedAt 追上本地时间后丢掉抬升，避免旧回合一直占在最前。
+  useEffect(() => {
+    setLiveActivityAt((prev) => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Map(prev);
+      for (const [id, stamp] of prev) {
+        if (streamingChatIds.has(id)) continue;
+        const chat = chats.find((item) => item.id === id);
+        const updated = chat?.updatedAt ? Date.parse(chat.updatedAt) : Number.NaN;
+        if (!chat || (Number.isFinite(updated) && updated >= stamp)) {
+          next.delete(id);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [chats, streamingChatIds]);
+
+  // 当前打开的会话由 AgentChatView 自己报开始/结束。切走后的会话回合还在
+  // 后端跑，卸载时不会再报结束，这里用 live-stream 对账，结束后摘掉指示。
+  const seenActiveBackgroundRef = useRef<Set<string>>(new Set());
+  const backgroundSinceRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    for (const id of seenActiveBackgroundRef.current) {
+      if (!streamingChatIds.has(id)) seenActiveBackgroundRef.current.delete(id);
+    }
+    for (const id of backgroundSinceRef.current.keys()) {
+      if (!streamingChatIds.has(id)) backgroundSinceRef.current.delete(id);
+    }
+    const backgroundIds = [...streamingChatIds].filter(
+      (id) => id !== currentChatId,
+    );
+    if (backgroundIds.length === 0 || !hasHostBridge()) return;
+
+    let cancelled = false;
+    let ticking = false;
+    const tick = async () => {
+      if (ticking || cancelled) return;
+      ticking = true;
+      try {
+        const now = Date.now();
+        const settled = await Promise.all(
+          backgroundIds.map(async (id) => {
+            try {
+              const live = await getChatLiveStream(id);
+              return { id, active: live?.active === true, ok: true as const };
+            } catch {
+              return { id, active: false, ok: false as const };
+            }
+          }),
+        );
+        if (cancelled) return;
+        const drop = new Set<string>();
+        for (const row of settled) {
+          if (!row.ok) continue;
+          if (row.active) {
+            seenActiveBackgroundRef.current.add(row.id);
+            backgroundSinceRef.current.delete(row.id);
+            continue;
+          }
+          // 已经对上过运行中的快照：inactive 就是回合结束。
+          if (seenActiveBackgroundRef.current.has(row.id)) {
+            drop.add(row.id);
+            seenActiveBackgroundRef.current.delete(row.id);
+            backgroundSinceRef.current.delete(row.id);
+            continue;
+          }
+          // 还没见过快照（切走时回合可能刚起步）。宽限期内保留指示。
+          const since = backgroundSinceRef.current.get(row.id);
+          if (since === undefined) {
+            backgroundSinceRef.current.set(row.id, now);
+            continue;
+          }
+          if (now - since >= BACKGROUND_STREAM_GRACE_MS) {
+            drop.add(row.id);
+            backgroundSinceRef.current.delete(row.id);
+          }
+        }
+        if (drop.size === 0) return;
+        setStreamingChatIds((prev) => {
+          let changed = false;
+          const next = new Set(prev);
+          for (const id of drop) {
+            if (next.delete(id)) changed = true;
+          }
+          return changed ? next : prev;
+        });
+      } finally {
+        ticking = false;
+      }
+    };
+
+    void tick();
+    const timer = window.setInterval(() => {
+      void tick();
+    }, BACKGROUND_STREAM_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [streamingChatIds, currentChatId]);
+
+  // null = 用户还没点过这一组，走默认（置顶：有置顶会话才展开；项目、最近：展开）。
+  // 点过之后写入 localStorage，刷新和重启后保持。
+  const [pinnedExpanded, setPinnedExpanded] = useState<boolean | null>(
+    () => readStoredSidebarSections().pinned ?? null,
+  );
+  const [projectsExpanded, setProjectsExpanded] = useState<boolean | null>(
+    () => readStoredSidebarSections().projects ?? null,
+  );
+  const [recentsExpanded, setRecentsExpanded] = useState<boolean | null>(
+    () => readStoredSidebarSections().recents ?? null,
+  );
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
   // ───── 项目模式 ─────
-  // 项目列表从 local-backend 拉取（electron-store 持久化）。会话按
-  // projectId 分组：项目分组在上（组头 hover：+ 新建对话 / ·· 菜单），
-  // 无项目对话在下（日期分组）。
-  const [projects, setProjects] = useState<LocalProject[]>([]);
+  // 项目列表与输入框「关联到项目」共用 useProjects。会话按 projectId
+  // 分组：项目分组在上（组头 hover：+ 新建对话 / ·· 菜单），无项目对话在下。
+  const {
+    projects,
+    error: projectsLoadError,
+    refresh: fetchProjects,
+  } = useProjects();
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
     () => new Set(),
   );
+  // 每个项目已展开的普通会话名额。缺省是 PROJECT_CHAT_PAGE；Infinity 表示已全部展开。
+  const [projectChatLimits, setProjectChatLimits] = useState<
+    Record<string, number>
+  >({});
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(
     null,
   );
   const [renamingValue, setRenamingValue] = useState("");
-  const [confirmDeleteProjectId, setConfirmDeleteProjectId] = useState<
-    string | null
-  >(null);
+  const [chatMenu, setChatMenu] = useState<{
+    id: string;
+    title: string;
+    anchor: HTMLElement;
+  } | null>(null);
+  const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  const [renamingChatValue, setRenamingChatValue] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameHint, setRenameHint] = useState<{
+    chatId: string;
+    text: string;
+  } | null>(null);
+  const renameCancelledRef = useRef(false);
+  const renameBusyRef = useRef(false);
+  const [renamingBusy, setRenamingBusy] = useState(false);
+  const [forkingChatId, setForkingChatId] = useState<string | null>(null);
+  const forkingChatRef = useRef<string | null>(null);
+  const [pendingDeleteProject, setPendingDeleteProject] =
+    useState<LocalProject | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(
     null,
   );
@@ -349,23 +699,39 @@ export function AgentSidebar({
     id: string;
     anchor: HTMLElement;
   } | null>(null);
+  const draggingProjectIdRef = useRef<string | null>(null);
+  const projectDragMovedRef = useRef(false);
+  const [draggingProjectId, setDraggingProjectId] = useState<string | null>(
+    null,
+  );
+  const [dropTarget, setDropTarget] = useState<{
+    id: string;
+    place: ProjectDropPlace;
+  } | null>(null);
 
-  const showProjectsChrome = hostToolChrome("projects");
-
-  const fetchProjects = useCallback(async () => {
-    if (!isElectron() || !hostToolChrome("projects")) return;
-    try {
-      const res = await listProjects();
-      setProjects(res.projects || []);
-    } catch (err) {
-      console.error("获取项目列表失败:", err);
-      setProjectError(err instanceof Error ? err.message : String(err));
-    }
+  const endProjectDrag = useCallback(() => {
+    draggingProjectIdRef.current = null;
+    setDraggingProjectId(null);
+    setDropTarget(null);
+    // dragend 之后浏览器有时还会补一次 click。等这次 click 过去再清标记，
+    // 避免松手把项目折叠掉；下一次真正的点击仍能折叠。
+    window.setTimeout(() => {
+      projectDragMovedRef.current = false;
+    }, 0);
   }, []);
 
   useEffect(() => {
-    void fetchProjects();
-  }, [fetchProjects]);
+    if (!draggingProjectId) return;
+    const { cursor, userSelect } = document.body.style;
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
+    return () => {
+      document.body.style.cursor = cursor;
+      document.body.style.userSelect = userSelect;
+    };
+  }, [draggingProjectId]);
+
+  const showProjectsChrome = hostToolChrome("projects");
 
   const handleCreateProject = useCallback(
     async (input: { name: string; sourceFolders: string[] }) => {
@@ -429,7 +795,7 @@ export function AgentSidebar({
       try {
         setDeletingProjectId(projectId);
         await deleteProject(projectId);
-        setConfirmDeleteProjectId(null);
+        setPendingDeleteProject(null);
         setProjectMenu(null);
         setEditingProjectId(null);
         await fetchProjects();
@@ -445,25 +811,8 @@ export function AgentSidebar({
     [deletingProjectId, fetchProjects, data],
   );
 
-  const handleDeleteProject = useCallback(
-    async (projectId: string) => {
-      // 与会话删除同款两段确认：第一次点击武装红色按钮，第二次才真删。
-      if (confirmDeleteProjectId !== projectId) {
-        setConfirmDeleteProjectId(projectId);
-        return;
-      }
-      try {
-        await removeProject(projectId);
-      } catch {
-        // 横幅已写 projectError
-      }
-    },
-    [confirmDeleteProjectId, removeProject],
-  );
-
   const closeProjectMenu = useCallback(() => {
     setProjectMenu(null);
-    setConfirmDeleteProjectId(null);
   }, []);
 
   const handleRevealProjectFolder = useCallback(async (folderPath: string) => {
@@ -476,14 +825,49 @@ export function AgentSidebar({
     }
   }, []);
 
-  const toggleProjectCollapsed = useCallback((projectId: string) => {
-    setCollapsedProjectIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(projectId)) next.delete(projectId);
-      else next.add(projectId);
-      return next;
-    });
-  }, []);
+  const toggleProjectCollapsed = useCallback(
+    (projectId: string) => {
+      const collapsing = !collapsedProjectIds.has(projectId);
+      setCollapsedProjectIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(projectId)) next.delete(projectId);
+        else next.add(projectId);
+        return next;
+      });
+      // 收起项目后再打开，回到最初的 5 条，不记住上次展开到第几页。
+      if (collapsing) {
+        setProjectChatLimits((limits) => {
+          if (limits[projectId] === undefined) return limits;
+          const next = { ...limits };
+          delete next[projectId];
+          return next;
+        });
+      }
+    },
+    [collapsedProjectIds],
+  );
+
+  const revealMoreProjectChats = useCallback(
+    (projectId: string, hiddenCount: number) => {
+      setProjectChatLimits((limits) => {
+        if (hiddenCount === 0) {
+          if (limits[projectId] === undefined) return limits;
+          const next = { ...limits };
+          delete next[projectId];
+          return next;
+        }
+        const current = limits[projectId] ?? PROJECT_CHAT_PAGE;
+        return {
+          ...limits,
+          [projectId]:
+            hiddenCount <= PROJECT_CHAT_PAGE
+              ? Number.POSITIVE_INFINITY
+              : current + PROJECT_CHAT_PAGE,
+        };
+      });
+    },
+    [],
+  );
 
   // Keep the shared "next new chat" agent aligned with the current chat. The
   // actual picker now lives in ChatInput, so the sidebar no longer renders the
@@ -520,33 +904,31 @@ export function AgentSidebar({
   const normalizedChats = useMemo(() => {
     return chats
       .map((chat) => {
-        const updated = chat.updatedAt ? new Date(chat.updatedAt) : null;
-        const created = new Date(chat.createdAt);
-        const sortDate =
-          updated && !Number.isNaN(updated.getTime())
-            ? updated
-            : !Number.isNaN(created.getTime())
-              ? created
-              : new Date();
         const { displayTitle, isAutomation } = parseChatTitle(chat.title);
         return {
           id: chat.id,
-          title: displayTitle || "新会话",
+          title: displayTitle || t("New conversation"),
           isAutomation,
           isPinned: chat.isPinned,
-          sortDate,
+          sortDate: new Date(
+            chatActivityTime(
+              chat.updatedAt,
+              chat.createdAt,
+              liveActivityAt.get(chat.id),
+            ),
+          ),
           agentId: chat.agentId ?? null,
           projectId: chat.projectId ?? null,
+          isStreaming: chat.isStreaming,
+          needsUserInput: chat.needsUserInput,
         };
       })
-      .sort((a, b) => {
-        if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
-        return b.sortDate.getTime() - a.sortDate.getTime();
-      });
-  }, [chats]);
+      .sort((a, b) => b.sortDate.getTime() - a.sortDate.getTime());
+  }, [chats, liveActivityAt]);
 
   // 顶层按项目分组：无项目对话（含项目已被删但列表还没刷新的孤儿会话）
-  // 保持原有的日期分组；每个项目一个分组，组内按 pin + 时间排序。
+  // 保持日期分组。会话按最后活动时间新到旧。项目按组内最近一次会话排序，
+  // 没有会话的项目留在后面，并保持它们原来的相对顺序。
   const knownProjectIds = useMemo(
     () =>
       showProjectsChrome
@@ -563,18 +945,30 @@ export function AgentSidebar({
     [normalizedChats, knownProjectIds],
   );
 
-  const projectGroups = useMemo(
-    () =>
-      showProjectsChrome
-        ? projects.map((project) => ({
-            project,
-            items: normalizedChats.filter((c) => c.projectId === project.id),
-          }))
-        : [],
-    [projects, normalizedChats, showProjectsChrome],
+  const projectGroups = useMemo(() => {
+    if (!showProjectsChrome) return [];
+    return projects
+      .map((project, index) => ({
+        project,
+        index,
+        items: normalizedChats.filter((c) => c.projectId === project.id),
+      }))
+      .sort((a, b) => {
+        const byActivity =
+          latestActivityTime(b.items.map((item) => item.sortDate.getTime())) -
+          latestActivityTime(a.items.map((item) => item.sortDate.getTime()));
+        if (byActivity !== 0) return byActivity;
+        return a.index - b.index;
+      })
+      .map(({ project, items }) => ({ project, items }));
+  }, [projects, normalizedChats, showProjectsChrome]);
+
+  const pinnedChats = useMemo(
+    () => normalizedChats.filter((c) => c.isPinned),
+    [normalizedChats],
   );
 
-  const chatGroups = useMemo(() => {
+  const recentChatGroups = useMemo(() => {
     const map = new Map<
       string,
       {
@@ -583,53 +977,227 @@ export function AgentSidebar({
         items: typeof normalizedChats;
       }
     >();
-    // 置顶会话独立成组排在所有日期分组之前：pin-first 排序若只带进日期
-    // 分组，「5 天前置顶的会话」会排在「今天」的普通会话之后，置顶语义
-    // 就只剩组内有效——与用户点图钉时的预期不符。
-    noProjectChats.forEach((chat) => {
-      const label = chat.isPinned ? "置顶" : getDateGroupLabel(chat.sortDate);
-      if (!map.has(label)) {
-        map.set(label, {
-          label,
-          priority: chat.isPinned ? 0 : getDateGroupPriority(label),
-          items: [],
-        });
-      }
-      map.get(label)!.items.push(chat);
-    });
+    noProjectChats
+      .filter((chat) => !chat.isPinned)
+      .forEach((chat) => {
+        const label = getDateGroupLabel(chat.sortDate);
+        if (!map.has(label)) {
+          map.set(label, {
+            label,
+            priority: getDateGroupPriority(chat.sortDate),
+            items: [],
+          });
+        }
+        map.get(label)!.items.push(chat);
+      });
     return Array.from(map.values()).sort((a, b) => a.priority - b.priority);
   }, [noProjectChats]);
 
-  const handleDeleteChat = useCallback(
-    async (id: string) => {
-      if (deletingChatId === id) return;
-      // Two-step confirm — first click arms the red button, second click
-      // actually deletes. Matches the cloud sibling exactly so users don't
-      // get muscle-memory whiplash.
-      if (confirmDeleteChatId !== id) {
-        setConfirmDeleteChatId(id);
-        return;
+  const isPinnedExpanded = pinnedExpanded ?? pinnedChats.length > 0;
+  const isProjectsExpanded = projectsExpanded ?? true;
+  const isRecentsExpanded = recentsExpanded ?? true;
+
+  const handleDeleteChat = useCallback(async () => {
+    if (!pendingDeleteChat || deletingChatId === pendingDeleteChat.id) return;
+    const id = pendingDeleteChat.id;
+    try {
+      setDeletingChatId(id);
+      const ok = await deleteChat(id);
+      if (ok) {
+        setPendingDeleteChat(null);
+        if (id === currentChatId) navigate("/agent");
       }
+    } finally {
+      setDeletingChatId(null);
+    }
+  }, [pendingDeleteChat, deleteChat, deletingChatId, currentChatId, navigate]);
+
+  const handleTogglePinChat = useCallback(
+    async (id: string, nextPinned: boolean) => {
+      if (pinningChatId === id) return;
+      setPinningChatId(id);
       try {
-        setDeletingChatId(id);
-        const ok = await deleteChat(id);
-        if (ok) {
-          setConfirmDeleteChatId(null);
-          if (id === currentChatId) navigate("/agent");
-        }
+        await setChatPinned(id, nextPinned);
+        await refreshChats();
+      } catch (err) {
+        console.error("Failed to toggle chat pin:", err);
       } finally {
-        setDeletingChatId(null);
+        setPinningChatId(null);
       }
     },
-    [confirmDeleteChatId, deleteChat, deletingChatId, currentChatId, navigate],
+    [pinningChatId, refreshChats],
+  );
+
+  useEffect(() => {
+    if (!renameHint) return;
+    const timer = window.setTimeout(() => setRenameHint(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [renameHint]);
+
+  const beginChatRename = useCallback((chat: { id: string; title: string }) => {
+    setChatMenu(null);
+    setRenameError(null);
+    setRenameHint(null);
+    renameCancelledRef.current = false;
+    setRenamingChatId(chat.id);
+    setRenamingChatValue(chat.title);
+  }, []);
+
+  const commitChatRename = useCallback(
+    async (chatId: string, previous: string) => {
+      if (renameBusyRef.current) return;
+      const next = renamingChatValue.trim();
+      if (!next || next === previous) {
+        setRenamingChatId(null);
+        setRenameError(null);
+        return;
+      }
+      renameBusyRef.current = true;
+      setRenamingBusy(true);
+      try {
+        await updateChatTitle(chatId, next);
+        patchChatTitle(chatId, next);
+        setRenamingChatId(null);
+        setRenameError(null);
+      } catch (err) {
+        const status = (err as { status?: number }).status;
+        if (status === 409) {
+          setRenamingChatId(null);
+          setRenameError(null);
+          setRenameHint({
+            chatId,
+            text: t(
+              "This chat is running in another process. Try renaming it again in a moment.",
+            ),
+          });
+          return;
+        }
+        setRenameError(err instanceof Error ? err.message : String(err));
+      } finally {
+        renameBusyRef.current = false;
+        setRenamingBusy(false);
+      }
+    },
+    [patchChatTitle, renamingChatValue],
+  );
+
+  const forkThisChat = useCallback(
+    async (chat: { id: string }) => {
+      if (forkingChatRef.current) return;
+      forkingChatRef.current = chat.id;
+      setForkingChatId(chat.id);
+      setChatMenu(null);
+      try {
+        const created = await forkChat(chat.id);
+        await refreshChats();
+        navigate(`/agent/${created.chatId}`);
+      } catch (err) {
+        const status = (err as { status?: number }).status;
+        const bytes = (err as { data?: { bytes?: number } }).data?.bytes;
+        const text =
+          status === 409
+            ? t("This chat is still generating. Fork it after this turn finishes.")
+            : status === 413
+              ? t("This workspace is too large to fork ({size}).", {
+                  size: formatForkBytes(bytes),
+                })
+              : t(err instanceof Error && err.message ? err.message : 'Fork failed');
+        setRenameHint({ chatId: chat.id, text });
+      } finally {
+        forkingChatRef.current = null;
+        setForkingChatId(null);
+      }
+    },
+    [navigate, refreshChats],
   );
 
   // 单条会话行——无项目日期分组和项目分组共用同一个渲染，避免两份 JSX。
   const renderChatRow = (chat: (typeof normalizedChats)[number]) => {
     const isCurrent = currentChatId === chat.id;
-    const isConfirmingDelete = confirmDeleteChatId === chat.id;
-    const isDeleting = deletingChatId === chat.id;
-    const chatAgent = agents.find((a) => a.id === chat.agentId) ?? null;
+    const isPinning = pinningChatId === chat.id;
+    const isStreaming = Boolean(
+      chat.isStreaming || streamingChatIds.has(chat.id),
+    );
+    const needsUserInput = Boolean(
+      chat.needsUserInput ||
+      pendingAskUserChatIds.has(chat.id) ||
+      pendingApprovalChatIds.has(chat.id),
+    );
+    const renameHintText =
+      renameHint?.chatId === chat.id ? (
+        <p
+          className="px-2.5 pb-1 text-[10px] leading-snug text-agent-muted-foreground"
+          data-testid="sidebar-chat-rename-hint"
+        >
+          {renameHint.text}
+        </p>
+      ) : null;
+
+    if (renamingChatId === chat.id) {
+      return (
+        <div
+          key={chat.id}
+          className="group/item relative"
+          data-testid="sidebar-chat-row"
+          data-chat-id={chat.id}
+        >
+          <form
+            className="px-2.5 py-0.5"
+            aria-busy={renamingBusy}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void commitChatRename(chat.id, chat.title);
+            }}
+          >
+            <div className="relative">
+            <input
+              autoFocus
+              readOnly={renamingBusy}
+              data-testid="sidebar-chat-rename-input"
+              value={renamingChatValue}
+              aria-label={t("Rename")}
+              onChange={(event) => setRenamingChatValue(event.target.value)}
+              onBlur={() => {
+                if (renameCancelledRef.current) {
+                  renameCancelledRef.current = false;
+                  return;
+                }
+                if (renameBusyRef.current) return;
+                void commitChatRename(chat.id, chat.title);
+              }}
+              onFocus={(event) => event.currentTarget.select()}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                if (renameBusyRef.current) return;
+                renameCancelledRef.current = true;
+                setRenamingChatId(null);
+                setRenameError(null);
+              }}
+              className="h-6 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-2 pr-6 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30 read-only:opacity-70"
+            />
+            {renamingBusy ? (
+              <LuLoaderCircle
+                className="pointer-events-none absolute right-1.5 top-1 h-3.5 w-3.5 animate-spin text-agent-muted-foreground"
+                data-testid="sidebar-chat-rename-busy"
+                aria-hidden="true"
+              />
+            ) : null}
+            </div>
+            {renameError ? (
+              <p
+                className="mt-0.5 text-[10px] leading-snug text-agent-destructive"
+                data-testid="sidebar-chat-rename-error"
+              >
+                {renameError}
+              </p>
+            ) : null}
+          </form>
+          {renameHintText}
+        </div>
+      );
+    }
+
     return (
       <div
         key={chat.id}
@@ -640,8 +1208,12 @@ export function AgentSidebar({
         <button
           type="button"
           onClick={() => {
-            setConfirmDeleteChatId(null);
             navigate(`/agent/${chat.id}`);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== chatRowKeys.rename) return;
+            event.preventDefault();
+            beginChatRename(chat);
           }}
           className={[
             "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors duration-200",
@@ -650,64 +1222,92 @@ export function AgentSidebar({
               : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground",
           ].join(" ")}
           title={
-            chat.isAutomation ? `[由自动化触发] ${chat.title}` : chat.title
+            chat.isAutomation
+              ? t("[Triggered by automation] {title}", { title: chat.title })
+              : chat.title
           }
         >
-          {chat.isPinned && (
-            <span className="shrink-0 text-[10px]" aria-label="已置顶">
-              📌
+          {needsUserInput ? (
+            <span
+              className="flex shrink-0 items-center justify-center text-amber-500 dark:text-amber-400"
+              title={t("Has a question that needs your input")}
+              aria-label={t("Waiting for user input")}
+            >
+              <LuCircleHelp className="h-3.5 w-3.5 animate-pulse" />
             </span>
-          )}
+          ) : isStreaming ? (
+            <span
+              className="flex shrink-0 items-center justify-center text-agent-foreground/70"
+              title={t("Conversation in progress")}
+              aria-label={t("Generating")}
+            >
+              <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            </span>
+          ) : null}
           {chat.isAutomation && (
             <LuCloudCog
               className="h-3 w-3 shrink-0 text-agent-muted-foreground"
-              aria-label="由自动化触发"
+              aria-label={t("Triggered by automation")}
             />
           )}
-          <AgentDot agent={chatAgent} size={16} />
-          <span className="min-w-0 truncate leading-none">{chat.title}</span>
+          <span className="min-w-0 truncate leading-none group-hover/item:pr-14 group-focus-within/item:pr-14">
+            {chat.title}
+          </span>
+          {forkingChatId === chat.id ? (
+            <span
+              className="shrink-0 text-[10px] text-agent-muted-foreground"
+              data-testid="sidebar-chat-forking"
+            >
+              {t("Forking…")}
+            </span>
+          ) : null}
         </button>
-        {/* Gradient mask so the trash button doesn't paint
-            over the chat title — fade matches the row's
-            own background (canvas when selected, muted when
-            hovered). */}
+        {/* Semi-transparent gradient container for action buttons:
+            fades long text smoothly to the left so buttons don't collide with text. */}
         <div
-          aria-hidden="true"
           className={[
-            "pointer-events-none absolute inset-y-0 right-0 w-12 rounded-r-full transition-opacity duration-200",
-            isConfirmingDelete
-              ? isCurrent
-                ? "bg-gradient-to-l from-agent-canvas via-agent-canvas/95 to-transparent opacity-100"
-                : "bg-gradient-to-l from-agent-muted via-agent-muted/95 to-transparent opacity-100"
-              : isCurrent
-                ? "bg-gradient-to-l from-agent-canvas via-agent-canvas/95 to-transparent opacity-0 group-hover/item:opacity-100"
-                : "bg-gradient-to-l from-agent-muted via-agent-muted/95 to-transparent opacity-0 group-hover/item:opacity-100",
+            "absolute inset-y-0 right-0 flex items-center justify-end gap-0.5 pr-1 pl-8 rounded-r-full transition-all duration-200",
+            "bg-gradient-to-l from-agent-muted/95 via-agent-muted/80 to-transparent",
+            "opacity-0 group-hover/item:opacity-100 focus-within:opacity-100 pointer-events-none group-hover/item:pointer-events-auto focus-within:pointer-events-auto",
           ].join(" ")}
-        />
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            void handleDeleteChat(chat.id);
-          }}
-          disabled={isDeleting}
-          className={[
-            "absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full transition-all duration-200",
-            isConfirmingDelete
-              ? "bg-agent-destructive/10 text-agent-destructive opacity-100 hover:bg-agent-destructive/20"
-              : "text-agent-muted-foreground opacity-0 hover:bg-agent-foreground/5 hover:text-agent-destructive group-hover/item:opacity-100 focus:opacity-100",
-            "disabled:cursor-not-allowed disabled:opacity-100",
-          ].join(" ")}
-          title={isConfirmingDelete ? "再次点击确认删除" : "删除会话"}
-          aria-label={isConfirmingDelete ? "再次点击确认删除" : "删除会话"}
-          data-testid="sidebar-chat-delete"
         >
-          <LuTrash2
-            className={["h-3.5 w-3.5", isDeleting ? "animate-pulse" : ""].join(
-              " ",
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleTogglePinChat(chat.id, !chat.isPinned);
+            }}
+            disabled={isPinning}
+            className="flex h-6 w-6 items-center justify-center rounded-full text-agent-foreground/70 transition-all duration-200 hover:bg-agent-foreground/10 hover:text-agent-foreground disabled:cursor-not-allowed"
+            title={chat.isPinned ? t("Unpin") : t("Pin chat")}
+            aria-label={chat.isPinned ? t("Unpin") : t("Pin chat")}
+            data-testid="sidebar-chat-pin"
+          >
+            {chat.isPinned ? (
+              <RiPushpin2Fill className="h-3.5 w-3.5 text-agent-foreground" />
+            ) : (
+              <RiPushpin2Line className="h-3.5 w-3.5 text-agent-foreground/75 hover:text-agent-foreground" />
             )}
-          />
-        </button>
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setChatMenu({
+                id: chat.id,
+                title: chat.title,
+                anchor: event.currentTarget,
+              });
+            }}
+            className="flex h-6 w-6 items-center justify-center rounded-full text-agent-foreground/70 transition-all duration-200 hover:bg-agent-foreground/10 hover:text-agent-foreground"
+            title={t("More actions")}
+            aria-label={t("More actions")}
+            data-testid="sidebar-chat-more"
+          >
+            <LuEllipsis className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        {renameHintText}
       </div>
     );
   };
@@ -725,18 +1325,22 @@ export function AgentSidebar({
     };
   }, [bridge, handleOpenNewChat]);
 
-  // Auto-load next page when the chat scroller approaches the bottom.
+  // Auto-load next page when the chat scroller approaches the bottom. Project
+  // groups need the complete list: otherwise an older project chat outside the
+  // first page makes its project incorrectly render as empty.
   // Throttled by `isLoadingMoreChats` inside the hook.
   useEffect(() => {
     const container = chatScrollRef.current;
-    if (!container || !chatsExpanded) return;
+    if (!container) return;
 
     const maybeLoadMore = () => {
       if (!hasMoreChats || isLoadingMoreChats) return;
       const nearBottom =
         container.scrollTop + container.clientHeight >=
         container.scrollHeight - 60;
-      if (nearBottom) void loadMoreChats();
+      const needsCompleteProjectGroups =
+        showProjectsChrome && projects.length > 0;
+      if (nearBottom || needsCompleteProjectGroups) void loadMoreChats();
     };
     container.addEventListener("scroll", maybeLoadMore, { passive: true });
     const tickId = window.requestAnimationFrame(maybeLoadMore);
@@ -748,27 +1352,29 @@ export function AgentSidebar({
     hasMoreChats,
     isLoadingMoreChats,
     loadMoreChats,
-    chatsExpanded,
+    isRecentsExpanded,
     normalizedChats.length,
+    projects.length,
+    showProjectsChrome,
   ]);
 
-  // Cmd+T from the app menu — wired in src/main.ts:createMenu (sends
-  // `menu:open-terminal`). Same pattern as `menu:new-chat` above. The
-  // terminal is a toggleable panel beside the chat, so this just flips
-  // the layout state owned by AgentLayout.
-  const showTerminalChrome = hostToolChrome("terminal");
+  const hasElectron = hasHostBridge();
 
-  useEffect(() => {
-    if (!showTerminalChrome || !bridge?.onMenuOpenTerminal) return;
-    bridge.onMenuOpenTerminal(() => {
-      onToggleRightPanel("terminal");
+  const projectChatWindow = (
+    items: typeof normalizedChats,
+    limit: number,
+  ) =>
+    visibleProjectChats(items, limit, {
+      currentId: currentChatId,
+      isAlwaysVisible: (chat) =>
+        Boolean(
+          chat.isStreaming ||
+            streamingChatIds.has(chat.id) ||
+            chat.needsUserInput ||
+            pendingAskUserChatIds.has(chat.id) ||
+            pendingApprovalChatIds.has(chat.id),
+        ),
     });
-    return () => {
-      bridge.offMenuOpenTerminal?.();
-    };
-  }, [bridge, onToggleRightPanel, showTerminalChrome]);
-
-  const hasElectron = isElectron();
 
   return (
     <div className="flex h-full w-full flex-col border-r border-agent-border/60 bg-agent-muted/70 backdrop-blur-md">
@@ -780,8 +1386,8 @@ export function AgentSidebar({
             type="button"
             onClick={onCollapse}
             className="flex h-7 w-7 items-center justify-center rounded-full text-agent-muted-foreground transition-colors duration-200 hover:bg-agent-foreground/5 hover:text-agent-foreground"
-            title="收起侧边栏"
-            aria-label="收起侧边栏"
+            title={t("Collapse sidebar")}
+            aria-label={t("Collapse sidebar")}
           >
             <LuPanelLeftClose className="h-3.5 w-3.5" />
           </button>
@@ -790,7 +1396,7 @@ export function AgentSidebar({
 
       {/* ───── 会话 ───── */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {/* 新对话 + 智能体 / Skill / MCP 设置入口 — 横版行按钮，各自打开独立设置页 */}
+        {/* 新对话 + 插件（智能体 / Skills / MCP / 网络搜索在同一页用分类切换） */}
         <div className="flex-shrink-0 space-y-0.5 px-2.5 pb-0.5">
           <button
             type="button"
@@ -801,292 +1407,470 @@ export function AgentSidebar({
                 ? "bg-agent-foreground/10 font-medium text-agent-foreground"
                 : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground",
             ].join(" ")}
-            title="新建对话"
+            title={t("Start a new chat")}
             data-testid="sidebar-new-chat"
           >
-            <LuPlus className="h-3.5 w-3.5" />
-            <span>新对话</span>
+            <LuSquarePen className="h-3.5 w-3.5" />
+            <span>{t("New chat")}</span>
           </button>
-          {settingsChrome("agents") && (
+          {pluginsAvailable && (
           <button
             type="button"
-            onClick={() => navigate("/settings?section=agents")}
+            onClick={() => navigate("/settings?section=plugins")}
             className={[
               "flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
-              onSettingsPage && settingsSection === "agents"
+              onPluginsSettings
                 ? "bg-agent-foreground/10 font-medium text-agent-foreground"
                 : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground",
             ].join(" ")}
-            title="智能体管理"
-            data-testid="sidebar-agent-settings"
-          >
-            <LuBot className="h-3.5 w-3.5" />
-            <span>智能体管理</span>
-          </button>
-          )}
-          {settingsChrome("skills") && (
-          <button
-            type="button"
-            onClick={() => navigate("/settings?section=skills")}
-            className={[
-              "flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
-              onSettingsPage && settingsSection === "skills"
-                ? "bg-agent-foreground/10 font-medium text-agent-foreground"
-                : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground",
-            ].join(" ")}
-            title="Skill 设置"
-            data-testid="sidebar-skill-settings"
+            title={t("Plugins")}
+            data-testid="sidebar-plugins"
           >
             <LuBlocks className="h-3.5 w-3.5" />
-            <span>Skill 设置</span>
+            <span>{t("Plugins")}</span>
           </button>
           )}
-          {settingsChrome("mcp") && (
-          <button
-            type="button"
-            onClick={() => navigate("/settings?section=mcp")}
-            className={[
-              "flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
-              onSettingsPage && settingsSection === "mcp"
-                ? "bg-agent-foreground/10 font-medium text-agent-foreground"
-                : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground",
-            ].join(" ")}
-            title="MCP 设置"
-            data-testid="sidebar-mcp-settings"
-          >
-            <LuPlug className="h-3.5 w-3.5" />
-            <span>MCP 设置</span>
-          </button>
-          )}
-        </div>
-        <div className="flex flex-shrink-0 items-center justify-between py-1 pl-2.5 pr-2.5">
-          <button
-            type="button"
-            onClick={() => setChatsExpanded((v) => !v)}
-            className="flex h-6 items-center rounded-full px-2.5 text-xs font-semibold tracking-wider text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
-          >
-            会话
-            <span className="ml-1">
-              {chatsExpanded ? (
-                <LuChevronUp className="h-3 w-3" />
-              ) : (
-                <LuChevronDown className="h-3 w-3" />
-              )}
-            </span>
-          </button>
-          <div className="flex items-center gap-1">
-            {hasElectron && showProjectsChrome && (
-              <button
-                type="button"
-                onClick={() => setCreateProjectOpen(true)}
-                className="flex h-6 w-6 items-center justify-center rounded-full text-agent-muted-foreground transition-colors duration-200 hover:bg-agent-foreground/5 hover:text-agent-foreground"
-                title="新建项目"
-                aria-label="新建项目"
-              >
-                <LuFolderPlus className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
         </div>
 
-        {chatsExpanded && (
-          <div
-            ref={chatScrollRef}
-            className="flex-1 overflow-y-auto px-2.5 pb-1"
-          >
-            {isChatLoading && chats.length === 0 && projects.length === 0 ? (
-              <div className="flex items-center justify-center py-4 text-xs text-agent-muted-foreground">
-                <LuLoaderCircle className="mr-1.5 h-3 w-3 animate-spin" />
-                加载中...
-              </div>
-            ) : chatGroups.length === 0 && projectGroups.length === 0 ? (
-              <div className="flex flex-col items-center gap-1.5 py-4 text-xs text-agent-muted-foreground">
-                <LuMessageSquare className="h-4 w-4 text-agent-muted-foreground/60" />
-                暂无会话
-              </div>
-            ) : (
-              <>
-                {/* 项目分组在前：组头可折叠，hover 出 + 新建对话 / ·· 菜单 */}
-                {showProjectsChrome &&
-                  projectGroups.map(({ project, items }) => (
-                  <div key={project.id} className="mb-1">
-                    <div className="group/proj relative">
-                      {renamingProjectId === project.id ? (
-                        <form
-                          className="flex items-center px-2.5 pb-1 pt-1.5"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            void handleRenameProject(project.id);
-                          }}
-                        >
-                          <input
-                            autoFocus
-                            value={renamingValue}
-                            onChange={(event) =>
-                              setRenamingValue(event.target.value)
-                            }
-                            onBlur={() => void handleRenameProject(project.id)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Escape")
-                                setRenamingProjectId(null);
-                            }}
-                            className="h-6 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-2 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
-                          />
-                        </form>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => toggleProjectCollapsed(project.id)}
-                            className="flex w-full min-w-0 items-center px-2.5 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-agent-muted-foreground/80 transition-colors hover:text-agent-foreground"
-                            title={`${project.name}\n${project.folderPath}`}
-                          >
-                            <LuFolder className="mr-1 h-3 w-3 shrink-0" />
-                            <span className="min-w-0 truncate normal-case">
-                              {project.name}
-                            </span>
-                            <span className="ml-0.5 shrink-0">
-                              {collapsedProjectIds.has(project.id) ? (
-                                <LuChevronDown className="h-3 w-3" />
-                              ) : (
-                                <LuChevronUp className="h-3 w-3" />
-                              )}
-                            </span>
-                            {items.length > 0 && (
-                              <span className="ml-1 shrink-0 font-normal">
-                                · {items.length}
-                              </span>
-                            )}
-                          </button>
-                          <div
-                            className={`absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 transition-opacity ${
-                              projectMenu?.id === project.id
-                                ? "opacity-100"
-                                : "opacity-0 group-hover/proj:opacity-100"
-                            }`}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => handleOpenNewChat(project.id)}
-                              className="flex h-5 w-5 items-center justify-center rounded-full text-agent-muted-foreground hover:bg-agent-foreground/10 hover:text-agent-foreground"
-                              title="在此项目下新建对话"
-                            >
-                              <LuPlus className="h-3 w-3" />
-                            </button>
-                            <button
-                              type="button"
-                              aria-label="项目菜单"
-                              aria-expanded={projectMenu?.id === project.id}
-                              onClick={(event) => {
-                                const button = event.currentTarget;
-                                setConfirmDeleteProjectId(null);
-                                setProjectMenu((current) =>
-                                  current?.id === project.id
-                                    ? null
-                                    : { id: project.id, anchor: button },
-                                );
-                              }}
-                              className="flex h-5 w-5 items-center justify-center rounded-full text-agent-muted-foreground hover:bg-agent-foreground/10 hover:text-agent-foreground"
-                              title="项目菜单"
-                            >
-                              <LuEllipsis className="h-3 w-3" />
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                    {!collapsedProjectIds.has(project.id) && (
-                      <div className="space-y-0.5">
-                        {items.length === 0 ? (
-                          <div className="px-2.5 py-0.5 text-[11px] text-agent-muted-foreground/60">
-                            暂无会话 — hover 项目名点 + 新建
-                          </div>
-                        ) : (
-                          items.map((chat) => renderChatRow(chat))
-                        )}
-                      </div>
+        <div
+          ref={chatScrollRef}
+          className="flex-1 overflow-y-auto px-2.5 pb-1"
+        >
+          {isChatLoading && chats.length === 0 && projects.length === 0 ? (
+            <div className="flex items-center justify-center py-4 text-xs text-agent-muted-foreground">
+              <LuLoaderCircle className="mr-1.5 h-3 w-3 animate-spin" />
+              {t("Loading...")}
+            </div>
+          ) : (
+            <>
+              {/* 1. 置顶 (Pinned)：没有置顶会话时整组不出现 */}
+              {pinnedChats.length > 0 && (
+              <div className="mb-1.5">
+                <div className="group/section flex h-7 items-center justify-between rounded-agent-md px-1.5 text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground">
+                  <button
+                    type="button"
+                    aria-expanded={isPinnedExpanded}
+                    onClick={() => {
+                      const next = !isPinnedExpanded;
+                      setPinnedExpanded(next);
+                      writeSidebarSectionExpanded("pinned", next);
+                    }}
+                    className="flex flex-1 min-w-0 items-center gap-1 text-left font-medium text-agent-muted-foreground hover:text-agent-foreground"
+                  >
+                    <span>{t("Pinned")}</span>
+                    {isPinnedExpanded ? (
+                      <LuChevronDown className="h-3 w-3 shrink-0 opacity-70" />
+                    ) : (
+                      <LuChevronRight className="h-3 w-3 shrink-0 opacity-70" />
                     )}
+                  </button>
+                </div>
+                {isPinnedExpanded && (
+                  <div className="space-y-0.5">
+                    {pinnedChats.map((chat) => renderChatRow(chat))}
                   </div>
-                ))}
-                {/* 无项目对话排在项目分组之后：保持原有日期分组 */}
-                {chatGroups.map((group) => (
-                  <div key={group.label} className="mb-1">
-                    <div className="px-2.5 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-agent-muted-foreground/80">
-                      {group.label}
-                    </div>
-                    <div className="space-y-0.5">
-                      {group.items.map((chat) => renderChatRow(chat))}
-                    </div>
-                  </div>
-                ))}
-              </>
-            )}
-            {(chatGroups.length > 0 || projectGroups.length > 0) && (
-              <div className="px-2 py-2 text-center text-[11px] text-agent-muted-foreground">
-                {isLoadingMoreChats ? (
-                  <span className="inline-flex items-center gap-1">
-                    <LuLoaderCircle className="h-3 w-3 animate-spin" />
-                    加载更多...
-                  </span>
-                ) : hasMoreChats ? (
-                  "继续下滑加载更多"
-                ) : (
-                  `共 ${normalizedChats.length} 个会话`
                 )}
               </div>
-            )}
-          </div>
-        )}
+              )}
+
+              {/* 2. 项目 (Projects) */}
+              {showProjectsChrome && (
+                <div className="mb-1.5">
+                  <div className="group/section flex h-7 items-center justify-between rounded-agent-md px-1.5 text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground">
+                    <button
+                      type="button"
+                      aria-expanded={isProjectsExpanded}
+                      onClick={() => {
+                        const next = !isProjectsExpanded;
+                        setProjectsExpanded(next);
+                        writeSidebarSectionExpanded("projects", next);
+                      }}
+                      className="flex flex-1 min-w-0 items-center gap-1 text-left font-medium text-agent-muted-foreground hover:text-agent-foreground"
+                    >
+                      <span>{t("Projects")}</span>
+                      {isProjectsExpanded ? (
+                        <LuChevronDown className="h-3 w-3 shrink-0 opacity-70" />
+                      ) : (
+                        <LuChevronRight className="h-3 w-3 shrink-0 opacity-70" />
+                      )}
+                    </button>
+                    {hasElectron && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCreateProjectOpen(true);
+                        }}
+                        className="flex h-5 w-5 items-center justify-center rounded-full text-agent-muted-foreground opacity-0 transition-opacity duration-200 hover:bg-agent-foreground/10 hover:text-agent-foreground group-hover/section:opacity-100 focus:opacity-100"
+                        title={t("New project")}
+                        aria-label={t("New project")}
+                      >
+                        <LuFolderPlus className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  {isProjectsExpanded && (
+                    <div className="space-y-0.5">
+                      {projectGroups.length === 0 ? (
+                        <div className="px-2.5 py-1 text-[11px] text-agent-muted-foreground/60">
+                          {t("No projects")}
+                        </div>
+                      ) : (
+                        projectGroups.map(({ project, items }) => (
+                          <div
+                            key={project.id}
+                            data-testid="sidebar-project"
+                            data-project-id={project.id}
+                            className="relative pb-1"
+                            onDragOver={(event) => {
+                              if (!draggingProjectIdRef.current) return;
+                              event.preventDefault();
+                              if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+                              const place = projectDropPlace(
+                                event.currentTarget,
+                                event.clientY,
+                              );
+                              setDropTarget((current) =>
+                                current?.id === project.id && current.place === place
+                                  ? current
+                                  : { id: project.id, place },
+                              );
+                            }}
+                            onDragLeave={(event) => {
+                              const next = event.relatedTarget;
+                              if (
+                                next instanceof Node &&
+                                event.currentTarget.contains(next)
+                              ) {
+                                return;
+                              }
+                              setDropTarget((current) =>
+                                current?.id === project.id ? null : current,
+                              );
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              const fromId = draggingProjectIdRef.current;
+                              const place = projectDropPlace(
+                                event.currentTarget,
+                                event.clientY,
+                              );
+                              endProjectDrag();
+                              if (!fromId) return;
+                              const next = nextProjectOrder(
+                                projectGroups.map((group) => group.project.id),
+                                fromId,
+                                project.id,
+                                place,
+                              );
+                              if (!next) return;
+                              void persistProjectOrder(next).catch((err) => {
+                                setProjectError(
+                                  err instanceof Error ? err.message : String(err),
+                                );
+                              });
+                            }}
+                          >
+                            {dropTarget?.id === project.id && draggingProjectId ? (
+                              <div
+                                className={[
+                                  "pointer-events-none absolute inset-x-2 z-10 h-0.5 rounded-full bg-agent-foreground",
+                                  dropTarget.place === "before" ? "top-0" : "bottom-1",
+                                ].join(" ")}
+                                data-testid="sidebar-project-drop-indicator"
+                              />
+                            ) : null}
+                            <div
+                              className={[
+                                "group/proj relative",
+                                draggingProjectId === project.id ? "opacity-40" : "",
+                              ].join(" ")}
+                            >
+                              {renamingProjectId === project.id ? (
+                                <form
+                                  className="flex items-center px-2.5 pb-1 pt-1.5"
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    void handleRenameProject(project.id);
+                                  }}
+                                >
+                                  <input
+                                    autoFocus
+                                    value={renamingValue}
+                                    onChange={(event) =>
+                                      setRenamingValue(event.target.value)
+                                    }
+                                    onBlur={() => void handleRenameProject(project.id)}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Escape")
+                                        setRenamingProjectId(null);
+                                    }}
+                                    className="h-6 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-2 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+                                  />
+                                </form>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    draggable
+                                    data-testid="sidebar-project-handle"
+                                    data-project-id={project.id}
+                                    onDragStart={(event) => {
+                                      projectDragMovedRef.current = true;
+                                      draggingProjectIdRef.current = project.id;
+                                      setDraggingProjectId(project.id);
+                                      const transfer = event.dataTransfer;
+                                      if (!transfer) return;
+                                      transfer.effectAllowed = "move";
+                                      try {
+                                        transfer.setData("text/plain", project.name);
+                                      } catch (error) {
+                                        // 排序状态记在 ref 里。个别环境拒绝写入 DataTransfer。
+                                        void error;
+                                      }
+                                    }}
+                                    onDragEnd={() => {
+                                      endProjectDrag();
+                                    }}
+                                    onClick={() => {
+                                      if (projectDragMovedRef.current) return;
+                                      toggleProjectCollapsed(project.id);
+                                    }}
+                                    className="flex w-full min-w-0 cursor-grab items-center px-2 pb-0.5 pt-1 text-[11px] font-medium text-agent-muted-foreground/90 transition-colors hover:text-agent-foreground active:cursor-grabbing"
+                                    title={`${project.name}\n${project.folderPath}`}
+                                  >
+                                    <LuFolder className="mr-1 h-3.5 w-3.5 shrink-0" />
+                                    <span className="min-w-0 truncate normal-case">
+                                      {project.name}
+                                    </span>
+                                    {project.origin === "cli" ? (
+                                      <span
+                                        className="ml-1 inline-flex shrink-0"
+                                        title={t("Created from the command line")}
+                                        aria-label={t("Created from the command line")}
+                                        data-testid="sidebar-project-cli-origin"
+                                      >
+                                        <LuTerminal className="h-3 w-3" aria-hidden="true" />
+                                      </span>
+                                    ) : null}
+                                    <span className="ml-1 shrink-0">
+                                      {collapsedProjectIds.has(project.id) ? (
+                                        <LuChevronRight className="h-3 w-3" />
+                                      ) : (
+                                        <LuChevronDown className="h-3 w-3" />
+                                      )}
+                                    </span>
+                                  </button>
+                                  <div
+                                    className={`absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 transition-opacity ${
+                                      projectMenu?.id === project.id
+                                        ? "pointer-events-auto opacity-100"
+                                        : "pointer-events-none opacity-0 group-hover/proj:pointer-events-auto group-hover/proj:opacity-100"
+                                    }`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenNewChat(project.id)}
+                                      className="flex h-5 w-5 items-center justify-center rounded-full text-agent-muted-foreground hover:bg-agent-foreground/10 hover:text-agent-foreground"
+                                      title={t("New chat in this project")}
+                                    >
+                                      <LuSquarePen className="h-3 w-3" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      aria-label={t("Project menu")}
+                                      aria-expanded={projectMenu?.id === project.id}
+                                      onClick={(event) => {
+                                        const button = event.currentTarget;
+                                        setProjectMenu((current) =>
+                                          current?.id === project.id
+                                            ? null
+                                            : { id: project.id, anchor: button },
+                                        );
+                                      }}
+                                      className="flex h-5 w-5 items-center justify-center rounded-full text-agent-muted-foreground hover:bg-agent-foreground/10 hover:text-agent-foreground"
+                                      title={t("Project menu")}
+                                    >
+                                      <LuEllipsis className="h-3 w-3" />
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                            {!collapsedProjectIds.has(project.id) && (
+                              <div className="space-y-0.5 pl-2">
+                                {items.length === 0 ? (
+                                  <div className="px-2.5 py-0.5 text-[11px] text-agent-muted-foreground/60">
+                                    {t("No chats yet. Hover the project name and click + to start one.")}
+                                  </div>
+                                ) : (
+                                  (() => {
+                                    const limit =
+                                      projectChatLimits[project.id] ??
+                                      PROJECT_CHAT_PAGE;
+                                    const folded = projectChatWindow(
+                                      items,
+                                      PROJECT_CHAT_PAGE,
+                                    );
+                                    const shown = projectChatWindow(items, limit);
+                                    const fullyShown = shown.hiddenCount === 0;
+                                    return (
+                                      <>
+                                        {shown.rows.map((chat) =>
+                                          renderChatRow(chat),
+                                        )}
+                                        {folded.hiddenCount > 0 && (
+                                          <button
+                                            type="button"
+                                            data-testid="sidebar-project-show-more"
+                                            data-project-id={project.id}
+                                            aria-expanded={fullyShown}
+                                            onClick={() =>
+                                              revealMoreProjectChats(
+                                                project.id,
+                                                shown.hiddenCount,
+                                              )
+                                            }
+                                            className="flex h-7 w-full items-center rounded-full px-2.5 text-left text-[11px] text-agent-muted-foreground/80 transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
+                                          >
+                                            {fullyShown
+                                              ? t("Show less")
+                                              : t("Show {count} more", {
+                                                  count: shown.hiddenCount,
+                                                })}
+                                          </button>
+                                        )}
+                                      </>
+                                    );
+                                  })()
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 3. 最近 (Recents) */}
+              <div className="mb-1.5">
+                <div className="group/section flex h-7 items-center justify-between rounded-agent-md px-1.5 text-xs text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground">
+                  <button
+                    type="button"
+                    aria-expanded={isRecentsExpanded}
+                    onClick={() => {
+                      const next = !isRecentsExpanded;
+                      setRecentsExpanded(next);
+                      writeSidebarSectionExpanded("recents", next);
+                    }}
+                    className="flex flex-1 min-w-0 items-center gap-1 text-left font-medium text-agent-muted-foreground hover:text-agent-foreground"
+                  >
+                    <span>{t("Recent")}</span>
+                    {isRecentsExpanded ? (
+                      <LuChevronDown className="h-3 w-3 shrink-0 opacity-70" />
+                    ) : (
+                      <LuChevronRight className="h-3 w-3 shrink-0 opacity-70" />
+                    )}
+                  </button>
+                  <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-200 group-hover/section:opacity-100 focus-within:opacity-100">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenNewChat();
+                      }}
+                      className="flex h-5 w-5 items-center justify-center rounded-full text-agent-muted-foreground hover:bg-agent-foreground/10 hover:text-agent-foreground"
+                      title={t("New chat")}
+                      aria-label={t("New chat")}
+                    >
+                      <LuSquarePen className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+                {isRecentsExpanded && (
+                  <div className="space-y-0.5">
+                    {recentChatGroups.length === 0 ? (
+                      chats.length === 0 && projects.length === 0 ? (
+                        <div className="flex flex-col items-center gap-1.5 py-4 text-xs text-agent-muted-foreground">
+                          <LuMessageSquare className="h-4 w-4 text-agent-muted-foreground/60" />
+                          {t("No chats yet")}
+                        </div>
+                      ) : (
+                        <div className="px-2.5 py-1 text-[11px] text-agent-muted-foreground/60">
+                          {t("No chats yet")}
+                        </div>
+                      )
+                    ) : (
+                      recentChatGroups.map((group) => (
+                        <div key={group.label} className="mb-1">
+                          <div className="px-2 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-agent-muted-foreground/80">
+                            {group.label}
+                          </div>
+                          <div className="space-y-0.5">
+                            {group.items.map((chat) => renderChatRow(chat))}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+          {normalizedChats.length > 0 && (
+            <div className="px-2 py-2 text-center text-[11px] text-agent-muted-foreground">
+              {isLoadingMoreChats ? (
+                <span className="inline-flex items-center gap-1">
+                  <LuLoaderCircle className="h-3 w-3 animate-spin" />
+                  {t("Loading more...")}
+                </span>
+              ) : hasMoreChats ? (
+                t("Scroll down to load more")
+              ) : (
+                t("Total chats: {count}", { count: normalizedChats.length })
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      {(error || projectError) && (
+      {(error || projectError || projectsLoadError) && (
         <div
           className="flex-shrink-0 border-t border-agent-destructive/40 bg-agent-destructive/10 px-2.5 py-1.5 text-[11px] text-agent-destructive"
           role="alert"
         >
-          {error ?? projectError}
+          {error ?? projectError ?? projectsLoadError}
         </div>
       )}
 
-      {/* ───── Footer: 右侧面板切换（终端 | 包槽位）+ 设置 ───── */}
+      {/* ───── Footer: 设置 ───── */}
       <div className="flex-shrink-0 border-t border-agent-border/40 px-2.5 py-1.5">
-        {showTerminalChrome ? (
-        <button
-          type="button"
-          onClick={() => onToggleRightPanel("terminal")}
-          className={[
-            "flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
-            rightPanel === "terminal"
-              ? "bg-agent-foreground/10 font-medium text-agent-foreground"
-              : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-foreground",
-          ].join(" ")}
-          title={`${rightPanel === "terminal" ? "关闭" : "打开"}终端面板 (${isMac ? "⌘T" : "Ctrl+T"})`}
-          data-testid="sidebar-terminal"
-        >
-          <LuTerminal className="h-3.5 w-3.5" />
-          <span>终端</span>
-          <span className="ml-auto text-[10px] text-agent-muted-foreground/70">
-            {isMac ? "⌘T" : "Ctrl+T"}
-          </span>
-        </button>
-        ) : null}
+        <SidebarAccount />
         {hasGeneralSettingsChrome() && (
         <button
           type="button"
           onClick={() => navigate("/settings")}
           className={[
-            "mt-0.5 flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
+            "flex h-7 w-full items-center gap-1.5 rounded-full px-2.5 text-xs transition-colors",
             onGeneralSettings
               ? "bg-agent-foreground/10 font-medium text-agent-foreground"
               : "text-agent-muted-foreground hover:bg-agent-foreground/5 hover:text-agent-foreground",
           ].join(" ")}
-          title="设置"
+          title={t("Settings")}
           data-testid="sidebar-llm-settings"
         >
           <LuSettings className="h-3.5 w-3.5" />
-          <span>设置</span>
+          <span>{t("Settings")}</span>
+          <SidebarVersionLabel release={release} />
         </button>
         )}
+        {!hasGeneralSettingsChrome() && release.version ? (
+          <div className="mt-0.5 flex h-7 w-full items-center px-2.5">
+            <SidebarVersionLabel release={release} />
+          </div>
+        ) : null}
       </div>
 
       {projectMenu &&
@@ -1101,9 +1885,7 @@ export function AgentSidebar({
               project={project}
               chatCount={chatCount}
               anchor={projectMenu.anchor}
-              revealLabel={isMac ? "在访达中显示" : "在文件管理器中显示"}
-              confirmDelete={confirmDeleteProjectId === project.id}
-              deleting={deletingProjectId === project.id}
+              revealLabel={isMac ? t("Show in Finder") : t("Show in file manager")}
               onClose={closeProjectMenu}
               onRename={() => {
                 setProjectMenu(null);
@@ -1122,11 +1904,90 @@ export function AgentSidebar({
                     }
                   : undefined
               }
-              onDelete={() => void handleDeleteProject(project.id)}
+              onDelete={() => {
+                setProjectMenu(null);
+                setPendingDeleteProject(project);
+              }}
             />
           );
         })()}
 
+      {chatMenu ? (
+        <ChatRowMenu
+          anchor={chatMenu.anchor}
+          onClose={() => {
+            const chatId = chatMenu.id;
+            setChatMenu(null);
+            requestAnimationFrame(() => {
+              const row = document.querySelector(
+                `[data-testid="sidebar-chat-row"][data-chat-id="${CSS.escape(chatId)}"]`,
+              );
+              row?.querySelector("button")?.focus();
+            });
+          }}
+          onRename={() => beginChatRename(chatMenu)}
+          onFork={() => {
+            const target = chatMenu;
+            setChatMenu(null);
+            void forkThisChat(target);
+          }}
+          onDelete={() => {
+            chatMenu.anchor.focus();
+            setPendingDeleteChat({ id: chatMenu.id, title: chatMenu.title });
+            setChatMenu(null);
+          }}
+        />
+      ) : null}
+
+      <ConfirmDialog
+        open={pendingDeleteChat !== null}
+        title={t("Delete chat")}
+        description={
+          pendingDeleteChat
+            ? t("Delete \"{title}\"? This cannot be undone.", {
+                title: pendingDeleteChat.title,
+              })
+            : ""
+        }
+        error={pendingDeleteChat ? error : null}
+        pending={
+          pendingDeleteChat !== null && deletingChatId === pendingDeleteChat.id
+        }
+        onCancel={() => {
+          if (deletingChatId) return;
+          setPendingDeleteChat(null);
+        }}
+        onConfirm={() => void handleDeleteChat()}
+        testId="sidebar-delete-chat-dialog"
+      />
+      <ConfirmDialog
+        open={pendingDeleteProject !== null}
+        title={t("Delete project")}
+        description={
+          pendingDeleteProject
+            ? t(
+                "Delete project \"{name}\"? Its chats will stay as chats without a project.",
+                { name: pendingDeleteProject.name },
+              )
+            : ""
+        }
+        confirmLabel={t("Delete project")}
+        pending={
+          pendingDeleteProject !== null &&
+          deletingProjectId === pendingDeleteProject.id
+        }
+        onCancel={() => {
+          if (deletingProjectId) return;
+          setPendingDeleteProject(null);
+        }}
+        onConfirm={() => {
+          if (!pendingDeleteProject) return;
+          void removeProject(pendingDeleteProject.id).catch(() => {
+            // 横幅已写 projectError
+          });
+        }}
+        testId="sidebar-delete-project-dialog"
+      />
       <CreateProjectModal
         open={createProjectOpen}
         onClose={() => setCreateProjectOpen(false)}

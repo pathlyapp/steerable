@@ -7,6 +7,9 @@ regress into prose) emit tool *intent* as text instead of a structured
 - MiniMax XML:      ``<invoke name="tool"><parameter name="k">v</parameter></invoke>``
 - DeepSeek XML:     ``<function=tool><parameter=k>v</parameter></function>``
 - Markdown pseudo:  ``[Tool call: NAME]\\n{"k": "v"}``
+- JSON tool object: a fenced or ``<tool_call>`` ``{"name", "arguments"}``
+  object (Qwen / Ollama), or a message that is only that object.
+  ``{"name": "text", "arguments": {"value": "..."}}`` is a reply, not a tool.
 
 If the loop treated that text as a final answer it would end the turn having
 never run the tool — the model "meant" to act but the loop stopped. This module
@@ -52,6 +55,27 @@ _PSEUDO_TOOL_CALL_HEADER_RE = re.compile(
     r"\[Tool[\s_]call:\s*([A-Za-z_][A-Za-z0-9_]*)\s*\]",
     re.IGNORECASE,
 )
+
+# --- JSON tool objects (Qwen / Ollama) --------------------------------------
+#
+# Small local models often answer with a markdown fence (or a <tool_call>
+# wrapper, or a message that is only the object) instead of a structured
+# tool_calls block:
+#
+#   ```json
+#   {"name": "ask_user", "arguments": {"intro": "..."}}
+#   ```
+#
+# Only a payload whose every element is {name, arguments} is a call. A fenced
+# config or a JSON object mentioned inside a sentence stays text.
+
+_TOOL_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_FENCE_RE = re.compile(r"```[^\n`]*\n?(.*?)```", re.DOTALL)
+_TOOL_CALL_BLOCK_RE = re.compile(
+    r"<tool_call>\s*(.*?)\s*</tool_call>",
+    re.DOTALL | re.IGNORECASE,
+)
+_FENCE_HOLD_CAP = 8192
 
 
 def _scan_balanced_json_object(text: str, start: int) -> tuple[str, int] | None:
@@ -151,12 +175,137 @@ def extract_inline_tool_calls(text: str) -> tuple[list[dict[str, Any]], str]:
         cursor = end_idx
 
     if not results:
+        recovered = _extract_json_tool_calls(text)
+        if recovered is not None:
+            return recovered
         return [], text
 
     cleaned_segments.append(text[cursor:])
     cleaned_text = "".join(cleaned_segments)
     cleaned_text = re.sub(r"\n{3,}", "\n\n", cleaned_text).strip()
     return results, cleaned_text
+
+
+def _coerce_arguments(raw: Any) -> dict[str, Any] | None:
+    """Return a dict of tool arguments, parsing a JSON string when needed."""
+    if raw is None:
+        return {}
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return {}
+        try:
+            raw = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(raw, dict):
+        return raw
+    return None
+
+
+_REPLY_TOOL_NAMES = frozenset({"text"})
+_REPLY_ARG_KEYS = ("value", "content", "text", "message")
+
+
+def reply_text_from_call(call: dict[str, Any]) -> str | None:
+    """Return the visible reply when a model wrapped plain text as a tool.
+
+    Some local models emit ``{"name": "text", "arguments": {"value": "..."}}``
+    instead of a message. ``None`` means the call is a real tool.
+
+    @param call: one ``{"name", "arguments"}`` object from inline recovery.
+    """
+    name = call.get("name")
+    if not isinstance(name, str) or name.strip().lower() not in _REPLY_TOOL_NAMES:
+        return None
+    arguments = call.get("arguments") or {}
+    if not isinstance(arguments, dict):
+        return ""
+    for key in _REPLY_ARG_KEYS:
+        value = arguments.get(key)
+        if isinstance(value, str):
+            return value
+    return ""
+
+
+def _calls_from_payload(payload: Any) -> list[dict[str, Any]] | None:
+    """Accept one tool-call object or a list of them. Anything else is text."""
+    items = payload if isinstance(payload, list) else [payload]
+    if not items:
+        return None
+    calls: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            return None
+        name = item.get("name")
+        if not isinstance(name, str) or _TOOL_NAME_RE.fullmatch(name.strip()) is None:
+            return None
+        arguments = _coerce_arguments(item.get("arguments", {}))
+        if arguments is None:
+            return None
+        calls.append({"name": name.strip(), "arguments": arguments})
+    return calls
+
+
+def _parse_tool_call_blob(blob: str) -> list[dict[str, Any]] | None:
+    """Parse a tool-call JSON blob, unwrapping one surrounding fence."""
+    blob = blob.strip()
+    if not blob:
+        return None
+    fenced = _FENCE_RE.fullmatch(blob)
+    if fenced is not None:
+        blob = fenced.group(1).strip()
+        if not blob:
+            return None
+    try:
+        payload = json.loads(blob)
+    except json.JSONDecodeError:
+        return None
+    return _calls_from_payload(payload)
+
+
+def _extract_json_tool_calls(text: str) -> tuple[list[dict[str, Any]], str] | None:
+    """Recover fenced / ``<tool_call>`` / whole-message JSON tool calls.
+
+    Returns ``None`` when the text is not this format, so the caller can
+    leave it untouched.
+    """
+    results: list[dict[str, Any]] = []
+    spans: list[tuple[int, int]] = []
+
+    def take(match: re.Match[str], blob: str) -> None:
+        if any(match.start() < end and match.end() > start for start, end in spans):
+            return
+        calls = _parse_tool_call_blob(blob)
+        if not calls:
+            return
+        results.extend(calls)
+        spans.append(match.span())
+
+    for match in _TOOL_CALL_BLOCK_RE.finditer(text):
+        take(match, match.group(1))
+    for match in _FENCE_RE.finditer(text):
+        take(match, match.group(1))
+    if not results:
+        unclosed = re.search(r"```[^\n`]*\n(.*)\Z", text, re.DOTALL)
+        if unclosed is not None:
+            calls = _parse_tool_call_blob(unclosed.group(1))
+            if calls:
+                results.extend(calls)
+                spans.append(unclosed.span())
+    if not results:
+        stripped = text.strip()
+        if stripped[:1] in "{[":
+            calls = _parse_tool_call_blob(stripped)
+            if calls:
+                return calls, ""
+        return None
+
+    cleaned = text
+    for start, end in sorted(spans, reverse=True):
+        cleaned = cleaned[:start] + cleaned[end:]
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return results, cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -378,8 +527,171 @@ class _MdCallFilter:
         return tail
 
 
+def _split_partial_backticks(buf: str) -> tuple[str, str]:
+    """Hold a trailing 1-2 backticks that may still become a fence opener."""
+    hold = 0
+    for char in reversed(buf):
+        if char != "`" or hold == 2:
+            break
+        hold += 1
+    if hold == 0:
+        return buf, ""
+    return buf[:-hold], buf[-hold:]
+
+
+def _opened_fence_body(held: str) -> str | None:
+    """Body of a span that starts with an opening fence.
+
+    ``held`` includes the closing fence when the span is complete. An
+    unclosed span returns the text after the language line.
+    """
+    if not held.startswith("```"):
+        return None
+    if held.endswith("```") and len(held) >= 6:
+        match = _FENCE_RE.fullmatch(held)
+        if match is None:
+            return None
+        return match.group(1)
+    rest = held[3:]
+    newline = rest.find("\n")
+    if newline < 0:
+        return rest
+    return rest[newline + 1 :]
+
+
+class _JsonFenceFilter:
+    """Hold a ``` fence and drop it only when the body is a tool-call object.
+
+    A code sample or a JSON config is released unchanged, including when the
+    fence never closes. A fence larger than ``_FENCE_HOLD_CAP`` is released
+    so a long code block is not stuck in the filter.
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._open = False
+        self._held = ""
+
+    def feed(self, chunk: str) -> str:
+        buf = self._buf + (chunk or "")
+        self._buf = ""
+        out: list[str] = []
+        while True:
+            if self._open:
+                close = buf.find("```")
+                if close < 0:
+                    self._held += buf
+                    if len(self._held) > _FENCE_HOLD_CAP:
+                        out.append(self._held)
+                        self._held = ""
+                        self._open = False
+                    break
+                self._held += buf[: close + 3]
+                buf = buf[close + 3 :]
+                released = self._release_held()
+                if released:
+                    out.append(released)
+                continue
+            opener = buf.find("```")
+            if opener >= 0:
+                if opener:
+                    out.append(buf[:opener])
+                buf = buf[opener + 3 :]
+                self._open = True
+                self._held = "```"
+                continue
+            emit, hold = _split_partial_backticks(buf)
+            if emit:
+                out.append(emit)
+            self._buf = hold
+            break
+        return "".join(out)
+
+    def _release_held(self) -> str:
+        held = self._held
+        self._held = ""
+        self._open = False
+        body = _opened_fence_body(held)
+        if body is not None and _parse_tool_call_blob(body):
+            return ""
+        return held
+
+    def flush(self) -> str:
+        if self._open:
+            self._held += self._buf
+            self._buf = ""
+            return self._release_held()
+        tail = self._buf
+        self._buf = ""
+        return tail
+
+
+class _BareToolJsonFilter:
+    """Hold a message that is only a tool-call JSON object.
+
+    A real tool object is dropped so recovery can execute it. A ``text``
+    reply object is replaced by its value. Any other leading ``{`` or ``[``
+    is released once it is clearly not that object.
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._passthrough = False
+
+    def feed(self, chunk: str) -> str:
+        if self._passthrough:
+            return chunk or ""
+        self._buf += chunk or ""
+        return self._decide(final=False)
+
+    def flush(self) -> str:
+        if self._passthrough:
+            return ""
+        return self._decide(final=True)
+
+    def _release(self, text: str) -> str:
+        self._passthrough = True
+        self._buf = ""
+        return text
+
+    def _decide(self, final: bool) -> str:
+        text = self._buf
+        stripped = text.lstrip()
+        if not stripped:
+            if final:
+                return self._release(text)
+            return ""
+        if stripped[0] not in "{[":
+            return self._release(text)
+        if len(text) > _FENCE_HOLD_CAP and not final:
+            return self._release(text)
+        try:
+            payload, end = json.JSONDecoder().raw_decode(stripped)
+        except json.JSONDecodeError as exc:
+            # An error at the end, or an open string, can still become JSON.
+            # `{not` and `[Tool call:` cannot, so they must stream immediately.
+            incomplete = exc.pos >= len(stripped) or "Unterminated" in exc.msg
+            if incomplete and not final and len(text) <= _FENCE_HOLD_CAP:
+                return ""
+            return self._release(text)
+        rest = stripped[end:]
+        if rest.strip():
+            return self._release(text)
+        calls = _calls_from_payload(payload)
+        if not calls:
+            return self._release(text)
+        if not final:
+            return ""
+        self._passthrough = True
+        self._buf = ""
+        replies = [reply_text_from_call(call) for call in calls]
+        if all(reply is not None for reply in replies):
+            return "".join(replies)
+        return ""
+
+
 class PseudoStreamStripper:
-    """Display-path filter chaining the fn-echo and markdown-call filters.
+    """Display-path filter chaining the fn-echo, JSON, and markdown filters.
 
     Usage: ``feed`` each raw content delta, emit what comes back; at stream
     end, ``flush`` once and emit the tail. Text held back to detect markers
@@ -388,10 +700,14 @@ class PseudoStreamStripper:
 
     def __init__(self) -> None:
         self._fn = _FnEchoFilter()
+        self._fence = _JsonFenceFilter()
+        self._bare = _BareToolJsonFilter()
         self._md = _MdCallFilter()
 
     def feed(self, chunk: str) -> str:
-        return self._md.feed(self._fn.feed(chunk))
+        return self._md.feed(self._bare.feed(self._fence.feed(self._fn.feed(chunk))))
 
     def flush(self) -> str:
-        return self._md.feed(self._fn.flush()) + self._md.flush()
+        fenced = self._fence.feed(self._fn.flush()) + self._fence.flush()
+        bare = self._bare.feed(fenced) + self._bare.flush()
+        return self._md.feed(bare) + self._md.flush()

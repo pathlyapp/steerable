@@ -36,19 +36,23 @@ the harness's `TraceSpan.attrs`, not into `ToolCall`.
 
 ## ToolMode (harness classifier)
 
-The harness's [`decide_tool_mode(name)`](../spec/architecture.md) returns
-one of:
+A tool's `ToolMode` is one of:
 
 | Mode          | Meaning                              | Default UI treatment       |
 | ------------- | ------------------------------------ | -------------------------- |
 | `read`        | Pure inspection (no side effects)    | Auto-run, no consent       |
 | `safe_write`  | Bounded mutation (e.g. update_event) | Auto-run with diff preview |
-| `destructive` | Irreversible (delete_*, drop_*, …)   | Auto-run, undo affordance  |
+| `destructive` | Irreversible mutation                | Auto-run, undo affordance  |
 | `local`       | Touches the user's machine           | **Requires consent**       |
 | `external`    | Calls outside services               | Auto-run, log              |
 
-Pattern rules (TypeScript regex equivalents in
-`@steerable/agent-ui/useToolCallStatus`):
+First-party tools declare their harness mode at registration (`mode=` on
+`@tool` / `ToolRouter.register`, or `mode` on the host `ToolSchema`).
+That declaration is what approval and plan-mode filtering read.
+
+`@steerable/agent-ui/useToolCallStatus` still falls back to these name
+patterns when a caller does not pass `mode`. That fallback is only for
+undeclared third-party names:
 
 ```
 ^get_  | ^list_  | ^read_  | ^search_   →  read
@@ -57,8 +61,70 @@ Pattern rules (TypeScript regex equivalents in
 ^local_ | ^shell_ | ^exec_              →  local
 ```
 
-You can override the inferred mode at registration time via the `@tool`
-decorator's `mode=` kwarg.
+## Tool presentation
+
+How a call is drawn (terminal, diff, search, read, web, or generic) is a
+separate declaration from `ToolMode`. First-party names are listed in
+`packages/agent-shell/ts/src/tool-presentation.ts` and
+`steerable_agent_runtime.tool_presentation`. Each entry names a `card`, a
+`kind` (`read | edit | delete | move | search | execute | fetch | other`),
+and how the row title is taken from the arguments. The host stamps that
+view onto `executed_actions`. The card uses `view.title` when
+`view.declared` is true.
+
+Names that are not in the table — MCP tools, plugins, scenario-pack tools —
+render as a generic card. The UI does not guess a card from a name prefix.
+
+`ToolRouter.register` copies the Python table into the tool's `metadata`
+under `presentation` unless the caller already set that key.
+
+## MCP transports
+
+MCP servers use an explicit `transport`: `stdio` starts a local child process,
+while `streamable-http` connects to an HTTP(S) endpoint with the official MCP
+SDK. Existing records without the field migrate to `stdio`; a config cannot
+carry both `command` and `url`.
+
+Desktop connections are pooled for five idle minutes and never evicted while
+a call is in flight. Streamable HTTP sessions remain process-local and close
+with DELETE when the host shuts down. SSE reconnect uses bounded exponential
+backoff, and `tools/list_changed` replaces the cached catalog as one
+generation. Legacy SSE-only endpoints are not silently selected after a
+Streamable HTTP failure.
+
+Persistent HTTP configs may contain non-sensitive literal headers. Bearer
+tokens and sensitive header values reference environment variables through
+`bearerTokenEnvVar` and `headersFromEnv`; literal `Authorization` is rejected,
+and the settings API never returns stored env/header values. Every server is
+capped at 64 tools and an over-cap catalog fails as a whole. MCP tools remain
+deferred and are discovered through `tool_search`.
+
+## Shell execution
+
+`local_exec_shell` runs in a pseudo-terminal unless the caller sets `pty` to
+false. A prefix policy decides `allow`, `prompt`, or `forbidden` before any
+process starts. Several matching prefixes keep the stricter decision
+(`allow` < `prompt` < `forbidden`). `forbidden` never starts a process.
+`prompt` waits until the caller passes `execApproval: "allow"`. The existing
+dangerous-command list still blocks before that policy.
+
+A host can point the same call at an SSH destination. The local process is
+`ssh` with `BatchMode=yes`; the script is one remote `bash -lc` argument
+(or `pwsh -Command` when the caller asked for PowerShell). Request
+environment variables are not copied onto that argv. An empty destination
+is rejected before a process starts.
+
+## Host tools added for parity
+
+The desktop host (the list the model sees when `toolsViaHost` is on) also
+registers:
+
+| Tool | Role |
+| --- | --- |
+| `grep`, `glob` | Project search. Same jobs as the sidecar workspace tools. |
+| `pwsh` | PowerShell. Windows uses `powershell.exe`; other platforms run `pwsh` and report a missing binary as a failed command. |
+| `get_goal`, `create_goal`, `update_goal` | One persisted goal per chat, with a revision checked on update. |
+| `job_list`, `job_output`, `job_kill` | Inspect and stop the background jobs `task_run` creates. Present only when the task service is wired. `job_id` is that `taskId`. |
 
 ## Exposure tiers
 
@@ -164,6 +230,12 @@ is an extra tool whose arguments are `{code, description}`. `code` is the
 body of a Python function. The program runs in a **child** interpreter
 under the same layer-2 backend as bash (Seatbelt / bwrap / Landlock). The
 sidecar process that holds the API key does not `exec` model Python.
+The Rust CoreLoop run-code executor requires the Python sidecar host to provide
+a verified interpreter through `STEERABLE_PYTHON`; it does not discover an
+arbitrary system Python from `PATH`. The host shell falls back to the
+interpreter inside `@steerable/runtime-<target>` when the variable is unset, so
+an installed CLI gets `run_code` without a second setup step. Product packaging
+may bundle this runner or install it separately.
 
 The child talks JSON-over-stdio (`tools.call(name, **kwargs)` /
 `tools.<name>(...)`). Nested calls go through the live executor (approval,
@@ -289,7 +361,7 @@ persists that key in userData and injects it at sidecar spawn; an empty
 key still leaves `web_search` **unregistered**.
 
 `STEERABLE_WEB_SEARCH_PROVIDER=host` registers without a sidecar key so the
-Electron host can execute hosted search with the existing chat credential
+desktop host can execute hosted search with the existing chat credential
 (OpenAI `api.openai.com` only). GLM, OpenRouter, and DeepSeek have no hosted
 search here — they need the Tavily settings key, or the explicit free
 backend `STEERABLE_WEB_SEARCH_PROVIDER=ddg` (DuckDuckGo lite HTML; not a

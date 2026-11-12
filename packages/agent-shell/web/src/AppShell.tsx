@@ -1,10 +1,12 @@
 import { Outlet } from 'react-router-dom';
-import { isElectron } from './lib/electron-bridge';
+import { ZoomToast } from './components/ZoomToast';
+import { hasHostBridge } from './lib/host-bridge';
 import { isDemoMode } from './lib/demo-flag';
 
 export function AppShell() {
   return (
     <div className="flex h-full w-full flex-col bg-agent-canvas text-agent-foreground">
+      <ZoomToast />
       <main className="flex flex-1 overflow-hidden">
         <Outlet />
       </main>
@@ -13,9 +15,9 @@ export function AppShell() {
           Demo &middot; simulated data, no live model
         </div>
       ) : (
-        !isElectron() && (
+        !hasHostBridge() && (
           <div className="border-t border-agent-border bg-agent-muted px-3 py-1 text-xs text-agent-muted-foreground">
-            Browser preview mode &middot; running outside Electron, IPC bridge unavailable
+            Browser preview mode &middot; no host bridge
           </div>
         )
       )}

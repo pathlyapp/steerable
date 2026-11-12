@@ -113,14 +113,13 @@ cat > package.json <<JSON
     "@steerable/agent-protocol": "file:$REPO/dist/npm/steerable-agent-protocol-0.1.0.tgz",
     "@steerable/agent-harness":  "file:$REPO/dist/npm/steerable-agent-harness-0.1.0.tgz"
   },
-  "pnpm": {
-    "overrides": {
-      "@steerable/agent-protocol": "file:$REPO/dist/npm/steerable-agent-protocol-0.1.0.tgz",
-      "@steerable/agent-harness":  "file:$REPO/dist/npm/steerable-agent-harness-0.1.0.tgz"
-    }
-  }
 }
 JSON
+cat > pnpm-workspace.yaml <<YAML
+overrides:
+  "@steerable/agent-protocol": $REPO/dist/npm/steerable-agent-protocol-0.1.0.tgz
+  "@steerable/agent-harness":  $REPO/dist/npm/steerable-agent-harness-0.1.0.tgz
+YAML
 pnpm install --no-frozen-lockfile
 node --input-type=module -e "
 import { decideToolMode, isTerminalResult } from '@steerable/agent-harness';
@@ -128,9 +127,16 @@ console.log({mode: decideToolMode('read_file'), done: isTerminalResult({success:
 "
 ```
 
-> **Why `pnpm.overrides`?** Tarballs of internal packages declare each other as
+> **Why overrides?** Tarballs of internal packages declare each other as
 > registry dependencies (`workspace:*` is rewritten on `pnpm pack`). Without
-> overrides, pnpm tries to fetch them from `registry.npmjs.org` and fails.
+> overrides, pnpm fetches them from `registry.npmjs.org` and fails.
+>
+> They go in `pnpm-workspace.yaml`: pnpm 10 stopped reading a `pnpm` field in
+> `package.json`, and an override takes a bare path — a `file:` prefix is read
+> as part of the path.
+>
+> `scripts/release/verify-local-artifacts.sh` does all of this for the whole
+> batch; run it instead of wiring a project by hand.
 
 ### Consuming Mode B artifacts from another project
 
@@ -141,13 +147,15 @@ console.log({mode: decideToolMode('read_file'), done: isTerminalResult({success:
   "dependencies": {
     "@steerable/agent-protocol": "file:../steerable/dist/npm/steerable-agent-protocol-0.1.0.tgz",
     "@steerable/agent-ui":       "file:../steerable/dist/npm/steerable-agent-ui-0.1.0.tgz"
-  },
-  "pnpm": {
-    "overrides": {
-      "@steerable/agent-protocol": "file:../steerable/dist/npm/steerable-agent-protocol-0.1.0.tgz"
-    }
   }
 }
+```
+
+With the matching `pnpm-workspace.yaml` beside it:
+
+```yaml
+overrides:
+  "@steerable/agent-protocol": ../steerable/dist/npm/steerable-agent-protocol-0.1.0.tgz
 ```
 
 #### Python (FastAPI / Sidecar embedder)
@@ -232,7 +240,9 @@ without a registry.
    git commit -am "chore(release): vA.B.C"
    git tag vA.B.C
    git push origin develop vA.B.C
-        └─► release.yml verifies the pinned bundle, then publishes npm/PyPI
+        └─► release.yml verifies the pinned bundle, builds the platform
+            sidecar bundles, runs the quickstart gate, then publishes
+            npm (workspace packages, platform runtimes, CLI) and PyPI
    ```
 
    `bump_to.sh` never edits the native pin. A framework release may reuse
@@ -269,17 +279,42 @@ clean checkout of the tagged commit:
 ```bash
 git checkout vX.Y.Z
 
-# TS — npm
+# TS — workspace packages first
 pnpm install --frozen-lockfile
 pnpm gen
 pnpm -r --filter '@steerable/*' build
 NODE_AUTH_TOKEN="$NPM_TOKEN" \
   pnpm -r --filter '@steerable/*' publish --no-git-checks
 
+# Platform runtimes, then the CLI that names them. These packages are
+# generated into dist/runtime/ and are NOT workspace members, so the
+# `pnpm --filter` above cannot publish them.
+VERSION=$(node -p "require('./packages/agent-cli/ts/package.json').version")
+python scripts/set_runtime_optional_deps.py prepare --version "$VERSION"
+( cd packages/agent-cli/ts && pnpm pack --pack-destination ../../../dist/npm )
+( cd packages/agent-runtime/ts && pnpm pack --pack-destination ../../../dist/npm )
+# Assembles dist/runtime/runtime-<target>/ from the built sidecar bundles.
+python scripts/assemble_runtime_packages.py \
+  --sidecar-root <sidecar-artifacts> --egress-root <egress-artifacts> --out dist/runtime
+for dir in dist/runtime/runtime-*; do
+  ( cd "$dir" && NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public --provenance )
+done
+( cd packages/agent-cli/ts && NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public --provenance )
+( cd packages/agent-runtime/ts && NODE_AUTH_TOKEN="$NPM_TOKEN" npm publish --access public --provenance )
+python scripts/set_runtime_optional_deps.py restore
+
 # Py — PyPI
 uv build --all-packages --out-dir dist/py
 rm dist/py/steerable_example_*.{whl,tar.gz} 2>/dev/null || true
 uv publish --token "$PYPI_API_TOKEN" dist/py/steerable_*.whl dist/py/steerable_*.tar.gz
+```
+
+Before publishing anything, run the packaged-install gate. It packs the batch,
+installs it into a clean project and imports it, which is the only check that
+sees a missing cross-package export:
+
+```bash
+python scripts/check_package_install.py
 ```
 
 ### Versioning rules

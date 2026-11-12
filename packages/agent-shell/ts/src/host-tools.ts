@@ -120,14 +120,19 @@ export function hasGeneralSettingsChrome(
 
 export const LOCAL_FS_TOOL_NAMES = [
   'local_exec_shell',
+  'write_stdin',
   'local_read_file',
   'view_image',
   'local_write_file',
   'local_edit_file',
+  'present_files',
   'local_open_path',
   'local_run_snippet',
   'local_list_scripts',
   'local_run_script',
+  'grep',
+  'glob',
+  'pwsh',
 ] as const;
 
 const FAMILY_TOOL_PREFIX: Record<HostToolFamilyId, readonly string[]> = {
@@ -142,6 +147,9 @@ const FAMILY_TOOL_PREFIX: Record<HostToolFamilyId, readonly string[]> = {
     'worktree_create',
     'worktree_list',
     'worktree_remove',
+    'job_list',
+    'job_output',
+    'job_kill',
   ],
   mcp: ['mcp_list_tools', 'mcp_tool_exec'],
   web: ['web_search', 'web_fetch'],
@@ -181,6 +189,7 @@ export function resolveApprovalMode(value: unknown): ApprovalMode {
 
 /**
  * 产品 `approval: "off"` 或 STEERABLE_APPROVAL=0 时本轮不挂 host 审批。
+ * 环境变量关掉审批层后，破坏性工具由工具路由拒绝。命令行放行用 `--approve allow-all`。
  * 环境变量是调试逃生口；产品字段是装配真源。
  */
 export function isApprovalEnabled(input: {

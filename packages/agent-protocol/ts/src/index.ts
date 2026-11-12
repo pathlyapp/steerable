@@ -6,6 +6,11 @@ export * from "./generated/ContentPart.js";
 export * from "./generated/ChatAgent.js";
 export * from "./generated/CommandSafetyPattern.js";
 
+// Host platform identifiers shared by the runtime resolvers and release tooling
+export * from "./runtime-target.js";
+
+// Failure vocabulary shared by the host shell and the command line
+export * from "./turn-failure-kind.js";
 // Tier 3 runtime models
 export * from "./generated/AgentSession.js";
 export * from "./generated/HarnessTrace.js";

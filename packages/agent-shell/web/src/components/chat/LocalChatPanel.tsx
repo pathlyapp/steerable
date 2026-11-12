@@ -11,15 +11,22 @@ import {
   type MentionReference,
 } from './ChatInput';
 import { EmptyChat } from './EmptyChat';
+import { EmptyChatHero } from './EmptyChatHero';
 import { MessageList } from './MessageList';
 import type { ExecutedAction } from './ExecutedActionsCard';
 import type { InspectTaskInput } from './executed-actions-model';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { TurnBlock } from './turn-timeline';
 import type { TurnFile } from './turn-files';
+import type { RetryState } from './RetryStatus';
+import type { TurnFailureCardProps } from './TurnFailureCard';
 import type { LlmSpeedSnapshot } from './process-status';
+import { ComposerStatusStack } from './composer-status-stack';
+import { t } from '@/i18n';
 import { SessionTodoList } from './SessionTodoList';
 import { resolveLatestSessionTodos } from './todo-list-model';
+import { SessionOrchestrationFlow } from './SessionOrchestrationFlow';
+import { resolveLatestSessionOrchestrationFlow } from './orchestration-flow-model';
 import {
   appendAttachmentRefs,
   collectImageAttachments,
@@ -57,9 +64,9 @@ export interface LocalChatPanelProps {
   isStreaming?: boolean;
   onSubmit: (input: { content: string; metadata?: Record<string, unknown> }) => void | Promise<void>;
   onCancel?: () => void;
-  /** 轮中转向（streaming 期间 Enter）：注入失败由 hook 兜底为排队/直发，见 ChatInput。 */
+  /** 轮中插队（streaming 期间 ⌘/Ctrl+Enter）：注入失败由 hook 兜底为排队/直发。 */
   onSteer?: (text: string) => Promise<SteerOutcome>;
-  /** W6-2 follow-up 排队：streaming 期间 ⌘/Ctrl+Enter 把文本排入待发队列。 */
+  /** W6-2 follow-up 排队：streaming 期间 Enter 把文本排入待发队列。 */
   onFollowUp?: (text: string) => void;
   /** 排队待发的 follow-up 文本列表。 */
   pendingFollowUps?: string[];
@@ -76,11 +83,11 @@ export interface LocalChatPanelProps {
   /** Slot rendered above the message list (header / agent picker / …). */
   header?: ReactNode;
   /**
-   * 空会话 hero 布局：提供后，当 messages 为空且未在流式时，整个面板渲染为
-   * 居中首屏（品牌标题 + 居中输入框，无 header）——与 /agent 落地页
-   * （EmptyChatGate）同款视觉。首条消息落地后自动切回常规布局。
+   * 空会话 hero 布局：为 true 时，当 messages 为空且未在流式时，整个面板渲染为
+   * 居中首屏（品牌 logo + brand.homeHint + 居中输入框，无 header）——与 /agent
+   * 落地页（EmptyChatGate）同款视觉。首条消息落地后自动切回常规布局。
    */
-  emptyHero?: { title: string; subtitle?: string };
+  emptyHero?: boolean;
   /** Override the default `EmptyChat` empty-state. */
   emptyState?: ReactNode;
   /** Disable the input (e.g. during initial chat-history load). */
@@ -115,6 +122,10 @@ export interface LocalChatPanelProps {
   orchestrationChildrenByMessageId?: Record<string, ChildInfo[]>;
   /** Current round number for the in-flight turn (1-based). */
   currentRound?: number;
+  /** Live "reconnecting" state of the in-flight turn (see RetryStatus). */
+  retryState?: RetryState | null;
+  /** Resolves a failed turn's action buttons (see TurnFailureCard). */
+  failureAction?: TurnFailureCardProps['action'];
   /**
    * Settings gear callback for the input toolbar. Receiving this enables
    * the gear button on `ChatInput`; AgentPage wires it to opening
@@ -191,6 +202,8 @@ export function LocalChatPanel({
   currentTurnChildren,
   orchestrationChildrenByMessageId,
   currentRound,
+  retryState,
+  failureAction,
   onOpenSettings,
   inputToolbarExtras,
   inputLeadingChrome,
@@ -219,6 +232,13 @@ export function LocalChatPanel({
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [mentionReferences, setMentionReferences] = useState<MentionReference[]>([]);
   const inputRef = useRef<ChatInputHandle>(null);
+  // 空会话首屏和对话底部各有一棵输入框。发出第一条消息会卸掉正在聚焦的那棵；
+  // 不重新聚焦的话，Ctrl/Cmd+V 没有落点。
+  const showEmptyHero = Boolean(emptyHero) && messages.length === 0 && !isStreaming;
+
+  useEffect(() => {
+    inputRef.current?.focusAtEnd();
+  }, [chatId, showEmptyHero]);
 
   const handleSelectPrompt = useCallback((prompt: string) => {
     setInputValue(prompt);
@@ -306,9 +326,6 @@ export function LocalChatPanel({
     }
   }, [inputValue, files, mentionReferences, onSubmit, mode, execPolicy, chatId, selectedAgentId]);
 
-  // 空会话 hero：messages 为空且未在流式时整面板切到居中首屏布局。
-  const showEmptyHero = Boolean(emptyHero) && messages.length === 0 && !isStreaming;
-
   const sessionTodos = useMemo(
     () =>
       resolveLatestSessionTodos({
@@ -324,6 +341,30 @@ export function LocalChatPanel({
       currentTurnActions,
       timelineByMessageId,
       currentTurnTimeline,
+    ],
+  );
+
+  const sessionOrchestrationFlow = useMemo(
+    () =>
+      resolveLatestSessionOrchestrationFlow({
+        messages,
+        executedActionsByMessageId,
+        currentTurnActions,
+        currentTurnChildren,
+        orchestrationChildrenByMessageId,
+        timelineByMessageId,
+        currentTurnTimeline,
+        turnActive: isStreaming,
+      }),
+    [
+      messages,
+      executedActionsByMessageId,
+      currentTurnActions,
+      currentTurnChildren,
+      orchestrationChildrenByMessageId,
+      timelineByMessageId,
+      currentTurnTimeline,
+      isStreaming,
     ],
   );
 
@@ -354,6 +395,17 @@ export function LocalChatPanel({
     // inputBox 并重新 observe，否则气泡宽度变量停在旧节点上。
   }, [showEmptyHero]);
 
+  const handleCancel = useCallback(() => {
+    if (pendingFollowUps && pendingFollowUps.length > 0) {
+      setInputValue((draft) =>
+        [...pendingFollowUps, draft.trim()]
+          .filter(Boolean)
+          .join('\n\n'),
+      );
+    }
+    onCancel?.();
+  }, [onCancel, pendingFollowUps]);
+
   const chatInputNode = (
     <>
       {attachmentError && (
@@ -370,7 +422,7 @@ export function LocalChatPanel({
         value={inputValue}
         onChange={setInputValue}
         onSubmit={handleSubmit}
-        onCancel={onCancel}
+        onCancel={handleCancel}
         onSteer={onSteer}
         onFollowUp={onFollowUp}
         pendingFollowUps={pendingFollowUps}
@@ -379,7 +431,7 @@ export function LocalChatPanel({
         disabled={disabled}
         placeholder={
           mode === 'plan'
-            ? '描述你的目标，Agent 将先制定计划…'
+            ? t('Describe your goal. The Agent will make a plan first...')
             : inputPlaceholder
         }
         currentAgent={currentAgent}
@@ -390,7 +442,20 @@ export function LocalChatPanel({
         onOpenSettings={onOpenSettings}
         toolbarExtras={inputToolbarExtras}
         leadingChrome={inputLeadingChrome}
-        trailingChrome={sessionTodos ? <SessionTodoList todos={sessionTodos} /> : undefined}
+        trailingChrome={
+          sessionOrchestrationFlow || sessionTodos ? (
+            <ComposerStatusStack>
+              {sessionOrchestrationFlow ? (
+                <SessionOrchestrationFlow
+                  flow={sessionOrchestrationFlow}
+                  chatId={chatId}
+                  onInspectTask={onInspectTask}
+                />
+              ) : null}
+              {sessionTodos ? <SessionTodoList todos={sessionTodos} /> : null}
+            </ComposerStatusStack>
+          ) : undefined
+        }
         mode={mode}
         onModeChange={onModeChange}
         execPolicy={execPolicy}
@@ -416,16 +481,7 @@ export function LocalChatPanel({
         {showEmptyHero ? (
           <div className="flex min-h-0 flex-1 items-center justify-center p-3 sm:p-5">
             <div className="flex w-full max-w-3xl flex-col items-center gap-4">
-              <div className="text-center">
-                <h1 className="text-xl font-semibold tracking-tight text-agent-foreground">
-                  {emptyHero?.title}
-                </h1>
-                {emptyHero?.subtitle && (
-                  <p className="mt-1.5 text-xs text-agent-muted-foreground">
-                    {emptyHero.subtitle}
-                  </p>
-                )}
-              </div>
+              <EmptyChatHero />
               <div className="w-full">
                 {inputBanner}
                 {chatInputNode}
@@ -461,6 +517,8 @@ export function LocalChatPanel({
                 currentTurnChildren={currentTurnChildren}
                 orchestrationChildrenByMessageId={orchestrationChildrenByMessageId}
                 currentRound={currentRound}
+                retryState={retryState}
+                failureAction={failureAction}
                 emptyState={emptyState ?? <EmptyChat onSelectPrompt={handleSelectPrompt} />}
                 mode={mode}
                 onRegenerate={onRegenerate}

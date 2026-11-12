@@ -74,6 +74,29 @@ async def test_plugin_disable_removes_tools_and_enable_restores(
     assert sidecar.tools.get("plugin_echo") is not None
 
 
+async def test_plugin_tools_describe_tracks_enabled_state(sidecar: Sidecar) -> None:
+    _wire_registry(sidecar)
+    described = await _call(sidecar, "plugin.tools.describe")
+    assert described["result"] == {
+        "tools": [
+            {
+                "name": "plugin_echo",
+                "description": "",
+                "schema": {"type": "object", "properties": {}},
+                "mode": "other",
+                "exposure": "direct",
+                "requireConsent": False,
+                "concurrencySafe": False,
+                "plugin": "echo-plugin",
+            }
+        ]
+    }
+
+    await _call(sidecar, "plugin.disable", {"name": "echo-plugin"})
+    after = await _call(sidecar, "plugin.tools.describe")
+    assert after["result"] == {"tools": []}
+
+
 async def test_plugin_reload_refuses_a_non_reloadable_plugin(
     sidecar: Sidecar,
 ) -> None:

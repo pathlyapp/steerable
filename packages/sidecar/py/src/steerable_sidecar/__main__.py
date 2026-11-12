@@ -7,7 +7,7 @@ import asyncio
 import logging
 import os
 
-from steerable_agent_runtime.errors import StoreAlreadyOwnedError
+from steerable_agent_runtime.errors import StorageUpgradeBlockedError, StoreAlreadyOwnedError
 
 from .sidecar import Sidecar, SidecarConfig
 from .web_tools import register_web_tools
@@ -52,6 +52,9 @@ def main() -> int:
     except StoreAlreadyOwnedError as exc:
         logging.getLogger("steerable_sidecar").error("%s", exc)
         return 1
+    except StorageUpgradeBlockedError as exc:
+        logging.getLogger("steerable_sidecar").error("%s", exc)
+        return 75
     # web_search / web_fetch on the RPC router: the desktop host delegates
     # these calls here over forward `tool.invoke` (single implementation —
     # the host carries schemas only). A malformed STEERABLE_WEB_* bound must

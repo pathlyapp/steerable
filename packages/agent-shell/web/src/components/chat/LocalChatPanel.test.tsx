@@ -13,20 +13,20 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: vi.fn(() => true),
-  getElectronBridge: vi.fn(),
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: vi.fn(() => true),
+  getHostBridge: vi.fn(),
   runLocalBackend: vi.fn(),
 }));
 
-import { getElectronBridge } from '@/lib/electron-bridge';
+import { getHostBridge } from '@/lib/host-bridge';
 import { LocalChatPanel } from './LocalChatPanel';
 
 const saveMock = vi.fn();
 
 beforeEach(() => {
   saveMock.mockReset();
-  vi.mocked(getElectronBridge).mockReturnValue({
+  vi.mocked(getHostBridge).mockReturnValue({
     attachments: { save: saveMock },
     // ChatInput 挂载时会拉 skills / MCP 列表；给个空实现避免测试噪音。
     localBackend: { request: vi.fn().mockResolvedValue({ skills: [], mcpTools: [] }) },
@@ -96,6 +96,35 @@ describe('LocalChatPanel 附件提交', () => {
     ]);
   });
 
+  it('浏览器依次选择两个同名文件时全部保留并交给宿主唯一命名', async () => {
+    saveMock.mockResolvedValue({
+      files: [
+        { name: 'image.png', path: '/data/attachments/chat-1/image.png', size: 5 },
+        { name: 'image-2.png', path: '/data/attachments/chat-1/image-2.png', size: 5 },
+      ],
+    });
+    const onSubmit = renderPanel();
+
+    pickFile('image.png', 'image/png');
+    await waitFor(() => expect(screen.getAllByText('image.png')).toHaveLength(1));
+    pickFile('image.png', 'image/png');
+    await waitFor(() => expect(screen.getAllByText('image.png')).toHaveLength(2));
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(saveMock.mock.calls[0][0].files).toHaveLength(2);
+    const input = onSubmit.mock.calls[0][0] as {
+      content: string;
+      metadata?: { images?: Array<{ name: string }> };
+    };
+    expect(input.content).toContain('/data/attachments/chat-1/image.png');
+    expect(input.content).toContain('/data/attachments/chat-1/image-2.png');
+    expect(input.metadata?.images?.map((image) => image.name)).toEqual([
+      'image.png',
+      'image-2.png',
+    ]);
+  });
+
   it('落盘失败：不写空引用、显示错误、无正文时不发送', async () => {
     saveMock.mockResolvedValue({
       files: [{ name: 'big.bin', path: '', size: 0, error: 'file too large' }],
@@ -121,5 +150,72 @@ describe('LocalChatPanel 附件提交', () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(saveMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('LocalChatPanel 停止生成', () => {
+  it('停止时把排队消息恢复到输入框后再取消回合', () => {
+    const onCancel = vi.fn();
+    render(
+      <LocalChatPanel
+        messages={[]}
+        agents={[]}
+        currentAgent={null}
+        isStreaming
+        pendingFollowUps={['第一条', '第二条']}
+        onSubmit={vi.fn()}
+        onCancel={onCancel}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('textbox').textContent).toBe('第一条\n\n第二条');
+  });
+});
+
+describe('LocalChatPanel 输入焦点', () => {
+  it('打开会话时聚焦输入框', () => {
+    renderPanel();
+
+    expect(document.activeElement).toBe(screen.getByRole('textbox'));
+  });
+
+  it('空会话发出第一条消息后，新的输入框重新获得焦点', () => {
+    const props = {
+      chatId: 'chat-1',
+      messages: [] as Array<{
+        id: string;
+        role: 'user';
+        content: string;
+        createdAt: string;
+      }>,
+      agents: [],
+      currentAgent: null,
+      emptyHero: true,
+      onSubmit: vi.fn(),
+    };
+    const view = render(<LocalChatPanel {...props} />);
+    const first = screen.getByRole('textbox');
+    expect(document.activeElement).toBe(first);
+
+    view.rerender(
+      <LocalChatPanel
+        {...props}
+        messages={[
+          {
+            id: 'm1',
+            role: 'user',
+            content: '你好',
+            createdAt: '2026-10-08T00:00:00.000Z',
+          },
+        ]}
+      />,
+    );
+
+    const next = screen.getByRole('textbox');
+    expect(next).not.toBe(first);
+    expect(document.activeElement).toBe(next);
   });
 });

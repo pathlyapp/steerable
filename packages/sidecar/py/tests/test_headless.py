@@ -552,7 +552,7 @@ async def test_default_path_takes_loop_limits_from_the_bundled_spec(
 ) -> None:
     """W3.4.2.4: with no ``--harness``, the limits still come from
     `default.harness.yaml`. This path used to leave `limits` unset and answer
-    `max_tool_errors` from a literal 32, so the spec's 16 never reached a run.
+    `max_tool_errors` from a literal 32, so the spec never reached a run.
     """
     from steerable_agent_runtime.harness_spec import load_harness_spec
     from steerable_sidecar.sidecar import _DEFAULT_HARNESS_SPEC_PATH
@@ -583,13 +583,16 @@ async def test_default_path_takes_loop_limits_from_the_bundled_spec(
 
     await _run("say done", cwd=str(tmp_path), harness_path=None)
 
+    from steerable_sidecar.loop_limits import resolve_loop_limits
+
     pinned = load_harness_spec(_DEFAULT_HARNESS_SPEC_PATH).loop
+    resolved = resolve_loop_limits(pinned)
     assert len(seen) == 1
     config = seen[0]
     assert (config.max_rounds, config.max_tool_errors, config.tool_dedup) == (
-        pinned.max_rounds,
-        pinned.max_tool_errors,
-        bool(pinned.tool_dedup),
+        resolved.max_rounds,
+        resolved.max_tool_errors,
+        resolved.tool_dedup,
     )
 
 
@@ -624,8 +627,10 @@ async def test_max_rounds_flag_overrides_the_spec(
 
     await _run("say done", cwd=str(tmp_path), max_rounds=9)
 
+    from steerable_sidecar.loop_limits import UNLIMITED_LOOP_LIMIT
+
     assert seen[0].max_rounds == 9
-    assert seen[0].max_tool_errors == 16
+    assert seen[0].max_tool_errors == UNLIMITED_LOOP_LIMIT
 
 
 @pytest.mark.asyncio
