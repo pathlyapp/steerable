@@ -17,7 +17,18 @@ on:
 jobs:
   a11y:
     name: a11y (axe via @storybook/test-runner)
-    runs-on: ubuntu-latest
+    # Pinned, not `-latest`. GitHub moved `ubuntu-latest` to 26.04, and the
+    # Playwright release this repo pins has no chromium build or dependency
+    # list for it, so `playwright install` failed before a single test ran.
+    # 22.04 is what `vrt` below already runs on, so both jobs see the same
+    # rendered DOM.
+    #
+    # This pin is a stopgap, not the fix: GitHub is retiring 22.04 too. The
+    # durable fix is a Playwright upgrade, which moves chromium (1.60 pins
+    # 1223, 1.65 pins 1254) and therefore invalidates every committed VRT
+    # baseline — that has to land as its own change with regenerated,
+    # reviewed snapshots.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v5
