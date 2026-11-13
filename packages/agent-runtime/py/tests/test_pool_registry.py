@@ -266,3 +266,77 @@ def _spawn_of(child_id: str):
         profile="explore",
         engine="coreloop",
     )
+
+
+# ---------------------------------------------------------------------------
+# close is durable, not just in-process
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_close_writes_closed_onto_the_row() -> None:
+    """Closing has to reach disk, or a later turn resumes a closed child.
+
+    The in-memory ``closed`` flag lives on the handle, and the handle dies
+    with the pool. `agent_send` decides whether a child is resumable by
+    reading its **row**, so a close that only touched the handle left a
+    closed child looking merely finished — and the observed behaviour was
+    `delivery: "resumed"` after an explicit `agent_close`.
+    """
+    store = InMemoryStorage()
+    registry = ChildRegistry(store)
+    pool = _pool(registry=registry, provider=_ScriptedProvider())
+
+    pool.spawn("look this up", None)
+    await pool.wait("0.1", 5)
+    assert (await store.get_child("chat/p:child:0.1")).status == "completed"
+
+    await pool.close("0.1")
+
+    assert (await store.get_child("chat/p:child:0.1")).status == "closed"
+    await pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_closing_a_running_child_does_not_settle_it_as_cancelled() -> None:
+    """Close cancels the run, and that cancel must not overwrite the row.
+
+    Cancelling to close produces ``cancelled`` from the loop. Writing that
+    back would leave the row resumable again — the exact state close is
+    supposed to end.
+    """
+    gate = asyncio.Event()
+    store = InMemoryStorage()
+    registry = ChildRegistry(store)
+    pool = _pool(registry=registry, provider=_ScriptedProvider(gate=gate))
+
+    pool.spawn("still running", None)
+    await asyncio.sleep(0.05)
+
+    await pool.close("0.1")
+
+    row = await store.get_child("chat/p:child:0.1")
+    assert row is not None
+    assert row.status == "closed"
+    gate.set()
+    await pool.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_a_closed_row_is_not_resumable() -> None:
+    """The point of the durable ``closed``: the resume path reads it."""
+    store = InMemoryStorage()
+    registry = ChildRegistry(store)
+    pool = _pool(registry=registry, provider=_ScriptedProvider())
+
+    pool.spawn("one run", None)
+    await pool.wait("0.1", 5)
+    await pool.close("0.1")
+    await pool.shutdown()
+
+    # A fresh pool is what a later turn builds; it has no handle for 0.1, so
+    # only the row can say the child is finished for good.
+    view = await registry.find_child("chat/p", "0.1")
+    assert view is not None
+    assert view.record.status == "closed"
+    assert view.resumable is False

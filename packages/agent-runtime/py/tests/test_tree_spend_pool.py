@@ -1,11 +1,12 @@
-"""The pool charges the shared tree budget, and reports it.
+"""The pool records each child's spend into the shared tree counter.
 
 Two behaviours matter here and only here:
 
-- a child's usage reaches the tree counter (not just its own registry row);
-- a tree with nothing left refuses to start a child, rather than letting it
-  run to its own wall and fail afterwards — the run would cost tokens for an
-  answer that gets thrown away.
+- a child's usage reaches the tree counter (not just its own registry row), so
+  the host reads one number for the turn instead of adding up loops;
+- nothing is refused for spending too much: the counter reports, it does not
+  gate. A previous design refused the next spawn once the tree overflowed, and
+  left children stopped mid-task at ``budget_exhausted``.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from steerable_agent_runtime import (
     LoopConfig,
     RouterToolExecutor,
     ToolRouter,
-    TreeBudget,
+    TreeSpend,
 )
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk, LLMUsage
 from steerable_agent_runtime.orchestration import (
@@ -35,7 +36,7 @@ PARENT = "chat/p"
 
 
 class _UsageProvider:
-    """Reports a fixed token bill so the tree counter has something to charge."""
+    """Reports a fixed token bill so the tree counter has something to record."""
 
     name = "fake"
     model = "fake-model"
@@ -59,7 +60,7 @@ class _UsageProvider:
 
 
 def _executor(
-    provider: Any, *, budget: TreeBudget | None, max_parallel: int = 4
+    provider: Any, *, spend: TreeSpend | None, max_parallel: int = 4
 ) -> OrchestrationExecutor:
     return OrchestrationExecutor(
         RouterToolExecutor(ToolRouter()),
@@ -67,7 +68,7 @@ def _executor(
         OrchestrationConfig(max_parallel=max_parallel),
         registry=ChildRegistry(InMemoryStorage()),
         parent_record_id=PARENT,
-        budget=budget,
+        spend=spend,
     )
 
 
@@ -83,23 +84,23 @@ async def _spawn(executor: OrchestrationExecutor, task: str = "task") -> dict[st
 
 
 @pytest.mark.asyncio
-async def test_a_child_charges_the_tree_budget() -> None:
-    budget = TreeBudget(limit=10_000)
-    executor = _executor(_UsageProvider(120), budget=budget)
+async def test_a_child_records_into_the_tree_counter() -> None:
+    spend = TreeSpend()
+    executor = _executor(_UsageProvider(120), spend=spend)
 
     await _spawn(executor)
     await executor._pool.wait("0.1", 5)
     await executor.shutdown()
 
-    report = budget.report()
+    report = spend.report()
     assert report.spent >= 120
     assert report.by_agent.get("0.1", 0) >= 120
 
 
 @pytest.mark.asyncio
-async def test_two_children_both_charge_the_same_counter() -> None:
-    budget = TreeBudget(limit=10_000)
-    executor = _executor(_UsageProvider(100), budget=budget, max_parallel=4)
+async def test_two_children_share_one_counter() -> None:
+    spend = TreeSpend()
+    executor = _executor(_UsageProvider(100), spend=spend, max_parallel=4)
 
     for call_id in ("s1", "s2"):
         result = await executor.execute(
@@ -111,17 +112,22 @@ async def test_two_children_both_charge_the_same_counter() -> None:
     await executor._pool.wait("0.2", 5)
     await executor.shutdown()
 
-    report = budget.report()
+    report = spend.report()
     # Both children are attributed separately, and the total is their sum.
     assert set(report.by_agent) >= {"0.1", "0.2"}
     assert report.spent >= 200
 
 
 @pytest.mark.asyncio
-async def test_an_exhausted_tree_refuses_a_new_child() -> None:
-    """Starting a child that cannot finish costs tokens for nothing."""
-    budget = TreeBudget(limit=10)
-    executor = _executor(_UsageProvider(500), budget=budget)
+async def test_a_huge_spend_does_not_refuse_the_next_child() -> None:
+    """Reporting is not gating: the turn keeps working and the host sees the bill.
+
+    The old behaviour refused this spawn with ``orchestration_budget_exceeded``
+    once the tree crossed its limit. That stopped a task the user had already
+    paid for partway through, for a limit nobody had asked to enforce.
+    """
+    spend = TreeSpend()
+    executor = _executor(_UsageProvider(500_000), spend=spend)
 
     await _spawn(executor)
     await executor._pool.wait("0.1", 5)
@@ -130,17 +136,17 @@ async def test_an_exhausted_tree_refuses_a_new_child() -> None:
         ToolCall(id="s2", name="agent_spawn", arguments={"task": "another"}),
         None,  # type: ignore[arg-type]
     )
+    await executor._pool.wait("0.2", 5)
     await executor.shutdown()
 
-    assert result.success is False
-    assert "orchestration_budget_exceeded" in (result.error or "")
-    assert "tokens" in (result.error or "")
+    assert result.success is True, result.error
+    assert spend.report().spent >= 1_000_000
 
 
 @pytest.mark.asyncio
-async def test_without_a_budget_nothing_is_charged_or_refused() -> None:
-    """A host that did not ask for a tree limit keeps the old behaviour."""
-    executor = _executor(_UsageProvider(9_999), budget=None)
+async def test_without_a_counter_nothing_is_recorded() -> None:
+    """A bare pool (tests, hosts without a tree) keeps working unchanged."""
+    executor = _executor(_UsageProvider(9_999), spend=None)
 
     await _spawn(executor)
     await executor._pool.wait("0.1", 5)
@@ -151,29 +157,22 @@ async def test_without_a_budget_nothing_is_charged_or_refused() -> None:
     await executor.shutdown()
 
     assert result.success is True
+    assert executor.pool.spend_report() is None
 
 
 @pytest.mark.asyncio
-async def test_budget_report_is_none_without_a_budget() -> None:
-    """'No limit' must be distinguishable from 'nothing spent'."""
-    executor = _executor(_UsageProvider(10), budget=None)
-    assert executor.pool.budget_report() is None
-    await executor.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_budget_report_exposes_the_split_for_a_host() -> None:
-    budget = TreeBudget(limit=5_000)
-    executor = _executor(_UsageProvider(400), budget=budget)
+async def test_spend_report_exposes_the_split_for_a_host() -> None:
+    spend = TreeSpend()
+    executor = _executor(_UsageProvider(400), spend=spend)
 
     await _spawn(executor)
     await executor._pool.wait("0.1", 5)
 
-    report = executor.pool.budget_report()
+    report = executor.pool.spend_report()
     await executor.shutdown()
 
     assert report is not None
-    assert report.limit == 5_000
+    assert report.spent >= 400
     assert report.by_agent.get("0.1", 0) >= 400
 
 

@@ -618,11 +618,11 @@ export interface SidecarStreamDone {
     unknownUsageChildren?: number;
   };
   /**
-   * R5: the whole turn tree's spend against `budgetTokens`. Absent when the
-   * host asked for no tree limit — "no limit" must stay distinguishable from
-   * "spent nothing".
+   * R5: the whole turn tree's spend, per agent. Always present on a
+   * delegating turn — there is no limit to compare it against, and none to
+   * be absent.
    */
-  treeUsage?: { limit: number; spent: number; byAgent: Record<string, number> };
+  treeUsage?: { spent: number; byAgent: Record<string, number> };
 }
 
 /** One child's bill inside `stream.done`'s `usage.children`. */

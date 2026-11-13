@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from steerable_agent_runtime import (
+    ChildRegistry,
     CoreLoop,
     LoopConfig,
     RouterToolExecutor,
@@ -22,11 +23,13 @@ from steerable_agent_runtime import (
 )
 from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk
 from steerable_agent_runtime.orchestration import (
+    AgentPool,
     ChildOutcome,
     OrchestrationConfig,
     OrchestrationExecutor,
     orchestration_tool_descriptors,
 )
+from steerable_agent_runtime.storage import InMemoryStorage
 from test_loop import collect, final_completion
 
 
@@ -1098,6 +1101,57 @@ async def test_send_to_closed_child_fails_with_child_closed() -> None:
     assert "child_closed" in _error(send)
     listing = next(r for r in results if r["name"] == "agent_list")
     assert _payload(listing)["children"][0]["status"] == "closed"
+
+
+@pytest.mark.asyncio
+async def test_a_later_turn_cannot_resume_a_child_closed_by_an_earlier_one() -> None:
+    """Close has to survive the pool that took it.
+
+    The same-turn case above is caught by the handle's own flag. A later turn
+    builds a fresh pool with no handle at all, so the only thing standing
+    between `agent_send` and a closed child is the row — and the row used to
+    keep the status of its last run, which made an explicitly closed child
+    look merely finished. Observed: `delivery: "resumed"` after `agent_close`.
+    """
+    store = InMemoryStorage()
+    registry = ChildRegistry(store)
+
+    def loop_factory(child_id: str, tool_filter: frozenset[str] | None):
+        provider, _ = _content_provider({"child task": [{"content": "child answer"}]})
+        return (
+            CoreLoop(provider, RouterToolExecutor(ToolRouter()), LoopConfig()),
+            [],
+        )
+
+    def pool() -> AgentPool:
+        return AgentPool(
+            config=OrchestrationConfig(),
+            depth=0,
+            lineage="0",
+            loop_factory=loop_factory,
+            registry=registry,
+            parent_record_id="chat/p",
+        )
+
+    # Turn one: spawn, let it finish, then close it.
+    first = pool()
+    first.spawn("child task", None)
+    await first.wait("0.1", 5)
+    await first.close("0.1")
+    await first.shutdown()
+
+    row = await store.get_child("chat/p:child:0.1")
+    assert row is not None
+    assert row.status == "closed"
+
+    # Turn two: a new pool, no handle for 0.1. Resolving it can only consult
+    # the row, which is exactly the path that used to resume a closed child.
+    second = pool()
+    view = await registry.find_child("chat/p", "0.1")
+    await second.shutdown()
+    assert view is not None
+    assert view.record.status == "closed"
+    assert view.resumable is False
 
 
 @pytest.mark.asyncio

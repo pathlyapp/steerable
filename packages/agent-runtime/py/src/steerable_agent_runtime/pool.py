@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from itertools import count
 from typing import Any
 
-from .budget import SessionBudgetExceeded, TreeBudget, TreeBudgetReport
+from .spend import TreeSpend
 from .engines import (
     AcpEngineSpec,
     AcpOutcome,
@@ -161,6 +161,10 @@ class _ChildHandle:
         #: Terminal flag set by close()/shutdown(): a closed child rejects
         #: sends even after its run has finished.
         self.closed = False
+        #: Set by ``shutdown`` only — the turn ended, not the child. Its row
+        #: then settles as ``cancelled`` (resumable) rather than ``closed``:
+        #: "the parent stopped waiting" is not "the user gave up on it".
+        self.pool_gone = False
         #: Model-visible record snapshot at the end of the last cleanly
         #: finished run (cooperative cancel included — the loop guarantees
         #: no dangling tool_calls). ``None`` before the first clean finish;
@@ -244,7 +248,7 @@ class AgentPool:
         event_sink: Callable[[str, dict[str, Any]], None] | None = None,
         registry: ChildRegistry | None = None,
         parent_record_id: str | None = None,
-        budget: TreeBudget | None = None,
+        spend: TreeSpend | None = None,
         history_store: Any | None = None,
         tree: AgentTree | None = None,
     ) -> None:
@@ -277,10 +281,10 @@ class AgentPool:
         #: (``<parent>:child:<lineage>``). Absent for a parent that never had
         #: one (a bare test loop), in which case children go unregistered.
         self._parent_record_id = parent_record_id
-        #: One token limit for the whole tree. ``None`` means each run keeps
-        #: its own accounting, which is the pre-delegation behaviour — a pool
-        #: without a shared budget cannot charge siblings against each other.
-        self._budget = budget
+        #: Per-agent accumulation for the turn's usage report. ``None`` keeps
+        #: the pool's own accounting off, which is what a bare pool (tests,
+        #: hosts without a tree) gets — nothing is charged, nothing is capped.
+        self._spend = spend
         #: The record channel. Needed only to write a fork seed's provenance
         #: into the child's own record; ``None`` keeps the legacy behaviour
         #: (the seed is just the child's opening messages).
@@ -367,14 +371,6 @@ class AgentPool:
                 f"parallel cap {self._config.max_parallel} reached "
                 f"({len(live)} children running); wait for one to finish "
                 "or close one before spawning again"
-            )
-        # A tree that already spent its budget must not start new work: the
-        # child would run until its own wall and then be refused anyway, which
-        # costs tokens for nothing.
-        if self._budget is not None and self._budget.exhausted:
-            raise OrchestrationBudgetExceeded(
-                f"the turn tree has spent {self._budget.report().spent} of its "
-                f"{self._budget.limit} tokens; no further children can start"
             )
         self._seq += 1
         child_id = f"{self._lineage}.{self._seq}"
@@ -741,16 +737,11 @@ class AgentPool:
         handle.outcome = ChildOutcome(handle.child_id, status, answer)
         usage = handle.loop.last_run_usage
         handle.usage = usage
-        # Charge the tree before announcing: a child that pushed the tree over
-        # its limit must be reported as having done so, not settled quietly
-        # and letting the parent discover it on the next spawn.
-        budget_exceeded: str | None = None
-        if self._budget is not None:
-            try:
-                self._budget.charge(usage, agent=handle.child_id)
-            except SessionBudgetExceeded as exc:
-                budget_exceeded = str(exc)
-                logger.warning("child %s crossed the tree budget: %s", handle.child_id, exc)
+        # Record the spend for attribution. Unbounded by design: a turn that
+        # runs long is a turn that had more work, not a failure, and stopping
+        # it mid-task costs the work already done. The host shows the number.
+        if self._spend is not None:
+            self._spend.record(usage, agent=handle.child_id)
         kind = "child_completed" if status == "completed" else "child_failed"
         self._emit(
             kind,
@@ -762,7 +753,6 @@ class AgentPool:
                 # read, and a parent computing turn cost needs it before the
                 # stream closes.
                 **({"usage": _usage_payload(usage)} if usage is not None else {}),
-                **({"budgetExceeded": budget_exceeded} if budget_exceeded else {}),
             },
         )
         await self._settle_child(handle, status=status, usage=usage)
@@ -859,10 +849,21 @@ class AgentPool:
         if self._registry is None or self._parent_record_id is None:
             return
         record_id = default_record_id(self._parent_record_id, handle.child_id)
+        # A closed child's row says `closed`, whatever the run it was in the
+        # middle of reports. Cancelling to close produces `cancelled` from the
+        # loop, and writing that would leave the row resumable again — the
+        # in-memory flag dies with the pool, the row does not.
+        #
+        # ``shutdown`` also marks handles closed, but that is the turn
+        # ending rather than the user giving up: those rows settle as
+        # ``cancelled`` (resumable) and `pool_gone` is what tells them apart.
+        final_status = (
+            "closed" if handle.closed and not handle.pool_gone else registry_status(status)
+        )
         try:
             wrote = await self._registry.finished(
                 record_id,
-                status=registry_status(status),
+                status=final_status,
                 usage=usage,
                 usage_known=handle.usage_known,
             )
@@ -871,14 +872,14 @@ class AgentPool:
         except Exception as exc:  # noqa: BLE001 — bookkeeping never fails a run
             logger.warning("child %s registry settle failed: %s", handle.child_id, exc)
 
-    def budget_report(self) -> TreeBudgetReport | None:
-        """The tree budget's snapshot, or ``None`` when this pool has none.
+    def spend_report(self) -> TreeSpendReport | None:
+        """The tree's per-agent spend, or ``None`` when this pool has none.
 
         Exposed so a host can report the turn's real cost (parent plus every
-        child) without walking the registry, and can tell "no limit" from
-        "zero spent".
+        child) without walking the registry. There is no limit to compare
+        against: the number is for display.
         """
-        return self._budget.report() if self._budget is not None else None
+        return self._spend.report() if self._spend is not None else None
 
     def children_usage(self) -> tuple[list[dict[str, Any]], int]:
         """Per-child bills for this turn's usage record, and the unknown count.
@@ -1132,6 +1133,13 @@ class AgentPool:
         # so a peer's message reports an unknown member instead of resuming an
         # agent the owner already gave up on.
         self._leave_tree(child_id)
+        # The same promise has to reach the durable row, not just this
+        # process. `send` after close is refused by `_resume_from_registry`
+        # only because that row says `closed`; leaving it at its last run's
+        # status let a closed child be resumed by a later turn (or by another
+        # executor reading the same registry) — the in-memory flag dies with
+        # the pool, the row does not.
+        await self._mark_closed(handle)
         if handle.outcome is not None:
             return True
         self._cancel_handle(handle)
@@ -1142,6 +1150,28 @@ class AgentPool:
             if not handle.task.done():
                 handle.task.cancel()
         return True
+
+    async def _mark_closed(self, handle: _ChildHandle) -> None:
+        """Write ``closed`` onto the child's row; best-effort like settling.
+
+        A pool without a registry (tests, hosts without storage) keeps its
+        previous behaviour, and a storage failure must not turn a close into
+        an error — the in-process refusal still holds for this turn.
+        """
+        if self._registry is None or self._parent_record_id is None:
+            return
+        record_id = default_record_id(self._parent_record_id, handle.child_id)
+        try:
+            wrote = await self._registry.finished(
+                record_id,
+                status="closed",
+                usage=handle.usage,
+                usage_known=handle.usage_known,
+            )
+            if wrote:
+                self._registry.mark_settled(record_id)
+        except Exception as exc:  # noqa: BLE001 — bookkeeping never fails a run
+            logger.warning("child %s registry close failed: %s", handle.child_id, exc)
 
     def _cancel_handle(self, handle: _ChildHandle) -> None:
         """Ask one child to stop, whichever engine it runs on.
@@ -1158,12 +1188,16 @@ class AgentPool:
     async def shutdown(self) -> None:
         """Cooperatively cancel every live child; hard-cancel stragglers.
 
-        Terminal for the whole pool: every child is marked closed, so no
-        sends or resumes are accepted afterwards.
+        Terminal for the whole **pool**, not for its children: a child that
+        was still running when the turn ended stays resumable, so its row is
+        ``cancelled`` (the run was cut short), not ``closed`` (the user gave
+        up on it). ``close`` is the one that writes ``closed``, because that
+        is the only path where "never again" was actually asked for.
         """
         live = [h for h in self._children.values() if h.outcome is None]
         for handle in self._children.values():
             handle.closed = True
+            handle.pool_gone = True
             self._leave_tree(handle.child_id)
         for handle in live:
             self._cancel_handle(handle)
