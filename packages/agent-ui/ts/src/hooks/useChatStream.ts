@@ -45,7 +45,10 @@ export interface ChatStreamTransport {
    * caller should keep the draft — a normal send can follow once the turn
    * ends). When omitted, the UI keeps send-during-streaming disabled.
    */
-  steer?: (content: string) => Promise<boolean>;
+  steer?: (
+    content: string,
+    options?: { execPolicy?: 'workspace' | 'full' },
+  ) => Promise<boolean>;
 }
 
 /**
@@ -107,8 +110,10 @@ export interface UseChatStreamReturn {
   /**
    * Steer the running turn with an extra user message. No-op resolving
    * `false` when not streaming or the transport has no `steer`. On success
-   * the message is appended to the visible transcript immediately (the loop
-   * consumes it at the next round boundary).
+   * the message is inserted immediately before the in-flight assistant
+   * message, matching the persisted order (hosts store the steer at
+   * acceptance, the reply at turn end), so the streaming assistant stays the
+   * list tail. The loop consumes it at the next round boundary.
    */
   steerUserMessage: (content: string) => Promise<boolean>;
   /**
@@ -142,8 +147,10 @@ export interface UseChatStreamReturn {
 type Action =
   | { type: 'reset'; messages: ChatMessage[] }
   | { type: 'append'; message: ChatMessage }
+  | { type: 'insert-before-last-assistant'; message: ChatMessage }
   | { type: 'patch-last-assistant'; patch: Partial<ChatMessage> }
   | { type: 'append-content'; delta: string }
+  | { type: 'replace-content'; content: string }
   | { type: 'append-tool-call'; call: ToolCall }
   | { type: 'attach-tool-result'; result: ToolResult }
   | { type: 'finalize-assistant' };
@@ -158,6 +165,13 @@ function reducer(state: State, action: Action): State {
       return { messages: action.messages };
     case 'append':
       return { messages: [...state.messages, action.message] };
+    case 'insert-before-last-assistant': {
+      const idx = findLastAssistantIndex(state.messages);
+      if (idx === -1) return { messages: [...state.messages, action.message] };
+      const next = state.messages.slice();
+      next.splice(idx, 0, action.message);
+      return { messages: next };
+    }
     case 'patch-last-assistant': {
       const idx = findLastAssistantIndex(state.messages);
       if (idx === -1) return state;
@@ -176,6 +190,20 @@ function reducer(state: State, action: Action): State {
       const patched: ChatMessage = {
         ...target,
         content: (target.content ?? '') + action.delta,
+      } as ChatMessage;
+      const next = state.messages.slice();
+      next[idx] = patched;
+      return { messages: next };
+    }
+    case 'replace-content': {
+      // A retried attempt restarts the reply, so the accumulated text is no
+      // longer an append target: replacing it is the only way the live view
+      // can match what the backend will persist.
+      const idx = findLastAssistantIndex(state.messages);
+      if (idx === -1) return state;
+      const patched: ChatMessage = {
+        ...state.messages[idx],
+        content: action.content,
       } as ChatMessage;
       const next = state.messages.slice();
       next[idx] = patched;
@@ -341,6 +369,19 @@ export function useChatStream(
           return;
         }
         case 'agent':
+          // `stream_restart`: the backend discarded the attempt it was
+          // streaming and started the request again. It carries the
+          // authoritative replacement text rather than a length to cut, so
+          // the live view cannot drift from the persisted reply. Handled here
+          // because the text lives in this hook's state; still forwarded, as
+          // every other `agent` event is.
+          if (event.event === 'stream_restart') {
+            const content =
+              typeof event.payload?.content === 'string' ? event.payload.content : '';
+            dispatch({ type: 'replace-content', content });
+          }
+          options.onUnknownEvent?.(event);
+          return;
         case 'orchestration':
         case 'loader-hint':
         case 'keepalive':
@@ -453,7 +494,7 @@ export function useChatStream(
       }
       const ok = await steer(content);
       if (ok) {
-        dispatch({ type: 'append', message: newUserMessage(content) });
+        dispatch({ type: 'insert-before-last-assistant', message: newUserMessage(content) });
       }
       return ok;
     },
@@ -474,7 +515,7 @@ export function useChatStream(
       if (steer) {
         const ok = await steer(content);
         if (ok) {
-          dispatch({ type: 'append', message: newUserMessage(content) });
+          dispatch({ type: 'insert-before-last-assistant', message: newUserMessage(content) });
           return 'steered';
         }
         // The turn may have ended while the steer was in flight; its

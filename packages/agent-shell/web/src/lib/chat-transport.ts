@@ -7,7 +7,7 @@
  *   user types in ChatPanel
  *     -> useChatStream.sendUserMessage()
  *     -> transport.stream(input, onEvent)
- *     -> window.electron.localBackend.startStream({ POST /api/v2/chats/:id/run })
+ *     -> window.steerableHost.localBackend.startStream({ POST /api/v2/chats/:id/run })
  *     -> main process forwards each raw SSE chunk via webContents.send
  *     -> preload re-emits as `{ type: 'data'; chunk: string }`
  *     -> we parse the SSE frames with the framework's `SSEParser`, normalise
@@ -28,7 +28,7 @@
  * Framework `SSEEvent` (packages/agent-protocol/ts/src/generated/SSEEvent.ts)
  * is the canonical normalisation target. The legacy-envelope mapping lives in
  * `@steerable/agent-ui/state`'s `bridgeLegacySSE` — this file used to keep its
- * own copy; wave 1 of the steerable-framework refactor consolidated them.
+ * own copy; wave 1 of the Steerable refactor consolidated them.
  *
  * We do still keep one app-specific guard: if any content has already
  * streamed and the backend ends with `budget_exhausted`, we downgrade that
@@ -52,7 +52,8 @@ import {
   parseSSEData,
 } from '@steerable/agent-ui/state';
 import type { SSEEvent } from '@steerable/agent-protocol';
-import { getElectronBridge } from './electron-bridge';
+import { getHostBridge } from './host-bridge';
+import { t } from '@/i18n';
 import {
   appendDelta,
   freezeReasoningDurations,
@@ -213,7 +214,7 @@ class LocalBackendSseAdapter {
 // starts a fresh SSE pipe against /api/v2/chats/:id/run.
 // ---------------------------------------------------------------------------
 
-export interface ElectronChatTransport extends ChatStreamTransport {
+export interface HostChatTransport extends ChatStreamTransport {
   /**
    * 立即取消当前进行中的流（如果有）。
    *
@@ -225,7 +226,7 @@ export interface ElectronChatTransport extends ChatStreamTransport {
   cancelActive: () => void;
 }
 
-export function createElectronChatTransport(chatId: string): ElectronChatTransport {
+export function createHostChatTransport(chatId: string): HostChatTransport {
   // 当前 in-flight 流的 id。startStream resolve 后写入，流结束（end/error）
   // 或被取消后清空。同一 transport 一次只会有一条流（useChatStream 在
   // isStreaming 时拒绝重入）。
@@ -233,7 +234,7 @@ export function createElectronChatTransport(chatId: string): ElectronChatTranspo
 
   return {
     cancelActive: () => {
-      const bridge = getElectronBridge();
+      const bridge = getHostBridge();
       if (active.streamId) {
         bridge?.localBackend.cancelStream(active.streamId);
         active.streamId = null;
@@ -253,16 +254,20 @@ export function createElectronChatTransport(chatId: string): ElectronChatTranspo
     },
     // 轮中转向：仅在 CoreLoop 路径（STEERABLE_USE_CORELOOP=1）且回合仍
     // 运行时生效；否则主进程软失败，useChatStream 保留草稿。
-    steer: async (content: string) => {
-      const bridge = getElectronBridge();
+    steer: async (content: string, options?: { execPolicy?: 'workspace' | 'full' }) => {
+      const bridge = getHostBridge();
       if (!bridge?.localBackend.steerChat) return false;
-      return await bridge.localBackend.steerChat(chatId, content);
+      return await bridge.localBackend.steerChat(
+        chatId,
+        content,
+        options?.execPolicy ? { execPolicy: options.execPolicy } : undefined,
+      );
     },
     stream: async (input: ChatStreamSendInput, onEvent) => {
-      const bridge = getElectronBridge();
+      const bridge = getHostBridge();
       if (!bridge) {
         throw new Error(
-          'Electron bridge unavailable — chat transport requires the desktop shell.',
+          'Host bridge unavailable — chat transport requires the desktop shell.',
         );
       }
 
@@ -347,10 +352,10 @@ export async function regenerateChatMessage(
   chatId: string,
   messageId: string,
 ): Promise<void> {
-  const bridge = getElectronBridge();
+  const bridge = getHostBridge();
   if (!bridge) {
     throw new Error(
-      'Electron bridge unavailable — regenerate requires the desktop shell.',
+      'Host bridge unavailable — regenerate requires the desktop shell.',
     );
   }
   await new Promise<void>((resolve, reject) => {
@@ -372,7 +377,7 @@ export async function regenerateChatMessage(
         if (frame.event !== 'error' || !frame.data) return;
         const parsed = parseSSEData(frame.data);
         const message = (parsed as { message?: unknown } | null)?.message;
-        refusal = typeof message === 'string' && message ? message : '重新生成失败';
+        refusal = typeof message === 'string' && message ? message : t('Regeneration failed');
       },
     });
     bridge.localBackend
@@ -388,7 +393,10 @@ export async function regenerateChatMessage(
             parser.end();
             settle(
               payload.status >= 400
-                ? new Error(refusal ?? `重新生成失败（HTTP ${payload.status}）`)
+                ? new Error(
+                    refusal ??
+                      t('Regeneration failed (HTTP {status})', { status: payload.status }),
+                  )
                 : undefined,
             );
           } else if (payload.type === 'error') settle(new Error(payload.error));

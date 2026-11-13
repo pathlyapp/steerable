@@ -3,6 +3,7 @@ import { LuCircleCheck, LuCircleX, LuListTodo } from 'react-icons/lu';
 import { ToolExecutionCard } from '@steerable/agent-ui/cards';
 import type { ToolExecutionPayload } from '@steerable/agent-protocol';
 import type { LocalChatAgent } from '@/lib/local-api';
+import { t } from '@/i18n';
 import { UnifiedDiff } from './UnifiedDiff';
 import {
   summarizeRunCodeAction,
@@ -20,6 +21,9 @@ import {
   isTaskFamilyTool,
   inspectableTaskFromAction,
   shortTaskId,
+  askReplay,
+  askRowSummary,
+  egressRowSummary,
   type InspectTaskInput,
 } from './executed-actions-model';
 import {
@@ -59,9 +63,22 @@ export interface ExecutedAction {
    * port-only egress); none = no backend on this platform.
    */
   sandbox?: { backend?: string; enforcement: string };
+  /** Set when a session allow or an unattended allow covered this call, so the row can say so. */
+  approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number; auto?: boolean };
+  /**
+   * 工具注册时声明的卡片。`declared` 为真时行标题用 `title`，
+   * 不再按工具名猜测。旧事件没有这个字段，仍走原来的摘要。
+   */
+  view?: {
+    card: 'generic' | 'terminal' | 'diff' | 'search' | 'read' | 'web';
+    kind: string;
+    title: string;
+    declared: boolean;
+  };
+  durationMs?: number;
 }
 
-interface ExecutedActionsCardProps {
+export interface ExecutedActionsCardProps {
   actions: ExecutedAction[];
   /** Drop the outer card chrome when nested in a turn-process group. */
   compact?: boolean;
@@ -94,7 +111,7 @@ function summarizeArguments(args: unknown): string | null {
   if (typeof args === 'string') return args.length > 60 ? args.slice(0, 57) + '…' : args;
   if (typeof args !== 'object') return String(args);
   const obj = args as Record<string, unknown>;
-  for (const key of ['command', 'cmd', 'query', 'path', 'file', 'target', 'message']) {
+  for (const key of ['command', 'cmd', 'url', 'query', 'path', 'file', 'target', 'message']) {
     const v = obj[key];
     if (typeof v === 'string' && v.length > 0) {
       return v.length > 60 ? v.slice(0, 57) + '…' : v;
@@ -107,12 +124,25 @@ function sandboxBadge(sandbox: ExecutedAction['sandbox']): string | null {
   if (!sandbox) return null;
   switch (sandbox.enforcement) {
     case 'full':
-      return '[沙箱]';
+      return t('[Sandboxed]');
     case 'partial':
-      return '[沙箱·部分]';
+      return t('[Sandboxed · partial]');
     default:
-      return '[未沙箱]';
+      return t('[Not sandboxed]');
   }
+}
+
+function toolProgressNote(action: ExecutedAction): string | undefined {
+  if (action.approval?.kind === 'allow_for_session' && action.approval.cached === true) {
+    return t('Allowed for this chat');
+  }
+  if (action.tool === 'ask_user' && askReplay(action.result)?.unattended && deriveStatus(action) !== 'failed') {
+    return t('Answered automatically');
+  }
+  if (action.approval?.auto === true && deriveStatus(action) !== 'failed') {
+    return t('Auto');
+  }
+  return undefined;
 }
 
 function actionToTool(action: ExecutedAction, idx: number): ToolExecutionPayload {
@@ -124,18 +154,23 @@ function actionToTool(action: ExecutedAction, idx: number): ToolExecutionPayload
         ? humanizeDelegateError(env.error)
         : env.error
       : null;
-  // W5-2: web_search/web_fetch 用结构化中文摘要（查询词/URL + 结果计数/
-  // 状态码），其余工具走通用参数摘要。
-  const summary =
-    (action.tool === 'delegate_subagent'
-      ? summarizeDelegateSubagent(action.arguments)
-      : null) ??
-    (isTaskFamilyTool(action.tool)
-      ? summarizeTaskAction(action.tool, action.arguments, action.result)
-      : null) ??
-    summarizeRunCodeAction(action.tool, action.arguments, action.result) ??
-    summarizeWebAction(action.tool, action.arguments, action.result) ??
-    summarizeArguments(action.arguments);
+  // 追问行用第一条问题。出网行用主机名。已保存的 view.title 往往只是开场白或工具名。
+  const asked = askRowSummary(action);
+  const egress = egressRowSummary(action);
+  // 声明过的工具用 view.title。没有 view 的旧事件仍按工具名做摘要。
+  const summary = asked
+    || egress
+    || (action.view?.declared
+    ? action.view.title
+    : ((action.tool === 'delegate_subagent'
+        ? summarizeDelegateSubagent(action.arguments)
+        : null) ??
+      (isTaskFamilyTool(action.tool)
+        ? summarizeTaskAction(action.tool, action.arguments, action.result)
+        : null) ??
+      summarizeRunCodeAction(action.tool, action.arguments, action.result) ??
+      summarizeWebAction(action.tool, action.arguments, action.result) ??
+      summarizeArguments(action.arguments)));
   const badge = sandboxBadge(action.sandbox);
   return {
     id: action.id ?? `${action.tool}-${idx}`,
@@ -145,7 +180,7 @@ function actionToTool(action: ExecutedAction, idx: number): ToolExecutionPayload
     args: action.arguments,
     output: action.result,
     error: errorText,
-    durationMs: null,
+    durationMs: typeof action.durationMs === 'number' ? action.durationMs : null,
     icon: null,
     expandable: true,
   };
@@ -156,6 +191,20 @@ function actionToTool(action: ExecutedAction, idx: number): ToolExecutionPayload
  * unified `diff` (local_edit_file), render it as a coloured diff; otherwise
  * fall back to the default JSON/text view.
  */
+function renderAskOutput(output: unknown): ReactNode {
+  const replay = askReplay(output);
+  if (!replay) return renderActionOutput(output);
+  return (
+    <div className="space-y-1 text-[11px] text-agent-foreground">
+      {replay.lines.map((line, index) => (
+        <p key={`${index}-${line}`} className="whitespace-pre-wrap break-words">
+          {line}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function renderActionOutput(output: unknown): ReactNode {
   if (output && typeof output === 'object') {
     const obj = output as Record<string, unknown>;
@@ -242,7 +291,7 @@ function renderDelegateArgs(
       {profile ? (
         <section>
           <div className="mb-0.5 text-[10px] uppercase tracking-wider text-agent-muted-foreground">
-            子代理
+            {t('Subagent')}
           </div>
           <div className="text-[11px]">{displayName}</div>
         </section>
@@ -250,7 +299,7 @@ function renderDelegateArgs(
       {task ? (
         <section>
           <div className="mb-0.5 text-[10px] uppercase tracking-wider text-agent-muted-foreground">
-            任务
+            {t('Task')}
           </div>
           <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
             {task}
@@ -267,7 +316,7 @@ function renderDelegateOutput(output: unknown): ReactNode {
     return (
       <div className="space-y-1.5">
         {kvBlock(
-          '回报',
+          t('Report'),
           <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
             {env.message}
           </pre>,
@@ -276,7 +325,7 @@ function renderDelegateOutput(output: unknown): ReactNode {
     );
   }
   if (env.error || env.success === false) {
-    return <div className="text-[11px] text-agent-muted-foreground">没有文字回报</div>;
+    return <div className="text-[11px] text-agent-muted-foreground">{t('No text report')}</div>;
   }
   return renderActionOutput(output);
 }
@@ -293,11 +342,11 @@ function TaskLead() {
   );
 }
 
-const TASK_STATUS_ZH: Record<string, string> = {
-  running: '已启动',
-  blocked: '等待依赖',
-  completed: '已完成',
-  failed: '失败',
+const TASK_STATUS_LABELS: Record<string, string> = {
+  running: 'Started',
+  blocked: 'Waiting on dependencies',
+  completed: 'Completed',
+  failed: 'Failed',
 };
 
 function kvBlock(label: string, value: ReactNode): ReactNode {
@@ -321,17 +370,22 @@ function renderTaskArgs(tool: string, args: unknown): ReactNode {
       <div className="space-y-1.5">
         {parsed.task
           ? kvBlock(
-              '任务',
+              t('Task'),
               <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
                 {parsed.task}
               </pre>,
             )
           : null}
         {parsed.dependsOn.length > 0
-          ? kvBlock('依赖', parsed.dependsOn.map(shortTaskId).join('、'))
+          ? kvBlock(t('Dependencies'), parsed.dependsOn.map(shortTaskId).join(t(', ')))
           : null}
         {parsed.worktree
-          ? kvBlock('工作区', parsed.worktreeName ? `隔离 · ${parsed.worktreeName}` : '隔离')
+          ? kvBlock(
+              t('Workspace'),
+              parsed.worktreeName
+                ? t('Isolated · {name}', { name: parsed.worktreeName })
+                : t('Isolated'),
+            )
           : null}
       </div>
     );
@@ -342,10 +396,10 @@ function renderTaskArgs(tool: string, args: unknown): ReactNode {
   if (!taskId && !message) return renderActionOutput(args);
   return (
     <div className="space-y-1.5">
-      {taskId ? kvBlock('编号', <span className="font-mono">{shortTaskId(taskId)}</span>) : null}
+      {taskId ? kvBlock(t('ID'), <span className="font-mono">{shortTaskId(taskId)}</span>) : null}
       {message
         ? kvBlock(
-            '消息',
+            t('Message'),
             <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
               {message}
             </pre>,
@@ -365,32 +419,35 @@ function renderTaskOutput(output: unknown): ReactNode {
       {parsed.items.map((item, index) => (
         <div key={item.taskId ?? `task-${index}`} className="space-y-1.5">
           {item.taskId
-            ? kvBlock('编号', <span className="font-mono">{shortTaskId(item.taskId)}</span>)
+            ? kvBlock(t('ID'), <span className="font-mono">{shortTaskId(item.taskId)}</span>)
             : null}
-          {item.status ? kvBlock('状态', TASK_STATUS_ZH[item.status] ?? item.status) : null}
+          {item.status ? kvBlock(
+                t('Status'),
+                TASK_STATUS_LABELS[item.status] ? t(TASK_STATUS_LABELS[item.status]) : item.status,
+              ) : null}
           {item.task
             ? kvBlock(
-                '任务',
+                t('Task'),
                 <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
                   {item.task}
                 </pre>,
               )
             : null}
-          {item.worktreeLabel ? kvBlock('工作区', item.worktreeLabel) : null}
-          {item.hint ? kvBlock('说明', item.hint) : null}
+          {item.worktreeLabel ? kvBlock(t('Workspace'), item.worktreeLabel) : null}
+          {item.hint ? kvBlock(t('Note'), item.hint) : null}
           {item.answer
             ? kvBlock(
-                '结果',
+                t('Result'),
                 <pre className="whitespace-pre-wrap break-words rounded bg-agent-muted/40 px-2 py-1.5">
                   {item.answer}
                 </pre>,
               )
             : null}
-          {item.error ? kvBlock('原因', item.error) : null}
+          {item.error ? kvBlock(t('Reason'), item.error) : null}
         </div>
       ))}
       {parsed.hint && parsed.items.every((item) => item.hint !== parsed.hint)
-        ? kvBlock('说明', parsed.hint)
+        ? kvBlock(t('Note'), parsed.hint)
         : null}
     </div>
   );
@@ -409,11 +466,14 @@ function toolCardExtras(
     const { profile } = parseDelegateSubagent(action.arguments);
     const displayName = delegateSubagentDisplayName(profile, agents);
     return {
-      label: `委派 · ${displayName}`,
+      label: t('Delegate · {name}', { name: displayName }),
       lead: <DelegateLead name={displayName} color={delegateColor(profile, agents)} />,
       renderArgs: (args) => renderDelegateArgs(args, agents),
       renderOutput: renderDelegateOutput,
     };
+  }
+  if (action.tool === 'ask_user') {
+    return { renderOutput: renderAskOutput };
   }
   if (isTaskFamilyTool(action.tool)) {
     return {
@@ -443,16 +503,16 @@ function inspectActivate(
           chatId,
           recordId: child.recordId,
           live: child.status === 'running',
-          title: task ?? '子代理任务',
+          title: task ?? t('Subagent task'),
         }),
-      activateTitle: '查看子代理执行过程',
+      activateTitle: t('View subagent run'),
     };
   }
   const target = inspectableTaskFromAction(action.tool, action.arguments, action.result);
   if (!target) return {};
   return {
     onActivate: () => onInspectTask({ id: target.id, chatId, title: target.title }),
-    activateTitle: '查看后台执行过程',
+    activateTitle: t('View background run'),
   };
 }
 
@@ -514,6 +574,7 @@ export function ToolsFlow({
               renderOutput={extras.renderOutput ?? renderActionOutput}
               onActivate={inspect.onActivate}
               activateTitle={inspect.activateTitle}
+              note={toolProgressNote(action)}
               className="rounded-none border-0 border-t border-agent-border first:border-t-0"
             />
           );
@@ -548,15 +609,18 @@ export function ExecutedActionsCard({
             <LuCircleX className="h-3.5 w-3.5 text-agent-destructive" />
           )}
           <span className="font-medium text-agent-foreground">
-            已自动执行 {expanded.length} 个操作
+            {t('Ran {count} actions automatically', { count: expanded.length })}
           </span>
         </div>
         <span className="text-[11px] text-agent-muted-foreground">
           {runningCount > 0
-            ? `${runningCount} 执行中`
+            ? t('{count} running', { count: runningCount })
             : failureCount > 0
-              ? `${successCount} 成功 · ${failureCount} 失败`
-              : `全部成功`}
+              ? t('{success} succeeded · {failed} failed', {
+                  success: successCount,
+                  failed: failureCount,
+                })
+              : t('All succeeded')}
         </span>
       </div>
       <div className="space-y-px">
@@ -573,6 +637,7 @@ export function ExecutedActionsCard({
               renderOutput={extras.renderOutput ?? renderActionOutput}
               onActivate={inspect.onActivate}
               activateTitle={inspect.activateTitle}
+              note={toolProgressNote(action)}
               className="rounded-none border-0 border-t border-agent-border first:border-t-0"
             />
           );

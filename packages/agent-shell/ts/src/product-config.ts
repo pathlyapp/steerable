@@ -17,14 +17,6 @@ export interface ProductLinks {
   website?: string;
 }
 
-export interface ProductUpdates {
-  /**
-   * electron-updater generic 通道根地址（目录，不含 latest*.yml）。
-   * 打包配置里的 publishUrl 由产品组装根注入到这里。空则不检查更新。
-   */
-  feedUrl?: string;
-}
-
 export interface ProductConfig {
   /**
    * 云端遥测端点（insights flush 的 API base）。空 = 不上报（中性默认）；
@@ -34,13 +26,8 @@ export interface ProductConfig {
   /** 帮助菜单链接；缺省的项不渲染。 */
   links?: ProductLinks;
   /**
-   * 桌面自动更新。缺省不检查。只在已打包的应用里生效，除非
-   * `DEEPPATH_APP_UPDATE=1`。`DEEPPATH_UPDATE_FEED_URL` 可覆盖 feedUrl。
-   */
-  updates?: ProductUpdates;
-  /**
-   * BS 模式的 userData 目录名（~/ 下）。CS 模式由 Electron 按
-   * productName 分目录，不经此字段。
+   * 未设置 `DEEPPATH_USER_DATA_DIR` 时的 userData 目录名（~/ 下）。
+   * Tauri 宿主总是注入该环境变量，不经此字段。
    */
   dataDirName?: string;
   /**
@@ -55,9 +42,15 @@ export interface ProductConfig {
   hostTools?: Record<string, boolean | { capability?: boolean; chrome?: boolean }>;
   /**
    * 命令安全询问：host = 弹宿主审批；off = 本轮不挂审批。缺省 host。
-   * STEERABLE_APPROVAL=0 仍是调试逃生口。
+   * STEERABLE_APPROVAL=0 关掉本轮审批层，破坏性工具由工具路由拒绝。
+   * 需要放行时用命令行 `--approve allow-all`，不要依赖这个环境变量。
    */
   approval?: 'host' | 'off';
+  /**
+   * 白名单外出网询问：host = 弹宿主审批；off = 自动加入当前代理会话。
+   * 缺省 host。自动放行仅存活到代理进程退出，不修改持久白名单。
+   */
+  egressApproval?: 'host' | 'off';
   /**
    * 对话模式。缺省 `['agent','plan']`。只留一种时渲染层不显示切换。
    */
@@ -66,6 +59,10 @@ export interface ProductConfig {
    * 设置入口。缺省全开。`false` 藏对应侧栏页或综合设置分段。
    */
   settings?: Record<string, boolean>;
+  /**
+   * 对话与配置的导出/导入。缺省关。只有显式 `true` 的产品才有入口和接口。
+   */
+  portable?: boolean;
   /**
    * 产品钉死的大模型。`settings.llm === false` 时必填，运行时用这份，
    * 不再读设置页。密钥用 `apiKeyEnv` 指向环境变量，不要把 key 写进仓库。
@@ -94,14 +91,55 @@ export interface ProductConfig {
    * 产品预置 MCP 服务。按需引入，缺省空。已有同名服务不覆盖。
    * 设置页入口不受影响。
    */
-  builtinMcp?: Array<{
-    name: string;
-    command: string;
-    args?: string[];
-    env?: Record<string, string>;
-    cwd?: string;
-    enabled?: boolean;
-  }>;
+  builtinMcp?: Array<
+    | {
+        name: string;
+        transport?: 'stdio';
+        command: string;
+        args?: string[];
+        env?: Record<string, string>;
+        cwd?: string;
+        enabled?: boolean;
+      }
+    | {
+        name: string;
+        transport: 'streamable-http';
+        url: string;
+        headers?: Record<string, string>;
+        headersFromEnv?: Record<string, string>;
+        bearerTokenEnvVar?: string;
+        enabled?: boolean;
+      }
+  >;
+  /**
+   * P3.1 多智能体编排六件套 (agent_spawn / agent_wait / agent_send / agent_interrupt / agent_close / agent_list)。
+   * 缺省关（仅开 delegate_subagent）；设为 true 或配置对象时在回合中启用。
+   * STEERABLE_ORCHESTRATION 环境变量（'1' 开启，'0' 显式关闭）优先级更高。
+   */
+  orchestration?: boolean | { enabled?: boolean; maxDepth?: number; maxParallel?: number };
+  /**
+   * 界面语言。缺省只有 `en`。译文在应用层语言包，不在本包。
+   * `locales` 是这个产品装进包里的语言；多于一种时设置页才出现切换。
+   */
+  i18n?: {
+    locales: string[];
+    defaultLocale: string;
+  };
+  /**
+   * 无项目会话分叉时，工作区复制的字节上限。缺省 500 MiB。
+   * 超过则接口返回 413，不创建新会话。
+   */
+  forkWorkspaceMaxBytes?: number;
+  /**
+   * 模型请求是否跳过系统代理直连。缺省关（跟随系统代理）。
+   *
+   * 打开后这一端点的请求不经过用户在系统里配置的代理。用于国内常见
+   * 「开着 Clash，但模型服务本来就在直连规则里」的情形：代理多转一手
+   * 只会用更短的超时把本来能连上的请求断掉。
+   *
+   * 要求流量必须经过公司代理的环境（例如企业产品）应保持关闭。
+   */
+  directModelConnection?: boolean;
 }
 
 /** shell 内置智能体：只有产品显式 `true` 才开。 */
@@ -110,6 +148,23 @@ export function isShellBuiltinAgentEnabled(
   config: ProductConfig = getProductConfig(),
 ): boolean {
   return config.builtinAgents?.[id] === true;
+}
+
+/**
+ * 模型请求是否直连（不经过系统代理）。只有产品显式 `true` 才开。
+ *
+ * 企业产品可能要求所有出网流量经过公司代理，所以缺省是关：产品不声明
+ * 就保持跟随系统代理的旧行为。
+ */
+export function productConfigDirectConnection(
+  config: ProductConfig = getProductConfig(),
+): boolean {
+  return config.directModelConnection === true;
+}
+
+/** 对话与配置能否导出/导入。缺省关，产品必须显式打开。 */
+export function isPortableProduct(config: ProductConfig = getProductConfig()): boolean {
+  return config.portable === true;
 }
 
 /** shell 内置技能：`true` 全开；否则只有对象里显式 `true` 的目录开。 */

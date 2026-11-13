@@ -5,8 +5,9 @@
  * automation.py:_AUTOMATION_TITLE_PREFIX), so the same parser works for both.
  */
 
-export const AUTOMATION_TITLE_PREFIX = '[自动化] ';
-const BARE_BRACKET_PREFIX = '[自动化]';
+// 与后端 automation.py 的标题前缀是同一条持久化约定，不能按界面语言改写。
+export const AUTOMATION_TITLE_PREFIX = '[自动化] '; // i18n:allow
+const BARE_BRACKET_PREFIX = '[自动化]'; // i18n:allow
 
 export interface ParsedChatTitle {
   displayTitle: string;

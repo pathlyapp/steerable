@@ -1,33 +1,33 @@
 /**
  * local-api 传输契约：每个 helper 只是把调用翻译成
- * `window.electron.localBackend.request({ method, path, body? })`，自身不含
+ * `window.steerableHost.localBackend.request({ method, path, body? })`，自身不含
  * 业务逻辑。这里逐字锁定方法 / 路径 / 查询串 / body 的形状，以及：
- *   - 桥缺失时 fail-loud（调用方应先 isElectron() 判断降级）；
+ *   - 桥缺失时 fail-loud（调用方应先 hasHostBridge() 判断降级）；
  *   - 路径参数一律 encodeURIComponent（id 里的 `/`、空格不破坏路由）；
  *   - request 拒绝时错误原样抛出（不包装、不吞）；
  *   - 响应按原样透传（泛型只是编译期标注）。
- * 桥走真实的 getElectronBridge() → window.electron 路径，不 mock 模块。
+ * 桥走真实的 getHostBridge() → window.steerableHost 路径，不 mock 模块。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as api from './local-api';
 
 type RequestInput = { method: string; path: string; body?: unknown };
 
-/** 安装最小可用的 window.electron 桥，返回可断言的 request 替身。 */
+/** 安装最小可用的 window.steerableHost 桥，返回可断言的 request 替身。 */
 function installBridge() {
   const request = vi.fn<(input: RequestInput) => Promise<unknown>>();
-  (window as { electron?: unknown }).electron = { localBackend: { request } };
+  (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
   return request;
 }
 
 afterEach(() => {
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 describe('local-api 桥接前置', () => {
   it('桥缺失时 GET / POST helper 都拒绝并提示只能在桌面壳内使用', async () => {
-    await expect(api.listChats()).rejects.toThrow(/Electron bridge unavailable/);
-    await expect(api.createChat()).rejects.toThrow(/Electron bridge unavailable/);
+    await expect(api.listChats()).rejects.toThrow(/Host bridge unavailable/);
+    await expect(api.createChat()).rejects.toThrow(/Host bridge unavailable/);
   });
 
   it('request 拒绝时错误原样抛出，不包装', async () => {
@@ -175,6 +175,17 @@ describe('local-api 智能体', () => {
       path: '/api/v2/chat-agents/agent-1',
     });
   });
+
+  it('updateChatTitle 用 PATCH settings 提交标题', async () => {
+    const request = installBridge();
+    request.mockResolvedValue({ id: 'chat/1', title: '周报' });
+    await api.updateChatTitle('chat/1', '周报');
+    expect(request).toHaveBeenCalledWith({
+      method: 'PATCH',
+      path: '/api/v2/chats/chat%2F1/settings',
+      body: { title: '周报' },
+    });
+  });
 });
 
 describe('local-api 运行中回合', () => {
@@ -196,7 +207,7 @@ describe('local-api 运行中回合', () => {
 });
 
 describe('local-api 项目', () => {
-  it('listProjects / createProject / updateProject / deleteProject 各走 REST 语义', async () => {
+  it('listProjects / createProject / updateProject / deleteProject / reorderProjects 各走 REST 语义', async () => {
     const request = installBridge();
     request.mockResolvedValue({});
     await api.listProjects();
@@ -215,6 +226,12 @@ describe('local-api 项目', () => {
     });
     await api.deleteProject('proj-1');
     expect(request).toHaveBeenLastCalledWith({ method: 'DELETE', path: '/api/v2/projects/proj-1' });
+    await api.reorderProjects(['proj-2', 'proj-1']);
+    expect(request).toHaveBeenLastCalledWith({
+      method: 'PUT',
+      path: '/api/v2/projects/order',
+      body: { orderedIds: ['proj-2', 'proj-1'] },
+    });
   });
 
   it('getChatProjectContext 拉取会话的项目上下文', async () => {
@@ -327,6 +344,18 @@ describe('local-api LLM 设置与目录', () => {
     request.mockResolvedValue({ posture: null });
     await api.getSidecarSandboxPosture();
     expect(request).toHaveBeenCalledWith({ method: 'GET', path: '/api/v2/sidecar/sandbox-posture' });
+  });
+
+  it('getLlmAccount 读取供应商余额，refresh 带查询参数', async () => {
+    const request = installBridge();
+    request.mockResolvedValue({ status: 'unsupported' });
+    await api.getLlmAccount();
+    expect(request).toHaveBeenLastCalledWith({ method: 'GET', path: '/api/v2/llm/account' });
+    await api.getLlmAccount(true);
+    expect(request).toHaveBeenLastCalledWith({
+      method: 'GET',
+      path: '/api/v2/llm/account?refresh=1',
+    });
   });
 
   it('getLlmSettings / setLlmSettings 读写同一端点', async () => {

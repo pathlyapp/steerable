@@ -1,7 +1,16 @@
 name: Sidecar build
 
+# Produces one signed bundle per published target. Two callers:
+#   * `release.yml`, which needs them before publishing the platform runtime
+#     packages — a CLI without its runtime cannot start;
+#   * a `sidecar-v*` tag, for rebuilding the bundles alone.
+#
+# Artifacts are workflow-scoped, so a caller has to run these jobs in its own
+# run: `release.yml` calls this file rather than downloading from a separate
+# run.
 on:
   workflow_dispatch:
+  workflow_call:
   push:
     tags: ["sidecar-v*"]
 
@@ -12,7 +21,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          # `macos-14` is not provisioned for this repository: the job is
+          # cancelled in one second with "The configuration
+          # 'macos-14-arm64-us-default' is not supported". `macos-latest` is the
+          # arm64 image here and runs.
+          - os: macos-latest
             target: darwin-arm64
             wheel_platform: darwin-arm64
           - os: macos-15-intel
@@ -21,6 +34,11 @@ jobs:
           - os: ubuntu-24.04
             target: linux-x64
             wheel_platform: manylinux-x64
+          # arm64 Linux servers and containers. ubuntu-24.04-arm is a native
+          # arm64 runner, so the bundled interpreter needs no cross-build.
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+            wheel_platform: manylinux-arm64
           - os: windows-2022
             target: win32-x64
             wheel_platform: win32-x64
@@ -44,6 +62,23 @@ jobs:
             --artifact-lock \
             --platform ${{ matrix.wheel_platform }} \
             --out dist/py
+      - name: Confirm the runner architecture matches the target
+        # Labels like `macos-latest` can change architecture over time; a bundle
+        # built for the wrong arch installs and then fails at import. The
+        # target name is the contract, so check it before spending the build.
+        run: |
+          arch=$(python -c "import platform; print(platform.machine().lower())")
+          case "${{ matrix.target }}" in
+            darwin-arm64|linux-arm64) want="arm64|aarch64" ;;
+            darwin-x64|linux-x64|win32-x64) want="x86_64|amd64" ;;
+            *) want="" ;;
+          esac
+          if [ -n "$want" ] && ! echo "$arch" | grep -Eq "^(${want})$"; then
+            echo "::error::runner architecture '$arch' does not match target ${{ matrix.target }}"
+            exit 1
+          fi
+          echo "::notice::runner architecture $arch matches ${{ matrix.target }}"
+
       - name: Build sidecar bundle
         # 320 MB per-target size budget. The build uses the
         # `install_only_stripped` python-build-standalone variant (~300 MB

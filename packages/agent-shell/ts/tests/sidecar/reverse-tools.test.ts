@@ -123,6 +123,34 @@ describe('createToolInvokeHandler', () => {
     );
   });
 
+  it('passes source folders as additional write roots, including under a worktree fence', async () => {
+    const toolRouter = makeToolRouter('ok');
+    const handler = createToolInvokeHandler({
+      toolRouter,
+      resolveProjectRoot: () => '/repo/project',
+      resolveAdditionalWriteRoots: () => ['/repo/src'],
+    });
+
+    await handler({
+      name: 'local_write_file',
+      arguments: { path: '/repo/src/pkg/a.ts' },
+      context: {
+        mode: 'agent',
+        chatId: 'chat-9',
+        workspaceRoot: '/repo/project/.steerable/worktrees/demo',
+      },
+    });
+
+    expect(toolRouter.execute).toHaveBeenCalledWith(
+      { name: 'local_write_file', arguments: { path: '/repo/src/pkg/a.ts' } },
+      {
+        projectRoot: '/repo/project/.steerable/worktrees/demo',
+        chatId: 'chat-9',
+        additionalWriteRoots: ['/repo/src'],
+      },
+    );
+  });
+
   it('passes chatId-only exec context when the chat has no project binding', async () => {
     const toolRouter = makeToolRouter('ok');
     const handler = createToolInvokeHandler({
@@ -313,6 +341,29 @@ describe('createToolInvokeHandler', () => {
 
     expect(out.success).toBe(true);
     expect(JSON.stringify(out).length).toBeLessThanOrEqual(8000);
+  });
+
+  it('preserves image content while capping only model-visible text', async () => {
+    const image = { b64: 'a'.repeat(20_000), media_type: 'image/jpeg' };
+    const toolRouter = makeToolRouter({
+      success: true,
+      data: {
+        width: 500,
+        height: 300,
+        sourcePath: '/tmp/slide.png',
+        content: 'x'.repeat(300_000),
+        _image: image,
+      },
+    });
+    const handler = createToolInvokeHandler({ toolRouter });
+
+    const out = (await handler({
+      name: 'view_image',
+      arguments: { path: '/tmp/slide.png' },
+    })) as { data: { content: string; _image: typeof image } };
+
+    expect(out.data._image).toEqual(image);
+    expect(out.data.content.length).toBeLessThan(300_000);
   });
 
   it('falls back to a truncation envelope for pathological shapes', async () => {

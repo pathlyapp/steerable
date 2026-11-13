@@ -1,5 +1,10 @@
 {
   "version": 1,
+  "compatibility": {
+    "coreloopApi": 1,
+    "sidecarProtocol": "0.1.0",
+    "egressCli": 1
+  },
   "pyo3Surface": {
     "steerable_agent_runtime": [
       "CoreLoop",
@@ -105,6 +110,7 @@
     "skills.list",
     "trace.fetch",
     "trace.export",
+    "metrics.export",
     "config.get",
     "config.set",
     "compat.describe",
@@ -113,6 +119,7 @@
     "plugin.enable",
     "plugin.disable",
     "plugin.reload",
+    "plugin.tools.describe",
     "presets.describe",
     "presets.resolve",
     "catalog.describe",
@@ -126,6 +133,8 @@
     "agent.session.fork",
     "agent.session.branches",
     "agent.session.tree",
-    "agent.session.messages"
+    "agent.session.messages",
+    "agent.children.list",
+    "agent.children.interrupt"
   ]
 }

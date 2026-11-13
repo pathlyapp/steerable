@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SSEEvent } from '@steerable/agent-protocol';
 import type { AgentOutletContext } from '@/layouts/AgentLayout';
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
+import { resetProjectsStoreForTests } from '@/hooks/useProjects';
 
 const electronState = { active: true };
 const bridgeRequest = vi.fn();
@@ -37,10 +38,11 @@ const listChatTasks = vi.fn();
 const getLlmModels = vi.fn();
 const getLlmSettings = vi.fn();
 const trackBehavior = vi.fn();
+const packEventHandlers = new Map<string, (value: unknown) => void>();
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => electronState.active,
-  getElectronBridge: () =>
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => electronState.active,
+  getHostBridge: () =>
     electronState.active
       ? {
           runtime: 'local',
@@ -69,12 +71,25 @@ vi.mock('@/lib/electron-bridge', () => ({
               if (suggestedRepliesHandler === callback) suggestedRepliesHandler = null;
             };
           },
+          onPackEvent: (event: string, callback: (value: unknown) => void) => {
+            packEventHandlers.set(event, callback);
+            return () => {
+              if (packEventHandlers.get(event) === callback) packEventHandlers.delete(event);
+            };
+          },
         }
       : null,
 }));
 
 vi.mock('@/lib/local-api', () => ({
   getChatLiveStream: (chatId: string) => getChatLiveStream(chatId),
+  openLocalPath: vi.fn(async () => ({ success: true })),
+  getLocalFileDownload: vi.fn(async () => ({
+    fileName: '报告.docx',
+    mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    size: 1024,
+    base64: 'QkFTRTY0',
+  })),
   listProjects: () => listProjects(),
   listChatTasks: (chatId: string) => listChatTasks(chatId),
   getLlmModels: (draft?: unknown) => getLlmModels(draft),
@@ -88,6 +103,7 @@ vi.mock('@/lib/local-api', () => ({
   setProjectTrusted: vi.fn(async () => ({ success: true })),
   updateChatProject: vi.fn(async () => ({ id: 'chat-1', projectId: null })),
   updateProject: vi.fn(async () => ({ success: true })),
+  getChat: vi.fn(async () => ({ id: 'chat-1', title: 'Chat', forkedFrom: null })),
   getChatBranches: vi.fn(async () => ({ activeRecordId: 'r1', lineage: [], children: [] })),
   activateChatBranch: vi.fn(async () => ({ activeRecordId: 'r1', messageCount: 0 })),
   getChatBranchTree: vi.fn(async () => ({
@@ -101,12 +117,12 @@ vi.mock('@/lib/local-api', () => ({
 }));
 
 vi.mock('@/lib/chat-transport', () => ({
-  createElectronChatTransport: () => ({
+  createHostChatTransport: () => ({
     stream: (
       input: { content: string; metadata?: Record<string, unknown> },
       onEvent: (event: SSEEvent) => void,
     ) => streamMock(input, onEvent),
-    steer: (content: string) => steerMock(content),
+    steer: (content: string, options?: { execPolicy?: string }) => steerMock(content, options),
     cancelActive: () => cancelActiveMock(),
   }),
   regenerateChatMessage: (chatId: string, messageId: string) =>
@@ -156,6 +172,7 @@ function makeCtx(overrides: Partial<AgentOutletContext> = {}): AgentOutletContex
     createChat: vi.fn(async () => 'chat-new'),
     deleteChat: vi.fn(async () => true),
     patchChatTitle: vi.fn(),
+    patchChatUpdatedAt: vi.fn(),
     isLoadingMoreChats: false,
     hasMoreChats: false,
     loadMoreChats: vi.fn(async () => {}),
@@ -164,7 +181,8 @@ function makeCtx(overrides: Partial<AgentOutletContext> = {}): AgentOutletContex
     inspectTask: vi.fn(),
     chatSlots: [],
     rightPanel: null,
-    onToggleChatSlot: vi.fn(),
+    openPanelIds: [],
+    onOpenRightPanel: vi.fn(),
     ...overrides,
   };
 }
@@ -267,10 +285,12 @@ function pressEnter() {
 }
 
 beforeEach(() => {
+  resetProjectsStoreForTests();
   vi.clearAllMocks();
   localStorage.clear();
   electronState.active = true;
   suggestedRepliesHandler = null;
+  packEventHandlers.clear();
   bridgeRequest.mockImplementation(defaultBridgeRequest);
   getChatLiveStream.mockResolvedValue({ active: false });
   listProjects.mockResolvedValue({ projects: [] });
@@ -289,11 +309,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('AgentPage 落地页（EmptyChatGate）', () => {
-  it('无 chatId 时渲染落地页：品牌标题、副标题与输入框', async () => {
+  it('无 chatId 时渲染落地页：品牌 logo、副标题与输入框', async () => {
     renderPage('/agent', makeCtx());
     await screen.findByTestId('empty-chat-home');
-    expect(screen.getByText('Steerable Shell')).toBeTruthy();
-    expect(screen.getByText('输入消息，直接开始一段新对话。')).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Steerable Shell' })).toBeTruthy();
+    expect(screen.queryByText('Steerable Shell')).toBeNull();
+    expect(screen.getByText('Type a message to start a new chat.')).toBeTruthy();
     expect(screen.getByRole('textbox')).toBeTruthy();
   });
 
@@ -351,7 +372,7 @@ describe('AgentPage 落地页（EmptyChatGate）', () => {
     await waitFor(() =>
       expect(streamMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          content: '这是什么文件\n\n---\n关联文件:\n- `/data/attachments/chat-new/纪要.docx`',
+          content: '这是什么文件\n\n---\nRelated files:\n- `/data/attachments/chat-new/纪要.docx`',
         }),
         expect.any(Function),
       ),
@@ -377,7 +398,7 @@ describe('AgentPage 落地页（EmptyChatGate）', () => {
     await typeComposer('hello');
     pressEnter();
     expect((await screen.findByRole('alert')).textContent).toContain('磁盘已满');
-    expect(screen.queryByText('正在创建对话…')).toBeNull();
+    expect(screen.queryByText('Creating chat…')).toBeNull();
     // 未跳转
     expect(screen.getByTestId('loc').textContent).toBe('/agent');
   });
@@ -388,7 +409,7 @@ describe('AgentPage 落地页（EmptyChatGate）', () => {
     await screen.findByTestId('empty-chat-home');
     await typeComposer('hello');
     pressEnter();
-    expect((await screen.findByRole('alert')).textContent).toContain('创建对话失败，请重试');
+    expect((await screen.findByRole('alert')).textContent).toContain('Failed to create the chat. Please try again.');
   });
 
   it('带 ?projectId= 进入时创建会话携带项目', async () => {
@@ -407,7 +428,7 @@ describe('AgentPage 落地页（EmptyChatGate）', () => {
     const ctx = makeCtx();
     renderPage('/agent', ctx);
     await screen.findByTestId('empty-chat-home');
-    expect(screen.getByText(/浏览器预览模式/)).toBeTruthy();
+    expect(screen.getByText(/Browser preview mode/)).toBeTruthy();
     await typeComposerDisabled('hello');
     pressEnter();
     expect(ctx.createChat).not.toHaveBeenCalled();
@@ -426,7 +447,7 @@ describe('AgentPage 水合层（AgentChatLoader）', () => {
       return defaultBridgeRequest(input);
     });
     renderPage('/agent/chat-1', makeCtx());
-    expect(await screen.findByText('加载对话历史…')).toBeTruthy();
+    expect(await screen.findByText('Loading chat history…')).toBeTruthy();
 
     // 后端按 createdAt DESC 返回（最新在前），页面应翻正为 ASC。
     resolveMessages({
@@ -467,7 +488,7 @@ describe('AgentPage 水合层（AgentChatLoader）', () => {
       return defaultBridgeRequest(input);
     });
     renderPage('/agent/chat-1', makeCtx());
-    expect((await screen.findByText(/加载对话历史失败/)).textContent).toContain('数据库锁定');
+    expect((await screen.findByText(/Failed to load chat history/)).textContent).toContain('数据库锁定');
     expect(screen.getByRole('textbox')).toBeTruthy();
   });
 
@@ -475,7 +496,7 @@ describe('AgentPage 水合层（AgentChatLoader）', () => {
     electronState.active = false;
     renderPage('/agent/chat-1', makeCtx());
     expect(await screen.findByRole('textbox')).toBeTruthy();
-    expect(screen.queryByText('加载对话历史…')).toBeNull();
+    expect(screen.queryByText('Loading chat history…')).toBeNull();
     expect(bridgeRequest).not.toHaveBeenCalled();
   });
 
@@ -595,15 +616,67 @@ describe('AgentPage 发送流程', () => {
     await typeComposer('讲个故事');
     pressEnter();
 
-    const stop = await screen.findByRole('button', { name: '停止生成' });
+    const stop = await screen.findByRole('button', { name: 'Stop generating' });
     expect(await screen.findByText('部分回复')).toBeTruthy();
     fireEvent.click(stop);
     expect(cancelActiveMock).toHaveBeenCalled();
-    // 前端状态复位：停止按钮回到发送按钮
-    await screen.findByRole('button', { name: '发送消息' });
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeTruthy();
     await act(async () => {
       finishStream();
     });
+    await screen.findByRole('button', { name: 'Send message' });
+  });
+
+  it('排队和插队读取当前命令沙箱档', async () => {
+    let finishStream: () => void = () => {};
+    streamMock.mockImplementation((_input: unknown, onEvent: (event: SSEEvent) => void) => {
+      if (streamMock.mock.calls.length === 1) {
+        onEvent({ type: 'content', content: '部分回复' });
+        onEvent({
+          type: 'agent',
+          event: 'turn_timeline',
+          payload: { blocks: [{ type: 'text', content: '部分回复' }] },
+        });
+        return new Promise<void>((resolve) => {
+          finishStream = resolve;
+        });
+      }
+      emitTextReply(onEvent, '下一条');
+    });
+    renderPage('/agent/chat-1', makeCtx());
+    await screen.findByRole('textbox');
+    await typeComposer('先说');
+    pressEnter();
+    await screen.findByText('部分回复');
+
+    fireEvent.click(screen.getByTestId('exec-policy-picker'));
+    fireEvent.click(screen.getByTestId('exec-policy-full'));
+
+    await typeComposer('排队这条');
+    await waitFor(() => expect(screen.getByRole('textbox').textContent).toBe('排队这条'));
+    pressEnter();
+    await waitFor(() => expect(screen.getByRole('textbox').textContent).toBe(''));
+
+    await typeComposer('插一句');
+    await waitFor(() => expect(screen.getByRole('textbox').textContent).toBe('插一句'));
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', metaKey: true });
+    await waitFor(() =>
+      expect(steerMock).toHaveBeenCalledWith('插一句', { execPolicy: 'full' }),
+    );
+
+    await act(async () => {
+      finishStream();
+    });
+    await waitFor(() => expect(streamMock).toHaveBeenCalledTimes(2));
+    expect(streamMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ metadata: expect.objectContaining({ execPolicy: 'workspace' }) }),
+    );
+    expect(streamMock.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        content: '排队这条',
+        metadata: expect.objectContaining({ execPolicy: 'full' }),
+      }),
+    );
   });
 
   it('流式传输出错时错误落进助手消息', async () => {
@@ -617,8 +690,11 @@ describe('AgentPage 发送流程', () => {
     await typeComposer('你好');
     pressEnter();
     // useChatStream 把错误打成 "[stream error] ..." 内容，AssistantMessage 的
-    // readTurnFailure 剥掉前缀后渲染成错误气泡「请求失败：…」。
-    expect((await screen.findByText(/请求失败/)).textContent).toContain('网关超时');
+    // readTurnFailure 剥掉前缀后渲染失败卡片。live 路径没有分类信息，所以
+    // 显示通用标题，原始文本在「详情」里（这里是唯一能看到它的地方）。
+    expect(await screen.findByText('Reply failed')).toBeTruthy();
+    fireEvent.click(screen.getByText('Details'));
+    expect(screen.getByTestId('turn-failure-details').textContent).toContain('网关超时');
   });
 
   it('挂载时向布局注册发送器，卸载时注销', async () => {
@@ -650,7 +726,7 @@ describe('AgentPage 发送流程', () => {
       return defaultBridgeRequest(input);
     });
     renderPage('/agent/chat-1', makeCtx());
-    fireEvent.click(await screen.findByRole('button', { name: '分享对话截图' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Share chat screenshot' }));
     await waitFor(() => expect(captureScreenshot).toHaveBeenCalled());
   });
 });
@@ -679,7 +755,7 @@ describe('AgentPage 中断恢复卡（W7-1）', () => {
   it('上一轮中断时展示恢复卡，「继续上次回复」走 resume 通道', async () => {
     hydrateInterrupted();
     renderPage('/agent/chat-1', makeCtx());
-    fireEvent.click(await screen.findByRole('button', { name: '继续上次回复' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue last reply' }));
     await waitFor(() =>
       expect(streamMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -692,16 +768,16 @@ describe('AgentPage 中断恢复卡（W7-1）', () => {
     // resume 不追加用户消息：列表里仍只有「之前的问题」一条用户消息
     expect(screen.getAllByText('之前的问题')).toHaveLength(1);
     await waitFor(() =>
-      expect(screen.queryByRole('button', { name: '继续上次回复' })).toBeNull(),
+      expect(screen.queryByRole('button', { name: 'Continue last reply' })).toBeNull(),
     );
   });
 
   it('「忽略」仅本次挂载隐藏中断卡，不发起 resume', async () => {
     hydrateInterrupted();
     renderPage('/agent/chat-1', makeCtx());
-    fireEvent.click(await screen.findByRole('button', { name: '忽略' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss' }));
     await waitFor(() =>
-      expect(screen.queryByRole('button', { name: '继续上次回复' })).toBeNull(),
+      expect(screen.queryByRole('button', { name: 'Continue last reply' })).toBeNull(),
     );
     expect(streamMock).not.toHaveBeenCalled();
   });
@@ -725,7 +801,7 @@ describe('AgentPage plan 模式操作条', () => {
     fireEvent.click(execute);
     await waitFor(() =>
       expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({ content: '请按照上面的计划开始执行。' }),
+        expect.objectContaining({ content: 'Start executing the plan above.' }),
         expect.any(Function),
       ),
     );
@@ -746,6 +822,61 @@ describe('AgentPage plan 模式操作条', () => {
   });
 });
 
+describe('AgentPage 侧栏正在生成指示', () => {
+  function listenStreaming(chatId: string) {
+    const flags: boolean[] = [];
+    const onChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ chatId: string; isStreaming: boolean }>).detail;
+      if (detail?.chatId === chatId) flags.push(detail.isStreaming);
+    };
+    window.addEventListener('chat:streaming-change', onChange);
+    return {
+      flags,
+      stop() {
+        window.removeEventListener('chat:streaming-change', onChange);
+      },
+    };
+  }
+
+  it('本页回合结束时通知侧栏停止正在生成', async () => {
+    const events = listenStreaming('chat-1');
+    try {
+      renderPage('/agent/chat-1', makeCtx());
+      await screen.findByRole('textbox');
+      await typeComposer('你好');
+      pressEnter();
+      await screen.findByText('默认回复');
+      await waitFor(() => expect(events.flags.at(-1)).toBe(false));
+    } finally {
+      events.stop();
+    }
+  });
+
+  it('切走时回合仍在流式，不把侧栏指示清成结束', async () => {
+    let release: (() => void) | undefined;
+    streamMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const events = listenStreaming('chat-1');
+    try {
+      const view = renderPage('/agent/chat-1', makeCtx());
+      await screen.findByRole('textbox');
+      await typeComposer('做一个自我介绍');
+      pressEnter();
+      await screen.findByRole('button', { name: 'Stop generating' });
+      expect(events.flags.at(-1)).toBe(true);
+      view.unmount();
+      expect(events.flags.at(-1)).toBe(true);
+      release?.();
+    } finally {
+      events.stop();
+    }
+  });
+});
+
 describe('AgentPage 远端回合恢复', () => {
   it('切回时远端回合仍在运行：叠加显示运行中的部分内容', async () => {
     getChatLiveStream.mockResolvedValue({
@@ -756,7 +887,49 @@ describe('AgentPage 远端回合恢复', () => {
     renderPage('/agent/chat-1', makeCtx());
     expect(await screen.findByText('远端正在输出')).toBeTruthy();
     // 远端运行中等同流式：输入区显示停止按钮
-    expect(await screen.findByRole('button', { name: '停止生成' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Stop generating' })).toBeTruthy();
+  });
+
+  it('后端主动回合广播开始流式状态，结束后重新水合消息', async () => {
+    let finished = false;
+    bridgeRequest.mockImplementation((input: { method: string; path: string }) => {
+      if (input.path.includes('/messages')) {
+        return Promise.resolve({
+          messages: finished
+            ? [{
+                id: 'a-wake',
+                chatId: 'chat-1',
+                role: 'assistant',
+                content: '后台目标已继续',
+                createdAt: '2026-09-01T08:06:00.000Z',
+              }]
+            : [],
+          interrupted: false,
+        });
+      }
+      return defaultBridgeRequest(input);
+    });
+    renderPage('/agent/chat-1', makeCtx());
+    await screen.findByRole('textbox');
+
+    const liveStreamCallsBeforeStart = getChatLiveStream.mock.calls.length;
+    getChatLiveStream.mockResolvedValue({ active: false });
+    act(() => {
+      packEventHandlers.get('chat-turn-started')?.({ chatId: 'chat-1' });
+    });
+    expect(await screen.findByRole('button', { name: 'Stop generating' })).toBeTruthy();
+    await waitFor(() => {
+      expect(getChatLiveStream.mock.calls.length).toBeGreaterThan(liveStreamCallsBeforeStart);
+    });
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeTruthy();
+
+    finished = true;
+    getChatLiveStream.mockResolvedValue({ active: false });
+    act(() => {
+      packEventHandlers.get('chat-turn-finished')?.({ chatId: 'chat-1' });
+    });
+    expect(await screen.findByText('后台目标已继续')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Send message' })).toBeTruthy();
   });
 });
 

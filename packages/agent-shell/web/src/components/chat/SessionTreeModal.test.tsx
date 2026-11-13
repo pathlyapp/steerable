@@ -14,7 +14,7 @@ import { SessionTreeModal } from './SessionTreeModal';
 
 afterEach(() => {
   cleanup();
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 const TREE_RESPONSE: ChatBranchTreeResponse = {
@@ -67,7 +67,7 @@ function installBridge(treeResponse: ChatBranchTreeResponse | null = TREE_RESPON
     }
     return Promise.reject(new Error(`unexpected request: ${input.method} ${input.path}`));
   });
-  (window as { electron?: unknown }).electron = { localBackend: { request } };
+  (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
   return { request };
 }
 
@@ -76,7 +76,7 @@ describe('SessionTreeModal', () => {
     installBridge();
     render(<SessionTreeModal chatId="chat_1" onClose={() => {}} />);
 
-    await waitFor(() => expect(screen.queryByText('正在加载分支…')).toBeNull());
+    await waitFor(() => expect(screen.queryByText('Loading branches...')).toBeNull());
 
     const rows = screen.getAllByRole('button').filter((b) => b.hasAttribute('data-tree-row'));
     expect(rows).toHaveLength(4);
@@ -143,7 +143,7 @@ describe('SessionTreeModal', () => {
     });
     render(<SessionTreeModal chatId="chat_1" onClose={() => {}} />);
 
-    await waitFor(() => screen.getByText(/重新生成回复后，旧版本会保留在这里/));
+    await waitFor(() => screen.getByText(/After you regenerate a reply, the old version is kept here/));
     expect(screen.queryAllByRole('button').filter((b) => b.hasAttribute('data-tree-row')))
       .toHaveLength(0);
   });

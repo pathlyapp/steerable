@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, ClassVar
 
 import pytest
 from steerable_agent_protocol.generated import ToolCall
@@ -21,10 +22,12 @@ class _ScriptedProvider:
         script: list[list[LLMStreamChunk]],
         fail_on: set[int] | None = None,
         fail_after_content_on: set[int] | None = None,
+        failure: BaseException | None = None,
     ):
         self._script = script
         self._fail_on = fail_on or set()
         self._fail_after_content_on = fail_after_content_on or set()
+        self._failure = failure
         self.attempts = 0
         self._round = 0
         self.stream_kwargs: list[dict] = []
@@ -42,7 +45,7 @@ class _ScriptedProvider:
 
         async def _gen():
             if attempt in self._fail_on:
-                raise RuntimeError("upstream blew up")
+                raise self._failure or RuntimeError("upstream blew up")
                 yield  # pragma: no cover — make this a generator
             self._round += 1
             for chunk in chunks:
@@ -85,7 +88,11 @@ class _CapturingTransport:
 
 
 def _make_sidecar(provider: _ScriptedProvider, **kwargs) -> Sidecar:
-    sidecar = Sidecar(llm_provider_factory=lambda _params: provider, **kwargs)
+    sidecar = Sidecar(
+        llm_provider_factory=kwargs.pop("llm_provider_factory", None)
+        or (lambda _params: provider),
+        **kwargs,
+    )
     sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
     return sidecar
 
@@ -359,6 +366,243 @@ async def test_coreloop_path_reports_terminal_failure() -> None:
     assert len(errors) == 1
     assert done[0]["ok"] is False
     assert done[0]["status"] == "failed"
+    # The provider classification travels beside the legacy exception class so
+    # the host picks user-facing copy by category instead of parsing text. The
+    # scripted provider raises a bare RuntimeError, which classifies as unknown.
+    assert errors[0]["kind"] == "LoopError"
+    assert errors[0]["errorKind"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_stream_error_forwards_the_engine_failure_detail() -> None:
+    """`proxy` / `attempts` reach the host when the engine reports them.
+
+    Driven through `_emit_loop_event` rather than a live stream: the fields
+    come from the Rust engine, so a Python-only test would be asserting on the
+    installed wheel's version rather than on this module's forwarding.
+    """
+
+    class _Event:
+        kind = "error"
+        data: ClassVar[dict] = {
+            "message": "openai_compat: transport error: ConnectError",
+            "kind": "transport",
+            "proxy": "http://127.0.0.1:7890",
+            "attempts": 5,
+            "round": 9,
+        }
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit_notification(self, method: str, payload: dict) -> None:
+            self.events.append((method, payload))
+
+    transport = _Transport()
+    await Sidecar._emit_loop_event(
+        transport, "stream-1", _Event(), "trace-1", model="fake"
+    )
+
+    assert transport.events == [
+        (
+            "stream.error",
+            {
+                "streamId": "stream-1",
+                "kind": "LoopError",
+                "message": "openai_compat: transport error: ConnectError",
+                "traceId": "trace-1",
+                "errorKind": "transport",
+                "proxy": "http://127.0.0.1:7890",
+                "attempts": 5,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_error_omits_detail_the_engine_did_not_send() -> None:
+    """Absent fields stay absent; an empty value would read as "direct"."""
+
+    class _Event:
+        kind = "error"
+        data: ClassVar[dict] = {"message": "boom", "kind": "unknown"}
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit_notification(self, method: str, payload: dict) -> None:
+            self.events.append((method, payload))
+
+    transport = _Transport()
+    await Sidecar._emit_loop_event(transport, "stream-1", _Event(), None)
+
+    payload = transport.events[0][1]
+    assert "proxy" not in payload
+    assert "attempts" not in payload
+    assert payload["errorKind"] == "unknown"
+
+
+class _DoneEvent:
+    """A terminal completion, the only event that carries a usage roll-up."""
+
+    kind = "completion"
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        self.data = data
+
+
+class _RecordingTransport:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    async def emit_notification(self, method: str, payload: dict) -> None:
+        self.events.append((method, payload))
+
+
+_DONE_BASE = {
+    "status": "completed",
+    "reason": "stop",
+    "usage": {
+        "promptTokens": 1000,
+        "completionTokens": 100,
+        "totalTokens": 1100,
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_done_folds_the_children_share_into_usage() -> None:
+    """A host reading the turn's cost must not have to walk the registry (R5)."""
+    transport = _RecordingTransport()
+
+    await Sidecar._emit_loop_event(
+        transport,
+        "stream-1",
+        _DoneEvent(dict(_DONE_BASE)),
+        "trace-1",
+        model="fake",
+        child_usage=lambda: (
+            [
+                {
+                    "childId": "0.1",
+                    "promptTokens": 500,
+                    "completionTokens": 50,
+                    "totalTokens": 550,
+                },
+                {
+                    "childId": "0.2",
+                    "promptTokens": 300,
+                    "completionTokens": 30,
+                    "totalTokens": 330,
+                },
+            ],
+            0,
+        ),
+    )
+
+    usage = transport.events[0][1]["usage"]
+    # The parent's own numbers stay exactly as the loop reported them.
+    assert usage["promptTokens"] == 1000
+    assert usage["totalTokens"] == 1100
+    # And the children's share arrives as its own, additive set of fields.
+    assert usage["childPromptTokens"] == 800
+    assert usage["childCompletionTokens"] == 80
+    assert usage["childTotalTokens"] == 880
+    assert [child["childId"] for child in usage["children"]] == ["0.1", "0.2"]
+
+
+@pytest.mark.asyncio
+async def test_done_marks_a_partial_bill_when_a_child_reported_nothing() -> None:
+    """Missing spend is named, not silently added as zero."""
+    transport = _RecordingTransport()
+
+    await Sidecar._emit_loop_event(
+        transport,
+        "stream-1",
+        _DoneEvent(dict(_DONE_BASE)),
+        "trace-1",
+        model="fake",
+        child_usage=lambda: (
+            [
+                {
+                    "childId": "0.1",
+                    "promptTokens": 500,
+                    "completionTokens": 50,
+                    "totalTokens": 550,
+                }
+            ],
+            1,
+        ),
+    )
+
+    usage = transport.events[0][1]["usage"]
+    assert usage["unknownUsageChildren"] == 1
+    assert usage["childTotalTokens"] == 550
+
+
+@pytest.mark.asyncio
+async def test_done_keeps_usage_unchanged_without_a_child_split() -> None:
+    """A turn that delegated nothing gets the historical payload, byte for byte."""
+    transport = _RecordingTransport()
+
+    await Sidecar._emit_loop_event(
+        transport,
+        "stream-1",
+        _DoneEvent(dict(_DONE_BASE)),
+        "trace-1",
+        model="fake",
+    )
+
+    usage = transport.events[0][1]["usage"]
+    assert set(usage) == {"promptTokens", "completionTokens", "totalTokens"}
+
+
+@pytest.mark.asyncio
+async def test_done_reports_unknown_children_even_when_none_billed() -> None:
+    """One external child and no local ones: the total is partial, not zero."""
+    transport = _RecordingTransport()
+
+    await Sidecar._emit_loop_event(
+        transport,
+        "stream-1",
+        _DoneEvent(dict(_DONE_BASE)),
+        "trace-1",
+        model="fake",
+        child_usage=lambda: ([], 2),
+    )
+
+    usage = transport.events[0][1]["usage"]
+    assert usage["unknownUsageChildren"] == 2
+    assert "children" not in usage
+
+
+@pytest.mark.asyncio
+async def test_done_carries_the_tree_budget_report_when_one_exists() -> None:
+    """`treeUsage` is the whole tree's spend; absent means "no limit asked for"."""
+    from steerable_agent_runtime import TreeBudget
+
+    budget = TreeBudget(limit=5000)
+    budget.charge(LLMUsage(prompt_tokens=700, completion_tokens=0, total_tokens=700), agent="0.1")
+    transport = _RecordingTransport()
+
+    await Sidecar._emit_loop_event(
+        transport,
+        "stream-1",
+        _DoneEvent(dict(_DONE_BASE)),
+        "trace-1",
+        model="fake",
+        tree_report=lambda: {
+            "limit": budget.report().limit,
+            "spent": budget.report().spent,
+            "byAgent": budget.report().by_agent,
+        },
+    )
+    tree = transport.events[0][1]["treeUsage"]
+    assert tree["limit"] == 5000
+    assert tree["spent"] == 700
+    assert tree["byAgent"] == {"0.1": 700}
 
 
 @pytest.mark.asyncio
@@ -1053,19 +1297,22 @@ async def test_chat_fork_unknown_trace_errors() -> None:
 
 
 def test_build_loop_config_default_budget_scales_with_rounds_and_window() -> None:
-    """No explicit budgetTokens → enough for max_rounds rounds of a fully
-    cache-hit window, so the cumulative token axis stays a backstop behind
-    max_rounds instead of capping the round count. Explicit budgetTokens
-    still wins."""
+    """No round cap and no budgetTokens → no token budget, so a long task
+    is not stopped by a derived wall. An explicit maxRounds still scales
+    the token backstop with that cap. Explicit budgetTokens still wins."""
+    from steerable_sidecar.loop_limits import UNLIMITED_LOOP_LIMIT
     from steerable_sidecar.sidecar import _build_loop_config
 
     cfg = _build_loop_config({"model": "deepseek-v4"})
-    assert cfg.budget is not None
-    assert cfg.budget.max_tokens == 80 * 131_072 // 10
+    assert cfg.max_rounds == UNLIMITED_LOOP_LIMIT
+    assert cfg.budget is None
 
     cfg_unknown = _build_loop_config({})
-    assert cfg_unknown.budget is not None
-    assert cfg_unknown.budget.max_tokens == 80 * 60_000 // 10
+    assert cfg_unknown.budget is None
+
+    capped = _build_loop_config({"model": "deepseek-v4", "maxRounds": 80})
+    assert capped.budget is not None
+    assert capped.budget.max_tokens == 80 * 131_072 // 10
 
     cfg_explicit = _build_loop_config({"model": "deepseek-v4", "budgetTokens": 50_000})
     assert cfg_explicit.budget is not None
@@ -1093,16 +1340,17 @@ def test_build_loop_config_tool_timeout_wiring() -> None:
 
 def test_build_loop_config_loop_limits_follow_harness_spec() -> None:
     """W3.4.2.4 precedence: explicit request param > the bundled default
-    spec's `loop:` section (80/16/false) > the entrypoint baseline. The
-    budget's max_steps follows the resolved max_rounds."""
+    spec's `loop:` section > the entrypoint baseline. The bundled spec
+    omits both caps, so the baseline (no cap) is what a turn runs with.
+    An explicit round cap still sets the budget's max_steps."""
+    from steerable_sidecar.loop_limits import UNLIMITED_LOOP_LIMIT
     from steerable_sidecar.sidecar import _build_loop_config
 
     cfg = _build_loop_config({})
-    assert cfg.max_rounds == 80
-    assert cfg.max_tool_errors == 16
+    assert cfg.max_rounds == UNLIMITED_LOOP_LIMIT
+    assert cfg.max_tool_errors == UNLIMITED_LOOP_LIMIT
     assert cfg.tool_dedup is False
-    assert cfg.budget is not None
-    assert cfg.budget.max_steps == 80
+    assert cfg.budget is None
 
     explicit = _build_loop_config({"maxRounds": 12, "maxToolErrors": 5})
     assert explicit.max_rounds == 12
@@ -1309,6 +1557,57 @@ async def test_subagent_on_by_default() -> None:
 
 
 @pytest.mark.asyncio
+async def test_profile_reasoning_effort_rebuilds_the_child_provider() -> None:
+    """`profiles[].reasoningEffort` reaches the host's provider factory (R6).
+
+    Asserted through the factory the sidecar itself built, because that is the
+    only place the override is observable: `default_llm_provider_factory`
+    validates the level there, so a profile pinning an unsupportable one fails
+    at spawn instead of being silently dropped from the wire body.
+    """
+    seen: list[dict[str, Any]] = []
+
+    scripted = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="d1",
+                    name="delegate_subagent",
+                    arguments={"task": "look it up", "subagent_type": "terse"},
+                )
+            ),
+            _text_round("parent final"),
+        ]
+    )
+
+    def factory(params: dict[str, Any]) -> Any:
+        seen.append(dict(params))
+        # The parent is the first call (it carries the request's own effort);
+        # every later call is a child rebuilt at the profile's level.
+        return scripted if len(seen) == 1 else _ScriptedProvider([_text_round("ok")])
+
+    sidecar = _make_sidecar(scripted, llm_provider_factory=factory)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "parent-model",
+            "baseUrl": "http://127.0.0.1:1/v1",
+            "messages": [{"role": "user", "content": "delegate"}],
+            "useCoreLoop": True,
+            "reasoningEffort": "high",
+            "subagent": {
+                "profiles": {"terse": {"reasoningEffort": "low"}},
+            },
+        },
+    )
+
+    # The child's factory call carries the profile's level, not the parent's.
+    assert seen[-1]["model"] == "parent-model"
+    assert seen[-1]["reasoningEffort"] == "low"
+    assert seen[-1]["baseUrl"] == "http://127.0.0.1:1/v1"
+@pytest.mark.asyncio
 async def test_subagent_disabled_with_explicit_false() -> None:
     """``params.subagent: false`` turns the default delegation seam off."""
     provider = _ScriptedProvider([_text_round("plain")])
@@ -1362,7 +1661,7 @@ async def test_subagent_profiles_advertise_subagent_type_enum() -> None:
 async def test_subagent_profile_omitting_max_rounds_inherits_parent_loop(
     monkeypatch,
 ) -> None:
-    """A profile that does not pin maxRounds uses the parent spec (80 / 16),
+    """A profile that does not pin maxRounds uses the parent loop (no cap),
     not the SubagentConfig default of 8 rounds / 3 consecutive tool errors."""
     from steerable_agent_runtime.subagent import SubagentConfig, SubagentRegistry
 
@@ -1393,10 +1692,12 @@ async def test_subagent_profile_omitting_max_rounds_inherits_parent_loop(
         },
     )
 
+    from steerable_sidecar.loop_limits import UNLIMITED_LOOP_LIMIT
+
     researcher = captured["researcher"]
     writer = captured["writer"]
-    assert researcher.max_rounds == 80
-    assert researcher.max_tool_errors == 16
+    assert researcher.max_rounds == UNLIMITED_LOOP_LIMIT
+    assert researcher.max_tool_errors == UNLIMITED_LOOP_LIMIT
     assert writer.max_rounds == 4
 
 
@@ -1862,6 +2163,54 @@ async def test_coreloop_orchestration_spawn_wait_over_rpc() -> None:
     spawned = next(p for p in child_events if p["kind"] == "child_spawned")
     assert spawned["childId"] == "0.1"
     assert spawned["streamId"] == stream_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("orchestration", "expected"),
+    [
+        ({"enabled": True}, None),
+        (
+            {"enabled": True, "childMaxRounds": 5, "childMaxToolErrors": 2},
+            (5, 2),
+        ),
+    ],
+)
+async def test_orchestration_children_inherit_parent_loop_limits(
+    monkeypatch, orchestration: dict[str, Any], expected: tuple[int, int] | None
+) -> None:
+    """Unpinned child limits use the parent loop (no cap), not the
+    OrchestrationConfig default of 8 rounds / 3 consecutive tool errors."""
+    from steerable_sidecar import sidecar as sidecar_module
+
+    captured: list[Any] = []
+    original = sidecar_module.OrchestrationConfig
+
+    def spy(**kwargs: Any) -> Any:
+        config = original(**kwargs)
+        captured.append(config)
+        return config
+
+    monkeypatch.setattr(sidecar_module, "OrchestrationConfig", spy)
+
+    provider = _ScriptedProvider([_text_round("plain")])
+    sidecar = _make_sidecar(provider)
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+            "orchestration": orchestration,
+        },
+    )
+
+    from steerable_sidecar.loop_limits import UNLIMITED_LOOP_LIMIT
+
+    [config] = captured
+    want = expected or (UNLIMITED_LOOP_LIMIT, UNLIMITED_LOOP_LIMIT)
+    assert (config.child_max_rounds, config.child_max_tool_errors) == want
 
 
 @pytest.mark.asyncio
@@ -2772,6 +3121,84 @@ async def test_todo_gate_retries_completion_until_list_is_finished() -> None:
     assert done[0]["status"] == "completed"
 
 
+def _todo_nudges(messages: list) -> int:
+    return sum("no task list yet" in str(message) for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_todo_planning_nudge_fires_once_on_a_long_turn_without_a_list() -> None:
+    """Five tool calls with no todo_write: the next request carries one
+    planning reminder, and it is not repeated on later rounds."""
+    from steerable_sidecar.todo_tools import register_todo_write
+
+    rounds = [
+        _tool_round(ToolCall(id=f"a{i}", name="add", arguments={"a": i, "b": 1}))
+        for i in range(6)
+    ]
+    provider = _ScriptedProvider([*rounds, _text_round("done")])
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    sidecar.tools.register(add)
+    register_todo_write(sidecar.tools)
+
+    _sid, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "add many"}],
+            "useCoreLoop": True,
+            "chatId": "nudge-chat",
+        },
+    )
+
+    assert [_todo_nudges(m) for m in provider.seen_messages] == [0, 0, 0, 0, 0, 1, 1]
+    done = [p for m, p in events if m == "stream.done"]
+    assert done[0]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_todo_planning_nudge_stays_silent_once_the_turn_has_a_list() -> None:
+    from steerable_sidecar.todo_tools import register_todo_write
+
+    todo_round = _tool_round(
+        ToolCall(
+            id="t1",
+            name="todo_write",
+            arguments={"todos": [{"id": "a", "content": "add", "status": "completed"}]},
+        )
+    )
+    rounds = [
+        _tool_round(ToolCall(id=f"a{i}", name="add", arguments={"a": i, "b": 1}))
+        for i in range(6)
+    ]
+    provider = _ScriptedProvider([todo_round, *rounds, _text_round("done")])
+    sidecar = _make_sidecar(provider)
+
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    sidecar.tools.register(add)
+    register_todo_write(sidecar.tools)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "add many"}],
+            "useCoreLoop": True,
+            "chatId": "planned-chat",
+        },
+    )
+
+    assert provider.attempts == 8
+    assert all(_todo_nudges(m) == 0 for m in provider.seen_messages)
+
+
 @pytest.mark.asyncio
 async def test_subagent_profile_system_prompt_seeds_child_and_roster_advertised() -> None:
     """profiles.<name>.systemPrompt seeds the child loop's first message
@@ -2821,3 +3248,110 @@ async def test_subagent_profile_system_prompt_seeds_child_and_roster_advertised(
         t for t in first_tools if t["function"]["name"] == "delegate_subagent"
     )
     assert "explore: 只读代码侦察。" in descriptor["function"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_stream_restart_is_forwarded_to_the_host() -> None:
+    """A retry after partial output must tell the host to drop what it has.
+
+    Without this the host appends the retry's text after the abandoned
+    attempt's and the reader sees both.
+    """
+
+    class _Event:
+        kind = "stream_restart"
+        data: ClassVar[dict] = {"reason": "retry", "round": 3, "attempt": 2}
+
+    class _Transport:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit_notification(self, method: str, payload: dict) -> None:
+            self.events.append((method, payload))
+
+    transport = _Transport()
+    await Sidecar._emit_loop_event(transport, "stream-1", _Event(), None)
+
+    assert transport.events == [
+        (
+            "stream.chunk",
+            {
+                "streamId": "stream-1",
+                "restart": {"reason": "retry", "round": 3, "attempt": 2},
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_metrics_export_pushes_turn_counters_to_collector() -> None:
+    """metrics.export (R4): turn outcomes go to the collector's /v1/metrics.
+
+    Kept separate from trace.export because a collector may accept one and not
+    the other, and because the payload is counts only — there is no content for
+    a privacy mode to filter.
+    """
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received: dict = {}
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received["path"] = self.path
+            received["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("hi")]))
+    try:
+        response = await sidecar.server.handle_frame(
+            _frame(
+                "metrics.export",
+                {
+                    "endpoint": f"http://127.0.0.1:{server.server_port}/v1/metrics",
+                    "samples": [
+                        {"outcome": "completed", "attempts": 2, "retried": True, "usedDirect": True},
+                        {"outcome": "failed", "failureKind": "transport", "attempts": 5},
+                    ],
+                },
+            )
+        )
+        assert "error" not in response, response
+        assert response["result"] == {"status": 200, "metrics": 2}
+        assert received["path"] == "/v1/metrics"
+
+        metrics = received["body"]["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+        names = {metric["name"] for metric in metrics}
+        assert names == {"steerable.turn.outcome", "steerable.turn.attempts"}
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_metrics_export_rejects_an_empty_or_invalid_batch() -> None:
+    sidecar = _make_sidecar(_ScriptedProvider([_text_round("hi")]))
+
+    empty = await sidecar.server.handle_frame(
+        _frame("metrics.export", {"endpoint": "http://127.0.0.1:1/v1/metrics", "samples": []})
+    )
+    assert "error" in empty
+
+    missing_endpoint = await sidecar.server.handle_frame(
+        _frame("metrics.export", {"samples": [{"outcome": "completed"}]})
+    )
+    assert "error" in missing_endpoint
+
+    not_an_object = await sidecar.server.handle_frame(
+        _frame(
+            "metrics.export",
+            {"endpoint": "http://127.0.0.1:1/v1/metrics", "samples": ["completed"]},
+        )
+    )
+    assert "error" in not_an_object

@@ -14,13 +14,13 @@ duplicated as real columns with indexes, so session enumeration and the
 resume tail-scan are indexed lookups, never a table scan over JSON.
 
 Concurrency: like ``InMemoryStorage``, all mutations run under one asyncio
-lock (safe under concurrent ``await`` in a single loop). A sibling
-``*.lock`` file (``fcntl.flock`` / Windows named mutex) makes the writer
-process-exclusive: a second process opening the same path fails loud
-(``StoreAlreadyOwnedError``). Process death releases the kernel lock;
-there is no TTL steal; the lock file is never deleted. WAL remains so a
-reader (e.g. the maintenance CLI) does not block the writer and does not
-take the write lease.
+lock (safe under concurrent ``await`` in a single loop). Across processes
+the database uses WAL, ``busy_timeout``, and a shared lease on the sibling
+``*.lock`` file, so two sidecars can write different sessions. Schema
+migration takes that file exclusively. A peer that is applying the schema
+is waited on briefly; a lease that is still held, or a ``user_version``
+newer than this process, refuses to open. Process death releases the
+kernel lock; the lock file is never deleted.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 from collections.abc import Iterable
 from typing import Any
 
@@ -40,8 +41,31 @@ from steerable_agent_protocol.generated import (
     TraceSpan,
 )
 
-from ..errors import StorageError
-from .write_lease import WriteLease, acquire_write_lease
+from ..child_record import (
+    TERMINAL_CHILD_STATUSES,
+    ChildRecord,
+    record_from_columns,
+    record_to_values,
+)
+from ..errors import StorageError, StorageUpgradeBlockedError, StoreAlreadyOwnedError
+from .write_lease import WriteLease, acquire_shared_lease, acquire_write_lease
+
+SCHEMA_VERSION = 2
+_BUSY_TIMEOUT_MS = 5000
+
+#: The terminal status set, as a SQL ``IN`` list. Kept next to the schema so a
+#: status added to ``child_record.TERMINAL_CHILD_STATUSES`` without this list
+#: fails ``test_child_record_statuses_match_sql`` instead of silently making
+#: ``include_finished=False`` return finished rows.
+_TERMINAL_CHILD_STATUS_SQL = (
+    " (" + ", ".join(f"'{s}'" for s in sorted(TERMINAL_CHILD_STATUSES)) + ")"
+)
+
+# A second process can observe version 0 while the first still holds the
+# exclusive lease to create the schema. The hold is the migration itself,
+# not a live sidecar, so wait out that window before refusing.
+_PEER_MIGRATION_WAIT_S = 1.0
+_PEER_MIGRATION_POLL_S = 0.02
 
 _SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -100,11 +124,106 @@ CREATE TABLE IF NOT EXISTS history (
     data      TEXT NOT NULL,
     PRIMARY KEY (record_id, seq)
 );
+
+-- Child-agent index (schema v2). Only the edge and the state: whose child
+-- this is, how deep, what profile and engine build it, and where it ended.
+-- Task text and answers live in the child's own ``history`` record, so each
+-- has one authoritative copy; ``profile`` and ``depth`` are duplicated here
+-- because resume must rebuild the child's tool domain and nesting from what
+-- it was created with, never from current settings.
+CREATE TABLE IF NOT EXISTS children (
+    record_id         TEXT PRIMARY KEY,
+    parent_record_id  TEXT NOT NULL,
+    child_id          TEXT NOT NULL,
+    depth             INTEGER NOT NULL,
+    profile           TEXT,
+    engine            TEXT NOT NULL,
+    status            TEXT NOT NULL,
+    resumable         INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens     INTEGER,
+    completion_tokens INTEGER,
+    usage_known       INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_children_parent ON children(parent_record_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_children_child ON children(parent_record_id, child_id);
 """
 
 
 def _dump(model: Any) -> str:
     return json.dumps(model.model_dump(mode="json"), ensure_ascii=False)
+
+
+def _is_memory(path: str) -> bool:
+    return path == ":memory:" or path.startswith("file::memory:")
+
+
+def _connect(path: str) -> sqlite3.Connection:
+    db = sqlite3.connect(path, timeout=_BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    db.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+    db.execute("PRAGMA journal_mode = WAL")
+    db.execute("PRAGMA synchronous = NORMAL")
+    return db
+
+
+def _read_user_version(path: str) -> int:
+    db = sqlite3.connect(path, timeout=_BUSY_TIMEOUT_MS / 1000)
+    try:
+        row = db.execute("PRAGMA user_version").fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        db.close()
+
+
+def _apply_schema(db: sqlite3.Connection) -> None:
+    db.executescript(_SCHEMA)
+    db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    db.commit()
+
+
+def _newer_than_this_program(version: int) -> StorageUpgradeBlockedError:
+    return StorageUpgradeBlockedError(
+        f"sidecar database version {version} is newer than this program ({SCHEMA_VERSION})"
+    )
+
+
+def _open_lease(path: str) -> WriteLease:
+    deadline = time.monotonic() + _PEER_MIGRATION_WAIT_S
+    while True:
+        version = _read_user_version(path)
+        if version > SCHEMA_VERSION:
+            raise _newer_than_this_program(version)
+        if version == SCHEMA_VERSION:
+            return acquire_shared_lease(path)
+        try:
+            exclusive = acquire_write_lease(path)
+        except StoreAlreadyOwnedError as exc:
+            if time.monotonic() >= deadline:
+                version = _read_user_version(path)
+                if version > SCHEMA_VERSION:
+                    raise _newer_than_this_program(version) from exc
+                if version == SCHEMA_VERSION:
+                    return acquire_shared_lease(path)
+                raise StorageUpgradeBlockedError(
+                    "sidecar database needs an upgrade but another process has it open"
+                ) from exc
+            time.sleep(_PEER_MIGRATION_POLL_S)
+            continue
+        try:
+            version = _read_user_version(path)
+            if version > SCHEMA_VERSION:
+                raise _newer_than_this_program(version)
+            if version < SCHEMA_VERSION:
+                db = _connect(path)
+                try:
+                    _apply_schema(db)
+                finally:
+                    db.close()
+        finally:
+            exclusive.release()
+        return acquire_shared_lease(path)
 
 
 class SqliteStorage:
@@ -113,11 +232,14 @@ class SqliteStorage:
     def __init__(self, path: str) -> None:
         self._path = path
         self._lock = asyncio.Lock()
-        self._lease: WriteLease = acquire_write_lease(path)
+        self._lease = WriteLease._unheld()
+        if _is_memory(path):
+            self._db = _connect(path)
+            _apply_schema(self._db)
+            return
+        self._lease = _open_lease(path)
         try:
-            self._db = sqlite3.connect(path, check_same_thread=False)
-            self._db.row_factory = sqlite3.Row
-            self._db.executescript(_SCHEMA)
+            self._db = _connect(path)
         except BaseException:
             self._lease.release()
             raise
@@ -412,3 +534,80 @@ class SqliteStorage:
         async with self._lock:
             rows = self._db.execute(sql, params).fetchall()
         return [r["record_id"] for r in rows]
+
+    # ------------------------------------------------------------------
+    # Child-agent index
+    # ------------------------------------------------------------------
+
+    async def upsert_child(self, record: ChildRecord) -> None:
+        async with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO children ("
+                " record_id, parent_record_id, child_id, depth, profile,"
+                " engine, status, resumable, prompt_tokens, completion_tokens,"
+                " usage_known, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                record_to_values(record),
+            )
+            self._db.commit()
+
+    async def finish_child(
+        self,
+        record_id: str,
+        *,
+        status: str,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        usage_known: bool = True,
+        resumable: bool = False,
+        updated_at: str,
+    ) -> bool:
+        async with self._lock:
+            cursor = self._db.execute(
+                "UPDATE children SET"
+                " status = ?, resumable = ?, prompt_tokens = ?,"
+                " completion_tokens = ?, usage_known = ?, updated_at = ?"
+                " WHERE record_id = ?",
+                (
+                    status,
+                    int(resumable),
+                    prompt_tokens,
+                    completion_tokens,
+                    int(usage_known),
+                    updated_at,
+                    record_id,
+                ),
+            )
+            self._db.commit()
+        return cursor.rowcount > 0
+
+    async def get_child(self, record_id: str) -> ChildRecord | None:
+        async with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM children WHERE record_id = ?", (record_id,)
+            ).fetchone()
+        return record_from_columns(dict(row)) if row else None
+
+    async def list_children(
+        self, parent_record_id: str, *, include_finished: bool = True
+    ) -> list[ChildRecord]:
+        sql = "SELECT * FROM children WHERE parent_record_id = ?"
+        if not include_finished:
+            sql += " AND status NOT IN" + _TERMINAL_CHILD_STATUS_SQL
+        sql += " ORDER BY created_at, rowid"
+        async with self._lock:
+            rows = self._db.execute(sql, (parent_record_id,)).fetchall()
+        return [record_from_columns(dict(r)) for r in rows]
+
+    async def list_all_children(
+        self, *, prefix: str | None = None
+    ) -> list[ChildRecord]:
+        sql = "SELECT * FROM children"
+        params: list[Any] = []
+        if prefix is not None:
+            sql += " WHERE parent_record_id LIKE ?"
+            params.append(f"{prefix}%")
+        sql += " ORDER BY created_at, rowid"
+        async with self._lock:
+            rows = self._db.execute(sql, params).fetchall()
+        return [record_from_columns(dict(r)) for r in rows]

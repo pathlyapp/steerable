@@ -40,6 +40,7 @@ const fetchMock = vi.fn();
 const store = {
   ensureInsightsSettings: mocks.ensureInsightsSettings,
   listInsightOutbox: mocks.listInsightOutbox,
+  claimInsightsForUpload: mocks.listInsightOutbox,
   exportInsightsBundle: mocks.exportInsightsBundle,
   markInsightUploaded: mocks.markInsightUploaded,
   markInsightUploadError: mocks.markInsightUploadError,

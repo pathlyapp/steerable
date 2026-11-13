@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import path from 'node:path';
 import type Database from 'better-sqlite3';
 import {
   ALL_ROUND_ASSISTANT_AGENT_ID,
@@ -13,7 +14,12 @@ import {
   mergeLlmSettings,
   type LlmSettings,
 } from './llm-settings.js';
+import { emitChatActivity } from './chat-activity.js';
 import { MESSAGE_ORDER_DESC } from './message-order.js';
+import {
+  currentStorageInstanceId,
+  instanceOwnerIsLive,
+} from './process-locks.js';
 import {
   mergeTelemetrySettings,
   type TelemetrySettings,
@@ -43,6 +49,7 @@ import {
   type UsageSummary,
   type UsageSummaryRow,
 } from './usage-summary.js';
+import type { ReliabilitySummary } from './reliability-summary.js';
 import type { TenantScope } from './driver.js';
 import type { ScopedStore } from './scoped-store.js';
 
@@ -60,6 +67,13 @@ export interface ChatSessionRecord {
   isPinned: boolean;
   systemPrompt: string | null;
   pinnedRefs: unknown[] | null;
+  /**
+   * 标题从哪来。`user` 表示用户改过名，自动标题不再覆盖（即使用户把标题改回「新对话」）。
+   * `auto` 表示上次由标题生成写入。缺省是旧库，仍按标题文本是否还是「新对话」判断。
+   */
+  titleSource?: 'user' | 'auto' | null;
+  /** 分叉来源会话 id。原会话已删除时仍保留 id，读取接口再决定是否展示。 */
+  forkedFrom?: string | null;
 }
 
 export interface ChatMessageRecord {
@@ -96,6 +110,17 @@ export interface ChatAgentRecord {
    * `/技能名` 显式触发三处都拦）。
    */
   allowExternalSkills: boolean;
+  /**
+   * 委派给这个智能体时用的模型。`null` 跟随父级——一个没表达的偏好不该
+   * 悄悄换成另一个模型。非空时经 sidecar 的 provider factory 重建 provider，
+   * 宿主服务不了的名字在建 provider 时失败即拒绝。
+   */
+  model: string | null;
+  /**
+   * 委派给这个智能体时的推理强度。`null` 跟随父级；不支持该档位时同样
+   * 失败即拒绝，错误点名画像、模型与取值。
+   */
+  reasoningEffort: string | null;
   /**
    * true = 无视技能的触发条件全量加载（内置「智能助手」的行为）。
    * 与 `allowExternalSkills: false` 同时设置时白名单仍然优先。
@@ -498,9 +523,12 @@ export class SqliteScopedStore implements ScopedStore {
     // 列成为无人读写的孤儿列（SQLite 不易 drop，保留无害）。
 
     // 项目模式（增量迁移）：chat 可绑定 ProjectRegistry 里的项目 id。
-    // 项目记录本身存在 electron-store（agent-projects.json），这里只存外键；
+    // 项目记录本身存在 json-store（agent-projects.json），这里只存外键；
     // 删项目时由路由层把本列置 NULL（会话降级为无项目对话）。
     this.ensureColumn('chat_sessions', 'project_id', 'TEXT');
+    // 用户改名后自动标题不再覆盖。NULL 保持旧规则：标题不是「新对话」就跳过。
+    this.ensureColumn('chat_sessions', 'title_source', 'TEXT');
+    this.ensureColumn('chat_sessions', 'forked_from', 'TEXT');
 
     // 任务编排（增量迁移）：depends_on 存 JSON string[]——本任务等待的
     // 依赖 taskId 列表；NULL = 无依赖。依赖必须指向建任务时已存在的
@@ -508,6 +536,33 @@ export class SqliteScopedStore implements ScopedStore {
     this.ensureColumn('tasks', 'depends_on', 'TEXT');
     // 后台任务推理过程：流事件回写，不bump updated_at（见 saveTaskProcess）。
     this.ensureColumn('tasks', 'process_json', 'TEXT');
+    // 创建该任务的宿主实例。清扫只处理所属实例已经退出的任务。
+    this.ensureColumn('tasks', 'owner_instance_id', 'TEXT');
+    this.ensureColumn('insights_outbox', 'claimed_by', 'TEXT');
+    this.ensureColumn('insights_outbox', 'claimed_at', 'TEXT');
+
+    // 网络失败统计（二期 R4）。一次回合一行，与 token 用量共用一张表：
+    // 两者都是「这一回合发生了什么」的事实，分成两张表只会让复盘时
+    // 要 join。
+    //
+    // outcome 取值 completed / failed / cancelled。cancelled 是用户主动
+    // 停止，不算失败——界面与统计都不该把它和网络故障混为一谈。
+    this.ensureColumn('usage_events', 'outcome', `TEXT NOT NULL DEFAULT 'completed'`);
+    // 失败类别（provider 分类：transport / auth / rate_limit / …）。
+    this.ensureColumn('usage_events', 'failure_kind', 'TEXT');
+    // 本回合一共发出了几次模型请求（含重试）。
+    this.ensureColumn('usage_events', 'attempts', 'INTEGER');
+    // 是否发生过重试，以及是否改走过直连。
+    this.ensureColumn('usage_events', 'retried', 'INTEGER NOT NULL DEFAULT 0');
+    this.ensureColumn('usage_events', 'used_direct', 'INTEGER NOT NULL DEFAULT 0');
+    // R5 子代理用量：partial 表示这一行不含全部花费（外部引擎子代理不报
+    // token）。NULL 表示数字就是全部账单——「缺一块」和「完整」必须能区分。
+    this.ensureColumn('usage_events', 'usage_note', 'TEXT');
+
+    // R6 角色级模型：委派画像可以钉模型与推理强度。NULL = 跟随父级，
+    // 所以旧行（与未配置的智能体）行为与改前一致。
+    this.ensureColumn('chat_agents', 'model', 'TEXT');
+    this.ensureColumn('chat_agents', 'reasoning_effort', 'TEXT');
 
     // 智能体技能面（增量迁移）：load_all_skills = 无视触发条件全量加载。
     // 此前这个行为是 router 里 `chatAgentId === 'all-round-assistant'` 的
@@ -931,7 +986,7 @@ export class SqliteScopedStore implements ScopedStore {
 
   async updateChat(
     chatId: string,
-    updates: Partial<Pick<ChatSessionRecord, 'title' | 'systemPrompt' | 'pinnedRefs' | 'isPinned' | 'projectId'>>
+    updates: Partial<Pick<ChatSessionRecord, 'title' | 'systemPrompt' | 'pinnedRefs' | 'isPinned' | 'projectId' | 'titleSource' | 'forkedFrom'>>
   ): Promise<ChatSessionRecord | null> {
     const existing = await this.getChat(chatId);
     if (!existing) return null;
@@ -948,7 +1003,7 @@ export class SqliteScopedStore implements ScopedStore {
     };
     this.db.prepare(`
       UPDATE chat_sessions
-      SET title = ?, system_prompt = ?, pinned_refs = ?, is_pinned = ?, project_id = ?, updated_at = ?
+      SET title = ?, system_prompt = ?, pinned_refs = ?, is_pinned = ?, project_id = ?, title_source = ?, forked_from = ?, updated_at = ?
       WHERE tenant_id = ? AND user_id = ? AND id = ?
     `).run(
       next.title,
@@ -956,11 +1011,14 @@ export class SqliteScopedStore implements ScopedStore {
       JSON.stringify(next.pinnedRefs ?? null),
       next.isPinned ? 1 : 0,
       next.projectId ?? null,
+      next.titleSource ?? null,
+      next.forkedFrom ?? null,
       next.updatedAt,
       this.scope.tenantId,
       this.scope.userId,
       chatId
     );
+    emitChatActivity({ chatId, updatedAt: next.updatedAt });
     return await this.getChat(chatId);
   }
 
@@ -1143,10 +1201,11 @@ export class SqliteScopedStore implements ScopedStore {
         (tenant_id, user_id, id, chat_id, role, content, message_metadata, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(this.scope.tenantId, this.scope.userId, id, chatId, role, content, messageMetadata, now);
-    this.db.prepare(
+    const updated = this.db.prepare(
       `UPDATE chat_sessions SET updated_at = ?
        WHERE tenant_id = ? AND user_id = ? AND id = ?`,
     ).run(now, this.scope.tenantId, this.scope.userId, chatId);
+    if (updated.changes > 0) emitChatActivity({ chatId, updatedAt: now });
     const row = this.db.prepare(
       `SELECT * FROM chat_messages WHERE tenant_id = ? AND user_id = ? AND id = ?`,
     ).get(this.scope.tenantId, this.scope.userId, id) as Record<string, unknown>;
@@ -1197,6 +1256,7 @@ export class SqliteScopedStore implements ScopedStore {
     messages: Array<{ role: ChatMessageRecord['role']; content: string }>,
   ): Promise<void> {
     const base = Date.now();
+    let activity: { chatId: string; updatedAt: string } | null = null;
     const insert = this.db.prepare(`
       INSERT INTO chat_messages
         (tenant_id, user_id, id, chat_id, role, content, message_metadata, created_at)
@@ -1217,16 +1277,19 @@ export class SqliteScopedStore implements ScopedStore {
           new Date(base + i).toISOString(),
         );
       });
-      this.db
+      const updatedAt = new Date(base + messages.length).toISOString();
+      const updated = this.db
         .prepare(`UPDATE chat_sessions SET updated_at = ?
                   WHERE tenant_id = ? AND user_id = ? AND id = ?`)
         .run(
-          new Date(base + messages.length).toISOString(),
+          updatedAt,
           this.scope.tenantId,
           this.scope.userId,
           chatId,
         );
+      if (updated.changes > 0) activity = { chatId, updatedAt };
     })();
+    if (activity) emitChatActivity(activity);
   }
 
   async listChatAgents(includeArchived = false): Promise<ChatAgentRecord[]> {
@@ -1256,8 +1319,9 @@ export class SqliteScopedStore implements ScopedStore {
         tenant_id, user_id,
         id, slug, name, icon, color, description, role_prompt, forbidden_prompt,
         skill_ids, tool_policy, allow_external_skills, load_all_skills,
+        model, reasoning_effort,
         is_builtin, is_archived, sort_order, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       this.scope.tenantId,
       this.scope.userId,
@@ -1273,6 +1337,8 @@ export class SqliteScopedStore implements ScopedStore {
       JSON.stringify(input.toolPolicy ?? { mode: 'all', tools: [] }),
       input.allowExternalSkills ? 1 : 0,
       input.loadAllSkills ? 1 : 0,
+      input.model ?? null,
+      input.reasoningEffort ?? null,
       input.isBuiltin ? 1 : 0,
       input.isArchived ? 1 : 0,
       input.sortOrder ?? 0,
@@ -1302,6 +1368,7 @@ export class SqliteScopedStore implements ScopedStore {
       UPDATE chat_agents
       SET slug = ?, name = ?, icon = ?, color = ?, description = ?, role_prompt = ?, forbidden_prompt = ?,
           skill_ids = ?, tool_policy = ?, allow_external_skills = ?, load_all_skills = ?,
+          model = ?, reasoning_effort = ?,
           is_builtin = ?, is_archived = ?, sort_order = ?, updated_at = ?
       WHERE tenant_id = ? AND user_id = ? AND id = ?
     `).run(
@@ -1316,6 +1383,8 @@ export class SqliteScopedStore implements ScopedStore {
       JSON.stringify(merged.toolPolicy),
       merged.allowExternalSkills ? 1 : 0,
       merged.loadAllSkills ? 1 : 0,
+      merged.model ?? null,
+      merged.reasoningEffort ?? null,
       merged.isBuiltin ? 1 : 0,
       merged.isArchived ? 1 : 0,
       merged.sortOrder,
@@ -1409,8 +1478,8 @@ export class SqliteScopedStore implements ScopedStore {
         tenant_id, user_id,
         id, chat_id, task, status, answer, error,
         worktree_path, worktree_branch, worktree_state, record_id, trace_id,
-        depends_on, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?)
+        depends_on, owner_instance_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
     `).run(
       this.scope.tenantId,
       this.scope.userId,
@@ -1425,6 +1494,7 @@ export class SqliteScopedStore implements ScopedStore {
       input.worktreePath ? 'pending' : null,
       input.recordId ?? null,
       input.dependsOn?.length ? JSON.stringify(input.dependsOn) : null,
+      currentStorageInstanceId(),
       now,
       now,
     );
@@ -1505,29 +1575,34 @@ export class SqliteScopedStore implements ScopedStore {
   }
 
   /**
-   * 启动清扫：running 任务只可能属于上一个已死的进程（任务流不跨进程
-   * 存活），全部落成 failed/interrupted——与 W7-1 turn_active 检测器同
-   * 理，残留 running 是崩溃签名，不是真相。
+   * 启动清扫：只把所属实例已经退出的 running / blocked 任务标成 failed。
+   * 没有 owner 的旧行视为已退出。仍被实例锁占住的任务保持原状态。
    */
   async failRunningTasks(reason: string): Promise<number> {
-    const info = this.db
-      .prepare(`UPDATE tasks SET status = 'failed', error = ?, updated_at = ?
-                WHERE tenant_id = ? AND user_id = ? AND status = 'running'`)
-      .run(reason, new Date().toISOString(), this.scope.tenantId, this.scope.userId);
-    // 级联：blocked 任务的点火能力在 TaskService（进程内），不跨进程存活；
-    // 重启后统一标 failed，模型经 task_status 看到原因后可重跑。
-    const blocked = this.db
-      .prepare(`SELECT id FROM tasks
-                WHERE tenant_id = ? AND user_id = ? AND status = 'blocked'`)
-      .all(this.scope.tenantId, this.scope.userId) as Array<{ id: string }>;
+    const rows = this.db
+      .prepare(`SELECT id, status, owner_instance_id AS owner
+                FROM tasks
+                WHERE tenant_id = ? AND user_id = ? AND status IN ('running', 'blocked')`)
+      .all(this.scope.tenantId, this.scope.userId) as Array<{
+        id: string;
+        status: string;
+        owner: string | null;
+      }>;
+    const dataDir = path.dirname(this.db.name);
     const now = new Date().toISOString();
-    for (const row of blocked) {
-      this.db
+    let swept = 0;
+    for (const row of rows) {
+      if (row.owner && instanceOwnerIsLive(dataDir, row.owner)) continue;
+      const error = row.status === 'blocked'
+        ? '进程重启中断了编排等待（依赖任务已随进程终止）；请重新 task_run。'
+        : reason;
+      const info = this.db
         .prepare(`UPDATE tasks SET status = 'failed', error = ?, updated_at = ?
-                  WHERE tenant_id = ? AND user_id = ? AND id = ?`)
-        .run(`进程重启中断了编排等待（依赖任务已随进程终止）；请重新 task_run。`, now, this.scope.tenantId, this.scope.userId, row.id);
+                  WHERE tenant_id = ? AND user_id = ? AND id = ? AND status = ?`)
+        .run(error, now, this.scope.tenantId, this.scope.userId, row.id, row.status);
+      swept += info.changes;
     }
-    return info.changes + blocked.length;
+    return swept;
   }
 
   // ─── W6-9 用量与成本归因 ─────────────────────────────────────────────
@@ -1546,11 +1621,27 @@ export class SqliteScopedStore implements ScopedStore {
     totalTokens: number;
     cachedPromptTokens?: number;
     costUsd?: number | null;
+    /** How the turn ended; omitted keeps the historical 'completed' default. */
+    outcome?: 'completed' | 'failed' | 'cancelled';
+    /** Provider classification, recorded only for `failed`. */
+    failureKind?: string | null;
+    /** Model requests spent on the turn, retries included. */
+    attempts?: number | null;
+    /** Whether any request in the turn was retried. */
+    retried?: boolean;
+    /** Whether any request went direct instead of through the proxy. */
+    usedDirect?: boolean;
+    /**
+     * `'partial'` when the totals exclude spend the host knows happened: a
+     * child agent on an external engine reports no tokens. Storing the note
+     * keeps a smaller number from reading as a complete bill.
+     */
+    usageNote?: 'partial' | null;
   }): Promise<void> {
     this.db.prepare(`
       INSERT INTO usage_events
-        (tenant_id, user_id, id, chat_id, kind, provider, model, prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens, cost_usd, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (tenant_id, user_id, id, chat_id, kind, provider, model, prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens, cost_usd, created_at, outcome, failure_kind, attempts, retried, used_direct, usage_note)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       this.scope.tenantId,
       this.scope.userId,
@@ -1564,8 +1655,77 @@ export class SqliteScopedStore implements ScopedStore {
       Math.max(0, Math.floor(input.totalTokens)),
       Math.max(0, Math.floor(input.cachedPromptTokens ?? 0)),
       input.costUsd ?? null,
-      new Date().toISOString()
+      new Date().toISOString(),
+      input.outcome ?? 'completed',
+      input.failureKind ?? null,
+      input.attempts ?? null,
+      input.retried ? 1 : 0,
+      input.usedDirect ? 1 : 0,
+      input.usageNote ?? null
     );
+  }
+
+  /**
+   * Reliability summary for the last `sinceDays` days.
+   *
+   * Splits the three terminal states apart because they answer different
+   * questions: a failed turn is something to fix, a cancelled one is the user's
+   * decision and must not inflate the failure rate, and a retried turn that
+   * completed is the measure of whether retrying is doing its job. Turns
+   * recorded before these columns existed default to `completed`, which is the
+   * only honest reading — their outcome was not observed.
+   *
+   * @param sinceDays Window length in days, ending now.
+   * @returns Counts per outcome, failures broken down by provider
+   *   classification, and how many completed turns had retried.
+   */
+  async getReliabilitySummary(sinceDays = 7): Promise<ReliabilitySummary> {
+    const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString();
+    const totals = this.db
+      .prepare(
+        `SELECT
+           COUNT(*) AS total,
+           SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failed,
+           SUM(CASE WHEN outcome = 'cancelled' THEN 1 ELSE 0 END) AS cancelled,
+           SUM(CASE WHEN outcome = 'completed' AND retried = 1 THEN 1 ELSE 0 END) AS recovered,
+           SUM(CASE WHEN used_direct = 1 THEN 1 ELSE 0 END) AS used_direct
+         FROM usage_events
+         WHERE tenant_id = ? AND user_id = ? AND created_at >= ?`,
+      )
+      .get(this.scope.tenantId, this.scope.userId, since) as {
+      total: number | null;
+      failed: number | null;
+      cancelled: number | null;
+      recovered: number | null;
+      used_direct: number | null;
+    };
+    const byKind = this.db
+      .prepare(
+        // Group by the expression, not the output alias: a bare `GROUP BY kind`
+        // resolves to a source column when one exists, which silently merges
+        // every row into the wrong bucket.
+        `SELECT COALESCE(failure_kind, 'unknown') AS kind, COUNT(*) AS count
+         FROM usage_events
+         WHERE tenant_id = ? AND user_id = ? AND created_at >= ?
+           AND outcome = 'failed'
+         GROUP BY COALESCE(failure_kind, 'unknown')
+         ORDER BY count DESC, kind`,
+      )
+      .all(this.scope.tenantId, this.scope.userId, since) as Array<{
+      kind: string;
+      count: number;
+    }>;
+    return {
+      sinceDays,
+      total: totals.total ?? 0,
+      failed: totals.failed ?? 0,
+      cancelled: totals.cancelled ?? 0,
+      /** Completed turns that had retried at least once. */
+      recoveredByRetry: totals.recovered ?? 0,
+      /** Turns where the model request went direct instead of via a proxy. */
+      usedDirect: totals.used_direct ?? 0,
+      failuresByKind: byKind.map((row) => ({ kind: row.kind, count: row.count })),
+    };
   }
 
   /**
@@ -1584,6 +1744,7 @@ export class SqliteScopedStore implements ScopedStore {
         SUM(completion_tokens) AS completion_tokens,
         SUM(total_tokens) AS total_tokens,
         SUM(cached_prompt_tokens) AS cached_prompt_tokens,
+        SUM(CASE WHEN usage_note = 'partial' THEN 1 ELSE 0 END) AS partial_turns,
         SUM(cost_usd) AS cost_usd
       FROM usage_events
       WHERE tenant_id = ? AND user_id = ? AND created_at >= ?
@@ -1712,6 +1873,52 @@ export class SqliteScopedStore implements ScopedStore {
     return rows.map((row) => this.mapInsightOutbox(row));
   }
 
+  /**
+   * Claims pending outbox rows for this process before upload.
+   * A row owned by a live instance is left alone. Without a bound instance
+   * this falls back to a plain list (single-process callers and tests).
+   */
+  async claimInsightsForUpload(limit: number): Promise<InsightOutboxRow[]> {
+    const me = currentStorageInstanceId();
+    if (!me) return this.listInsightOutbox({ uploaded: false, limit });
+    const capped = Math.max(1, Math.min(limit, 500));
+    const pending = this.db.prepare(
+      `SELECT id, claimed_by AS claimedBy FROM insights_outbox
+       WHERE tenant_id = ? AND user_id = ? AND uploaded_at IS NULL
+       ORDER BY created_at ASC LIMIT ?`,
+    ).all(this.scope.tenantId, this.scope.userId, capped) as Array<{
+      id: string;
+      claimedBy: string | null;
+    }>;
+    const dataDir = path.dirname(this.db.name);
+    const now = new Date().toISOString();
+    const claimed: InsightOutboxRow[] = [];
+    for (const row of pending) {
+      if (row.claimedBy && row.claimedBy !== me && instanceOwnerIsLive(dataDir, row.claimedBy)) {
+        continue;
+      }
+      const info = this.db.prepare(
+        `UPDATE insights_outbox SET claimed_by = ?, claimed_at = ?
+         WHERE tenant_id = ? AND user_id = ? AND id = ? AND uploaded_at IS NULL
+           AND (claimed_by IS NULL OR claimed_by = ? OR claimed_by IS ?)`,
+      ).run(
+        me,
+        now,
+        this.scope.tenantId,
+        this.scope.userId,
+        row.id,
+        me,
+        row.claimedBy,
+      );
+      if (info.changes !== 1) continue;
+      const stored = this.db.prepare(
+        `SELECT * FROM insights_outbox WHERE tenant_id = ? AND user_id = ? AND id = ?`,
+      ).get(this.scope.tenantId, this.scope.userId, row.id) as Record<string, unknown> | undefined;
+      if (stored) claimed.push(this.mapInsightOutbox(stored));
+    }
+    return claimed;
+  }
+
   async markInsightUploaded(id: string): Promise<void> {
     this.db.prepare(
       `UPDATE insights_outbox SET uploaded_at = ?, upload_error = NULL
@@ -1799,6 +2006,8 @@ export class SqliteScopedStore implements ScopedStore {
       isPinned: Number(row.is_pinned ?? 0) === 1,
       systemPrompt: row.system_prompt ? String(row.system_prompt) : null,
       pinnedRefs: row.pinned_refs ? this.safeJson(row.pinned_refs) : null,
+      titleSource: row.title_source === 'user' || row.title_source === 'auto' ? row.title_source : null,
+      forkedFrom: row.forked_from ? String(row.forked_from) : null,
     };
   }
 
@@ -1860,6 +2069,8 @@ export class SqliteScopedStore implements ScopedStore {
       toolPolicy: this.safeJson(row.tool_policy, { mode: 'all', tools: [] }),
       allowExternalSkills: Number(row.allow_external_skills ?? 0) === 1,
       loadAllSkills: Number(row.load_all_skills ?? 0) === 1,
+      model: row.model ? String(row.model) : null,
+      reasoningEffort: row.reasoning_effort ? String(row.reasoning_effort) : null,
       isBuiltin: Number(row.is_builtin ?? 0) === 1,
       isArchived: Number(row.is_archived ?? 0) === 1,
       sortOrder: Number(row.sort_order ?? 0),

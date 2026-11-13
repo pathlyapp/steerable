@@ -29,6 +29,7 @@ from steerable_agent_harness.safety import CommandSafetyConfig, classify_shell_c
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
 from .errors import PolicyDeniedError, ToolDispatchError
+from .tool_presentation import builtin_presentation
 from .tool_schema import derive_schema
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,11 @@ class ToolRouter:
         resolved_consent = (
             require_consent if require_consent is not None else resolved_mode == "destructive"
         )
+        merged_metadata = dict(metadata or {})
+        if "presentation" not in merged_metadata:
+            declared = builtin_presentation(resolved_name)
+            if declared is not None:
+                merged_metadata["presentation"] = declared
         tool_meta = RegisteredTool(
             name=resolved_name,
             handler=handler,
@@ -124,7 +130,7 @@ class ToolRouter:
                 concurrency_safe if concurrency_safe is not None else resolved_mode == "read"
             ),
             exposure=exposure,
-            metadata=dict(metadata or {}),
+            metadata=merged_metadata,
         )
         self._tools[resolved_name] = tool_meta
         return tool_meta

@@ -18,7 +18,8 @@ import {
   mergeTaskWorktree,
   type LocalTask,
 } from '@/lib/local-api';
-import { getElectronBridge } from '@/lib/electron-bridge';
+import { getHostBridge } from '@/lib/host-bridge';
+import { t } from '@/i18n';
 
 /**
  * TaskPanelModal — 跨 turn 后台任务面板（4.6a/4.6c）。
@@ -80,7 +81,7 @@ export function TaskPanelModal({
   // 任务终态推送 → 重拉列表。preload 只透传 chatId/taskId/status，
   // 记录本体以 SQLite 为准。
   useEffect(() => {
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     if (!bridge?.onTaskUpdated) return;
     return bridge.onTaskUpdated((payload) => {
       if (payload.chatId === chatId) void refresh();
@@ -121,14 +122,14 @@ export function TaskPanelModal({
     }
   };
 
-  const runningCount = tasks?.filter((t) => t.status === 'running').length ?? 0;
+  const runningCount = tasks?.filter((task) => task.status === 'running').length ?? 0;
 
   return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       role="dialog"
       aria-modal="true"
-      aria-label="后台任务"
+      aria-label={t('Background tasks')}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -138,10 +139,15 @@ export function TaskPanelModal({
         <div className="flex items-center gap-2 border-b border-agent-border px-3 py-2">
           <LuListTodo className="h-4 w-4 shrink-0 text-agent-muted-foreground" />
           <span className="min-w-0 flex-1 truncate text-xs font-medium text-agent-foreground">
-            后台任务
+            {t('Background tasks')}
             {tasks && tasks.length > 0 && (
               <span className="ml-1.5 text-xs font-normal text-agent-muted-foreground">
-                {tasks.length} 个任务{runningCount > 0 ? `，${runningCount} 个运行中` : ''}
+                {runningCount > 0
+                  ? t('{count} tasks, {running} running', {
+                      count: tasks.length,
+                      running: runningCount,
+                    })
+                  : t('{count} tasks', { count: tasks.length })}
               </span>
             )}
           </span>
@@ -149,7 +155,7 @@ export function TaskPanelModal({
             type="button"
             onClick={onClose}
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
-            aria-label="关闭"
+            aria-label={t('Close')}
           >
             <LuX className="h-3.5 w-3.5" />
           </button>
@@ -159,11 +165,13 @@ export function TaskPanelModal({
           {loading ? (
             <div className="flex items-center justify-center gap-2 px-3 py-6 text-xs text-agent-muted-foreground">
               <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
-              正在加载任务…
+              {t('Loading tasks...')}
             </div>
           ) : !tasks || tasks.length === 0 ? (
             <div className="px-3 py-6 text-center text-xs text-agent-muted-foreground">
-              暂无后台任务 — 让助手用 task_run 启动一个跨轮任务后会出现在这里。
+              {t(
+                'No background tasks yet. When the assistant starts a cross-turn task with task_run, it appears here.',
+              )}
             </div>
           ) : (
             tasks.map((task) => {
@@ -190,7 +198,7 @@ export function TaskPanelModal({
                       type="button"
                       onClick={() => onInspect?.(task)}
                       className="min-w-0 flex-1 truncate text-left text-xs font-medium text-agent-foreground hover:underline"
-                      title="在右侧查看推理过程"
+                      title={t('View the reasoning process on the right')}
                     >
                       {task.task}
                     </button>
@@ -202,9 +210,9 @@ export function TaskPanelModal({
                         <LuGitBranch className="h-3 w-3" />
                         {task.worktreeBranch}
                         {task.worktreeState === 'merged'
-                          ? ' · 已合并'
+                          ? ` · ${t('Merged')}`
                           : task.worktreeState === 'discarded'
-                            ? ' · 已丢弃'
+                            ? ` · ${t('Discarded')}`
                             : ''}
                       </span>
                     )}
@@ -212,7 +220,7 @@ export function TaskPanelModal({
                       type="button"
                       onClick={() => setExpandedId(expanded ? null : task.id)}
                       className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
-                      aria-label={expanded ? '收起' : '展开'}
+                      aria-label={expanded ? t('Collapse') : t('Expand')}
                       aria-expanded={expanded}
                     >
                       {expanded ? (
@@ -225,12 +233,12 @@ export function TaskPanelModal({
 
                   <div className="mt-1 pl-5 text-[10px] text-agent-muted-foreground/80">
                     {task.status === 'running'
-                      ? '运行中'
+                      ? t('In progress')
                       : task.status === 'blocked'
-                        ? '等待依赖'
+                        ? t('Waiting on dependencies')
                         : task.status === 'completed'
-                          ? '已完成'
-                          : '失败'}
+                          ? t('Completed')
+                          : t('Failed')}
                     {' · '}
                     {formatTime(task.updatedAt)}
                   </div>
@@ -250,10 +258,10 @@ export function TaskPanelModal({
                         !task.error && (
                           <div className="text-xs text-agent-muted-foreground">
                             {task.status === 'running'
-                              ? '任务还在运行，完成后结果会出现在这里。'
+                              ? t('The task is still running. The result appears here when it finishes.')
                               : task.status === 'blocked'
-                                ? '等待依赖任务完成，就绪后会自动开始。'
-                                : '无结果。'}
+                                ? t('Waiting for dependent tasks to finish. It starts automatically when ready.')
+                                : t('No result.')}
                           </div>
                         )
                       )}
@@ -271,7 +279,7 @@ export function TaskPanelModal({
                             ) : (
                               <LuGitMerge className="h-3 w-3" />
                             )}
-                            合并到主仓
+                            {t('Merge into main repo')}
                           </button>
                           <button
                             type="button"
@@ -281,7 +289,7 @@ export function TaskPanelModal({
                             data-task-discard
                           >
                             <LuTrash2 className="h-3 w-3" />
-                            丢弃
+                            {t('Discard')}
                           </button>
                         </div>
                       )}
@@ -299,7 +307,9 @@ export function TaskPanelModal({
         </div>
 
         <div className="border-t border-agent-border px-3 py-1.5 text-[10px] text-agent-muted-foreground/80">
-          任务由后台智能体独立执行。点任务名可在右侧看推理过程；Esc 关闭。
+          {t(
+            'Background agents run tasks on their own. Click a task name to see its reasoning on the right. Press Esc to close.',
+          )}
         </div>
       </div>
     </div>,

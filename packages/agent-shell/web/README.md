@@ -14,8 +14,12 @@ export default createProductViteConfig({ productDir, flavor });
 
 The product's Vite build compiles this package's `src/` into the product's own
 bundle; there is no prebuilt `dist/` here. See
-[`docs/spec/architecture.md`](https://github.com/pathlyapp/opensteerable/blob/develop/docs/spec/architecture.md)
+[`docs/spec/architecture.md`](https://github.com/pathlyapp/steerable/blob/develop/docs/spec/architecture.md)
 for the tier model.
+
+Renderer code reads native and backend capabilities through `HostBridge`
+(`getHostBridge()`). Browser mode uses the HTTP/SSE adapter; Tauri mode
+layers native commands and menu events over that same adapter.
 
 Products that require authentication can register an `AppShellGate` from
 `@steerable/agent-shell-web/auth/gate` before calling `bootstrap()`. An

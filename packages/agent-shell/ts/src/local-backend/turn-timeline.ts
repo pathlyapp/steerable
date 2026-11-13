@@ -42,6 +42,31 @@ export function appendTimelineDelta(
 }
 
 /**
+ * Withdraw a discarded attempt's streamed text and reasoning.
+ *
+ * A retry after partial output restarts the reply from nothing, so the blocks
+ * this attempt produced must not survive into the persisted turn: the retry's
+ * own text would otherwise be appended after text the model never finished
+ * saying. Tool blocks are kept — a tool call that already ran is a fact, and
+ * the retry does not repeat it.
+ *
+ * @param blocks Timeline to prune in place.
+ * @param sinceLength `blocks.length` recorded when the attempt started; only
+ *   entries at or after that index are candidates.
+ */
+export function dropAttemptBlocks(
+  blocks: PersistedTurnBlock[],
+  sinceLength: number,
+): void {
+  for (let index = blocks.length - 1; index >= sinceLength; index -= 1) {
+    const block = blocks[index];
+    if (block && (block.type === 'text' || block.type === 'reasoning')) {
+      blocks.splice(index, 1);
+    }
+  }
+}
+
+/**
  * Close the current reasoning/text segment so the next same-kind delta
  * starts a new block. Mirrors apps/web `sealLastBlock`.
  */

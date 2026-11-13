@@ -9,7 +9,12 @@
  *  - read_state.seed 处理器校验入参形状并返回 seeded 计数；
  *  - shutdown 逆序停包装配、杀终端、停 sidecar。
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+process.env.DEEPPATH_USER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'host-runtime-'));
 
 const mocks = vi.hoisted(() => ({
   setDefaultExecTimeoutMs: vi.fn(),
@@ -31,6 +36,9 @@ const mocks = vi.hoisted(() => ({
   refreshAllEnabled: vi.fn(async () => {}),
   seedProductServers: vi.fn(),
   setTaskServices: vi.fn(),
+  setLoopMonitor: vi.fn(),
+  loopMonitorConstructed: vi.fn(),
+  loopMonitorDispose: vi.fn(),
   registerToolContributions: vi.fn(),
   listModelSchemas: vi.fn(() => []),
   packAssemblies: new Map<string, (deps: unknown) => unknown>(),
@@ -58,6 +66,7 @@ vi.mock('../src/terminal-manager.js', () => ({
 vi.mock('../src/tool-router.js', () => ({
   ToolRouter: class {
     setTaskServices = mocks.setTaskServices;
+    setLoopMonitor = mocks.setLoopMonitor;
     registerToolContributions = mocks.registerToolContributions;
     listModelSchemas = mocks.listModelSchemas;
   },
@@ -79,6 +88,16 @@ vi.mock('../src/local-backend/router.js', () => ({
   LocalBackendRouter: class {
     resolveChatProject = vi.fn(() => null);
     resolveChatWorkspaceRoot = vi.fn(async () => '/tmp/chat-ws');
+    wakeChat = vi.fn(async () => ({ started: true }));
+    setAskReplay = vi.fn();
+  },
+}));
+vi.mock('../src/local-backend/loop-pty-monitor.js', () => ({
+  LoopPtyMonitor: class {
+    dispose = mocks.loopMonitorDispose;
+    constructor(...args: unknown[]) {
+      mocks.loopMonitorConstructed(...args);
+    }
   },
 }));
 vi.mock('../src/local-backend/worktree-service.js', () => ({ WorktreeService: class {} }));
@@ -94,6 +113,7 @@ vi.mock('../src/storage/driver.js', () => {
   return {
     LOCAL_SCOPE: { tenantId: 'local', userId: 'local' },
     initializeStorage: vi.fn(async () => {}),
+    watchStorageChanges: vi.fn(),
     closeStorage: vi.fn(async () => {}),
     getScopedStore: () => store,
     getPackDbAccess: () => ({ scope: { tenantId: 'local', userId: 'local' } }),
@@ -115,6 +135,7 @@ vi.mock('../src/host/visible-terminal-exec.js', () => ({
 vi.mock('../src/json-store.js', () => ({ createJsonStore: () => ({}) }));
 vi.mock('../src/local-backend/skill-loader.js', () => ({
   bindWorkspaceSkillRoots: mocks.bindWorkspaceSkillRoots,
+  listSkillRoots: () => ['/tmp/skills-builtin'],
 }));
 vi.mock('../src/attachments.js', () => ({
   getChatAttachmentsDir: (chatId: string) => `/tmp/attachments/${chatId}`,
@@ -153,7 +174,10 @@ describe('createHostRuntime · 装配', () => {
     expect(rt.toolRouter).toBeDefined();
     expect(rt.taskService).toBeDefined();
     expect(rt.localBackendRouter).toBeDefined();
+    expect(rt.localBackendRouter.setAskReplay).toHaveBeenCalledOnce();
     expect(mocks.setTaskServices).toHaveBeenCalledOnce();
+    expect(mocks.loopMonitorConstructed).toHaveBeenCalledOnce();
+    expect(mocks.setLoopMonitor).toHaveBeenCalledOnce();
     expect(mocks.bindWorkspaceSkillRoots).toHaveBeenCalledOnce();
     expect(mocks.seedProductServers).toHaveBeenCalledOnce();
   });
@@ -170,6 +194,19 @@ describe('createHostRuntime · 装配', () => {
     expect(broadcast).toHaveBeenCalledWith('terminal:exit', { sessionId: 's1', code: 0, signal: null });
     handlers.spawned({ id: 's2' });
     expect(broadcast).toHaveBeenCalledWith('terminal:spawned', { id: 's2' });
+  });
+
+  it('本连接的会话活动广播 chat-activity', async () => {
+    const options = makeOptions();
+    const rt = await createHostRuntime(options);
+    const { emitChatActivity } = await import('../src/storage/chat-activity.js');
+    const broadcast = (options as never as { broadcast: ReturnType<typeof vi.fn> }).broadcast;
+    emitChatActivity({ chatId: 'c1', updatedAt: '2026-10-09T03:00:00.000Z' });
+    expect(broadcast).toHaveBeenCalledWith('chat-activity', {
+      chatId: 'c1',
+      updatedAt: '2026-10-09T03:00:00.000Z',
+    });
+    await rt.shutdown();
   });
 
   it('持久化的 execTimeoutSeconds 恢复为毫秒；未配置时传 null', async () => {
@@ -211,6 +248,12 @@ describe('start · 生命周期', () => {
     expect(mocks.startHostSidecar).toHaveBeenCalledOnce();
   });
 
+  it('Python sidecar 启动失败时拒绝宿主启动', async () => {
+    mocks.startHostSidecar.mockRejectedValueOnce(new Error('python sidecar missing'));
+    const rt = await createHostRuntime(makeOptions());
+    await expect(rt.start()).rejects.toThrow('python sidecar missing');
+  });
+
   it('启动清扫 running 任务并记录原因；有清扫结果时打日志', async () => {
     mocks.failRunningTasks.mockReturnValue(3);
     const options = makeOptions();
@@ -227,9 +270,54 @@ describe('start · 生命周期', () => {
     const bootDeps = mocks.startHostSidecar.mock.calls[0][0];
     expect(bootDeps.approvalHandler).toBe('approval-handler');
     expect(bootDeps.askUserHandler).toBe('ask-user-handler');
+    // 附件目录 + 技能根（只读参考面）。spill 未设 env → 不出现。
     expect(await bootDeps.resolveAdditionalReadRoots('chat-1')).toEqual([
       '/tmp/attachments/chat-1',
+      '/tmp/skills-builtin',
     ]);
+    expect(await bootDeps.resolveAdditionalWriteRoots('chat-1')).toEqual([]);
+  });
+
+  it('技能根与 spill 根都进文件工具读根，且不进写根', async () => {
+    process.env.STEERABLE_SPILL_DIR = '/tmp/spill-dir';
+    try {
+      const rt = await createHostRuntime(makeOptions());
+      await rt.start();
+      const bootDeps = mocks.startHostSidecar.mock.calls.at(-1)?.[0] as {
+        resolveAdditionalReadRoots: (chatId: string) => Promise<string[]>;
+        resolveAdditionalWriteRoots: (chatId: string) => Promise<string[]>;
+      };
+      const read = await bootDeps.resolveAdditionalReadRoots('chat-1');
+      // 技能文档（含 spec_lock_reference.md）与 sidecar 溢出的工具输出
+      // 都必须能被 local_read_file 读回，否则只能 shell cat 绕行。
+      expect(read).toContain('/tmp/skills-builtin');
+      expect(read).toContain('/tmp/spill-dir');
+      // 只读：两者都不授予写入。
+      expect(await bootDeps.resolveAdditionalWriteRoots('chat-1')).toEqual([]);
+    } finally {
+      delete process.env.STEERABLE_SPILL_DIR;
+    }
+  });
+
+  it('包声明的可写根跟着每次工具调用走，且同时成为可读根', async () => {
+    const { registerPackTurnHooks, resetPackTurnHooks } = await import('../src/local-backend/pack-turn-hooks.js');
+    registerPackTurnHooks('test-pack-roots', {
+      execWritableRoots: () => ['/tmp/pack-root'],
+    });
+    try {
+      const rt = await createHostRuntime(makeOptions());
+      await rt.start();
+      const bootDeps = mocks.startHostSidecar.mock.calls.at(-1)?.[0] as {
+        resolveAdditionalReadRoots: (chatId: string) => Promise<string[]>;
+        resolveAdditionalWriteRoots: (chatId: string) => Promise<string[]>;
+      };
+      expect(await bootDeps.resolveAdditionalWriteRoots('chat-1')).toEqual(['/tmp/pack-root']);
+      // 回归：包在项目根之外落盘的产物必须能被文件工具读回，否则模型只能退回
+      // shell cat 绕行（ppt-master 的 ppt-projects 工作区就是这个症状）。
+      expect(await bootDeps.resolveAdditionalReadRoots('chat-1')).toContain('/tmp/pack-root');
+    } finally {
+      resetPackTurnHooks();
+    }
   });
 
   it('read_state.seed 处理器：合法 state 透传并回 seeded；畸形入参按空表处理', async () => {
@@ -262,6 +350,20 @@ describe('start · 生命周期', () => {
     expect(mocks.terminalEnsurePrimary).toHaveBeenCalledOnce();
     const onLog = (options as never as { onLog: ReturnType<typeof vi.fn> }).onLog;
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining('pty unavailable'));
+    vi.useRealTimers();
+  });
+
+  it('关停后不再预热终端', async () => {
+    vi.useFakeTimers();
+    try {
+      const rt = await createHostRuntime(makeOptions());
+      await rt.start();
+      await rt.shutdown();
+      vi.advanceTimersByTime(2_100);
+      expect(mocks.terminalEnsurePrimary).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -273,6 +375,7 @@ describe('shutdown', () => {
     const rt = await createHostRuntime(makeOptions());
     await rt.shutdown();
     expect(mocks.terminalKillAll).toHaveBeenCalledOnce();
+    expect(mocks.loopMonitorDispose).toHaveBeenCalledOnce();
     expect(order).toEqual(['b', 'a']);
     expect(mocks.shutdownHostSidecar).toHaveBeenCalledOnce();
   });

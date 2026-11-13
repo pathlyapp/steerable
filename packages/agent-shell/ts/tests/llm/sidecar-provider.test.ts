@@ -87,6 +87,29 @@ describe('SidecarLlmProvider', () => {
     expect(fake.streamChat).toHaveBeenCalledTimes(1);
   });
 
+  it('carries the product direct-connection switch, and omits it when off', async () => {
+    // 标题生成 / AI 建议打的是同一个模型服务：产品开了直连，这条辅助通道
+    // 也必须跳过代理，否则对话能用而标题生成还在代理上失败。
+    const direct = createFakeSupervisor('happy');
+    await new SidecarLlmProvider({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supervisor: direct as any,
+      provider: 'openai_compat',
+      model: 'gpt-4o-mini',
+      directConnection: true,
+    }).generate({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hi' }] });
+    expect(direct.streamChat.mock.calls[0][0].directConnection).toBe(true);
+
+    const off = createFakeSupervisor('happy');
+    await new SidecarLlmProvider({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      supervisor: off as any,
+      provider: 'openai_compat',
+      model: 'gpt-4o-mini',
+    }).generate({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hi' }] });
+    expect(off.streamChat.mock.calls[0][0]).not.toHaveProperty('directConnection');
+  });
+
   it('captures tool calls emitted by the sidecar', async () => {
     const fake = createFakeSupervisor('tool-call');
     const provider = new SidecarLlmProvider({

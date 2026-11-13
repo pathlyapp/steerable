@@ -36,6 +36,11 @@ export interface UsageSummary {
     cachedPromptTokens: number;
     /** 所有有单价模型的成本合计(无单价模型不计入)。 */
     costUsd: number;
+    /**
+     * R5:行数里有多少条只是部分账单(外部引擎子代理不报 token)。
+     * 面板据此提示「合计不含部分子代理」，而不是让偏小的数字冒充完整账单。
+     */
+    partialTurns: number;
   };
 }
 
@@ -49,6 +54,8 @@ export interface UsageSummaryRow {
   total_tokens: number;
   cached_prompt_tokens: number;
   cost_usd: number | null;
+  /** R5: how many rows in this bucket are only a partial bill. */
+  partial_turns: number;
 }
 
 /**
@@ -80,5 +87,14 @@ export function buildUsageSummary(rows: UsageSummaryRow[], sinceDays: number): U
     { turns: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedPromptTokens: 0, costUsd: 0 },
   );
 
-  return { sinceDays, byModel, totals };
+  return {
+    sinceDays,
+    byModel,
+    totals: {
+      ...totals,
+      // Summed over rows rather than buckets: "how many turns are missing
+      // spend" is a fact about the window, not about one model.
+      partialTurns: rows.reduce((sum, row) => sum + Number(row.partial_turns ?? 0), 0),
+    },
+  };
 }

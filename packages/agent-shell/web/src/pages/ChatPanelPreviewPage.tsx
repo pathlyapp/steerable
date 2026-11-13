@@ -5,6 +5,7 @@ import { ChatHeader } from '@/components/ChatHeader';
 import type { ExecutedAction } from '@/components/chat/ExecutedActionsCard';
 import type { TurnBlock } from '@/components/chat/turn-timeline';
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
+import { t } from '@/i18n';
 
 /**
  * ChatPanelPreviewPage — dev-only visual harness for `LocalChatPanel`.
@@ -22,10 +23,10 @@ import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
 const MOCK_AGENT: LocalChatAgent = {
   id: 'agent_local_default',
   slug: 'local-coder',
-  name: '本地 Coder',
+  name: 'Local coder',
   icon: '🤖',
   color: '#0ea5e9',
-  description: '本地代码助手 — 跑 shell / 工具演示 / 简单读写',
+  description: 'Local coding assistant — shell, tool demos, and simple file edits',
   rolePrompt: null,
   isBuiltin: true,
 };
@@ -34,7 +35,7 @@ const MOCK_CHAT: LocalChat = {
   id: 'preview-chat',
   projectId: null,
   userId: 'preview-user',
-  title: '预览：检查服务连通性 + 跑测试套件',
+  title: 'Preview: check the service, then run the test suite',
   agentId: MOCK_AGENT.id,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
@@ -47,21 +48,21 @@ const MOCK_MESSAGES: ChatMessage[] = [
   {
     id: 'm1',
     role: 'user',
-    content: '帮我看下本地服务是否连通，再跑一下本目录的测试套件。',
+    content: 'Check whether the local service is up, then run the test suite in this directory.',
     createdAt: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
   },
   {
     id: 'm2',
     role: 'assistant',
     agentId: MOCK_AGENT.id,
-    content: `好的，先检查服务连通性，然后跑测试。
+    content: `I'll check the service, then run the tests.
 
 \`\`\`bash
 $ check_connection
 ✓ Mock service @ 127.0.0.1:8765 reachable (latency 4ms)
 \`\`\`
 
-连接正常。接下来跑测试套件：
+The connection is fine. Next, the test suite:
 
 \`\`\`bash
 $ npm test
@@ -74,18 +75,17 @@ FAIL  src/components/chat/AssistantMessage.test.tsx
 Tests: 1 failed, 2 passed, 3 total
 \`\`\`
 
-有 1 个失败：\`AssistantMessage\` 的默认 agent 色没有从 props 传过来。建议在
-\`agentInitial\` 之前先 \`a.color ?? '#7c3aed'\`，让 fallback 优先于硬编码。
+1 failure: \`AssistantMessage\` did not take the agent color from props. Use \`a.color ?? '#7c3aed'\` before \`agentInitial\` so the fallback wins over the hardcoded color.
 
-要我帮你直接改这个文件吗？`,
+Want me to edit that file?`,
     createdAt: new Date(Date.now() - 1000 * 60 * 3).toISOString(),
   },
 ];
 
 const MOCK_TODOS = [
-  { id: 'survey', content: '检查服务连通性', status: 'completed' as const },
-  { id: 'test', content: '跑本目录测试套件', status: 'in_progress' as const },
-  { id: 'fix', content: '修失败的断言颜色', status: 'pending' as const },
+  { id: 'survey', content: 'Check service connectivity', status: 'completed' as const },
+  { id: 'test', content: 'Run the test suite in this directory', status: 'in_progress' as const },
+  { id: 'fix', content: 'Fix the failing assertion color', status: 'pending' as const },
 ];
 
 const MOCK_TODO_ACTION: ExecutedAction = {
@@ -127,12 +127,12 @@ const MOCK_ACTIONS: ExecutedAction[] = [
 ];
 
 const MOCK_TIMELINE: TurnBlock[] = [
-  { type: 'reasoning', content: '先检查服务连通性，再跑测试套件。' },
+  { type: 'reasoning', content: 'Check connectivity first, then run the test suite.' },
   { type: 'tools', actions: [MOCK_TODO_ACTION] },
   { type: 'tools', actions: [MOCK_ACTIONS[1]] },
-  { type: 'text', content: '连接正常。接下来跑测试套件。' },
+  { type: 'text', content: 'The connection is fine. Next, the test suite.' },
   { type: 'tools', actions: [MOCK_ACTIONS[2]] },
-  { type: 'reasoning', content: '测试失败，读一下失败文件再给建议。' },
+  { type: 'reasoning', content: 'The tests failed. Read the failing file, then suggest a fix.' },
   { type: 'tools', actions: [MOCK_ACTIONS[3]] },
   { type: 'text', content: MOCK_MESSAGES[1].content ?? '' },
 ];
@@ -142,33 +142,35 @@ const MOCK_TIMELINE: TurnBlock[] = [
  *   • `static`     — finished conversation; verifies copy buttons, action
  *     cards, markdown rendering on history.
  *   • `thinking`   — in-flight assistant bubble before any content; verifies
- *     StreamingStatus's "正在思考..." baseline.
+ *     StreamingStatus's "Now thinking..." baseline.
  *   • `tools-run`  — in-flight bubble, round 2, 2 tools just ran; verifies
- *     StreamingStatus's "已调用 N 个工具" + "Round N" badge interaction.
+ *     StreamingStatus's "Called N tools" line and the Round N badge.
  *   • `reasoning-stream` — reasoning tokens arrive over time; verifies the
  *     5-line peek stays visible and the list scrollbar sticks to the bottom.
  */
 type PreviewScene = 'static' | 'thinking' | 'tools-run' | 'reasoning-stream';
 
 const STREAMING_REASONING = [
-  '先检查服务是否还能连上。',
-  '如果端口通了，再跑本目录的测试套件。',
-  '失败的话只读失败文件，不要整仓扫一遍。',
-  '断言颜色对不上时优先看 AssistantMessage 的默认色。',
-  '改完再复跑一次，确认没有带出新的失败。',
-  '工具调用保持最少：连通性检查、跑测试、必要时读文件。',
-  '最后用一两句说清楚结果和下一步。',
-  '如果还在思考，后面的句子会被 5 行窗口裁掉。',
-  '比较 a < b 时不要被 Markdown 当成 HTML 标签吃掉。',
-  '滚动条应一直钉在最下面，不要随着 token 上下跳。',
+  'Check whether the service is still reachable.',
+  'If the port is open, run the test suite in this directory.',
+  'If it fails, read only the failing file. Do not scan the whole repo.',
+  "When an assertion color is wrong, look at AssistantMessage's default color first.",
+  'After the edit, run the tests again and check for new failures.',
+  'Keep tool calls few: connectivity, tests, and a file read only if needed.',
+  'Finish with one or two sentences on the result and the next step.',
+  'If thinking is still streaming, later sentences are cut by the 5-line window.',
+  'Comparing a < b must not be eaten as an HTML tag by Markdown.',
+  'The scrollbar should stay pinned to the bottom and not jump with each token.',
 ].join('\n');
 
-const SCENES: { id: PreviewScene; label: string }[] = [
-  { id: 'static', label: '静态历史' },
-  { id: 'thinking', label: '流式 · 空内容' },
-  { id: 'tools-run', label: '流式 · 工具已跑 · round 2' },
-  { id: 'reasoning-stream', label: '流式 · 推理打字' },
-];
+function previewScenes(): { id: PreviewScene; label: string }[] {
+  return [
+    { id: 'static', label: t('Static history') },
+    { id: 'thinking', label: t('Streaming · empty content') },
+    { id: 'tools-run', label: t('Streaming · tools ran · round 2') },
+    { id: 'reasoning-stream', label: t('Streaming · reasoning typing') },
+  ];
+}
 
 export function ChatPanelPreviewPage() {
   const [scene, setScene] = useState<PreviewScene>('static');
@@ -249,14 +251,14 @@ export function ChatPanelPreviewPage() {
             {
               type: 'reasoning',
               content: [
-                '先检查服务是否还能连上。',
-                '如果端口通了，再跑本目录的测试套件。',
-                '失败的话只读失败文件，不要整仓扫一遍。',
-                '断言颜色对不上时优先看 AssistantMessage 的默认色。',
-                '改完再复跑一次，确认没有带出新的失败。',
-                '工具调用保持最少：连通性检查、跑测试、必要时读文件。',
-                '最后用一两句说清楚结果和下一步。',
-                '如果还在思考，后面的句子会被 5 行窗口裁掉。',
+                'Check whether the service is still reachable.',
+                'If the port is open, run the test suite in this directory.',
+                'If it fails, read only the failing file. Do not scan the whole repo.',
+                "When an assertion color is wrong, look at AssistantMessage's default color first.",
+                'After the edit, run the tests again and check for new failures.',
+                'Keep tool calls few: connectivity, tests, and a file read only if needed.',
+                'Finish with one or two sentences on the result and the next step.',
+                'If thinking is still streaming, later sentences are cut by the 5-line window.',
               ].join('\n'),
             },
             {
@@ -299,7 +301,7 @@ export function ChatPanelPreviewPage() {
           timelineByMsgId: { m2: MOCK_TIMELINE },
           durationByMessageId: { m2: 83_000 },
           currentRound: 1,
-          suggestedReplies: ['修一下失败的断言颜色', '把测试再跑一遍', '解释这次失败的原因'],
+          suggestedReplies: ['Fix the failing assertion color', 'Run the tests again', 'Explain this failure'],
         };
     }
   }, [scene, streamedReasoning]);
@@ -311,7 +313,7 @@ export function ChatPanelPreviewPage() {
           /preview/chat (dev harness)
         </span>
         <div className="flex gap-1">
-          {SCENES.map((s) => (
+          {previewScenes().map((s) => (
             <button
               key={s.id}
               type="button"
@@ -339,7 +341,7 @@ export function ChatPanelPreviewPage() {
           header={
             <ChatHeader chat={MOCK_CHAT} />
           }
-          inputPlaceholder="预览模式 — 输入不会真的发送…"
+          inputPlaceholder={t('Preview mode: input is not actually sent…')}
           agents={[MOCK_AGENT]}
           currentAgent={MOCK_AGENT}
           executedActionsByMessageId={config.actionsByMsgId}

@@ -1,6 +1,6 @@
 [project]
 name = "steerable-sidecar"
-version = "0.6.39"
+version = "0.10.0"
 description = "Steerable agent runtime sidecar — JSON-RPC over stdio."
 license = { text = "Apache-2.0" }
 readme = "README.md"
@@ -20,6 +20,7 @@ dependencies = [
   # builds a transport per declared proxy at client construction, so the scheme
   # must be buildable or every provider call fails before reaching a URL.
   "httpx[socks]>=0.27",
+  "Pillow>=10.4",
   "steerable-agent-protocol>=0.1.0,<1.0.0",
   "steerable-agent-harness>=0.1.0,<1.0.0",
   "steerable-agent-runtime>=0.1.0,<1.0.0",

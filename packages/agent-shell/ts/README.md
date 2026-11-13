@@ -1,6 +1,35 @@
 # @steerable/agent-shell
 
-Product-neutral Electron and headless HTTP host for Steerable Framework.
+Product-neutral Node HostRuntime and headless HTTP host for Steerable Framework.
+
+## Runtime bundle
+
+The sidecar, its `run_code` interpreter and the egress proxy are binary
+artifacts. The shell resolves them from the first place that has them: an
+explicit `STEERABLE_SIDECAR_PYTHON` (or the `host-runtime.json` a desktop
+product writes), a packaged `python-runtime/` directory, the
+`@steerable/runtime-<target>` npm package, then a repository `.venv`. A missing
+bundle raises `SidecarRuntimeMissingError` with the reason and the target, and
+a digest mismatch refuses to start.
+
+`egressProxyMissingWarning()` is the one-line notice a command line should print
+when the proxy is absent: the host allow-list is then not enforced by domain and
+network rules fall back to ports.
+
+## Desktop composition
+
+Tauri desktop products supervise the same BS executable used by browser mode,
+bind it to an ephemeral loopback port, and load its web UI in a WebView. The
+renderer uses `HostBridge`: HTTP/SSE carries agent, storage, PTY, approval,
+attachment, and pack traffic; narrow Tauri commands provide native dialogs,
+menus, screenshots, and updates. `STEERABLE_HOST_READY` on stdout is the
+machine-readable startup record. `STEERABLE_HOST_PARENT_PID` makes the Node
+host shut down if its desktop supervisor disappears.
+
+The reusable Rust host source is published as
+`@steerable/agent-shell-tauri`. Product `src-tauri` crates depend on its
+installed npm path and only supply product configuration plus
+`tauri::generate_context!()`.
 
 ## BS composition
 

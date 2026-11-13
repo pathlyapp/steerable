@@ -18,7 +18,9 @@
  * 真实拼装逻辑上，mock 只停在进程外边界。
  */
 import { vi } from 'vitest';
+import path from 'node:path';
 import { resetProductConfigForTests } from '../../src/product-config.js';
+import { GoalStore } from '../../src/goal-store.js';
 
 import type {
   ChatAgentRecord,
@@ -143,6 +145,8 @@ class FakeLocalStore {
       systemPrompt: string | null;
       pinnedRefs: unknown[] | null;
       projectId: string | null;
+      titleSource: 'user' | 'auto' | null;
+      forkedFrom: string | null;
     }>,
   ): Promise<ChatSessionRecord | null> {
     const chat = this.state.chats.get(chatId);
@@ -381,9 +385,37 @@ class FakeLocalStore {
     return { days: sinceDays, events: this.state.usageEvents.length };
   }
 
+  /**
+   * 真实实现的 SQL 版本在 `reliability-sql.test.ts` 里用真库验证；这里只
+   * 按同样的口径把内存里记下的 usage 事件数一遍，让路由层能端到端读到数。
+   */
+  async getReliabilitySummary(sinceDays = 7): Promise<Record<string, unknown>> {
+    const turns = this.state.usageEvents.filter((event) => event.kind === 'turn');
+    return {
+      sinceDays,
+      total: turns.length,
+      failed: turns.filter((event) => event.outcome === 'failed').length,
+      cancelled: turns.filter((event) => event.outcome === 'cancelled').length,
+      recoveredByRetry: turns.filter(
+        (event) => event.outcome === 'completed' && event.retried === true,
+      ).length,
+      usedDirect: turns.filter((event) => event.usedDirect === true).length,
+      failuresByKind: [],
+    };
+  }
+
   // ── settings ──
   async getLlmSettings(): Promise<Record<string, unknown> | null> {
     return this.state.llmSettings;
+  }
+
+  async setLlmSettings(settings: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this.state.llmSettings = { ...settings };
+    return this.state.llmSettings;
+  }
+
+  async getInsightsSettings(): Promise<FakeStoreState['insights']> {
+    return this.state.insights;
   }
 
   async getTelemetrySettings(): Promise<FakeStoreState['telemetry']> {
@@ -460,6 +492,11 @@ const harness = vi.hoisted(() => {
     // 类声明存在 TDZ，不能在这里 new；store 在下方模块求值时赋值，
     // vi.mock 工厂在测试文件 import router 时才执行，那时已就绪。
     store: null as unknown as FakeLocalStore,
+    /**
+     * 每个测试文件各自一份。内存会话 id 从 chat-1 重新计，写锁落在这个目录下；
+     * 并行文件若共用一个目录，会把对方的锁当成「会话正在运行」并返回 409。
+     */
+    userDataDir: `/tmp/steerable-router-${crypto.randomUUID()}`,
     /** 技能删除路由的 userSkillsDir（真实 fs 操作，用例可覆写到临时目录）。 */
     userSkillsDir: '/tmp/router-test-user-skills',
     /** getSidecarSupervisor() 的返回值（同步路径：流式/cancel/branches）。 */
@@ -502,6 +539,7 @@ const harness = vi.hoisted(() => {
     parseImageAttachments: vi.fn((value: unknown) => (Array.isArray(value) ? value : [])),
     processImageAttachments: vi.fn(() => ({ images: [], notes: [] as string[] })),
     loadProjectRuleFiles: vi.fn(() => ({ files: [] as string[], content: '' })),
+    listProjectRuleFiles: vi.fn(() => [] as string[]),
     /** matchPackBackendRoute 的每用例返回值。 */
     packRoute: null as null | {
       params: Record<string, string>;
@@ -542,7 +580,7 @@ vi.mock('../../src/runtime.js', () => ({
   getAppRootDir: () => '/tmp/app-root',
   // 系统提示词会带上本会话附件目录（项目围栏外的只读
   // 放行根），router.ts 经 chatAttachmentsDirPath() 读它。
-  getUserDataDir: () => '/tmp/user-data',
+  getUserDataDir: () => h.userDataDir,
   getDocumentsDir: () =>
     process.env.STEERABLE_DOCUMENTS_DIR || '/tmp/steerable-test-documents',
   shellOpenPath: (target: string) => h.shellOpenPath(target),
@@ -572,6 +610,23 @@ vi.mock('../../src/sidecar/index.js', () => ({
 vi.mock('../../src/local-backend/coreloop-stream.js', () => ({
   buildWorldState: (input: unknown) => ({ mockedWorldState: true, input }),
   getActiveCoreLoopStreamId: (chatId: string) => h.activeStreamIds.get(chatId),
+  toTurnTool: (schema: {
+    name: string;
+    description: string;
+    inputSchema: unknown;
+    mode?: string;
+    approval?: { category?: string } | null;
+  }) => {
+    const tool: Record<string, unknown> = {
+      name: schema.name,
+      description: schema.description,
+      inputSchema: schema.inputSchema,
+    };
+    if (schema.mode) tool.mode = schema.mode;
+    const category = schema.approval?.category;
+    if (category) tool.approvalCategory = category;
+    return tool;
+  },
   streamCoreLoopTurn: (options: Record<string, unknown>) => {
     if (!h.streamImpl) throw new Error('streamImpl not configured');
     return h.streamImpl(options);
@@ -614,6 +669,7 @@ vi.mock('../../src/image-attachment.js', () => ({
 
 vi.mock('../../src/project-rules.js', () => ({
   loadProjectRuleFiles: h.loadProjectRuleFiles,
+  listProjectRuleFiles: h.listProjectRuleFiles,
 }));
 
 vi.mock('../../src/local-backend/pack-turn-hooks.js', () => ({
@@ -714,6 +770,8 @@ export function resetRouterTestkit(): void {
   h.processImageAttachments.mockReturnValue({ images: [], notes: [] });
   h.loadProjectRuleFiles.mockReset();
   h.loadProjectRuleFiles.mockReturnValue({ files: [], content: '' });
+  h.listProjectRuleFiles.mockReset();
+  h.listProjectRuleFiles.mockReturnValue([]);
   h.recordInsightEvent.mockReset();
   h.recordInsightTurn.mockReset();
   h.recordInsightProfile.mockReset();
@@ -735,7 +793,8 @@ export interface ToolSchemaStub {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  mode: 'read' | 'write';
+  mode: 'read' | 'write' | 'external';
+  approval?: { category?: string } | null;
 }
 
 export const DEFAULT_TOOL_SCHEMAS: ToolSchemaStub[] = [
@@ -750,6 +809,7 @@ export const DEFAULT_TOOL_SCHEMAS: ToolSchemaStub[] = [
  */
 export function makeToolRouter(overrides: Record<string, unknown> = {}) {
   const schemas = (overrides.schemas as ToolSchemaStub[] | undefined) ?? DEFAULT_TOOL_SCHEMAS;
+  const goalStore = new GoalStore(path.join(h.userDataDir, `goals-${crypto.randomUUID()}.json`));
   const applyPolicy = (policy?: { mode: string; tools: string[] }) => {
     if (!policy || policy.mode === 'all') return schemas;
     if (policy.mode === 'allowlist') return schemas.filter((s) => policy.tools.includes(s.name));
@@ -763,6 +823,7 @@ export function makeToolRouter(overrides: Record<string, unknown> = {}) {
     getSchemaByName: vi.fn((name: string) => schemas.find((s) => s.name === name) ?? null),
     projectRegistry: null as unknown,
     mcpRegistry: null as unknown,
+    goals: () => goalStore,
     ...overrides,
   };
 }
@@ -828,6 +889,7 @@ export function makeMcpRegistry(options: {
   const toolCache = options.toolCache ?? new Map();
   return {
     list: vi.fn(() => servers),
+    toPublicEntry: vi.fn((server: Record<string, unknown>) => ({ ...server })),
     getCachedTools: vi.fn((id: string) => toolCache.get(id) ?? null),
     serverKey: vi.fn((s: { id: string }) => `key-${s.id}`),
     refreshTools: vi.fn(async (id: string) => {

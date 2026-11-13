@@ -18,6 +18,7 @@ function row(overrides: Partial<UsageSummaryRow>): UsageSummaryRow {
     total_tokens: 0,
     cached_prompt_tokens: 0,
     cost_usd: null,
+    partial_turns: 0,
     ...overrides,
   };
 }
@@ -34,6 +35,7 @@ describe('buildUsageSummary (W6-9)', () => {
       totalTokens: 0,
       cachedPromptTokens: 0,
       costUsd: 0,
+      partialTurns: 0,
     });
   });
 
@@ -95,5 +97,26 @@ describe('buildUsageSummary (W6-9)', () => {
       30,
     );
     expect(s.totals.costUsd).toBeCloseTo(0.003, 10);
+  });
+
+  it('counts partial-bill turns across buckets, not per bucket', () => {
+    // R5: an external-engine child reports no tokens, so the turn's stored
+    // totals are a lower bound. The panel must be able to say so instead of
+    // presenting the smaller number as the whole bill.
+    const s = buildUsageSummary(
+      [
+        row({ model: 'a', total_tokens: 100, partial_turns: 2 }),
+        row({ model: 'b', total_tokens: 50, partial_turns: 0 }),
+        row({ model: 'c', total_tokens: 10, partial_turns: 1 }),
+      ],
+      30,
+    );
+    expect(s.totals.partialTurns).toBe(3);
+    expect(s.totals.totalTokens).toBe(160);
+  });
+
+  it('reports zero partial turns when every row is a complete bill', () => {
+    const s = buildUsageSummary([row({ total_tokens: 10 })], 30);
+    expect(s.totals.partialTurns).toBe(0);
   });
 });

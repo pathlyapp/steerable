@@ -2,7 +2,7 @@
  * 项目默认家目录：`Documents/<应用名>/<项目名>/`。
  *
  * 新建项目不再等于「选一个已有文件夹」——项目是带名字的容器，
- * 家目录由本模块分配并创建。用户另加的源文件夹是附加只读根，
+ * 家目录由本模块分配并创建。用户另加的源文件夹是额外可写根（含子目录），
  * 不替代这个家目录。
  */
 
@@ -69,6 +69,31 @@ export function allocateProjectHome(
 
 export function ensureProjectHome(folderPath: string): void {
   fs.mkdirSync(folderPath, { recursive: true });
+}
+
+/**
+ * 把一批可写根落成真实目录，返回原列表（便于链式使用）。
+ *
+ * Linux 的 Landlock 在安装规则时逐个 open 这些路径，bwrap 则要 bind mount
+ * 它们；声明了但还没建过的目录会让被沙箱的子进程直接起不来
+ * （`writable root … does not exist`）。这与 supervisor 启动时对
+ * `sandboxWritableRoots` 做的 mkdir 是同一个前置条件。
+ *
+ * 建不出来的根**留在列表里**：沙箱应当因此明确拒绝这次调用，而不是悄悄
+ * 少一份写权限继续跑。
+ */
+export function ensureWritableRoots(roots: readonly string[]): string[] {
+  for (const root of new Set(roots)) {
+    if (typeof root !== 'string' || !root.trim()) continue;
+    try {
+      fs.mkdirSync(root, { recursive: true });
+    } catch (err) {
+      console.warn(
+        `[project-home] cannot create writable root ${root}: ${(err as Error).message}`,
+      );
+    }
+  }
+  return [...roots];
 }
 
 /** 无项目对话的工作区子目录名（与托管项目家目录并列，避免撞名）。 */

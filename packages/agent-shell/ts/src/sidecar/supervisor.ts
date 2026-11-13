@@ -19,12 +19,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { onAppWillQuit, offAppWillQuit } from '../runtime.js';
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 import { resolveWinSpawnHelperPath } from './reverse-spawn.js';
+import { resolvePlatformRuntime } from '@steerable/agent-runtime';
+import { bundledRuntimeTag } from '@steerable/agent-protocol';
 import {
   SidecarBootError,
   SidecarMethodError,
@@ -45,6 +45,7 @@ import type {
   SidecarSessionForkResult,
   SidecarSessionMessages,
   SidecarSessionTree,
+  SidecarChildrenList,
   SidecarSkillModule,
   SidecarStartOptions,
   SidecarChildEvent,
@@ -58,8 +59,6 @@ const READY_PREFIX = '__SIDECAR_READY__:';
 const DEFAULT_BOOT_TIMEOUT_MS = 15_000;
 const DEFAULT_HEALTH_INTERVAL_MS = 5_000;
 const DEFAULT_RESTART_AFTER_FAILED_PINGS = 3;
-export const RUST_SIDECAR_ENV = 'STEERABLE_RUST_SIDECAR';
-export const RUST_SIDECAR_BIN_ENV = 'STEERABLE_RUST_SIDECAR_BIN';
 // Only /usr/bin/sandbox-exec is trusted — a PATH-relative lookup could
 // resolve to an attacker-planted binary (codex's rule).
 const SEATBELT_EXECUTABLE = '/usr/bin/sandbox-exec';
@@ -115,7 +114,6 @@ export class SidecarSupervisor extends EventEmitter {
   private healthTimer: NodeJS.Timeout | null = null;
   private failedPings = 0;
   private shuttingDown = false;
-  private quitListener: (() => void) | null = null;
   private reverseHandlers = new Map<string, SidecarReverseHandler>();
 
   private constructor(private readonly options: SidecarStartOptions) {
@@ -123,8 +121,12 @@ export class SidecarSupervisor extends EventEmitter {
   }
 
   /** Spawn the sidecar and wait for the ready marker. */
-  static async start(options: SidecarStartOptions = {}): Promise<SidecarSupervisor> {
+  static async start(
+    options: SidecarStartOptions = {},
+    onCreate?: (supervisor: SidecarSupervisor) => void,
+  ): Promise<SidecarSupervisor> {
     const supervisor = new SidecarSupervisor(options);
+    onCreate?.(supervisor);
     try {
       await supervisor.boot();
       SidecarSupervisor.lastSpawnRefusal = null;
@@ -444,15 +446,70 @@ export class SidecarSupervisor extends EventEmitter {
   }
 
   /**
+   * Every child agent recorded for one parent session.
+   *
+   * Soft-fail null keeps the caller honest: an empty list would be
+   * indistinguishable from "this session spawned nothing", and the two mean
+   * very different things to a "resume your children" panel.
+   */
+  async childrenList(params: {
+    parentRecordId?: string;
+    prefix?: string;
+    includeFinished?: boolean;
+    answerPreviewChars?: number;
+  }): Promise<SidecarChildrenList | null> {
+    try {
+      return await this.call<SidecarChildrenList>('agent.children.list', params, {
+        timeoutMs: 15_000,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Cooperatively interrupt one running child of a chat's live turn.
+   *
+   * Soft-fails `null` (the caller treats it as "nothing to stop"): the panel
+   * pressed stop on a row that may have settled a moment ago, which is not an
+   * error worth showing.
+   *
+   * @param chatId The chat whose turn owns the child.
+   * @param childId The child's lineage id.
+   */
+  async childrenInterrupt(
+    chatId: string,
+    childId: string,
+  ): Promise<{ interrupted: boolean; reason?: string } | null> {
+    try {
+      return await this.call<{ interrupted: boolean; reason?: string }>(
+        'agent.children.interrupt',
+        { chatId, childId },
+        { timeoutMs: 15_000 },
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Inject a user message into a running CoreLoop turn (mid-turn steering).
    * Soft-fails (`{ ok: false }`) when the turn already ended — the caller
    * should then send the message as a normal new turn instead.
    */
-  async steerChat(streamId: string, content: string): Promise<boolean> {
+  async steerChat(
+    streamId: string,
+    content: string,
+    execPolicy?: 'workspace' | 'full',
+  ): Promise<boolean> {
     try {
       const result = await this.call<{ ok: boolean; reason?: string }>(
         'agent.chat.steer',
-        { streamId, content },
+        {
+          streamId,
+          content,
+          ...(execPolicy ? { execPolicy } : {}),
+        },
         { timeoutMs: 2_000 },
       );
       return result.ok === true;
@@ -493,10 +550,6 @@ export class SidecarSupervisor extends EventEmitter {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
     this.stopHealthTimer();
-    if (this.quitListener) {
-      offAppWillQuit(this.quitListener);
-      this.quitListener = null;
-    }
     const child = this.child;
     if (!child) return;
     try {
@@ -516,27 +569,72 @@ export class SidecarSupervisor extends EventEmitter {
     this.failPending(new SidecarShutdownError('sidecar shut down'));
   }
 
+  /**
+   * Kill the supervised process without sending the sidecar shutdown RPC.
+   *
+   * This is the host-owned abrupt-stop path for crash recovery and emergency
+   * teardown. Callers must not use the pid reported by `system.ping`: under
+   * bwrap that pid belongs to the private PID namespace and is not a host pid.
+   */
+  async forceShutdown(): Promise<void> {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+    this.stopHealthTimer();
+    const child = this.child;
+    if (!child) return;
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new SidecarShutdownError('sidecar did not exit after SIGKILL'));
+      }, 2_000);
+      const onExit = () => {
+        cleanup();
+        resolve();
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        child.off('exit', onExit);
+      };
+      child.once('exit', onExit);
+      try {
+        const signalled = child.kill('SIGKILL');
+        if (!signalled && child.exitCode === null && child.signalCode === null) {
+          cleanup();
+          reject(new SidecarShutdownError('failed to send SIGKILL to sidecar'));
+        } else if (child.exitCode !== null || child.signalCode !== null) {
+          onExit();
+        }
+      } catch (err) {
+        cleanup();
+        reject(new SidecarShutdownError(
+          `failed to send SIGKILL to sidecar: ${(err as Error).message}`,
+        ));
+      }
+    });
+    this.child = null;
+    this.failPending(new SidecarShutdownError('sidecar forcibly shut down'));
+  }
+
   // ------------------------------------------------------------------
   // Internal: boot
   // ------------------------------------------------------------------
 
   private async boot(): Promise<void> {
-    const rustBin = rustSidecarEnabled()
-      ? resolveRustSidecarBin(this.options.rustSidecarBin)
-      : undefined;
-    let spawnPlan: { command: string; args: string[]; env?: NodeJS.ProcessEnv };
-    if (rustBin) {
-      spawnPlan = await this.resolveSandboxedSpawn(rustBin, this.options.args ?? []);
-    } else {
-      const py = this.resolvePythonBinary();
-      const entry = this.options.entryModule ?? 'steerable_sidecar';
-      const args = ['-m', entry, ...(this.options.args ?? [])];
-      spawnPlan = await this.resolveSandboxedSpawn(py, args);
+    const py = this.resolvePythonBinary();
+    const entry = this.options.entryModule ?? 'steerable_sidecar';
+    const args = ['-m', entry, ...(this.options.args ?? [])];
+    const spawnPlan = await this.resolveSandboxedSpawn(py, args);
+    // Profile generation is asynchronous. A quit can begin while it runs;
+    // never spawn a new child after shutdown has claimed the supervisor.
+    if (this.shuttingDown) {
+      throw new SidecarShutdownError('sidecar startup cancelled by shutdown');
     }
     const child = spawn(spawnPlan.command, spawnPlan.args, {
       cwd: this.options.cwd,
       env: { ...process.env, ...this.options.env, ...spawnPlan.env },
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     }) as ChildProcessWithoutNullStreams;
     this.child = child;
     this.attachListeners(child);
@@ -549,7 +647,6 @@ export class SidecarSupervisor extends EventEmitter {
       throw err;
     }
 
-    this.installAppQuitHook();
     this.startHealthTimer();
     this.emit('ready', this.readyHealth);
   }
@@ -648,16 +745,11 @@ export class SidecarSupervisor extends EventEmitter {
         ...(webEgress ? ['--allow-web-egress'] : []),
         ...(allowResolver ? ['--allow-resolver'] : []),
       ];
-      const rustBin = rustSidecarEnabled()
-        ? resolveRustSidecarBin(this.options.rustSidecarBin)
-        : undefined;
-      const { stdout } = rustBin
-        ? await execFileAsync(rustBin, ['sandbox', 'profile', ...flags], { timeout: 10_000 })
-        : await execFileAsync(
-            command,
-            ['-m', 'steerable_sidecar.sandbox', 'profile', ...flags],
-            { timeout: 10_000 },
-          );
+      const { stdout } = await execFileAsync(
+        command,
+        ['-m', 'steerable_sidecar.sandbox', 'profile', ...flags],
+        { timeout: 10_000 },
+      );
       const profile = stdout.trim();
       if (!profile.includes('(deny default)')) {
         throw new Error('generated profile is not a Seatbelt policy');
@@ -670,11 +762,16 @@ export class SidecarSupervisor extends EventEmitter {
           ')',
       );
       this.sandboxPosture = { backend: 'seatbelt', enforcement: 'partial', reason: 'active' };
+      const confinedTmp = join(writableRoots[0], 'tmp');
+      mkdirSync(confinedTmp, { recursive: true });
       return {
         command: SEATBELT_EXECUTABLE,
         args: ['-p', profile, command, ...args],
         env: {
           PYTHONDONTWRITEBYTECODE: '1',
+          TMPDIR: confinedTmp,
+          TMP: confinedTmp,
+          TEMP: confinedTmp,
           // macOS denies a nested sandbox_apply once the outer profile allows
           // outbound network, so a layer-1-confined sidecar cannot wrap its own
           // run_code child. The marker tells the sidecar to let that child
@@ -706,29 +803,17 @@ export class SidecarSupervisor extends EventEmitter {
     // 都透传环境）+ sidecar 应用层域名名单强制，网络命名空间保持共享。
     // 这里如实记录，不假装接上了实际不强制的参数。
     const egressViaProxy = this.options.env?.STEERABLE_EGRESS_CONFINED === '1';
-    const rustBin = rustSidecarEnabled()
-      ? resolveRustSidecarBin(this.options.rustSidecarBin)
-      : undefined;
-    const wrapArgs = rustBin
-      ? [
-          'sandbox',
-          'linux-wrap',
-          ...writableRoots.flatMap((root) => ['--writable-root', root]),
-          '--',
-          command,
-          ...args,
-        ]
-      : [
-          '-m',
-          'steerable_sidecar.sandbox',
-          'linux-wrap',
-          ...writableRoots.flatMap((root) => ['--writable-root', root]),
-          '--',
-          command,
-          ...args,
-        ];
+    const wrapArgs = [
+      '-m',
+      'steerable_sidecar.sandbox',
+      'linux-wrap',
+      ...writableRoots.flatMap((root) => ['--writable-root', root]),
+      '--',
+      command,
+      ...args,
+    ];
     try {
-      const { stdout } = await execFileAsync(rustBin ?? command, wrapArgs, { timeout: 15_000 });
+      const { stdout } = await execFileAsync(command, wrapArgs, { timeout: 15_000 });
       const plan = JSON.parse(stdout.trim()) as {
         argv?: unknown;
         backend?: unknown;
@@ -827,6 +912,17 @@ export class SidecarSupervisor extends EventEmitter {
     child.stderr.setEncoding('utf-8');
     child.stdout.on('data', (chunk: string) => this.handleStdoutChunk(chunk));
     child.stderr.on('data', (chunk: string) => this.handleStderrChunk(chunk));
+    child.stdin.on('error', (error) => {
+      // A child may close stdin between shutdown's requireChild() and write().
+      // Keep the stream error handled; the write callback/pending failure
+      // carries the transport error to callers.
+      this.failPending(new SidecarShutdownError(
+        `sidecar stdin closed: ${error.message}`,
+      ));
+      if (!this.shuttingDown) {
+        this.options.onLogLine?.(`sidecar stdin error: ${error.message}`);
+      }
+    });
     child.on('exit', (code, signal) => {
       this.emit('exit', { code, signal });
       this.failPending(new SidecarShutdownError(
@@ -839,14 +935,6 @@ export class SidecarSupervisor extends EventEmitter {
     child.on('error', (err) => {
       this.emit('error', err);
     });
-  }
-
-  private installAppQuitHook(): void {
-    const hook = () => {
-      void this.shutdown();
-    };
-    this.quitListener = hook;
-    onAppWillQuit(hook);
   }
 
   private async waitForReady(timeoutMs: number): Promise<SidecarHealthSnapshot> {
@@ -1097,10 +1185,48 @@ export class SidecarSupervisor extends EventEmitter {
 }
 
 /**
+ * Why the sidecar interpreter could not be located. The CLI turns this into
+ * actionable text and exit code 78 rather than printing a stack trace.
+ */
+export class SidecarRuntimeMissingError extends Error {
+  readonly reason: 'not_installed' | 'unsupported_platform' | 'invalid_manifest' | 'digest_mismatch';
+  readonly target: string | null;
+  readonly detail: string;
+
+  constructor(failure: {
+    reason: 'not_installed' | 'unsupported_platform' | 'invalid_manifest' | 'digest_mismatch';
+    target: string | null;
+    detail: string;
+  }) {
+    super(
+      failure.reason === 'unsupported_platform'
+        ? `Steerable publishes no runtime bundle for ${failure.detail}`
+        : failure.reason === 'digest_mismatch'
+          ? `platform runtime file does not match its published digest: ${failure.detail}`
+          : failure.reason === 'invalid_manifest'
+            ? `platform runtime descriptor is unusable: ${failure.detail}`
+            : `platform runtime package is not installed: ${failure.detail}`,
+    );
+    this.name = 'SidecarRuntimeMissingError';
+    this.reason = failure.reason;
+    this.target = failure.target;
+    this.detail = failure.detail;
+  }
+}
+
+/**
  * Resolve the sidecar's Python interpreter: explicit option →
- * STEERABLE_SIDECAR_PYTHON → bundled python-runtime → sibling framework
- * venv (dev layout) → system python. Module-level so the egress-proxy
- * launcher (W1.3.3) spawns the same interpreter the sidecar uses.
+ * STEERABLE_SIDECAR_PYTHON → bundled python-runtime → platform npm package →
+ * sibling framework venv (dev layout).
+ *
+ * The platform package sits after the bundled resources so a desktop product's
+ * vendored runtime keeps winning, and before the dev venv so an installed CLI
+ * works without a framework checkout.
+ *
+ * Module-level so the egress-proxy launcher (W1.3.3) spawns the same
+ * interpreter the sidecar uses.
+ *
+ * @throws {SidecarRuntimeMissingError} When no candidate exists, naming the reason.
  */
 export function resolveSidecarPython(pythonExecutable?: string): string {
   if (pythonExecutable) {
@@ -1109,37 +1235,29 @@ export function resolveSidecarPython(pythonExecutable?: string): string {
   const explicit = process.env.STEERABLE_SIDECAR_PYTHON;
   if (explicit && existsSync(explicit)) return explicit;
 
-  const platformTag = (() => {
-    switch (process.platform) {
-      case 'darwin':
-        return process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64';
-      case 'win32':
-        return 'win32-x64';
-      default:
-        return 'linux-x64';
-    }
-  })();
+  const platformTag = bundledRuntimeTag(process.platform, process.arch);
   const binaryName = process.platform === 'win32' ? 'python.exe' : 'python3';
 
   // build_sidecar.py 的产物布局是 <platform>/python/<exe>（Windows：
   // python/python.exe；POSIX：python/bin/python3，见 build_sidecar.py 的
   // python_binary()）。保留无 python/ 层的旧布局候选做向后兼容。
-  const runtimeBases: string[] = [];
-  try {
-    const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-    if (resourcesPath) {
-      runtimeBases.push(join(resourcesPath, 'python-runtime'));
+  if (platformTag) {
+    const runtimeBase = join(__dirname, '..', '..', 'python-runtime');
+    const candidates = [
+      join(runtimeBase, platformTag, 'python', binaryName),
+      join(runtimeBase, platformTag, 'python', 'bin', binaryName),
+      join(runtimeBase, platformTag, binaryName),
+      join(runtimeBase, platformTag, 'bin', binaryName),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
     }
-  } catch { /* not in Electron */ }
-  runtimeBases.push(join(__dirname, '..', '..', 'python-runtime'));
-
-  const candidates: string[] = [];
-  for (const base of runtimeBases) {
-    candidates.push(join(base, platformTag, 'python', binaryName));
-    candidates.push(join(base, platformTag, 'python', 'bin', binaryName));
-    candidates.push(join(base, platformTag, binaryName));
-    candidates.push(join(base, platformTag, 'bin', binaryName));
   }
+
+  // Installed CLI: the per-platform npm package carries the same signed
+  // bundle the desktop products vendor.
+  const platform = resolvePlatformRuntime();
+  if (platform.kind === 'ok') return platform.runtime.sidecarPython;
 
   // Dev-layout convenience: the framework repo root .venv (uv sync). The
   // shell lives inside the framework repo (packages/agent-shell/ts), so the
@@ -1152,55 +1270,19 @@ export function resolveSidecarPython(pythonExecutable?: string): string {
   // 本模块在两个平面执行：源码（vitest，ts/src/sidecar/）与编译产物
   // （ts/dist/sidecar/）——到框架仓库根分别是四层与五层，两个候选都压入，
   // 由下方 existsSync 挑出存在的那个。
+  const devCandidates: string[] = [];
   for (const up of [
     join('..', '..', '..', '..'),
     join('..', '..', '..', '..', '..'),
   ]) {
     const frameworkVenv = join(__dirname, up, '.venv');
-    candidates.push(join(frameworkVenv, 'bin', 'python3'));
+    devCandidates.push(join(frameworkVenv, 'bin', 'python3'));
     if (process.platform === 'win32') {
-      candidates.push(join(frameworkVenv, 'Scripts', 'python.exe'));
+      devCandidates.push(join(frameworkVenv, 'Scripts', 'python.exe'));
     }
   }
-
-  for (const candidate of candidates) {
+  for (const candidate of devCandidates) {
     if (existsSync(candidate)) return candidate;
   }
-  // Fallback to system python (developer machines).
-  return process.platform === 'win32' ? 'python' : 'python3';
-}
-
-function envFlag(name: string): boolean {
-  const raw = (process.env[name] ?? '').trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
-}
-
-export function rustSidecarEnabled(): boolean {
-  return envFlag(RUST_SIDECAR_ENV);
-}
-
-/**
- * Resolve the optional Rust sidecar binary. Missing binary with the flag
- * on is a silent fallback to Python (`python -m steerable_sidecar`).
- */
-export function resolveRustSidecarBin(explicit?: string): string | undefined {
-  if (explicit) {
-    return existsSync(explicit) ? explicit : undefined;
-  }
-  const fromEnv = process.env[RUST_SIDECAR_BIN_ENV];
-  if (fromEnv) {
-    return existsSync(fromEnv) ? fromEnv : undefined;
-  }
-  const exe = process.platform === 'win32' ? 'steerable-sidecar.exe' : 'steerable-sidecar';
-  const relatives = [
-    join('..', '..', '..', '..', 'sidecar', 'rs', 'target', 'debug', exe),
-    join('..', '..', '..', '..', '..', 'sidecar', 'rs', 'target', 'debug', exe),
-    join('..', '..', '..', '..', 'sidecar', 'rs', 'target', 'release', exe),
-    join('..', '..', '..', '..', '..', 'sidecar', 'rs', 'target', 'release', exe),
-  ];
-  for (const rel of relatives) {
-    const candidate = join(__dirname, rel);
-    if (existsSync(candidate)) return candidate;
-  }
-  return undefined;
+  throw new SidecarRuntimeMissingError(platform);
 }

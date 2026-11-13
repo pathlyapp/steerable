@@ -56,10 +56,24 @@ PYTHON_CMD="python3"
 if ! python3 --version &>/dev/null; then
   PYTHON_CMD="python"
 fi
-"$PYTHON_CMD" "$FW/packages/sidecar/build/build_sidecar.py" \
-  --target "$TARGET" \
-  --from-wheels "$WHEELS_ABS" \
-  "${EXTRA_BUILD_ARGS[@]}"
+if ! "$PYTHON_CMD" -c 'import ssl' &>/dev/null; then
+  if ! command -v uv &>/dev/null; then
+    echo "ERROR: $PYTHON_CMD has no SSL support and uv is unavailable" >&2
+    exit 1
+  fi
+  PYTHON_CMD="$(uv python find 3.12)"
+fi
+# macOS /bin/bash is 3.2. With set -u, expanding an empty "${array[@]}" is an
+# unbound variable, so only append extra flags when the caller passed some.
+build_cmd=(
+  "$PYTHON_CMD" "$FW/packages/sidecar/build/build_sidecar.py"
+  --target "$TARGET"
+  --from-wheels "$WHEELS_ABS"
+)
+if [[ ${#EXTRA_BUILD_ARGS[@]} -gt 0 ]]; then
+  build_cmd+=("${EXTRA_BUILD_ARGS[@]}")
+fi
+"${build_cmd[@]}"
 
 echo "[prepare-sidecar] copying runtime into $OUT_DIR"
 SRC="$FW/packages/sidecar/dist/python-runtime"

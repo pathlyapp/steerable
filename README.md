@@ -1,6 +1,6 @@
 <div align="center">
 
-# OpenSteerable
+# Steerable
 
 **The model-quality layer that makes local, quantized, and cheap models behave.**
 
@@ -8,7 +8,7 @@ Recovers and executes malformed tool calls · vetoes bad completion drafts · ca
 Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM runtime · embeddable Python sidecar · headless React chat UI. Pick any subset, skip the rest.
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![CI](https://github.com/pathlyapp/opensteerable/actions/workflows/ci.yml/badge.svg)](https://github.com/pathlyapp/opensteerable/actions/workflows/ci.yml)
+[![CI](https://github.com/pathlyapp/steerable/actions/workflows/ci.yml/badge.svg)](https://github.com/pathlyapp/steerable/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-mkdocs-success)](https://steerableframework.com/)
 [![Storybook](https://img.shields.io/badge/storybook-live-ff4785)](https://steerableframework.com/storybook/)
 [![Live demo](https://img.shields.io/badge/live%20demo-agent--shell-22c55e)](https://steerableframework.com/demo/)
@@ -19,10 +19,10 @@ Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM 
 [![PyPI: sidecar](https://img.shields.io/pypi/v/steerable-sidecar?label=steerable-sidecar&color=3776ab)](https://pypi.org/project/steerable-sidecar/)
 
 [![Python](https://img.shields.io/badge/python-%E2%89%A53.10-blue?logo=python&logoColor=white)](https://www.python.org/)
-[![Node](https://img.shields.io/badge/node-%E2%89%A522-green?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/node-%E2%89%A526.4.0-green?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Sigstore](https://img.shields.io/badge/npm%20provenance-sigstore-orange)](https://docs.npmjs.com/generating-provenance-statements)
 
-[Docs](https://steerableframework.com/) · [Storybook](https://steerableframework.com/storybook/) · [Live demo](https://steerableframework.com/demo/) · [Examples](./examples) · [Releases](https://github.com/pathlyapp/opensteerable/releases) · [Discussions](https://github.com/pathlyapp/opensteerable/discussions)
+[Docs](https://steerableframework.com/) · [Storybook](https://steerableframework.com/storybook/) · [Live demo](https://steerableframework.com/demo/) · [Examples](./examples) · [Releases](https://github.com/pathlyapp/steerable/releases) · [Discussions](https://github.com/pathlyapp/steerable/discussions)
 
 > **79.0% on [Terminal-Bench 2.1](https://snorkel.ai/leaderboard/terminal-bench-2-1/)** with GLM-5.3-Flash — same band as Claude Code + Opus 4.8 (78.9%) and Codex CLI + GPT-5.5 (83.1%). Harbor hidden tests, 89-task catalog, three-run mean. [Numbers and protocol](#terminal-bench-21).
 
@@ -36,7 +36,7 @@ Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM 
 
 ## Table of contents
 
-- [Why OpenSteerable](#why-opensteerable)
+- [Why Steerable](#why-steerable)
 - [Terminal-Bench 2.1](#terminal-bench-21)
 - [Quickstart — pick your path (5 minutes)](#quickstart--pick-your-path-5-minutes)
 - [Architecture](#architecture)
@@ -52,17 +52,17 @@ Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM 
 
 ---
 
-## Why OpenSteerable
+## Why Steerable
 
-Every agent SDK assumes the model emits clean, structured `tool_calls`. Local, quantized, and cheap models don't. OpenSteerable is the model-quality layer that closes that gap — plus the plumbing layers you'd otherwise rewrite, each shippable on its own.
+Every agent SDK assumes the model emits clean, structured `tool_calls`. Local, quantized, and cheap models don't. Steerable is the model-quality layer that closes that gap — plus the plumbing layers you'd otherwise rewrite, each shippable on its own.
 
-| The problem you've already solved twice | OpenSteerable's answer |
+| The problem you've already solved twice | Steerable's answer |
 |---|---|
-| **"The model emitted a tool call as prose. Again."** Local, quantized, and cheap models break the assumptions every SDK makes about structured `tool_calls`. | The **model-quality layer** — the part no vendor SDK will build for you. `pseudo.py` recovers *and executes* malformed calls in three formats (MiniMax XML, DeepSeek `<function=>`, markdown); a `before_completion` veto answers `accept`/`retry`/`narrate` on a completion draft; grounding judges catch fabricated data; token estimates self-calibrate against observed usage. See the [roadmap](https://steerableframework.com/roadmap/#the-differentiator-the-model-quality-layer). |
+| **"The model emitted a tool call as prose. Again."** Local, quantized, and cheap models break the assumptions every SDK makes about structured `tool_calls`. | The **model-quality layer** — the part no vendor SDK will build for you. `pseudo.py` recovers *and executes* malformed calls in three formats (MiniMax XML, DeepSeek `<function=>`, markdown); a `before_completion` veto answers `accept`/`retry`/`narrate` on a completion draft; grounding judges catch fabricated data; token estimates self-calibrate against observed usage. |
 | **"What shape is this SSE stream?"** Every team invents their own envelope; FE and BE drift. | One JSON Schema → generated **TypeScript types + Pydantic models**, in lockstep release. `content`, `tool_call`, `tool_result`, `error`, `done`, `budget_exhausted` all standardised; conformance test suite verifies the two language SDKs stay byte-compatible. |
 | **Tool dispatch / budgets / retries / safety regex** | `agent-harness` (Py): `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, `is_terminal_result`, command-safety patterns. **Pure functions, zero I/O coupling** — drop into FastAPI / Celery / a notebook. 49 unit + golden tests. |
 | **LLM provider abstraction** | `agent-runtime` (Py): one `LLMProvider` interface across **four wire protocols** — OpenAI-compatible chat/completions (Ollama, vLLM, DeepSeek, Groq, …), OpenAI Responses, Anthropic-native, Gemini-native — with a live gateway model catalog, per-vendor sampling presets, `@tool` decorator, `ToolRouter`, SSE-over-HTTP and stdio JSON-RPC transports. |
-| **Shipping LLMs in a desktop app without a network round-trip** | `steerable-sidecar`: a portable, signed CPython binary that speaks JSON-RPC over stdio (34 methods). Bundle with Electron / Tauri / Wails / your custom shell — **macOS notarised, Windows code-signed**, ~95 MB stripped on darwin-arm64 under a CI size budget. |
+| **Shipping LLMs in a desktop app without a network round-trip** | `steerable-sidecar`: a portable, signed CPython binary that speaks JSON-RPC over stdio (36 methods). Bundle it into a Tauri app (`@steerable/agent-shell-tauri`), any other native shell, or your own host — **macOS notarised, Windows code-signed**, ~95 MB stripped on darwin-arm64 under a CI size budget. |
 | **Chat UI that doesn't look like 2003** | `@steerable/agent-ui`: 7 headless React components + 14 rich cards + 3 hooks + Tailwind preset. Every component has Storybook + a11y (axe) + visual-regression baselines locked in CI. |
 
 Every layer is independently published. Use just the protocol types, just the UI, just the sidecar — there is no monolith to swallow.
@@ -71,13 +71,13 @@ Every layer is independently published. Use just the protocol types, just the UI
 
 ## Terminal-Bench 2.1
 
-A Flash-cost model on OpenSteerable. Harbor hidden tests, 89-task catalog, three independent full runs: mean **79.0%** (SD 3.4 points). The runs average **229.9M input tokens**, down 15.4% from the superseded six-run baseline. Provider prices changed between measurement windows, so we do not publish a cross-date dollar conversion. Protocol and run list: [`docs/evals.md`](./docs/evals.md).
+A Flash-cost model on Steerable. Harbor hidden tests, 89-task catalog, three independent full runs: mean **79.0%** (SD 3.4 points). The runs average **229.9M input tokens**, down 15.4% from the superseded six-run baseline. Provider prices changed between measurement windows, so we do not publish a cross-date dollar conversion. Protocol and run list: [`docs/evals.md`](./docs/evals.md).
 
 **Same model · GLM-5.3-Flash** — identical cheap model, same Harbor catalog-89 protocol:
 
 | Agent | TB 2.1 | Input tokens / run | Notes |
 | ----- | ------ | ------------------ | ----- |
-| **OpenSteerable** | **79.0% ±3.4** | **229.9M** | this repo, 3× catalog-89 · **+5.6 vs Pi** |
+| **Steerable** | **79.0% ±3.4** | **229.9M** | this repo, 3× catalog-89 · **+5.6 vs Pi** |
 | Claude Code | 83.1% | 299.2M | this repo, 1 catalog run |
 | Pi | 73.4% ±2.2 | 138.9M | this repo, 3 catalog runs |
 
@@ -128,7 +128,7 @@ export function Chat() {
 
 `useChatStream` parses every standard `SSEEvent` shape into typed messages — you don't write a parser, you don't argue about envelope format. See live components at the [Storybook](https://steerableframework.com/storybook/).
 
-### "I'm shipping an Electron app and want LLMs to run locally"
+### "I'm shipping a desktop app and want LLMs to run locally"
 
 ```bash
 # Bundle the sidecar binary into resources/python-runtime/<platform>/
@@ -146,23 +146,42 @@ proc.stdin.write(JSON.stringify({
 // SSE-over-JSON-RPC events stream back on stdout, one per line.
 ```
 
-TypeScript hosts can skip the subprocess plumbing with `@steerable/agent-runtime` (`packages/agent-runtime/ts` — source-consumed via `link:`, not on npm yet): it owns spawn, the `lifecycle.ready` handshake, health pings, bounded auto-restart, and graceful drain, and exposes the full CoreLoop-level API (`chatStream` / `cancelChat` / `steerChat` / session fork & branch tree / …).
+TypeScript hosts can skip the subprocess plumbing with `@steerable/agent-runtime` (`packages/agent-runtime/ts` — source-consumed via `link:`, not on npm yet): it owns spawn, the `lifecycle.ready` handshake, health pings, bounded auto-restart, and graceful drain, and exposes the full CoreLoop-level API (`chatStream` / `cancelChat` / `steerChat` / session fork & branch tree / …). A Tauri product usually takes `@steerable/agent-shell-tauri` instead: the crate owns the native window and supervises the shell's Node host, which supervises the sidecar.
 
 Full runnable: [`examples/sidecar-roundtrip`](./examples/sidecar-roundtrip). Real-world embedder: [`deeppath-agent`](https://github.com/deeppath/deeppath-agent).
 
 ### "I just want to see the agent shell running"
 
-The Tier 5 host shell runs standalone with neutral branding (no product, no packs), in two modes:
+The Tier 5 host shell runs standalone with neutral branding (no product, no packs), in the browser or from the command line:
 
 ```bash
 pnpm install
-pnpm agent-shell:web       # BS mode: builds shell + neutral web app, boots the headless server
-# → http://127.0.0.1:4787  (OpenSteerable Shell)
-
-pnpm agent-shell:client    # desktop client mode: same build, launched as an Electron window
+pnpm agent-shell:web       # builds shell + neutral web app, boots the headless server
+# → http://127.0.0.1:4787  (Steerable Shell)
 ```
 
-Both are the production code path (prod web build, shell default preload) — the browser-dev Electron mock is dev-server-only and tree-shaken out of prod builds, so it never appears here.
+<!-- quickstart:cli -->
+```bash
+npm install -g @steerable/agent-cli
+steerable-cli login                    # pick a provider, paste a key, pick a model
+steerable-cli run "summarize this repo"
+```
+
+Two other install paths produce the same command: `curl -fsSL https://steerableframework.com/install.sh | sh` (installs Node too when missing) and `brew install pathlyapp/steerable/steerable`. See [packaging](packaging/README.md).
+
+`login` verifies the key with one model-list request before saving it. In scripts and CI, set the provider's environment variable instead and skip the prompt:
+
+```bash
+export DEEPSEEK_API_KEY=sk-...
+steerable-cli run "summarize this repo"
+```
+
+`steerable-cli doctor` lists every runtime and configuration check with the command that fixes a failure; `steerable-cli tui` opens the terminal interface (it needs Node 26.4.0 because of the renderer, while the other commands run on Node 22.19.0 and newer).
+<!-- /quickstart:cli -->
+
+A product ships the desktop window through `@steerable/agent-shell-tauri` and its own thin `src-tauri` crate; the framework repo itself boots the same shell in the browser.
+
+Both web and CLI are the production code path — the browser-dev host mock is dev-server-only and tree-shaken out of prod builds, so it never appears here.
 
 ---
 
@@ -173,8 +192,9 @@ Five tiers, strict no-upward-imports rule. Each tier is shippable on its own.
 ```mermaid
 flowchart TB
     subgraph T5[Tier 5 · Host Shell]
-        SH["<b>@steerable/agent-shell</b> (TS, private)<br/>Electron main + preload · headless HTTP server · local-backend · storage · sidecar supervisor"]
-        SHW["<b>@steerable/agent-shell-web</b> (TS, private)<br/>product-neutral renderer SPA source (React + Vite)"]
+        SH["<b>@steerable/agent-shell</b> (TS)<br/>Node host runtime + headless HTTP server · local-backend · storage · sidecar supervisor"]
+        SHT["<b>@steerable/agent-shell-tauri</b> (Rust)<br/>native window · menus · dialogs · updates · process containment"]
+        SHW["<b>@steerable/agent-shell-web</b> (TS)<br/>product-neutral renderer SPA source (React + Vite)"]
     end
 
     subgraph T4[Tier 4 · UI]
@@ -197,6 +217,7 @@ flowchart TB
 
     SH --> UI
     SH --> SC
+    SHT --> SH
     SHW --> UI
     UI --> P
     RT --> H
@@ -213,13 +234,13 @@ flowchart TB
     class H,HF t2
     class RT,SC t3
     class UI t4
-    class SH,SHW t5
+    class SH,SHW,SHT t5
 ```
 
 **The rules:**
 - Tier N never imports Tier N+1. Adopting any layer means inheriting only the layers below it.
 - TS↔Py for `agent-protocol` is **codegen, not parallel implementation** — `spec/*.schema.json` is the single source of truth.
-- The public npm and pure-Python packages release in framework lockstep. The private Rust bundle — the native CoreLoop wheel, Rust sidecar, and egress proxy — has its own version and immutable `rust-vX.Y.Z` Release. `rust-artifacts.lock.json` pins the reviewed bundle manifest and exact native dependency; framework releases reuse that pin until an explicit artifact update. Rust crates remain unpublished on crates.io (`publish = false`).
+- The public npm and Python sidecar packages release in framework lockstep. The private Rust bundle — the native CoreLoop wheel and egress proxy — has its own version and immutable `rust-vX.Y.Z` Release. `rust-artifacts.lock.json` pins the reviewed bundle manifest and exact native dependency; framework releases reuse that pin until an explicit artifact update. Rust crates remain unpublished on crates.io (`publish = false`).
 - Tier 5 is **product-neutral**: brand, telemetry endpoints, help links, and data-directory names are injected by the consuming product's assembly root (`setProductBrand` / `setProductConfig`), enforced by the `shell:neutral` gate in CI.
 
 ---
@@ -283,16 +304,17 @@ flowchart TB
 </details>
 
 <details>
-<summary><b>Tier 5 — Host Shell</b> · <code>@steerable/agent-shell</code> + <code>@steerable/agent-shell-web</code> + <code>@steerable/pack-sdk</code> (private)</summary>
+<summary><b>Tier 5 — Host Shell</b> · <code>@steerable/agent-shell</code> + <code>@steerable/agent-shell-tauri</code> + <code>@steerable/agent-shell-web</code> + <code>@steerable/pack-sdk</code></summary>
 
-- **Two hosts, one runtime**: Electron desktop shell (main process, IPC, strict CSP, visible PTY via node-pty) and headless HTTP server (`/api/v2/*`, SSE) assembled from the same `HostRuntime`
+- **Two hosts, one runtime**: a Tauri desktop window (`@steerable/agent-shell-tauri`, a Rust crate that supervises the Node host on a loopback port — native window, menus, dialogs, single-instance, process containment, updates) and a headless HTTP server (`/api/v2/*`, SSE) assembled from the same `HostRuntime`
 - **Local backend**: chat/project/agent CRUD, CoreLoop streaming, skill loader (brand-placeholder rendering), subagent profiles, cross-turn background tasks with a panel UI, git-worktree isolation, session branch tree, usage/insights storage (SQLite via better-sqlite3)
 - **Sidecar supervision**: boot, health, egress proxy, seatbelt/exec sandbox, reverse approval/ask-user bridges
 - **Connection diagnostics**: LLM connection diagnosis panel, system/ambient proxy detection, and egress hints surfaced in settings — a misconfigured gateway fails with a remedy, not a hang
-- **Scenario-pack extension points** (`pack-sdk` types): services, tools, migrations, seeds, skills, IPC namespaces, HTTP routes, renderer chat slots & settings panels, brand/logo — composed at build time by the product's assembly root
+- **Scenario-pack extension points** (`pack-sdk` types): services, tools, migrations, skills, agent seeds, HTTP routes, CLI commands, packaging spec, and renderer contributions (routes, settings panels, chat slots, card renderers, brand/logo) — composed at build time by the product's assembly root
 - **Renderer SPA source** (`agent-shell-web`): product-neutral React app consumed by product web entries via the `@/` alias + `createProductViteConfig` factory
 - **Packaging helpers**: `scripts/prepare-sidecar.sh` / `prepare-framework-wheels.sh` build the embedded Python runtime for product installers
 - **Neutrality gate**: `pnpm --filter @steerable/agent-shell shell:neutral` fails CI on any product hardcoding in shell sources or skill text
+- **Command line** (`@steerable/agent-cli`): `steerable-cli` runs a turn or a terminal session in-process and shares the host database with the desktop app. Products supply their own command name.
 - 615 node-side unit tests + 220 renderer component tests
 
 </details>
@@ -303,7 +325,7 @@ flowchart TB
 
 There is no "best agent framework" — there's the right one for your shape of problem.
 
-|  | OpenSteerable | LangChain (Py + JS) | Vercel AI SDK (TS) | OpenAI Assistants API |
+|  | Steerable | LangChain (Py + JS) | Vercel AI SDK (TS) | OpenAI Assistants API |
 |---|---|---|---|---|
 | **One wire protocol shared by TS + Py (codegen-aligned)** | ✅ | ⚠️ (separate Py / JS impls) | ❌ (TS only) | ⚠️ (proprietary REST, not OSS) |
 | **Pure-function harness (drop into any framework)** | ✅ | ⚠️ (LCEL/Runnable coupling) | ⚠️ (React/Next coupling) | n/a (SaaS) |
@@ -312,9 +334,9 @@ There is no "best agent framework" — there's the right one for your shape of p
 | **Lockstep release across all layers** | ✅ | n/a | n/a | n/a |
 | **Self-hosted, no vendor lock-in** | ✅ | ✅ | ✅ | ❌ |
 
-**Reach for OpenSteerable when** you need typed cross-language contracts, plan to ship to desktop / on-prem / air-gapped, or want a UI library you can theme without `!important` wars.
+**Reach for Steerable when** you need typed cross-language contracts, plan to ship to desktop / on-prem / air-gapped, or want a UI library you can theme without `!important` wars.
 
-**Don't reach for OpenSteerable when** your agent lives entirely inside one Python process with no FE, you're happy with cloud-hosted Assistants, or you want a high-level `prompt -> answer` SDK with batteries included for every model — OpenSteerable is closer to "Express for agents" than "Rails for agents".
+**Don't reach for Steerable when** your agent lives entirely inside one Python process with no FE, you're happy with cloud-hosted Assistants, or you want a high-level `prompt -> answer` SDK with batteries included for every model — Steerable is closer to "Express for agents" than "Rails for agents".
 
 For a comparison with agent-specific frameworks and products (Codex, DeepSeek Harness, LangGraph, OpenAI Agents SDK, Claude Agent SDK), see [the docs comparison page](https://steerableframework.com/comparison/).
 
@@ -322,34 +344,33 @@ For a comparison with agent-specific frameworks and products (Codex, DeepSeek Ha
 
 ## Who's using it in production
 
-- **[DeepPath](https://deeppath.cc)** — web (`@steerable/agent-protocol` + `@steerable/agent-ui`), API (all 3 Py packages), Electron desktop (sidecar + UI). The framework was extracted from this codebase and is dogfooded back into it on every release.
+- **[DeepPath](https://deeppath.cc)** — web (`@steerable/agent-protocol` + `@steerable/agent-ui`), API (all 3 Py packages), desktop (Tauri shell + sidecar + UI). The framework was extracted from this codebase and is dogfooded back into it on every release; that repo assembles several branded builds from the same shell.
 
-If you're using OpenSteerable in production, send a PR adding your project here.
+If you're using Steerable in production, send a PR adding your project here.
 
 ---
 
 ## Project status & roadmap
 
-**Current**: `0.6.x` series — public registries, lockstep tag-driven releases, one production consumer ([DeepPath](https://deeppath.cc)) shipping on web, API, and desktop.
+**Current**: `0.8.x` series — public registries, lockstep tag-driven releases, native engine artifacts at `1.0.7`. One consumer codebase ([DeepPath](https://deeppath.cc)) ships web, API and desktop from this framework, and assembles several branded desktop builds from the same shell.
 
 | Phase | Status | What lands |
 |---|---|---|
 | **0.x consolidation** | 🟢 in progress | Stable surface API, integration tests against downstream repos, downstream lockfile bumps semi-automated |
 | **0.3+ Trusted Publishing** | ✅ done | npm `--provenance` (sigstore) + PyPI Trusted Publishing over OIDC; cross-platform sidecar build/sign matrix in GHA |
 | **0.4+ Sidecar slimming** | ✅ done | `install_only_stripped` distro landed; darwin-arm64 bundle 94.7 MB (was ~700 MB class), CI budgets back at the 320 MB design target |
-| **0.5–0.6 Architecture-review waves 0–4** | ✅ done | Append-only model-visible history, world-state diffing with `cache_control` emission, tool exposure tiers + `tool_search`, MCP client, approval algebra, per-exec sandbox, AG-UI/ACP peer transports, plugin lifecycle, gateway model catalog — details in the [roadmap](https://steerableframework.com/roadmap/) |
+| **0.5–0.6 Architecture-review waves 0–4** | ✅ done | Append-only model-visible history, world-state diffing with `cache_control` emission, tool exposure tiers + `tool_search`, MCP client, approval algebra, per-exec sandbox, AG-UI/ACP peer transports, plugin lifecycle, gateway model catalog |
+| **0.6.x–0.7 Rust CoreLoop + Tauri host** | ✅ done | The loop and egress proxy became digest-pinned Rust artifacts adopted through one lock file; the desktop host moved from an Electron main process to `@steerable/agent-shell-tauri`, which supervises the same Node host; `directConnection`, diagnosable and reconnectable provider failures, continuation of failed or stopped turns, OTLP turn-outcome counters, approval policy rules and project binding |
 | **1.0** | ⚪ gated on | One full minor cycle without breaking changes; spec freeze (`additionalProperties` semantics locked); shared `1.0.0` decision for protocol+harness pair |
 
-Where the architecture is headed, what's genuinely missing, and what's explicitly out of scope: **[Architecture Review & Roadmap](https://steerableframework.com/roadmap/)** — a gap scorecard against Codex and DeepSeek Harness, with the honest negatives.
-
-Public follow-up themes live in [`docs/roadmap.md`](./docs/roadmap.md). Pre-1.0 contract: minor (`0.X`) is the breaking-change axis.
+Pre-1.0 contract: minor (`0.X`) is the breaking-change axis.
 
 ---
 
 ## Documentation
 
 - **[Getting Started](./docs/getting-started.md)** — full walkthrough, ~5 minutes
-- **[Evals](./docs/evals.md)** — Terminal-Bench 2.1 catalog-89 score of record (OpenSteerable + GLM-5.3-Flash **79.0%**) plus Harbor cheap-12 (`claude-code` / `codex` / `pi`)
+- **[Evals](./docs/evals.md)** — Terminal-Bench 2.1 catalog-89 score of record (Steerable + GLM-5.3-Flash **79.0%**) plus Harbor cheap-12 (`claude-code` / `codex` / `pi`)
 - **[Specs](./docs/spec/)** — wire-level reference for every event/envelope shape
 - **[Examples](./examples)** — 3 runnable end-to-end smoke tests:
   - [`py-minimal`](./examples/py-minimal) — protocol + harness + tool dispatch
@@ -364,8 +385,8 @@ Public follow-up themes live in [`docs/roadmap.md`](./docs/roadmap.md). Pre-1.0 
 
 ## Community & support
 
-- 💬 **Questions / ideas / show & tell** → [GitHub Discussions](https://github.com/pathlyapp/opensteerable/discussions)
-- 🐛 **Bug reports / feature requests** → [GitHub Issues](https://github.com/pathlyapp/opensteerable/issues)
+- 💬 **Questions / ideas / show & tell** → [GitHub Discussions](https://github.com/pathlyapp/steerable/discussions)
+- 🐛 **Bug reports / feature requests** → [GitHub Issues](https://github.com/pathlyapp/steerable/issues)
 - 🔒 **Security disclosures** → see [`SECURITY.md`](./SECURITY.md) (please email the maintainers privately first; do not open a public issue)
 - 📦 **npm provenance** → every `@steerable/*` tarball ships sigstore attestations; verify with `npm audit signatures @steerable/agent-ui`
 
@@ -376,8 +397,8 @@ Public follow-up themes live in [`docs/roadmap.md`](./docs/roadmap.md). Pre-1.0 
 Contributions are welcome — both small (typo fixes, examples) and structural (new LLM adapters, new sidecar transport).
 
 ```bash
-git clone https://github.com/pathlyapp/opensteerable
-cd steerable-framework
+git clone https://github.com/pathlyapp/steerable
+cd steerable
 pnpm install
 uv sync --all-packages
 
@@ -388,7 +409,7 @@ uv run pytest     # ~1,950 tests
 
 If your change touches `spec/`, the codegen drift checker will fire in CI — re-run `pnpm gen && uv run python scripts/generate_py.py` and commit the regenerated files.
 
-Working on OpenSteerable alongside one of the consumer repos? See [`INTEGRATION-TESTING.md`](./INTEGRATION-TESTING.md) — covers the local toggle scripts (`use_framework_local.sh` / `use_framework_npm.sh` / `use_framework_source.sh`) that flip each consumer between published-registry mode and sibling-source mode.
+Working on Steerable alongside one of the consumer repos? See [`INTEGRATION-TESTING.md`](./INTEGRATION-TESTING.md) — covers the local toggle scripts (`use_framework_local.sh` / `use_framework_npm.sh` / `use_framework_source.sh`) that flip each consumer between published-registry mode and sibling-source mode.
 
 Cutting a release? See [`RELEASING.md`](./RELEASING.md). Short version:
 
@@ -405,7 +426,7 @@ All commits must be DCO-signed (`git commit -s`); the [DCO check](.github/workfl
 
 ## Acknowledgements
 
-OpenSteerable stands on the work of:
+Steerable stands on the work of:
 
 - **[python-build-standalone](https://github.com/astral-sh/python-build-standalone)** — the portable CPython distribution that makes the sidecar possible (and the reason you can ship a single signed binary instead of asking users to install Python).
 - **[Sigstore](https://sigstore.dev/)** — npm tarball provenance attestations.
@@ -418,7 +439,8 @@ OpenSteerable stands on the work of:
 ## License
 
 The source in this repository is licensed under the
-[Apache License 2.0](./LICENSE). The separately built native CoreLoop wheel,
-Rust sidecar, and egress proxy pinned by `rust-artifacts.lock.json` are
-binary-only MIT-licensed artifacts; their source is not included here. See
-[`NOTICE`](./NOTICE) for third-party attributions and distribution details.
+[Apache License 2.0](./LICENSE). The separately built native CoreLoop wheel
+and egress proxy pinned by `rust-artifacts.lock.json` are
+source-unavailable binary artifacts licensed separately by their immutable
+Release. The lock records the reviewed license identifier. See
+[`NOTICE`](./NOTICE) for distribution terms and third-party attributions.

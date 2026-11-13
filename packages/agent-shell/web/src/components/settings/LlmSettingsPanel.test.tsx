@@ -29,9 +29,9 @@ const getCatalogProviders = vi.fn();
 const getLlmModels = vi.fn();
 const electronState = { active: true };
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => electronState.active,
-  getElectronBridge: () => undefined,
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => electronState.active,
+  getHostBridge: () => undefined,
 }));
 vi.mock('@/lib/local-api', () => ({
   getLlmSettings: () => getLlmSettings(),
@@ -140,14 +140,14 @@ async function renderPanel(settings: Partial<LlmSettings> = {}, props: PanelProp
 
 /** 等挂载后的模型目录防抖拉取（400ms）落定，避免干扰后续调用断言。 */
 async function settleCatalog() {
-  await screen.findByText(/网关目录不可用/, undefined, { timeout: 3000 });
+  await screen.findByText(/Gateway catalog unavailable/, undefined, { timeout: 3000 });
 }
 
 describe('LlmSettingsPanel — 环境与加载', () => {
   it('非桌面环境提示需要在客户端打开，且不请求配置', async () => {
     electronState.active = false;
     render(<LlmSettingsPanel />);
-    expect(await screen.findByText('需要在桌面客户端中打开')).toBeTruthy();
+    expect(await screen.findByText('Open this in the desktop app')).toBeTruthy();
     expect(getLlmSettings).not.toHaveBeenCalled();
   });
 
@@ -159,7 +159,7 @@ describe('LlmSettingsPanel — 环境与加载', () => {
       }),
     );
     render(<LlmSettingsPanel />);
-    expect(await screen.findByText('加载当前配置...')).toBeTruthy();
+    expect(await screen.findByText('Loading current settings...')).toBeTruthy();
     expect((screen.getByTestId('llm-settings-save') as HTMLButtonElement).disabled).toBe(true);
 
     resolveSettings({ ...BASE_SETTINGS });
@@ -178,10 +178,10 @@ describe('LlmSettingsPanel — 环境与加载', () => {
     getProviderPresets.mockRejectedValue(new Error('sidecar down'));
     getCatalogProviders.mockRejectedValue(new Error('sidecar down'));
     await renderPanel();
-    expect(screen.getByText(/旗标词汇表由 sidecar 提供/)).toBeTruthy();
+    expect(screen.getByText(/The flag vocabulary comes from the sidecar/)).toBeTruthy();
 
     fireEvent.click(document.querySelector('[data-preset-mode="pinned"]')!);
-    expect(screen.getByText(/预制注册表由 sidecar 提供/)).toBeTruthy();
+    expect(screen.getByText(/The preset registry comes from the sidecar/)).toBeTruthy();
 
     fireEvent.click(screen.getByTestId('llm-settings-save'));
     await waitFor(() => expect(setLlmSettings).toHaveBeenCalled());
@@ -213,7 +213,7 @@ describe('LlmSettingsPanel — 表单回填与渲染', () => {
 
   it('未填写 API Key 时显示创建密钥的引导提示', async () => {
     await renderPanel({ apiKey: '' });
-    expect(screen.getByText(/尚未配置 API Key/)).toBeTruthy();
+    expect(screen.getByText(/No API key yet/)).toBeTruthy();
   });
 
   it('切换服务商后自动填入默认 URL 与目录首个模型，并隐藏 OpenAI 专属区块', async () => {
@@ -225,8 +225,8 @@ describe('LlmSettingsPanel — 表单回填与渲染', () => {
     expect(url.value).toBe('https://messages.example');
     expect((screen.getByTestId('llm-model-input') as HTMLInputElement).value).toBe('msg-large');
     // anthropic 原生协议：不显示 compat 旗标区与厂商预制区
-    expect(screen.queryByText('高级兼容旗标（可选）')).toBeNull();
-    expect(screen.queryByText('厂商参数预制')).toBeNull();
+    expect(screen.queryByText('Advanced compatibility flags (optional)')).toBeNull();
+    expect(screen.queryByText('Vendor parameter presets')).toBeNull();
   });
 });
 
@@ -237,11 +237,11 @@ describe('LlmSettingsPanel — 网关目录与凭证', () => {
       catalogStatus: 'live',
     });
     await renderPanel();
-    await screen.findByText(/已从网关拉取 2 个模型/, undefined, { timeout: 3000 });
+    await screen.findByText(/Fetched 2 models from the gateway/, undefined, { timeout: 3000 });
 
     getLlmModels.mockClear();
     fireEvent.click(screen.getByTestId('llm-key-test'));
-    await screen.findByText(/凭证可用，网关返回 2 个模型/);
+    await screen.findByText(/Credentials work. The gateway returned 2 models/);
     expect(getLlmModels.mock.calls.at(-1)?.[0]).toMatchObject({
       baseUrl: 'https://api.acme.example/v1',
       apiKey: 'sk-test',
@@ -258,7 +258,7 @@ describe('LlmSettingsPanel — 网关目录与凭证', () => {
       error: '401 unauthorized',
     });
     fireEvent.click(screen.getByTestId('llm-key-test'));
-    expect(await screen.findByText(/验证失败：401 unauthorized/)).toBeTruthy();
+    expect(await screen.findByText(/Verification failed: 401 unauthorized/)).toBeTruthy();
   });
 
   it('刷新按钮绕过缓存重新拉取模型目录', async () => {
@@ -267,7 +267,7 @@ describe('LlmSettingsPanel — 网关目录与凭证', () => {
       catalogStatus: 'live',
     });
     await renderPanel();
-    await screen.findByText(/已从网关拉取 1 个模型/, undefined, { timeout: 3000 });
+    await screen.findByText(/Fetched 1 models from the gateway/, undefined, { timeout: 3000 });
 
     getLlmModels.mockClear();
     getLlmModels.mockResolvedValue({
@@ -275,7 +275,7 @@ describe('LlmSettingsPanel — 网关目录与凭证', () => {
       catalogStatus: 'live',
     });
     fireEvent.click(screen.getByTestId('llm-model-refresh'));
-    await screen.findByText(/已从网关拉取 2 个模型/);
+    await screen.findByText(/Fetched 2 models from the gateway/);
     expect(getLlmModels.mock.calls.at(-1)?.[0]).toMatchObject({ refresh: true });
   });
 
@@ -297,7 +297,7 @@ describe('LlmSettingsPanel — compat 旗标', () => {
   it('按词汇表渲染 bool / 枚举 / 列表三种旗标，保存时只下发非自动覆盖', async () => {
     await renderPanel();
     const boolRow = document.querySelector('[data-compat-flag="supportsTemperature"]')!;
-    fireEvent.click(within(boolRow as HTMLElement).getByText('开'));
+    fireEvent.click(within(boolRow as HTMLElement).getByText('Yes'));
 
     const enumRow = document.querySelector('[data-compat-flag="maxTokensField"]')!;
     fireEvent.change(within(enumRow as HTMLElement).getByRole('combobox'), {
@@ -330,7 +330,7 @@ describe('LlmSettingsPanel — compat 旗标', () => {
       compat: { supportsTemperature: false, maxTokensField: 'max_completion_tokens' },
     });
     const boolRow = document.querySelector('[data-compat-flag="supportsTemperature"]')!;
-    const offButton = within(boolRow as HTMLElement).getByText('关');
+    const offButton = within(boolRow as HTMLElement).getByText('No');
     expect(offButton.className).toContain('bg-agent-foreground');
     const enumRow = document.querySelector('[data-compat-flag="maxTokensField"]')!;
     expect(
@@ -387,7 +387,7 @@ describe('LlmSettingsPanel — 保存流程', () => {
 
   it('本地命令超时留空或非法时不下发，填正整数时随保存下发', async () => {
     await renderPanel();
-    const input = screen.getByPlaceholderText('留空 = 默认（后台 30s / 终端 60s）');
+    const input = screen.getByPlaceholderText('Blank = default (background 30s / terminal 60s)');
     fireEvent.change(input, { target: { value: 'abc' } });
     fireEvent.click(screen.getByTestId('llm-settings-save'));
     await waitFor(() => expect(setLlmSettings).toHaveBeenCalled());
@@ -443,7 +443,7 @@ describe('LlmSettingsPanel — 温度与预制（面板级接线）', () => {
     resolveProviderPreset.mockResolvedValue({ preset: { temperature: 0.2 } });
     await renderPanel();
     expect(
-      await screen.findByText(/命中预制：temperature 0.2/, undefined, { timeout: 3000 }),
+      await screen.findByText(/Matched preset: temperature 0.2/, undefined, { timeout: 3000 }),
     ).toBeTruthy();
     fireEvent.click(screen.getByTestId('llm-settings-save'));
     await waitFor(() => expect(setLlmSettings).toHaveBeenCalled());
@@ -453,7 +453,7 @@ describe('LlmSettingsPanel — 温度与预制（面板级接线）', () => {
   it('预制「关闭」保存 {enabled:false}', async () => {
     await renderPanel();
     fireEvent.click(document.querySelector('[data-preset-mode="off"]')!);
-    expect(screen.getByText('已关闭：不下发厂商预制参数。')).toBeTruthy();
+    expect(screen.getByText('Off: vendor preset parameters are not sent.')).toBeTruthy();
     fireEvent.click(screen.getByTestId('llm-settings-save'));
     await waitFor(() => expect(setLlmSettings).toHaveBeenCalled());
     expect(setLlmSettings.mock.calls[0][0].presets).toEqual({ enabled: false });

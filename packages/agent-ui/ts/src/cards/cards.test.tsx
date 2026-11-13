@@ -490,6 +490,10 @@ describe('ToolExecutionCard', () => {
     const label = screen.getByText('已完成');
     expect(label.parentElement?.className).toMatch(/shrink-0/);
     expect(label.parentElement?.className).toMatch(/whitespace-nowrap/);
+    const row = label.parentElement?.parentElement;
+    expect(row?.tagName).toBe('SPAN');
+    expect(row?.className).toMatch(/pr-2\.5/);
+    expect(label.closest('button')?.className ?? '').not.toMatch(/pr-2\.5/);
   });
 
   it('expands to show args/output and renders error', () => {

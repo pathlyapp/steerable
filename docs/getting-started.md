@@ -8,10 +8,14 @@
 
 | Tool      | Version | Why                                                              |
 | --------- | ------- | ---------------------------------------------------------------- |
-| Node.js   | ≥ 22    | TypeScript packages, Vitest                                      |
+| Node.js   | ≥ 26.4.0 | Working in this repository: TypeScript packages, Vitest, the terminal renderer |
 | pnpm      | ≥ 10    | Workspace + dependency resolution                                |
 | Python    | ≥ 3.10  | Harness, runtime, sidecar packages                               |
 | uv        | latest  | Fast Python dependency manager (replaces pip/virtualenv flow)    |
+
+Installing the command line as a user does not need this repository's Node
+floor: `@steerable/agent-cli` runs on Node 22.19 or newer, and only
+`steerable-cli tui` needs 26.4 for the renderer.
 
 ## 1 · Install the packages
 
@@ -25,7 +29,7 @@ uv add steerable-agent-protocol steerable-agent-harness steerable-agent-runtime
 uv add steerable-sidecar
 ```
 
-### TypeScript (web app or Electron renderer)
+### TypeScript (web app or desktop renderer)
 
 ```bash
 pnpm add @steerable/agent-protocol @steerable/agent-ui
@@ -91,7 +95,7 @@ asyncio.run(main())
 The `@tool` decorator auto-classifies via `decide_tool_mode("read_file")` →
 `"read"` (read-only); see [Tools spec](spec/tools.md) for the rules.
 
-## 4 · Hello, Sidecar (Electron / shell embedder)
+## 4 · Hello, Sidecar (desktop / shell embedder)
 
 The official TypeScript entry is `@steerable/agent-runtime` — it owns the
 sidecar process lifecycle (spawn, `lifecycle.ready` handshake, health ping,
@@ -100,7 +104,7 @@ bounded auto-restart, graceful drain) and exposes the CoreLoop-level API over
 on npm):
 
 ```bash
-pnpm add link:../steerable-framework/packages/agent-runtime/ts
+pnpm add link:../steerable/packages/agent-runtime/ts
 ```
 
 ```ts
@@ -112,7 +116,7 @@ const runtime = new AgentRuntime({
 });
 await runtime.start();                   // spawn + lifecycle.ready handshake
 
-const health = await runtime.ping();     // { status: 'ok', version: '0.6.4', … }
+const health = await runtime.ping();     // { status: 'ok', version: '0.9.0', … }
 
 const stream = await runtime.chatStream({
   provider: 'openai_compat',
@@ -132,7 +136,7 @@ await runtime.close();
 Any language that can fork a subprocess can also speak the protocol directly:
 spawn `python -m steerable_sidecar`, wait for `__SIDECAR_READY__:{json}` on
 stderr, frame JSON-RPC on stdin/stdout — see the
-[sidecar-roundtrip example](https://github.com/pathlyapp/opensteerable/tree/main/examples/sidecar-roundtrip).
+[sidecar-roundtrip example](https://github.com/pathlyapp/steerable/tree/main/examples/sidecar-roundtrip).
 
 The `agent.chat.stream` notification → `stream.chunk` flow is the canonical way
 to pull LLM output back through the sidecar without going through HTTP.
@@ -168,20 +172,23 @@ function MyChat() {
 ```
 
 `useChatStream` is intentionally transport-agnostic — fetch+SSE in the browser,
-WebSocket in your dev panel, IPC in Electron, sidecar JSON-RPC in a desktop
-shell. The hook reduces protocol `SSEEvent`s onto a `ChatMessage[]` regardless.
+WebSocket in your dev panel, IPC from a native host, sidecar JSON-RPC in a
+desktop shell. The hook reduces protocol `SSEEvent`s onto a `ChatMessage[]`
+regardless.
 
 ## 6 · Run the local dev preview
 
 The framework ships its own product-neutral host shell, so you can boot the
-full stack — Electron main or headless HTTP server, sidecar, chat UI — without
-any consumer repo:
+full stack — host runtime, sidecar, chat UI — without any consumer repo:
 
 ```bash
 pnpm install
 pnpm agent-shell:web       # headless server + neutral web app → http://127.0.0.1:4787
-pnpm agent-shell:client    # same build, launched as an Electron window
 ```
+
+A desktop window comes from a product's own `src-tauri` crate calling
+`steerable_agent_shell_tauri::run`; the framework repo boots the shell in the
+browser only.
 
 For a UI-only preview, `pnpm shell:dev` boots the example web shell with a mock
 transport that replays the 14 rich chat cards — zero external services.
@@ -190,4 +197,4 @@ transport that replays the 14 rich chat cards — zero external services.
 
 - Read the [Spec Overview](spec/overview.md) to understand the cross-language contract pipeline
 - Read the [Architecture](spec/architecture.md) page to understand the Tier 1–5 boundary
-- Browse [`examples/`](https://github.com/pathlyapp/opensteerable/tree/main/examples) for runnable starter projects
+- Browse [`examples/`](https://github.com/pathlyapp/steerable/tree/main/examples) for runnable starter projects

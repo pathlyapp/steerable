@@ -24,6 +24,32 @@ export interface ChildInfo {
   status: string;
   /** 子代理自己的 durable record；右侧过程面板据此回看它的推理与工具。 */
   recordId?: string;
+  /**
+   * R5: this child's bill. Absent while running, and absent for a child on
+   * an engine that reports no tokens at all (external ACP) — the two mean
+   * different things, so the row shows "not counted" for the settled one
+   * instead of `0 tok`.
+   */
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  /** Wall-clock the child ran, from spawn to terminal event. */
+  elapsedMs?: number;
+  /** R2: the fork re-read the parent history on a different model route. */
+  cacheNote?: 'cold';
+  parentModel?: string;
+  childModel?: string;
+  /**
+   * R7-3: this child stopped to ask the user something.
+   *
+   * Set by `child_needs_input`; cleared when the parent hands over the answer
+   * (the delegation result that follows), so the row stops saying 「等待你的
+   * 回答」 once the user has answered.
+   */
+  needsInput?: { intro: string };
+  /**
+   * R7-3: this child asked for input and the parent has since passed the
+   * answer on. It is not running any more, so the row reads 「已结束 · 已转交」.
+   */
+  handedOver?: boolean;
 }
 
 /**
@@ -105,6 +131,8 @@ const STATUS_MAP: Record<string, OrchestrationTaskStatus> = {
   cancelled: 'skipped',
   // Interrupted = paused-but-resumable; renders as pending (not terminal).
   interrupted: 'pending',
+  // Blocked on the user: still open, and not something 「继续」 can resolve.
+  needs_input: 'ask_user_paused',
 };
 
 /**
@@ -150,42 +178,184 @@ export function shouldShowOrchestrationBoard(children: ChildInfo[]): boolean {
 export function foldOrchestrationChildEvents(
   events: ReadonlyArray<Record<string, unknown>>,
 ): ChildInfo[] {
-  const list: ChildInfo[] = [];
+  // Spawn timestamps by childId: the elapsed time is only known when a
+  // terminal event arrives, and nothing else records when the child started.
+  const spawnedAtMs = new Map<string, number>();
+  let list: ChildInfo[] = [];
   for (const ev of events) {
     if (!ev || typeof ev !== 'object') continue;
-    const kind = typeof ev.kind === 'string' ? ev.kind : '';
-    const childId = typeof ev.childId === 'string' ? ev.childId : '';
-    if (!kind || !childId) continue;
-    const idx = list.findIndex((c) => c.childId === childId);
-    if (kind === 'child_spawned') {
-      if (idx >= 0) continue;
-      list.push({
+    list = applyChildEvent(list, ev, spawnedAtMs);
+  }
+  return list;
+}
+
+/**
+ * Fold one `agent.child` event into the live child list.
+ *
+ * The live stream and a replay must read an event the same way, or the panel
+ * shows one thing while streaming and another after a reload. `spawnedAtMs`
+ * carries the spawn clock across calls; omit it for a one-shot fold and the
+ * elapsed column simply stays empty.
+ *
+ * @param list The children accumulated so far.
+ * @param ev One `agent.child` lifecycle payload.
+ * @param spawnedAtMs Spawn timestamps by childId (mutated).
+ * @returns The list after this event.
+ */
+export function applyChildEvent(
+  list: ChildInfo[],
+  ev: Record<string, unknown>,
+  spawnedAtMs: Map<string, number> = new Map(),
+): ChildInfo[] {
+  const kind = typeof ev.kind === 'string' ? ev.kind : '';
+  const childId = typeof ev.childId === 'string' ? ev.childId : '';
+  if (!kind || !childId) return list;
+  const idx = list.findIndex((c) => c.childId === childId);
+  if (kind === 'child_spawned') {
+    if (idx >= 0) return list;
+    spawnedAtMs.set(childId, typeof ev.atMs === 'number' ? ev.atMs : Date.now());
+    return [
+      ...list,
+      {
         childId,
         task: typeof ev.task === 'string' ? ev.task : undefined,
         depth: typeof ev.depth === 'number' ? ev.depth : undefined,
-        profile: typeof ev.profile === 'string' ? ev.profile : undefined,
+        ...(typeof ev.profile === 'string' ? { profile: ev.profile } : {}),
         // 子代理自己的 durable record：委派行靠它跳转右侧过程栏。
-        recordId: typeof ev.recordId === 'string' ? ev.recordId : undefined,
+        ...(typeof ev.recordId === 'string' ? { recordId: ev.recordId } : {}),
+        // R2: the fork re-read the parent prefix on another model. A hint,
+        // not an error — the spawn still succeeded.
+        ...(ev.cacheNote === 'cold' ? { cacheNote: 'cold' as const } : {}),
+        ...(typeof ev.parentModel === 'string' ? { parentModel: ev.parentModel } : {}),
+        ...(typeof ev.childModel === 'string' ? { childModel: ev.childModel } : {}),
         status: 'running',
-      });
-      continue;
-    }
-    if (idx < 0) continue;
-    const status =
-      kind === 'child_completed'
-        ? 'completed'
-        : kind === 'child_failed'
-          ? 'failed'
-          : kind === 'child_cancelled'
-            ? 'cancelled'
-            : kind === 'child_interrupted'
-              ? 'interrupted'
-              : kind === 'child_resumed'
-                ? 'running'
-                : list[idx].status;
-    list[idx] = { ...list[idx], status };
+      },
+    ];
   }
-  return list;
+  if (idx < 0) return list;
+  if (kind === 'child_needs_input') {
+    // The child stopped and is waiting on the user. It is not running and it
+    // is not settled — marking it `interrupted` would offer 「继续」, which is
+    // wrong: what it needs is an answer.
+    const next = [...list];
+    next[idx] = {
+      ...list[idx],
+      status: 'needs_input',
+      needsInput: { intro: typeof ev.intro === 'string' ? ev.intro : '' },
+      handedOver: undefined,
+    };
+    return next;
+  }
+  const status =
+    kind === 'child_completed'
+      ? 'completed'
+      : kind === 'child_failed'
+        ? 'failed'
+        : kind === 'child_cancelled'
+          ? 'cancelled'
+          : kind === 'child_interrupted'
+            ? 'interrupted'
+            : kind === 'child_resumed'
+              ? 'running'
+              : list[idx].status;
+  const next = [...list];
+  next[idx] = {
+    ...list[idx],
+    status,
+    ...(isChildUsage(ev.usage) ? { usage: ev.usage } : {}),
+    ...elapsedOf(spawnedAtMs.get(childId), ev),
+  };
+  return next;
+}
+
+/** Statuses `agent_send` can continue. `closed` is deliberately absent. */
+const RESUMABLE_CHILD_STATUSES = new Set([
+  'completed',
+  'interrupted',
+  'cancelled',
+  'budget_exhausted',
+]);
+
+/**
+ * The child a question came from, for the ask-user card's source line.
+ *
+ * Returns the first row waiting on the user: the host shows one card at a
+ * time, so "which child asked" has exactly one answer while a card is open.
+ *
+ * @param children This turn's children.
+ * @returns The child that asked, or null when nothing is waiting.
+ */
+export function childAwaitingInput(
+  children: readonly ChildInfo[],
+): ChildInfo | null {
+  return children.find((child) => Boolean(child.needsInput)) ?? null;
+}
+
+/**
+ * Whether 「继续」 applies to this child.
+ *
+ * Derived from the status rather than stored: a resumed child goes back to
+ * `running`, and a stored flag would have to be cleared on every resume.
+ * `needs_input` is deliberately absent — that child is waiting for an
+ * answer, and resuming it would just ask the same question again.
+ *
+ * @param child The child row.
+ * @returns True when `agent_send` can continue it.
+ */
+export function isChildResumable(child: ChildInfo): boolean {
+  if (child.needsInput) return false;
+  return RESUMABLE_CHILD_STATUSES.has(child.status);
+}
+
+function isChildUsage(
+  value: unknown,
+): value is { promptTokens: number; completionTokens: number; totalTokens: number } {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.promptTokens === 'number'
+    && typeof record.completionTokens === 'number'
+    && typeof record.totalTokens === 'number'
+  );
+}
+
+/**
+ * How long the child ran, when both ends carry a wall clock.
+ *
+ * Both are required: replaying a turn persisted before `atMs` existed would
+ * otherwise report a zero-length run, which reads as "it did nothing".
+ */
+function elapsedOf(
+  spawnedAtMs: number | undefined,
+  ev: Record<string, unknown>,
+): { elapsedMs?: number } {
+  if (spawnedAtMs === undefined) return {};
+  const atMs = typeof ev.atMs === 'number' ? ev.atMs : undefined;
+  if (atMs === undefined) return {};
+  const elapsed = atMs - spawnedAtMs;
+  return elapsed >= 0 ? { elapsedMs: elapsed } : {};
+}
+
+/**
+ * Mark a child's question as handed over once the parent has re-delegated.
+ *
+ * The old row keeps existing (it is a real delegation that ran), but it must
+ * stop saying 「等待你的回答」 — the user answered, and the work continued in a
+ * new child. Without this the panel shows two rows both waiting on the user.
+ *
+ * @param list The children accumulated so far.
+ * @param childId The child that asked.
+ * @returns The list with that child marked handed over.
+ */
+export function markChildHandedOver(
+  list: ChildInfo[],
+  childId: string,
+): ChildInfo[] {
+  const idx = list.findIndex((child) => child.childId === childId);
+  if (idx < 0 || !list[idx].needsInput) return list;
+  const next = [...list];
+  next[idx] = { ...list[idx], status: 'completed', handedOver: true, needsInput: undefined };
+  return next;
 }
 
 /**
@@ -221,4 +391,80 @@ export function extractPersistedOrchestrationChildren(
     }
   }
   return seeded;
+}
+
+/**
+ * 把注册表里的子代理并进重启后的面板（R7-2）。
+ *
+ * 落库的 `orchestrationChildEvents` 只覆盖「回合跑到了收尾」的情形：进程被杀
+ * 时最后一条 assistant 消息可能根本没落库，那些子代理只存在于注册表里。没有
+ * 这一步，用户重开后看到的比实际派出去的少。
+ *
+ * 已经出现在某条消息里的子代理不重复添加（事件流比注册行更新）。剩下的挂到
+ * 最后一条 assistant 消息上——那是这个会话最近一次派发的归处；会话里一条
+ * assistant 消息都没有时（首个回合就被杀）返回空，因为没有面板可挂。
+ *
+ * @param persisted 落库事件水合出的「消息 id → 子代理」。
+ * @param orderedMessageIds 会话消息按时间顺序的 id。
+ * @param sessionChildren 注册表返回的本会话子代理。
+ * @returns 合并后的映射；未变化时返回原对象。
+ */
+export function mergeSessionChildren(
+  persisted: Record<string, ChildInfo[]>,
+  orderedMessageIds: readonly string[],
+  sessionChildren: ReadonlyArray<Record<string, unknown>>,
+): Record<string, ChildInfo[]> {
+  if (sessionChildren.length === 0) return persisted;
+  const seen = new Set<string>();
+  for (const list of Object.values(persisted)) {
+    for (const child of list) seen.add(child.childId);
+  }
+  const unseen = sessionChildren
+    .map(toChildInfo)
+    .filter((child): child is ChildInfo => child !== null && !seen.has(child.childId));
+  if (unseen.length === 0) return persisted;
+  const target = [...orderedMessageIds].reverse().find((id) => id in persisted)
+    ?? undefined;
+  if (target === undefined) return persisted;
+  return {
+    ...persisted,
+    [target]: [...persisted[target], ...unseen],
+  };
+}
+
+/**
+ * 注册行 → 面板行。
+ *
+ * 注册行没有任务文本（那是子代理自己的记录），也没有耗时；状态已经是合成
+ * 结果（`interrupted` 表示行未终结且本进程没有活句柄），正好是面板要的。
+ *
+ * @param raw `agent.children.list` 的一行。
+ * @returns 面板行；缺 childId 时返回 null。
+ */
+function toChildInfo(raw: Record<string, unknown>): ChildInfo | null {
+  const childId = typeof raw.childId === 'string' ? raw.childId : '';
+  if (!childId) return null;
+  const status = typeof raw.status === 'string' ? raw.status : 'interrupted';
+  const prompt = typeof raw.promptTokens === 'number' ? raw.promptTokens : null;
+  const completion =
+    typeof raw.completionTokens === 'number' ? raw.completionTokens : null;
+  return {
+    childId,
+    status,
+    ...(typeof raw.depth === 'number' ? { depth: raw.depth } : {}),
+    ...(typeof raw.profile === 'string' ? { profile: raw.profile } : {}),
+    ...(typeof raw.recordId === 'string' ? { recordId: raw.recordId } : {}),
+    // `usageKnown: false` 是外部引擎：它跑过，但没人计过 token。
+    ...(raw.usageKnown === false
+      ? {}
+      : prompt !== null || completion !== null
+        ? {
+            usage: {
+              promptTokens: prompt ?? 0,
+              completionTokens: completion ?? 0,
+              totalTokens: (prompt ?? 0) + (completion ?? 0),
+            },
+          }
+        : {}),
+  };
 }

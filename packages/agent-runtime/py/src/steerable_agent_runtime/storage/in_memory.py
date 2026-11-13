@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 from steerable_agent_protocol.generated import (
@@ -16,6 +17,7 @@ from steerable_agent_protocol.generated import (
     TraceSpan,
 )
 
+from ..child_record import TERMINAL_CHILD_STATUSES, ChildRecord
 from ..errors import StorageError
 
 
@@ -32,6 +34,10 @@ class InMemoryStorage:
         self._spans: dict[str, list[TraceSpan]] = {}
         self._events: dict[str, list[TraceEvent]] = {}
         self._history: dict[str, list[dict[str, Any]]] = {}
+        #: Insertion order preserved (dicts are ordered) so ``list_children``
+        #: returns the spawn order a host renders, matching the SQL
+        #: ``ORDER BY created_at, rowid``.
+        self._children: dict[str, ChildRecord] = {}
 
     # ------------------------------------------------------------------
     # Sessions
@@ -213,3 +219,71 @@ class InMemoryStorage:
         if prefix is not None:
             ids = [record_id for record_id in ids if record_id.startswith(prefix)]
         return sorted(ids)
+
+    # ------------------------------------------------------------------
+    # Child-agent index
+    # ------------------------------------------------------------------
+
+    async def upsert_child(self, record: ChildRecord) -> None:
+        async with self._lock:
+            # Re-inserting an existing record keeps its original position:
+            # reassigning an existing key in a dict does not reorder it.
+            self._children[record.record_id] = replace(record)
+
+    async def finish_child(
+        self,
+        record_id: str,
+        *,
+        status: str,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        usage_known: bool = True,
+        resumable: bool = False,
+        updated_at: str,
+    ) -> bool:
+        async with self._lock:
+            existing = self._children.get(record_id)
+            if existing is None:
+                return False
+            self._children[record_id] = existing.with_terminal_status(
+                status=status,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                usage_known=usage_known,
+                resumable=resumable,
+                updated_at=updated_at,
+            )
+            return True
+
+    async def get_child(self, record_id: str) -> ChildRecord | None:
+        async with self._lock:
+            return self._children.get(record_id)
+
+    async def list_children(
+        self, parent_record_id: str, *, include_finished: bool = True
+    ) -> list[ChildRecord]:
+        async with self._lock:
+            records = [
+                record
+                for record in self._children.values()
+                if record.parent_record_id == parent_record_id
+            ]
+        if not include_finished:
+            records = [r for r in records if r.status not in TERMINAL_CHILD_STATUSES]
+        # Parity with the SQL ``ORDER BY created_at, rowid``: sort by
+        # ``created_at`` only — Python's sort is stable, so insertion order
+        # (this dict's order) breaks ties the way ``rowid`` does.
+        records.sort(key=lambda r: r.created_at)
+        return records
+
+    async def list_all_children(
+        self, *, prefix: str | None = None
+    ) -> list[ChildRecord]:
+        async with self._lock:
+            records = list(self._children.values())
+        if prefix is not None:
+            records = [
+                r for r in records if r.parent_record_id.startswith(prefix)
+            ]
+        records.sort(key=lambda r: r.created_at)
+        return records

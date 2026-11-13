@@ -106,7 +106,7 @@ export async function flushInsightsOutbox(store: ScopedStore): Promise<{
     return { uploaded: 0, skipped: 0, failed: 0 };
   }
   const settings = await store.ensureInsightsSettings();
-  const pending = await store.listInsightOutbox({ uploaded: false, limit: MAX_BATCH });
+  const pending = await store.claimInsightsForUpload(MAX_BATCH);
   const { upload, skipped } = rowsEligibleForAutoUpload(settings, pending);
   let uploaded = 0;
   let failed = 0;

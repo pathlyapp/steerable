@@ -94,7 +94,7 @@ describe('TurnProcessGroup', () => {
 
     const toggle = processToggle();
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    expect(toggle.textContent).toContain('思考 2 次 · 工具调用 2 次');
+    expect(toggle.textContent).toContain('Thought 2 times · 2 tool calls');
     expect(screen.queryByText('先读配置')).toBeNull();
     expect(screen.queryByTestId('tools-flow')).toBeNull();
     expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
@@ -107,7 +107,7 @@ describe('TurnProcessGroup', () => {
       showThinkingContent: false,
     });
 
-    expect(processToggle().textContent).toBe('工作中');
+    expect(processToggle().textContent).toBe('Working');
     expect(processToggle().getAttribute('aria-expanded')).toBe('true');
     const folds = screen.getAllByTestId('turn-thinking');
     expect(folds).toHaveLength(2);
@@ -135,7 +135,7 @@ describe('TurnProcessGroup', () => {
     );
 
     expect(processToggle().getAttribute('aria-expanded')).toBe('false');
-    expect(processToggle().textContent).toContain('思考 2 次 · 工具调用 2 次');
+    expect(processToggle().textContent).toContain('Thought 2 times · 2 tool calls');
     expect(screen.queryByText('先读配置')).toBeNull();
     expect(screen.queryByTestId('thinking-peek')).toBeNull();
     expect(screen.getByTestId('answer').textContent).toBe('本地 CSV 配置');
@@ -162,7 +162,7 @@ describe('TurnProcessGroup', () => {
       blocks: [{ type: 'reasoning', content: '先读配置先读配置先读配置先读配置' }],
     });
 
-    expect(processToggle().textContent).toBe('工作中');
+    expect(processToggle().textContent).toBe('Working');
     expect(screen.queryByTestId('thinking-peek')).toBeNull();
     expect(screen.queryByText('先读配置先读配置先读配置先读配置')).toBeNull();
   });
@@ -175,12 +175,12 @@ describe('TurnProcessGroup', () => {
       thinkingDisplay: 'full',
       blocks: [{ type: 'reasoning', content: '先读配置先读配置先读配置先读配置' }],
     });
-    expect(processToggle().textContent).toBe('工作中');
+    expect(processToggle().textContent).toBe('Working');
     act(() => {
       vi.advanceTimersByTime(1000);
     });
     const fold = screen.getByTestId('turn-thinking').querySelector('button');
-    expect(fold?.textContent).toContain('思考中');
+    expect(fold?.textContent).toContain('Thinking');
     expect(fold?.textContent).toContain('1s');
     expect(fold?.textContent).not.toMatch(/tok\/s/);
   });
@@ -343,7 +343,7 @@ describe('TurnProcessGroup', () => {
 
     const thinking = screen.getAllByTestId('turn-thinking');
     expect(thinking).toHaveLength(2);
-    expect(thinking[0].textContent).toContain('思考');
+    expect(thinking[0].textContent).toContain('Thinking');
     expect(thinking[0].textContent).not.toContain('先想一下');
     expect(thinking[1].textContent).toContain('再写脚本');
     const response = screen.getByTestId('turn-response');
@@ -446,7 +446,7 @@ describe('TurnProcessGroup', () => {
     });
     expect(processToggle().getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByTestId('tools-flow')).toBeNull();
-    expect(processToggle().textContent).toContain('工具调用 1 次');
+    expect(processToggle().textContent).toContain('1 tool calls');
   });
 
   it('folds a finished tools-only turn even when 完整显示 is on', () => {
@@ -457,7 +457,7 @@ describe('TurnProcessGroup', () => {
     });
     expect(processToggle().getAttribute('aria-expanded')).toBe('false');
     expect(screen.queryByTestId('tools-flow')).toBeNull();
-    expect(processToggle().textContent).toContain('工具调用 1 次');
+    expect(processToggle().textContent).toContain('1 tool calls');
   });
 
   it('keeps the work line as 工作中 while a tool is running', () => {
@@ -466,7 +466,7 @@ describe('TurnProcessGroup', () => {
       blocks: [{ type: 'reasoning', content: '先读配置' }, tool('local_run_snippet', true)],
       showThinkingContent: false,
     });
-    expect(processToggle().textContent).toBe('工作中');
+    expect(processToggle().textContent).toBe('Working');
     const fold = screen.getByTestId('turn-thinking');
     expect(fold.querySelector('button')?.getAttribute('aria-expanded')).toBe('false');
     expect(fold.textContent).not.toContain('先读配置');
@@ -482,11 +482,11 @@ describe('TurnProcessGroup', () => {
       startedAtMs: Date.parse('2026-09-08T12:00:00.000Z'),
       thinkingDisplay: 'full',
     });
-    expect(processToggle().textContent).toBe('工作中');
+    expect(processToggle().textContent).toBe('Working');
     act(() => {
       vi.advanceTimersByTime(12_000);
     });
-    expect(processToggle().textContent).toBe('工作中');
+    expect(processToggle().textContent).toBe('Working');
     expect(screen.getByTestId('turn-thinking').querySelector('button')?.textContent).toContain('12s');
   });
 
@@ -501,22 +501,22 @@ describe('TurnProcessGroup', () => {
     });
     fireEvent.click(processToggle());
     expect(screen.getByTestId('turn-thinking').querySelector('button')?.textContent).toBe(
-      '思考 · 8s',
+      'Thought for 8s',
     );
   });
 
   it('appends worked duration after the turn finishes', () => {
     renderGroup({ isStreaming: false, durationMs: 83_000 });
     expect(processToggle().textContent).toContain(
-      '工作了 1m 23s · 思考 2 次 · 工具调用 2 次',
+      'Worked 1m 23s · Thought 2 times · 2 tool calls',
     );
   });
 
   it('omits worked duration for sub-second finished turns', () => {
     renderGroup({ isStreaming: false, durationMs: 400 });
     const label = processToggle().textContent ?? '';
-    expect(label).toContain('思考 2 次 · 工具调用 2 次');
-    expect(label).not.toContain('工作了');
+    expect(label).toContain('Thought 2 times · 2 tool calls');
+    expect(label).not.toContain('Worked');
   });
 
   it('freezes live elapsed when the stream ends before durationMs lands', () => {
@@ -541,7 +541,7 @@ describe('TurnProcessGroup', () => {
       />,
     );
     expect(processToggle().textContent).toContain(
-      '工作了 12s · 思考 2 次 · 工具调用 2 次',
+      'Worked 12s · Thought 2 times · 2 tool calls',
     );
   });
 });

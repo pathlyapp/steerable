@@ -1,4 +1,5 @@
 import { LuCircle, LuCircleCheck, LuListChecks } from 'react-icons/lu';
+import { t } from '@/i18n';
 
 /**
  * PlanTodoList — renders the ```plan fenced block that the plan-mode skill
@@ -75,7 +76,7 @@ export function PlanTodoList({ content }: { content: string }) {
       <div className="flex items-center gap-2 border-b border-amber-400/30 bg-amber-400/10 px-3 py-2 dark:border-amber-500/20">
         <LuListChecks className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
         <span className="flex-1 truncate text-[13px] font-semibold text-amber-800 dark:text-amber-200">
-          {title || '执行计划'}
+          {title || t('Execution plan')}
         </span>
         {items.length > 0 && (
           <span className="shrink-0 rounded-full bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">

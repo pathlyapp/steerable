@@ -7,8 +7,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('electron-log', () => ({
-  default: { info: () => {}, warn: () => {}, error: () => {} },
+vi.mock('../../src/log.js', () => ({
+  log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
 }));
 vi.mock('../../src/llm/index.js', () => ({
   llmService: {

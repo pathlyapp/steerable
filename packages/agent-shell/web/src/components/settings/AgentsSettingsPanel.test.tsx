@@ -9,9 +9,9 @@ const archiveChatAgent = vi.fn();
 const listChatAgentSkills = vi.fn();
 const listChatAgentTools = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
-  getElectronBridge: () => ({
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => ({
     localBackend: { request: vi.fn() },
     local: {},
   }),
@@ -101,7 +101,7 @@ describe('AgentsSettingsPanel', () => {
     render(<AgentsSettingsPanel />);
     const row = await screen.findByTestId('agent-row-local-assistant');
     expect(row.textContent).toContain('电脑操作员');
-    expect(row.textContent).toContain('内置');
+    expect(row.textContent).toContain('Built-in');
     expect(screen.queryByTestId('agent-archive-local-assistant')).toBeNull();
   });
 
@@ -165,8 +165,7 @@ describe('AgentsSettingsPanel', () => {
     });
   });
 
-  it('编辑时回填已保存的能力面', async () => {
-    const restricted: LocalChatAgent = {
+  it('编辑时回填已保存的能力面', async () => {    const restricted: LocalChatAgent = {
       ...custom,
       skillIds: ['90-csv-tools'],
       allowExternalSkills: false,
@@ -203,22 +202,83 @@ describe('AgentsSettingsPanel', () => {
     listChatAgents.mockResolvedValue({ agents: [builtin, restricted], total: 2 });
     render(<AgentsSettingsPanel />);
     const summary = await screen.findByTestId('agent-capability-geo-advisor');
-    expect(summary.textContent).toContain('技能 1');
-    expect(summary.textContent).toContain('仅限所选技能');
-    expect(summary.textContent).toContain('仅 1 个工具');
+    expect(summary.textContent).toContain('Skills 1');
+    expect(summary.textContent).toContain('Selected skills only');
+    expect(summary.textContent).toContain('Only 1 tools');
     expect(screen.queryByTestId('agent-capability-local-assistant')).toBeNull();
   });
 
-  it('archives a custom agent after two-step confirm', async () => {
-    listChatAgents
+  it('角色模型与推理强度：留空即跟随父级', async () => {
+    // R6: 未配置的智能体不能让 sidecar 重建 provider，所以空表单必须发 null。
+    render(<AgentsSettingsPanel />);
+    await screen.findByTestId('agent-row-local-assistant');
+    fireEvent.click(screen.getByTestId('agent-add'));
+    fireEvent.change(screen.getByTestId('agent-form-name'), {
+      target: { value: '轻量调研' },
+    });
+    fireEvent.click(screen.getByTestId('agent-form-save'));
+
+    await waitFor(() => {
+      expect(createChatAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ model: null, reasoningEffort: null }),
+      );
+    });
+  });
+
+  it('角色模型与推理强度：填写后随保存下发', async () => {
+    render(<AgentsSettingsPanel />);
+    await screen.findByTestId('agent-row-local-assistant');
+    fireEvent.click(screen.getByTestId('agent-add'));
+    fireEvent.change(screen.getByTestId('agent-form-name'), {
+      target: { value: '轻量调研' },
+    });
+    fireEvent.change(screen.getByTestId('agent-form-model'), {
+      target: { value: 'glm-5.3-flash' },
+    });
+    fireEvent.change(screen.getByTestId('agent-form-effort'), {
+      target: { value: 'low' },
+    });
+    fireEvent.click(screen.getByTestId('agent-form-save'));
+
+    await waitFor(() => {
+      expect(createChatAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'glm-5.3-flash', reasoningEffort: 'low' }),
+      );
+    });
+  });
+
+  it('编辑时回填已保存的模型与推理强度', async () => {
+    const pinned: LocalChatAgent = {
+      ...custom,
+      model: 'glm-5.3-flash',
+      reasoningEffort: 'high',
+    };
+    listChatAgents.mockResolvedValue({ agents: [pinned], total: 1 });
+    render(<AgentsSettingsPanel />);
+    await screen.findByTestId('agent-row-geo-advisor');
+    fireEvent.click(screen.getByTestId('agent-edit-geo-advisor'));
+
+    expect((screen.getByTestId('agent-form-model') as HTMLInputElement).value).toBe(
+      'glm-5.3-flash',
+    );
+    expect((screen.getByTestId('agent-form-effort') as HTMLInputElement).value).toBe('high');
+  });
+
+  it('archives a custom agent after dialog confirm', async () => {    listChatAgents
       .mockResolvedValueOnce({ agents: [builtin, custom], total: 2 })
       .mockResolvedValueOnce({ agents: [builtin], total: 1 });
     render(<AgentsSettingsPanel />);
     await screen.findByTestId('agent-row-geo-advisor');
-    const archive = screen.getByTestId('agent-archive-geo-advisor');
-    fireEvent.click(archive);
+    fireEvent.click(screen.getByTestId('agent-archive-geo-advisor'));
     expect(archiveChatAgent).not.toHaveBeenCalled();
-    fireEvent.click(archive);
+    expect(screen.getByTestId('agent-archive-dialog').textContent).toContain('地质顾问');
+
+    fireEvent.click(screen.getByTestId('agent-archive-dialog-cancel'));
+    expect(archiveChatAgent).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('agent-archive-dialog')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('agent-archive-geo-advisor'));
+    fireEvent.click(screen.getByTestId('agent-archive-dialog-confirm'));
     await waitFor(() => {
       expect(archiveChatAgent).toHaveBeenCalledWith('geo-advisor');
     });

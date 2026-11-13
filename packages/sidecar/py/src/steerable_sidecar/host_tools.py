@@ -16,6 +16,7 @@ enforce them (deeppath-agent's ToolRouter carries the same 61-rule set).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any, cast
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
@@ -103,23 +104,35 @@ class HostApprover:
         method: str = "approval.request",
         timeout: float | None = None,
         amendment_sink: Any | None = None,
+        chat_id: str | None = None,
+        sandbox_enforced: Callable[[], bool] | None = None,
     ) -> None:
         self._server = server
         self._method = method
         self._timeout = timeout
         self._amendment_sink = amendment_sink
+        self._chat_id = chat_id if isinstance(chat_id, str) and chat_id else None
+        # Read at approve time so a mid-turn full-access switch is visible.
+        self._sandbox_enforced = sandbox_enforced
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
+        params: dict[str, Any] = {
+            "toolName": request.tool_name,
+            "arguments": request.arguments,
+            "mode": request.mode,
+            "category": request.category,
+            "round": request.round_index,
+        }
+        if self._chat_id:
+            # The renderer only shows the card in the chat that asked.
+            params["chatId"] = self._chat_id
+        if self._sandbox_enforced is not None:
+            # False: the card must not say writes outside the cwd are blocked.
+            params["sandboxEnforced"] = bool(self._sandbox_enforced())
         try:
             payload: Any = await self._server.call(
                 self._method,
-                {
-                    "toolName": request.tool_name,
-                    "arguments": request.arguments,
-                    "mode": request.mode,
-                    "category": request.category,
-                    "round": request.round_index,
-                },
+                params,
                 timeout=self._timeout,
             )
         except Exception as exc:  # noqa: BLE001 — fail closed
@@ -183,12 +196,20 @@ class HostAskUserHandler:
         self._timeout = timeout
 
     async def __call__(
-        self, intro: str, questions: list[dict[str, Any]]
+        self,
+        intro: str,
+        questions: list[dict[str, Any]],
+        context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        params: dict[str, Any] = {"intro": intro, "questions": questions}
+        chat_id = _chat_id_from_context(context)
+        if chat_id:
+            # The renderer only shows the card in the chat that asked.
+            params["chatId"] = chat_id
         try:
             payload: Any = await self._server.call(
                 self._method,
-                {"intro": intro, "questions": questions},
+                params,
                 timeout=self._timeout,
             )
         except Exception as exc:  # noqa: BLE001 — no answer beats a hung turn
@@ -198,6 +219,19 @@ class HostAskUserHandler:
             return dict(payload["answers"])
         logger.warning("host returned an invalid ask_user reply: %r", payload)
         return {}
+
+
+def _chat_id_from_context(context: dict[str, Any] | None) -> str | None:
+    """Read the owning chat from loop dispatch context.
+
+    ``RunCodeBoundExecutor`` passes ``chat_id``; some callers use ``chatId``.
+    """
+    if not isinstance(context, dict):
+        return None
+    raw = context.get("chat_id") or context.get("chatId")
+    if isinstance(raw, str) and raw:
+        return raw
+    return None
 
 
 _KNOWN_RESULT_KEYS = frozenset(ToolResult.model_fields)

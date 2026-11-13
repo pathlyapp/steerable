@@ -9,7 +9,7 @@ import type { SidecarSandboxPosture } from '@/lib/local-api';
 
 const getSidecarSandboxPosture = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({ isElectron: () => true }));
+vi.mock('@/lib/host-bridge', () => ({ hasHostBridge: () => true }));
 vi.mock('@/lib/local-api', () => ({
   getSidecarSandboxPosture: () => getSidecarSandboxPosture(),
 }));
@@ -28,19 +28,19 @@ afterEach(cleanup);
 
 describe('SecuritySettingsPanel — layer-1 态势披露', () => {
   it.each([
-    ['platform_unsupported', '当前平台没有可用的进程沙箱后端'],
-    ['seatbelt_missing', '未找到 /usr/bin/sandbox-exec'],
-    ['profile_failed', '沙箱配置（Seatbelt profile）生成失败'],
-    ['wrap_failed', 'Linux 进程沙箱'],
-    ['helper_missing', '未找到 win-spawn-helper.exe'],
+    ['platform_unsupported', 'No process sandbox backend is available on this platform'],
+    ['seatbelt_missing', '/usr/bin/sandbox-exec not found'],
+    ['profile_failed', 'Failed to generate the sandbox configuration (Seatbelt profile)'],
+    ['wrap_failed', 'Linux process sandbox'],
+    ['helper_missing', 'win-spawn-helper.exe not found'],
   ] as const)('收容失败 %s：告知已拒绝启动，不谎称仍在跑', async (reason, detail) => {
     getSidecarSandboxPosture.mockResolvedValue({ posture: posture({ reason }) });
     render(<SecuritySettingsPanel />);
 
-    const headline = await screen.findByText(/无法收容、已拒绝启动 —/);
+    const headline = await screen.findByText(/startup was refused —/);
     expect(headline.textContent).toContain(detail);
-    expect(screen.getByText(/没有启动/)).toBeTruthy();
-    expect(screen.queryByText(/未沙箱 —/)).toBeNull();
+    expect(screen.getByText(/did not start/)).toBeTruthy();
+    expect(screen.queryByText(/Not sandboxed —/)).toBeNull();
     expect(screen.getByText(/STEERABLE_SIDECAR_SANDBOX=0/)).toBeTruthy();
   });
 
@@ -50,11 +50,11 @@ describe('SecuritySettingsPanel — layer-1 态势披露', () => {
     });
     render(<SecuritySettingsPanel />);
 
-    expect((await screen.findByText(/已手动关闭 —/)).textContent).toContain(
+    expect((await screen.findByText(/Turned off manually —/)).textContent).toContain(
       'STEERABLE_SIDECAR_SANDBOX=0',
     );
-    expect(screen.queryByText(/无法收容、已拒绝启动 —/)).toBeNull();
-    expect(screen.getByText(/无操作系统隔离运行/)).toBeTruthy();
+    expect(screen.queryByText(/startup was refused —/)).toBeNull();
+    expect(screen.getByText(/runs without OS isolation/)).toBeTruthy();
   });
 
   it('Seatbelt 生效时记为「部分」，不谎称完全强制', async () => {
@@ -63,9 +63,9 @@ describe('SecuritySettingsPanel — layer-1 态势披露', () => {
     });
     render(<SecuritySettingsPanel />);
 
-    expect(await screen.findByText(/Seatbelt · 部分强制/)).toBeTruthy();
-    expect(screen.getByText(/不识别主机名/)).toBeTruthy();
-    expect(screen.queryByText(/无法收容、已拒绝启动 —/)).toBeNull();
+    expect(await screen.findByText(/Seatbelt · partial enforcement/)).toBeTruthy();
+    expect(screen.getByText(/does not recognize host names/)).toBeTruthy();
+    expect(screen.queryByText(/startup was refused —/)).toBeNull();
   });
 
   it('bwrap 生效时记为部分强制', async () => {
@@ -73,16 +73,16 @@ describe('SecuritySettingsPanel — layer-1 态势披露', () => {
       posture: posture({ backend: 'bwrap', enforcement: 'partial', reason: 'active' }),
     });
     render(<SecuritySettingsPanel />);
-    expect(await screen.findByText(/bwrap · 部分强制/)).toBeTruthy();
+    expect(await screen.findByText(/bwrap · partial enforcement/)).toBeTruthy();
   });
 
   it('sidecar 未就绪时不冒充任何一种姿态', async () => {
     getSidecarSandboxPosture.mockRejectedValue(new Error('503'));
     render(<SecuritySettingsPanel />);
 
-    expect(await screen.findByText(/sidecar 未就绪/)).toBeTruthy();
-    expect(screen.queryByText(/无法收容、已拒绝启动 —/)).toBeNull();
-    expect(screen.queryByText(/部分强制/)).toBeNull();
+    expect(await screen.findByText(/Sidecar not ready/)).toBeTruthy();
+    expect(screen.queryByText(/startup was refused —/)).toBeNull();
+    expect(screen.queryByText(/partial enforcement/)).toBeNull();
   });
 
   it('出网退回端口级时披露原因（此前只有主进程日志可见）', async () => {
@@ -95,7 +95,7 @@ describe('SecuritySettingsPanel — layer-1 态势披露', () => {
     });
     render(<SecuritySettingsPanel />);
 
-    expect(await screen.findByText(/已退回端口级/)).toBeTruthy();
+    expect(await screen.findByText(/fell back to port level/)).toBeTruthy();
     expect(screen.getByText(/127\.0\.0\.1:7890/)).toBeTruthy();
   });
 
@@ -106,8 +106,8 @@ describe('SecuritySettingsPanel — layer-1 态势披露', () => {
     });
     render(<SecuritySettingsPanel />);
 
-    expect(await screen.findByText(/按主机白名单代理生效中/)).toBeTruthy();
-    expect(screen.getByText(/逐项放行/)).toBeTruthy();
+    expect(await screen.findByText(/per-host allowlist proxy is active/)).toBeTruthy();
+    expect(screen.getByText(/allow them one by one/)).toBeTruthy();
   });
 
   it('无 egress 字段（旧后端）时不渲染出网行', async () => {
@@ -116,7 +116,7 @@ describe('SecuritySettingsPanel — layer-1 态势披露', () => {
     });
     render(<SecuritySettingsPanel />);
 
-    await screen.findByText(/Seatbelt · 部分强制/);
-    expect(screen.queryByText(/出网管控/)).toBeNull();
+    await screen.findByText(/Seatbelt · partial enforcement/);
+    expect(screen.queryByText(/Egress control/)).toBeNull();
   });
 });

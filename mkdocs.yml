@@ -1,14 +1,14 @@
-site_name: OpenSteerable
+site_name: Steerable
 site_description: The model-quality layer that makes local, quantized, and cheap models behave — spec-first agent framework for TypeScript + Python.
 site_url: https://steerableframework.com/
-repo_url: https://github.com/pathlyapp/opensteerable
-repo_name: pathlyapp/opensteerable
+repo_url: https://github.com/pathlyapp/steerable
+repo_name: pathlyapp/steerable
 edit_uri: edit/main/docs/
 
 theme:
   name: material
-  logo: assets/logo.svg
-  favicon: assets/logo.svg
+  logo: assets/logo.png
+  favicon: assets/logo.png
   features:
     - navigation.instant
     - navigation.tracking
@@ -69,7 +69,6 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Comparison: comparison.md
-  - Roadmap: roadmap.md
   - Evals: evals.md
   - Spec:
       - Overview: spec/overview.md
@@ -82,8 +81,10 @@ nav:
       - Runtime: spec/runtime.md
       - Sidecar: spec/sidecar.md
       - CoreLoop: spec/core-loop.md
+      - Engine compatibility: spec/engine-compatibility.md
       - Compaction: spec/compaction.md
-  - UI Components: ui/index.md
+  - UI:
+      - Components: ui/index.md
 
 plugins:
   - search
@@ -94,4 +95,4 @@ extra_css:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/pathlyapp/opensteerable
+      link: https://github.com/pathlyapp/steerable

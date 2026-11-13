@@ -255,3 +255,130 @@ def export_trace(
         trace, spans, events, service_name=service_name, privacy_mode=privacy_mode
     )
     return export_otlp_http(payload, endpoint, timeout_s=timeout_s, headers=headers)
+
+
+# ---------------------------------------------------------------------------
+# Metrics — counters for the reliability statistics (phase 2, R4)
+# ---------------------------------------------------------------------------
+
+#: Metrics are deliberately separate from traces: a collector that only knows
+#: ``/v1/traces`` keeps working, and a collector that wants counts subscribes
+#: to ``/v1/metrics``. The names follow the OTel naming convention (dots,
+#: no unit suffix — the unit rides in `unit`).
+_TURN_COUNTER = "steerable.turn.outcome"
+_ATTEMPT_COUNTER = "steerable.turn.attempts"
+
+
+def to_otlp_metrics_json(
+    samples: Iterable[dict[str, Any]],
+    *,
+    service_name: str = "steerable-agent",
+    now_ms: int | None = None,
+) -> dict[str, Any]:
+    """Build an ``ExportMetricsServiceRequest`` from recorded turn outcomes.
+
+    Each sample is one finished turn:
+
+    - ``outcome``: ``completed`` | ``failed`` | ``cancelled``
+    - ``failureKind``: provider classification, only meaningful when failed
+    - ``retries``: retries spent in the turn
+    - ``usedDirect``: whether the model request skipped the proxy
+    - ``attempts``: model requests issued
+
+    Nothing here identifies the conversation, the prompt, or the model: the
+    payload is labels and counts, which is what an operator needs to see
+    whether reconnecting works and what the failure rate is. That also means
+    the payload is privacy-safe by construction rather than by filtering —
+    there is no free-form field to filter.
+
+    Labels are ordered so repeated exports are byte-identical for the same
+    input, which keeps collector-side series stable.
+    """
+
+    timestamp = now_ms if now_ms is not None else int(datetime.now(timezone.utc).timestamp() * 1000)
+    turn_counts: dict[tuple[tuple[str, str], ...], int] = {}
+    attempt_counts: dict[tuple[tuple[str, str], ...], int] = {}
+
+    for sample in samples:
+        labels: list[tuple[str, str]] = [
+            ("outcome", str(sample.get("outcome") or "unknown")),
+        ]
+        failure_kind = sample.get("failureKind")
+        if failure_kind:
+            labels.append(("failure_kind", str(failure_kind)))
+        labels.append(("used_direct", "true" if sample.get("usedDirect") else "false"))
+        key = tuple(labels)
+        turn_counts[key] = turn_counts.get(key, 0) + 1
+        attempts = int(sample.get("attempts") or 0)
+        if attempts > 0:
+            attempt_counts[key] = attempt_counts.get(key, 0) + attempts
+
+    def datapoints(counts: dict[tuple[tuple[str, str], ...], int]) -> list[dict[str, Any]]:
+        points: list[dict[str, Any]] = []
+        for key in sorted(counts):
+            points.append(
+                {
+                    "asInt": str(counts[key]),
+                    "startTimeUnixNano": str(timestamp * 1_000_000),
+                    "timeUnixNano": str(timestamp * 1_000_000),
+                    "attributes": _attrs(dict(key)),
+                }
+            )
+        return points
+
+    # Sums (monotonic counters) rather than gauges: these count events since
+    # the process started, and a collector aggregates them across exports.
+    metrics: list[dict[str, Any]] = []
+    if turn_counts:
+        metrics.append(
+            {
+                "name": _TURN_COUNTER,
+                "description": "Agent turns by terminal outcome.",
+                "unit": "1",
+                "sum": {
+                    "aggregationTemporality": 2,  # cumulative
+                    "isMonotonic": True,
+                    "dataPoints": datapoints(turn_counts),
+                },
+            }
+        )
+    if attempt_counts:
+        metrics.append(
+            {
+                "name": _ATTEMPT_COUNTER,
+                "description": "Model requests issued on finished turns, retries included.",
+                "unit": "1",
+                "sum": {
+                    "aggregationTemporality": 2,
+                    "isMonotonic": True,
+                    "dataPoints": datapoints(attempt_counts),
+                },
+            }
+        )
+    return {
+        "resourceMetrics": [
+            {
+                "resource": {"attributes": _attrs({"service.name": service_name})},
+                "scopeMetrics": [
+                    {"scope": {"name": "steerable-agent-runtime"}, "metrics": metrics}
+                ],
+            }
+        ]
+    }
+
+
+def export_metrics(
+    samples: Iterable[dict[str, Any]],
+    endpoint: str,
+    *,
+    service_name: str = "steerable-agent",
+    timeout_s: float = 10.0,
+    headers: dict[str, str] | None = None,
+) -> int:
+    """POST turn-outcome counters to a collector's ``/v1/metrics`` URL.
+
+    Returns the HTTP status. Callers treat failure as non-fatal: a turn that
+    completed must not fail because its telemetry could not be delivered.
+    """
+    payload = to_otlp_metrics_json(samples, service_name=service_name)
+    return export_otlp_http(payload, endpoint, timeout_s=timeout_s, headers=headers)

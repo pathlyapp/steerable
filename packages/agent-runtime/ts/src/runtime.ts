@@ -39,6 +39,37 @@ export interface SessionMessages {
   messages: { seq: number; role: string; content: string }[];
 }
 
+/**
+ * One child agent as the durable index reports it.
+ *
+ * `status` is composed, never stored raw: a terminal row reports its own
+ * status, a non-terminal row with a live handle reports `running`, and one
+ * with no handle reports `interrupted` (the spawning turn ended or the
+ * process died — `resumable` says whether a send can continue it).
+ */
+export interface ChildAgentStatus {
+  recordId: string;
+  parentRecordId: string;
+  childId: string;
+  depth: number;
+  profile: string | null;
+  engine: string;
+  status: string;
+  resumable: boolean;
+  live: boolean;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  usageKnown: boolean;
+  createdAt: string;
+  updatedAt: string;
+  answerPreview?: string;
+}
+
+export interface ChildrenList {
+  parentRecordId: string | null;
+  children: ChildAgentStatus[];
+}
+
 export interface ToolDescriptor {
   name: string;
   description?: string;
@@ -69,6 +100,20 @@ export interface TraceExportResult {
   status: string;
   traceId: string;
   privacyMode: string;
+}
+
+/** One finished turn, as `metrics.export` accepts it. Counts and labels only. */
+export interface MetricsExportSample {
+  outcome: 'completed' | 'failed' | 'cancelled';
+  failureKind?: string | null;
+  attempts?: number | null;
+  retried?: boolean;
+  usedDirect?: boolean;
+}
+
+export interface MetricsExportResult {
+  status: string;
+  metrics: number;
 }
 
 /**
@@ -168,6 +213,18 @@ export interface PluginRecord {
   reloadable: boolean;
 }
 
+/** One enabled plugin's tool as served by `plugin.tools.describe`. */
+export interface PluginToolDescriptor {
+  name: string;
+  description: string;
+  schema: Record<string, unknown>;
+  mode: string;
+  exposure: 'direct' | 'deferred' | 'hidden';
+  requireConsent: boolean;
+  concurrencySafe: boolean;
+  plugin: string | null;
+}
+
 /** Recursive node of the `agent.session.tree` branch-family view. */
 export interface SessionTreeNode {
   recordId: string;
@@ -220,11 +277,13 @@ export interface ChatStreamParams {
   apiKey?: string;
   /** History seed window the host already rendered (see WS3 contract). */
   historySeed?: unknown[];
-  /** Orchestration opt-in: {maxDepth?, maxParallel?, childMaxRounds?}. */
+  /** Orchestration opt-in: {maxDepth?, maxParallel?, childMaxRounds?,
+   * childMaxToolErrors?}; child limits default to the parent loop's. */
   orchestration?: {
     maxDepth?: number;
     maxParallel?: number;
     childMaxRounds?: number;
+    childMaxToolErrors?: number;
   };
   /** Per-request tool domain narrowing (fail-closed on the loop side). */
   toolFilter?: string[];
@@ -492,6 +551,37 @@ export class AgentRuntime {
     return this.process.request('agent.session.messages', { recordId });
   }
 
+  /**
+   * Every child agent recorded for one parent session — the durable answer
+   * to "what did this session spawn", which the live pool cannot give once
+   * the spawning turn ended.
+   */
+  childrenList(params: {
+    parentRecordId?: string;
+    prefix?: string;
+    includeFinished?: boolean;
+    answerPreviewChars?: number;
+  } = {}): Promise<ChildrenList> {
+    return this.process.request('agent.children.list', params);
+  }
+
+  /**
+   * Cooperatively interrupt one running child of a chat's live turn.
+   *
+   * The panel's stop control, not a model-driven tool call: it must not wait
+   * for a turn of its own. `interrupted: false` means the child is not running
+   * in this process (already settled, or a restarted sidecar).
+   *
+   * @param chatId The chat whose turn owns the child.
+   * @param childId The child's lineage id (`0.2`).
+   */
+  childrenInterrupt(chatId: string, childId: string): Promise<{
+    interrupted: boolean;
+    reason?: string;
+  }> {
+    return this.process.request('agent.children.interrupt', { chatId, childId });
+  }
+
   // ---- chat ------------------------------------------------------------
 
   /**
@@ -571,6 +661,15 @@ export class AgentRuntime {
 
   exportTrace(traceId: string): Promise<TraceExportResult> {
     return this.process.request('trace.export', { traceId });
+  }
+
+  /** POST turn-outcome counters to a collector's `/v1/metrics`. */
+  exportMetrics(params: {
+    endpoint: string;
+    samples: MetricsExportSample[];
+    serviceName?: string;
+  }): Promise<MetricsExportResult> {
+    return this.process.request('metrics.export', params);
   }
 
   getConfig(): Promise<Record<string, unknown>> {
@@ -653,6 +752,15 @@ export class AgentRuntime {
   /** Hot-reload a reloadable plugin from its source. */
   reloadPlugin(name: string): Promise<{ plugin: PluginRecord }> {
     return this.process.request('plugin.reload', { name });
+  }
+
+  /**
+   * Descriptors for every tool an enabled plugin provides. Hosts that own
+   * the model-visible tool list advertise these and call them with
+   * `tool.invoke`; disabled plugins contribute none.
+   */
+  describePluginTools(): Promise<{ tools: PluginToolDescriptor[] }> {
+    return this.process.request('plugin.tools.describe');
   }
 
   /** The framework-owned provider-preset table for host settings UIs. */

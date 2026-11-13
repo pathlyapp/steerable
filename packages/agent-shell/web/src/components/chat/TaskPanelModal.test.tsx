@@ -15,7 +15,7 @@ import { TaskPanelModal } from './TaskPanelModal';
 
 afterEach(() => {
   cleanup();
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 function makeTask(overrides: Partial<LocalTask> = {}): LocalTask {
@@ -48,7 +48,7 @@ function installBridge(tasks: LocalTask[]) {
   const taskUpdatedListeners: Array<
     (payload: { chatId: string; taskId: string }) => void
   > = [];
-  (window as { electron?: unknown }).electron = {
+  (window as { steerableHost?: unknown }).steerableHost = {
     localBackend: { request },
     onTaskUpdated: (
       cb: (payload: { chatId: string; taskId: string }) => void,
@@ -77,7 +77,7 @@ describe('TaskPanelModal', () => {
     ]);
     render(<TaskPanelModal chatId="chat_1" onClose={() => {}} />);
 
-    await waitFor(() => expect(screen.queryByText('正在加载任务…')).toBeNull());
+    await waitFor(() => expect(screen.queryByText('Loading tasks...')).toBeNull());
     const rows = screen
       .getAllByRole('button', { hidden: true })
       .map((b) => b.closest('[data-task-row]'))
@@ -90,13 +90,13 @@ describe('TaskPanelModal', () => {
       'failed',
     ]);
     expect(screen.getByText('跑测试')).toBeTruthy();
-    expect(screen.getByText(/3 个任务，1 个运行中/)).toBeTruthy();
+    expect(screen.getByText(/3 tasks, 1 running/)).toBeTruthy();
   });
 
   it('空态文案', async () => {
     installBridge([]);
     render(<TaskPanelModal chatId="chat_1" onClose={() => {}} />);
-    await waitFor(() => screen.getByText(/暂无后台任务/));
+    await waitFor(() => screen.getByText(/No background tasks yet/));
   });
 
   it('展开行显示答案；worktree pending 任务显示合并/丢弃并走对应路由', async () => {
@@ -112,11 +112,11 @@ describe('TaskPanelModal', () => {
     await waitFor(() => screen.getByText('统计仓库行数'));
 
     // 展开 → 答案 + worktree 操作。
-    fireEvent.click(screen.getByRole('button', { name: '展开' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
     await waitFor(() => screen.getByText('共 42 行。'));
     expect(screen.getByText('steerable/demo')).toBeTruthy();
 
-    fireEvent.click(screen.getByText('合并到主仓'));
+    fireEvent.click(screen.getByText('Merge into main repo'));
     await waitFor(() =>
       expect(request).toHaveBeenCalledWith({
         method: 'POST',
@@ -147,8 +147,8 @@ describe('TaskPanelModal', () => {
     render(<TaskPanelModal chatId="chat_1" onClose={() => {}} />);
     await waitFor(() => screen.getByText('统计仓库行数'));
 
-    fireEvent.click(screen.getByRole('button', { name: '展开' }));
-    fireEvent.click(await screen.findByText('丢弃'));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
+    fireEvent.click(await screen.findByText('Discard'));
     await waitFor(() =>
       expect(request).toHaveBeenCalledWith({
         method: 'POST',

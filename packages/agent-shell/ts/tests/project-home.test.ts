@@ -2,7 +2,7 @@
  * 项目默认家目录：Documents/<应用名>/<项目名>/，重名追加 -2。
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -11,6 +11,7 @@ import {
   chatWorkspacePath,
   CHAT_WORKSPACES_DIR,
   ensureChatWorkspace,
+  ensureWritableRoots,
   expandUserPath,
   sanitizeProjectDirName,
 } from '../src/project-home.js';
@@ -78,5 +79,44 @@ describe('ensureChatWorkspace', () => {
       chatWorkspacePath('chat-abc', { documentsDir, appFolderName: '测试助手' }),
     );
     expect(existsSync(folder)).toBe(true);
+  });
+});
+
+describe('ensureWritableRoots', () => {
+  // Landlock opens every writable root when it installs its rules and bwrap
+  // bind-mounts them, so a declared-but-missing root aborts the sandboxed
+  // spawn. The roots a turn declares (pack workspaces, a project's source
+  // folders) are names until something writes there.
+  it('creates nested roots and leaves existing ones alone', () => {
+    const base = mkdtempSync(path.join(tmpdir(), 'wr-'));
+    temps.push(base);
+    const existing = path.join(base, 'already');
+    mkdirSync(existing, { recursive: true });
+    const deep = path.join(base, 'a', 'b', 'c');
+
+    const result = ensureWritableRoots([existing, deep]);
+
+    expect(result).toEqual([existing, deep]);
+    expect(existsSync(deep)).toBe(true);
+    expect(existsSync(existing)).toBe(true);
+  });
+
+  it('keeps a root it cannot create in the list so the sandbox still refuses', () => {
+    const base = mkdtempSync(path.join(tmpdir(), 'wr-'));
+    temps.push(base);
+    // A regular file where a directory has to go: mkdir cannot succeed.
+    const blocker = path.join(base, 'file');
+    mkdirSync(path.dirname(blocker), { recursive: true });
+    writeFileSync(blocker, '');
+    const impossible = path.join(blocker, 'child');
+
+    const result = ensureWritableRoots([impossible]);
+
+    expect(result).toEqual([impossible]);
+    expect(existsSync(impossible)).toBe(false);
+  });
+
+  it('skips blank entries', () => {
+    expect(ensureWritableRoots(['', '   '])).toEqual(['', '   ']);
   });
 });

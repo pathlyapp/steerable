@@ -1,9 +1,16 @@
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
-import { getAppRootDir, shellOpenPath } from '../runtime.js';
+import { getLocale, tFor } from '../i18n.js';
+import { getAppRootDir, getUserDataDir, shellOpenPath } from '../runtime.js';
+import {
+  acquireChatWriteLock,
+  ChatBusyError,
+} from '../storage/process-locks.js';
+import type { HeldWriteLease } from '../storage/write-lease.js';
 import { llmService, getSidecarSupervisor, whenSidecarSupervisor } from '../llm/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -12,14 +19,22 @@ import {
   buildWorldState,
   getActiveCoreLoopStreamId,
   streamCoreLoopTurn,
+  toTurnTool,
   type CoreLoopToolAction,
   type SkillTurnContext,
   type StreamCoreLoopTurnOptions,
+  type TurnFailureInfo,
+  type TurnToolWire,
 } from './coreloop-stream.js';
 import {
   driveWithAutoContinue,
   resolveAutoContinueMax,
 } from './auto-continue-helper.js';
+import {
+  buildActiveGoalContext,
+  buildGoalContinuationPrompt,
+  shouldContinueGoal,
+} from './goal-continuation-helper.js';
 import {
   buildAmbientDelegateRoster,
   buildDelegateDispatchInstruction,
@@ -31,12 +46,14 @@ import {
   type TurnSubagentParam,
 } from './subagent-profiles.js';
 import { resolveMentionedAgentIds } from './mention-targets.js';
+import { presentToolCall } from '../tool-presentation.js';
 import {
   readSidecarHistoryEntries,
   timelineFromHistoryEntries,
 } from './task-process.js';
 import {
   appendTimelineDelta,
+  dropAttemptBlocks,
   freezeTimelineReasoning,
   sealLastTimelineBlock,
   syncTimelineTools,
@@ -57,11 +74,12 @@ import {
 import { getBrand } from '../brand.js';
 import { recordInsightEvent, recordInsightTurn, recordInsightProfile } from '../insights/record.js';
 import { buildInsightsExportPayload, flushInsightsOutbox, uploadInsightsBundle } from '../insights/flush.js';
-import { sanitizeCompatOverrides, sanitizePresetsChoice, sanitizeLlmProvider, sanitizeVendorId, sidecarWireProvider, listingBaseUrl, vendorModelsListUrl, usesOpenAiCompatExtras } from '../storage/llm-settings.js';
+import { sanitizeCompatOverrides, sanitizePresetsChoice, sanitizeLlmProvider, sanitizeVendorId, sidecarWireProvider, listingBaseUrl, vendorModelsListUrl, usesOpenAiCompatExtras, withResolvedApiKey, resolveApiKey } from '../storage/llm-settings.js';
 import { ToolRouter } from '../tool-router.js';
 import { setDefaultExecTimeoutMs } from '../local-executor.js';
 import { allowEgressForBaseUrl, getActiveEgressBroker, getEgressPosture } from '../sidecar/egress-proxy.js';
 import { buildExecSandbox, parseExecPolicy } from '../sidecar/exec-sandbox.js';
+import { storedAskResult, type ResolvedAsk } from '../sidecar/reverse-ask-user.js';
 import { clampExecPolicy } from '../host-tools.js';
 import {
   getResolvedHostTools,
@@ -69,9 +87,11 @@ import {
   resolveRuntimeLlmSettings,
   resolveTurnApproval,
   resolveTurnChatMode,
+  resolveTurnOrchestration,
 } from '../host-tools-runtime.js';
 import { SidecarSupervisor } from '../sidecar/index.js';
 import { diagnoseLlmConnection } from './llm-diagnose.js';
+import { readLlmAccount } from './llm-account.js';
 import {
   brandSkillVars,
   buildSystemPrompt,
@@ -96,18 +116,36 @@ import {
 } from './regenerate-helper.js';
 import { resolveBranchActivation } from './branch-helper.js';
 import { detectInterruptedTurn } from './interrupted-helper.js';
+import { resumableTurn } from './resumable-turn.js';
+import { handlePortableRequest } from './portable-service.js';
+import {
+  getProductConfig,
+  isPortableProduct,
+  productConfigDirectConnection,
+} from '../product-config.js';
 import { dropCurrentUserMessage } from './history-helper.js';
 import { parseImageAttachments, processImageAttachments } from '../image-attachment.js';
-import { chatAttachmentsDirPath } from '../attachments.js';
-import { loadProjectRuleFiles } from '../project-rules.js';
+import { chatAttachmentsDirPath, isValidChatAttachmentsKey } from '../attachments.js';
+import { canonicalFencePath, canonicalPathInside } from '../fence-path.js';
+import { listProjectRuleFiles, loadProjectRuleFiles } from '../project-rules.js';
 import {
   allocateProjectHome,
+  chatWorkspacePath,
   ensureChatWorkspace,
   ensureProjectHome,
+  ensureWritableRoots,
   expandUserPath,
 } from '../project-home.js';
 import type { TaskService } from './task-service.js';
 import { registerLiveStream, getLiveStream, removeLiveStream } from './live-stream.js';
+import { compactHistory, forkHistory, rewindFrom, type StoredTurn } from './history-edit.js';
+import {
+  copyForkDirectory,
+  DEFAULT_FORK_WORKSPACE_MAX_BYTES,
+  directorySizeBytes,
+  forkPathRewriter,
+  removeForkDirectory,
+} from './fork-copy.js';
 import {
   beginPackTurnObservers,
   collectPackExecWritableRoots,
@@ -115,6 +153,8 @@ import {
   collectPackWorldState,
 } from './pack-turn-hooks.js';
 import { matchPackBackendRoute } from './pack-backend-routes.js';
+import { invokePackHttpRoute } from '../host/http-routes.js';
+import { installProductCli } from '../cli-install.js';
 import { collectTurnFiles } from './turn-files.js';
 import { resolveMentionedPaths } from './mentioned-paths.js';
 import { getAuthProvider, type Principal } from '../auth/index.js';
@@ -132,11 +172,93 @@ export interface LocalBackendResponse<T = unknown> {
   data: T;
 }
 
+function stringRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      String(item),
+    ]),
+  );
+}
+
 function parseSourceFolders(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((item): item is string => typeof item === 'string' && item.trim() !== '')
     .map(expandUserPath);
+}
+
+/** 拖拽排序的 id 列表。不是字符串数组时返回 null，由路由回 400。 */
+function readProjectOrderIds(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const ids: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || item.trim() === '') return null;
+    ids.push(item.trim());
+  }
+  return ids;
+}
+
+/** 回合产物下载上限：base64 走 localBackend JSON 通道，过大文件先拒绝。 */
+const MAX_LOCAL_DOWNLOAD_BYTES = 128 * 1024 * 1024;
+
+/** `target` 是否位于 `root` 内部（含 root 本身）。比较前解析符号链接。 */
+function isPathInsideRoot(root: string, target: string): boolean {
+  return canonicalPathInside(root, target);
+}
+
+/** 从一条消息的 `messageMetadata` 里取出本回合产物的绝对路径。 */
+function turnFilePathsFromMetadata(raw: unknown): string[] {
+  if (typeof raw !== 'string' || !raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+  const files = (parsed as { turnFiles?: unknown }).turnFiles;
+  if (!Array.isArray(files)) return [];
+  const paths: string[] = [];
+  for (const item of files) {
+    if (!item || typeof item !== 'object') continue;
+    const filePath = (item as { path?: unknown }).path;
+    if (typeof filePath === 'string' && filePath) paths.push(filePath);
+  }
+  return paths;
+}
+
+const DOWNLOAD_MIME_BY_EXT: Record<string, string> = {
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint', // shell-neutral:allow — Office 扩展名 / MIME，不是产品品牌
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation', // shell-neutral:allow — Office 扩展名 / MIME，不是产品品牌
+  '.pdf': 'application/pdf',
+  '.csv': 'text/csv',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.json': 'application/json',
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.mp3': 'audio/mpeg',
+  '.mp4': 'video/mp4',
+  '.zip': 'application/zip',
+  '.7z': 'application/x-7z-compressed',
+  '.tar': 'application/x-tar',
+  '.gz': 'application/gzip',
+};
+
+function downloadMimeForPath(filePath: string): string {
+  return DOWNLOAD_MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
 }
 
 /**
@@ -148,28 +270,44 @@ export type StreamEmit = (sseChunk: string) => void;
 
 export interface StreamResult {
   status: number;
+  /** Internal turn outcome used by automatic goal continuation. */
+  turn?: {
+    completionStatus: string;
+    madeProgress: boolean;
+  };
+}
+
+export type ChatWakeTrigger = 'goal' | 'loop';
+
+export interface WakeResult {
+  started: boolean;
+  reason?: 'busy' | 'failed';
+  status?: number;
 }
 
 /**
- * 把 CoreLoop/LLM 的底层错误翻译成适合直接显示在助手消息里的中文提示。
- * 原始错误仍保存在 messageMetadata.completionReason 里，便于排查。
+ * Reads the structured failure detail off a rejected stream.
+ *
+ * `streamCoreLoopTurn` annotates its rejection; anything else (an abort, a
+ * router-level error) carries none, which the renderer shows as its generic
+ * card. Returns undefined rather than an empty object so the persisted
+ * metadata omits the field entirely.
  */
-export function userFacingCoreLoopFailure(reason: string): string {
-  if (reason.includes('HTTP 401') || reason.includes('HTTP 403')) {
-    return '[回复失败] 模型服务认证失败，请检查 API Key 配置。';
-  }
-  if (reason.includes('HTTP 404')) {
-    return '[回复失败] 模型服务或模型名不存在（HTTP 404），请检查 baseUrl 与 model 配置。';
-  }
-  if (
-    reason.includes('ECONNREFUSED') ||
-    reason.includes('ENOTFOUND') ||
-    reason.includes('ETIMEDOUT') ||
-    reason.includes('fetch failed')
-  ) {
-    return '[回复失败] 无法连接模型服务，请检查网络或 baseUrl 配置。';
-  }
-  return `[回复失败] ${reason}`;
+export function readTurnFailureInfo(err: unknown): TurnFailureInfo | undefined {
+  const info = (err as { failureInfo?: unknown })?.failureInfo;
+  if (!info || typeof info !== 'object') return undefined;
+  const record = info as Record<string, unknown>;
+  const pick = (key: string): string | undefined =>
+    typeof record[key] === 'string' && record[key] ? (record[key] as string) : undefined;
+  const pickNumber = (key: string): number | undefined =>
+    typeof record[key] === 'number' ? (record[key] as number) : undefined;
+  const out: TurnFailureInfo = {
+    errorKind: pick('errorKind'),
+    proxy: pick('proxy'),
+    attempts: pickNumber('attempts'),
+    statusCode: pickNumber('statusCode'),
+  };
+  return Object.values(out).some((value) => value !== undefined) ? out : undefined;
 }
 
 export interface StreamOptions {
@@ -202,6 +340,19 @@ function coreLoopBudgetTokensFromEnv(): number | undefined {
   if (!raw) return undefined;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : undefined;
+}
+
+/**
+ * ``trace.fetch`` 的单次 RPC 超时。原来硬编码 5s：长跑的 trace 动辄几十 MB
+ * （实测 259 轮 → 161111 条事件 ≈ 39 MB），5s 必然超时，整条 trace 被静默丢弃
+ * ——偏偏最需要排查的长跑一条现场都不留。侧车侧已改成分片返回
+ * （``_handle_trace_fetch``，默认 ≤5 万条事件），这里再给足传输余量。
+ */
+function traceFetchTimeoutMs(): number {
+  const raw = process.env.DEEPPATH_TRACE_FETCH_TIMEOUT_MS;
+  if (!raw) return 60_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 60_000;
 }
 
 const LOCAL_USER_BASE = {
@@ -254,6 +405,47 @@ function isRoundBoundaryHook(notice: { kind?: string; action?: unknown } | undef
   return notice.action === 'retry' || notice.action === 'narrate';
 }
 
+/**
+ * Extracts the fields a "reconnecting" indicator needs from a retry notice.
+ *
+ * The loop announces every retry as a `hook_action`; only attempts on the
+ * same model request are a wait the user notices, so the round and delay are
+ * carried through. Returns null for any other hook action so the caller can
+ * keep its round-boundary handling unchanged.
+ */
+/**
+ * `completionStatus` of a persisted assistant message, or null.
+ *
+ * Only the terminal assistant message's status decides whether Continue is
+ * offered, so this reads the field and leaves the meaning to
+ * `resumableTurn`. A message without metadata (older builds) yields null,
+ * which refuses — resuming a turn whose end state is unknown could append a
+ * reply to a conversation that already finished.
+ */
+export function readCompletionStatus(
+  message: { messageMetadata?: string | null } | undefined,
+): string | null {
+  const raw = message?.messageMetadata;
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const status = (JSON.parse(raw) as { completionStatus?: unknown }).completionStatus;
+    return typeof status === 'string' && status ? status : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readRetryNotice(
+  notice: { kind?: string; action?: unknown; delayMs?: unknown; round?: unknown; reason?: unknown } | undefined,
+): { round?: number; delayMs?: number; reason?: string } | null {
+  if (notice?.kind !== 'hook_action' || notice.action !== 'retry') return null;
+  return {
+    ...(typeof notice.round === 'number' ? { round: notice.round } : {}),
+    ...(typeof notice.delayMs === 'number' ? { delayMs: notice.delayMs } : {}),
+    ...(typeof notice.reason === 'string' && notice.reason ? { reason: notice.reason } : {}),
+  };
+}
+
 function buildLocalAgent() {
   const now = new Date().toISOString();
   return {
@@ -264,7 +456,7 @@ function buildLocalAgent() {
     platform: process.platform,
     hostname: 'localhost',
     shell: process.platform === 'win32' ? 'powershell' : 'zsh',
-    osVersion: process.versions.electron || null,
+    osVersion: null,
     osArch: process.arch,
     isOnline: true,
     lastHeartbeat: now,
@@ -327,6 +519,28 @@ function persistedAgentIdFromMetadata(raw: string | null | undefined): string | 
   return typeof agentId === 'string' && agentId ? agentId : undefined;
 }
 
+/** Rule path relative to the project root. A path outside that root keeps its base name. */
+function relativeRulePath(folderPath: string, file: string): string {
+  if (!path.isAbsolute(file)) return file;
+  const relative = path.relative(folderPath, file);
+  if (
+    !relative
+    || relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) return path.basename(file);
+  return relative;
+}
+
+/** Fork title in the caller's locale. The stored default title stays `新对话`. */
+function forkTitle(source: string, requestedLocale: unknown): string {
+  const title = (source || '新对话').trim() || '新对话';
+  const locale = typeof requestedLocale === 'string' && requestedLocale.trim()
+    ? requestedLocale
+    : getLocale();
+  return tFor(locale, '{title} (fork)', { title });
+}
+
 export class LocalBackendRouter {
   private readonly defaultStore: ScopedStore;
   private readonly storeContext = new AsyncLocalStorage<ScopedStore>();
@@ -334,6 +548,7 @@ export class LocalBackendRouter {
   private readonly broadcast: LocalBackendBroadcast | null;
   /** 4.6a/4.6c：任务面板的路由入口（列表 + 合并/丢弃）。未注入时任务路由 503。 */
   private readonly taskService: TaskService | null;
+  private takeAskReplay: ((chatId: string) => ResolvedAsk | undefined) | null = null;
 
   constructor(
     private readonly toolRouter: ToolRouter,
@@ -348,6 +563,17 @@ export class LocalBackendRouter {
     this.resolveStore = options.resolveStore ?? (() => options.store);
     this.broadcast = options.broadcast ?? null;
     this.taskService = options.taskService ?? null;
+    const goals = (this.toolRouter as ToolRouter & {
+      goals?: () => { onChange(listener: (chatId: string, goal: unknown) => void): () => void };
+    }).goals?.();
+    goals?.onChange((chatId, goal) => {
+      this.broadcast?.('goal-changed', { chatId, goal });
+    });
+  }
+
+  /** The host records each answered ask; the following tool row stores that text. */
+  setAskReplay(take: (chatId: string) => ResolvedAsk | undefined): void {
+    this.takeAskReplay = take;
   }
 
   private get store(): ScopedStore {
@@ -371,6 +597,78 @@ export class LocalBackendRouter {
     const url = new URL(request.path, 'http://local.backend');
     const pathname = url.pathname;
 
+    const goalMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/goal$/);
+    if (goalMatch) {
+      const chatId = goalMatch[1];
+      const chat = await this.store.getChat(chatId);
+      if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+      const goals = this.toolRouter.goals();
+      if (method === 'GET') {
+        const result = await goals.get(chatId);
+        return { status: 200, data: { goal: result.goal ?? null } };
+      }
+      if (method === 'POST') {
+        const payload = this.toRecord(request.body);
+        const action = String(payload.action || '');
+        if (action === 'set') {
+          const result = await goals.create(chatId, String(payload.objective || ''));
+          if (result.success && result.goal) {
+            this.startGoalWake(chatId, result.goal);
+          }
+          return {
+            status: result.success ? 200 : 409,
+            data: result.success ? { goal: result.goal } : { detail: result.error, goal: result.goal },
+          };
+        }
+        if (action === 'clear') {
+          const result = await goals.clear(chatId);
+          return { status: 200, data: { goal: result.goal ?? null } };
+        }
+        const current = (await goals.get(chatId)).goal;
+        if (!current) return { status: 404, data: { detail: 'goal not found' } };
+        const result = await goals.update({
+          chatId,
+          id: current.id,
+          revision: current.revision,
+          action,
+          actor: 'user',
+          objective: typeof payload.objective === 'string' ? payload.objective : undefined,
+        });
+        if (result.success && result.goal && action === 'resume') {
+          this.startGoalWake(chatId, result.goal);
+        }
+        return {
+          status: result.success ? 200 : 400,
+          data: result.success ? { goal: result.goal } : { detail: result.error, goal: result.goal },
+        };
+      }
+      return this.notFound('Not found');
+    }
+
+    const loopsMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/loops$/);
+    if (loopsMatch && method === 'GET') {
+      const chatId = loopsMatch[1];
+      if (!await this.store.getChat(chatId)) {
+        return { status: 404, data: { detail: 'chat not found' } };
+      }
+      return {
+        status: 200,
+        data: { loops: this.toolRouter.listMonitoredLoops(chatId) },
+      };
+    }
+    const loopMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/loops\/([^/]+)$/);
+    if (loopMatch && method === 'DELETE') {
+      const chatId = loopMatch[1];
+      if (!await this.store.getChat(chatId)) {
+        return { status: 404, data: { detail: 'chat not found' } };
+      }
+      const success = this.toolRouter.stopMonitoredLoop(chatId, loopMatch[2]);
+      return {
+        status: success ? 200 : 404,
+        data: success ? { success: true } : { detail: 'loop not found' },
+      };
+    }
+
     if (method === 'GET' && pathname === '/api/v2/auth/me') {
       const authProvider = getAuthProvider();
       if (authProvider) {
@@ -383,6 +681,26 @@ export class LocalBackendRouter {
         };
       }
       return { status: 200, data: buildLocalApiUser() };
+    }
+
+    if (
+      pathname === '/api/v2/portable/config' ||
+      pathname === '/api/v2/portable/preview' ||
+      pathname === '/api/v2/portable/chats' ||
+      /^\/api\/v2\/chats\/[^/]+\/portable$/.test(pathname)
+    ) {
+      if (!isPortableProduct()) return this.notFound('Not found');
+      return handlePortableRequest({
+        method,
+        pathname,
+        includeSecrets: url.searchParams.get('includeSecrets') === '1',
+        body: request.body,
+        store: this.store,
+        mcp: this.toolRouter.mcpRegistry ?? null,
+        projects: getResolvedHostTools().projects.capability
+          ? (this.toolRouter.projectRegistry ?? null)
+          : null,
+      });
     }
 
     // Desktop Agent —— 在本地模式下虚拟一个永远在线的 agent，所有 exec 直接走 ToolRouter
@@ -609,7 +927,7 @@ export class LocalBackendRouter {
     }
 
     // ───── 项目模式：projects CRUD ─────
-    // 项目记录存 electron-store（agent-projects.json），chat.project_id 存
+    // 项目记录存 json-store（agent-projects.json），chat.project_id 存
     // SQLite。删除项目不删会话——会话降级为无项目对话。
     if (
       (pathname === '/api/v2/projects' || pathname.startsWith('/api/v2/projects/')) &&
@@ -648,6 +966,47 @@ export class LocalBackendRouter {
             data: { error: err instanceof Error ? err.message : String(err) },
           };
         }
+      }
+    }
+
+    if (pathname === '/api/v2/projects/order' && method === 'PUT') {
+      const registry = this.toolRouter.projectRegistry;
+      if (!registry) {
+        return { status: 503, data: { error: '项目注册表不可用' } };
+      }
+      const orderedIds = readProjectOrderIds(this.toRecord(request.body).orderedIds);
+      if (!orderedIds) {
+        return { status: 400, data: { error: 'orderedIds 必须是项目 id 列表' } };
+      }
+      return {
+        status: 200,
+        data: { success: true, projects: registry.reorder(orderedIds) },
+      };
+    }
+
+    if (pathname === '/api/v2/projects/resolve' && method === 'POST') {
+      const registry = this.toolRouter.projectRegistry;
+      if (!registry) {
+        return { status: 503, data: { error: '项目注册表不可用' } };
+      }
+      const payload = this.toRecord(request.body);
+      const folderPath = typeof payload.folderPath === 'string' ? expandUserPath(payload.folderPath) : '';
+      if (!folderPath.trim()) {
+        return { status: 400, data: { error: '项目文件夹不能为空' } };
+      }
+      try {
+        const resolved = registry.resolveByFolder(folderPath, {
+          ...(payload.origin === 'cli' ? { origin: 'cli' as const } : {}),
+        });
+        return {
+          status: 200,
+          data: { project: resolved.project, created: resolved.created },
+        };
+      } catch (err) {
+        return {
+          status: 400,
+          data: { error: err instanceof Error ? err.message : String(err) },
+        };
       }
     }
 
@@ -758,6 +1117,117 @@ export class LocalBackendRouter {
       };
     }
 
+    // 子代理停止：面板的「停止」。与「继续」不同，它不需要一个回合——协作取消
+    // 发生在正在跑的那次运行里，等回合只会让用户等自己的点击。
+    const childStopMatch = pathname.match(/^\/api\/v2\/children\/([^/]+)\/stop$/);
+    if (childStopMatch && method === 'POST') {
+      const chatId = url.searchParams.get('session')?.trim();
+      const childId = url.searchParams.get('child')?.trim();
+      if (!chatId || !childId) {
+        return {
+          status: 400,
+          data: { detail: 'session and child query parameters are required' },
+        };
+      }
+      const supervisor = getSidecarSupervisor();
+      if (!supervisor) {
+        return { status: 503, data: { detail: 'sidecar unavailable' } };
+      }
+      const result = await supervisor.childrenInterrupt(chatId, childId);
+      if (!result) {
+        return { status: 502, data: { detail: 'children interrupt failed' } };
+      }
+      return { status: 200, data: result };
+    }
+
+    // 子代理续跑：把一个已中断 / 撞墙 / 已完成但可续的子代理放回池里接着跑。
+    // 续跑必须经过一次真实回合——子代理要继承父回合的预算、审批与工具面，
+    // 所以这里只落一条用户消息并转发给 stream 路由，由父代理的 `agent_send`
+    // 触发重建（见 sidecar 的 `agent_send` 续跑分支）。直接起一个游离的子代理
+    // 会脱离父回合的预算与围栏。
+    const childResumeMatch = pathname.match(/^\/api\/v2\/children\/([^/]+)\/resume$/);
+    if (childResumeMatch && method === 'POST') {
+      const parentRecordId = url.searchParams.get('session')?.trim();
+      const childId = url.searchParams.get('child')?.trim();
+      if (!parentRecordId || !childId) {
+        return {
+          status: 400,
+          data: { detail: 'session and child query parameters are required' },
+        };
+      }
+      const supervisor = getSidecarSupervisor();
+      if (!supervisor) {
+        return { status: 503, data: { detail: 'sidecar unavailable' } };
+      }
+      // Ask the index first: a closed or unknown child must not start a turn
+      // that then fails with a confusing tool error.
+      const listed = await supervisor.childrenList({
+        parentRecordId,
+        includeFinished: true,
+      });
+      if (!listed) {
+        return { status: 502, data: { detail: 'children list failed' } };
+      }
+      const child = listed.children.find((row) => row.childId === childId);
+      if (!child) {
+        return {
+          status: 404,
+          data: { detail: `no child ${childId} for session ${parentRecordId}` },
+        };
+      }
+      if (!child.resumable) {
+        return {
+          status: 409,
+          data: {
+            detail: child.status === 'closed'
+              ? `child ${childId} is closed; have the parent spawn a new one`
+              : `child ${childId} is ${child.status}; wait for it to settle`,
+          },
+        };
+      }
+      const payload = this.toRecord(request.body);
+      const message =
+        typeof payload.message === 'string' && payload.message.trim()
+          ? payload.message.trim()
+          : 'Continue the original task.';
+      return {
+        status: 200,
+        data: {
+          recordId: child.recordId,
+          childId: child.childId,
+          profile: child.profile,
+          depth: child.depth,
+          message,
+          // The host turns this into the parent turn's tool call; it carries
+          // what that turn needs, not a second execution path.
+          instruction: `Call agent_send with childId "${childId}" and this message: ${message}`,
+        },
+      };
+    }
+
+    // 子代理索引：这个会话派过哪些子代理、现在什么状态。
+    // 池只活一个回合，所以「上次派的还在不在」只能问 sidecar 的持久索引。
+    if (method === 'GET' && pathname === '/api/v2/children') {
+      const supervisor = getSidecarSupervisor();
+      if (!supervisor) {
+        return { status: 503, data: { detail: 'sidecar unavailable' } };
+      }
+      const parentRecordId = url.searchParams.get('session')?.trim();
+      const includeFinished = url.searchParams.get('active') !== '1';
+      const previewChars = Number(url.searchParams.get('previewChars') ?? '0');
+      const listed = await supervisor.childrenList({
+        ...(parentRecordId ? { parentRecordId } : {}),
+        includeFinished,
+        ...(Number.isFinite(previewChars) && previewChars > 0
+          ? { answerPreviewChars: Math.trunc(previewChars) }
+          : {}),
+      });
+      if (!listed) {
+        return { status: 502, data: { detail: 'children list failed' } };
+      }
+      return { status: 200, data: listed };
+    }
+
     // 4.6c Task×Worktree：合并到主仓 / 丢弃。两个操作都是幂等目标态
     // （worktreeState 非 pending 时 TaskService 抛错 → 409）。
     const taskActionMatch = pathname.match(/^\/api\/v2\/tasks\/([^/]+)\/(merge|discard)$/);
@@ -792,15 +1262,16 @@ export class LocalBackendRouter {
         return { status: 200, data: { project: null } };
       }
       const trusted = registry!.isTrusted(project.id);
-      // 仅在已信任时才真正读取规则文件内容；未信任时只探测「有没有」，
-      // 不读内容（发现本身不解析、不注入）。
-      const rules = loadProjectRuleFiles(project.folderPath);
+      const files = trusted
+        ? loadProjectRuleFiles(project.folderPath).files
+        : listProjectRuleFiles(project.folderPath);
       return {
         status: 200,
         data: {
           project: { id: project.id, name: project.name, folderPath: project.folderPath, trusted },
-          ruleFileCount: rules.files.length,
-          rulesActive: trusted && rules.files.length > 0,
+          ruleFileCount: files.length,
+          rulesActive: trusted && files.length > 0,
+          files: files.map((file) => relativeRulePath(project.folderPath, file)),
         },
       };
     }
@@ -811,6 +1282,7 @@ export class LocalBackendRouter {
       if (method === 'GET') {
         const chat = await this.store.getChat(chatId);
         if (!chat) return this.notFound('Chat not found');
+        const source = chat.forkedFrom ? await this.store.getChat(chat.forkedFrom) : null;
         return {
           status: 200,
           data: {
@@ -824,27 +1296,34 @@ export class LocalBackendRouter {
             isPinned: chat.isPinned,
             systemPrompt: chat.systemPrompt,
             pinnedRefs: chat.pinnedRefs,
+            forkedFrom: source ? { chatId: source.id, title: source.title } : null,
           },
         };
       }
       if (method === 'DELETE') {
-        if (url.searchParams.get('onlyIfEmpty') === '1') {
-          const deleted = await this.store.deleteChatIfEmpty(chatId);
+        const lease = this.tryChatLock(chatId);
+        if (!lease) return this.chatBusy();
+        try {
+          if (url.searchParams.get('onlyIfEmpty') === '1') {
+            const deleted = await this.store.deleteChatIfEmpty(chatId);
+            return {
+              status: 200,
+              data: { success: true, deleted, chatId },
+            };
+          }
+          const ok = await this.store.deleteChat(chatId);
+          if (!ok) return this.notFound('Chat not found');
           return {
             status: 200,
-            data: { success: true, deleted, chatId },
+            data: {
+              success: true,
+              message: '删除成功',
+              chatId,
+            },
           };
+        } finally {
+          lease.release();
         }
-        const ok = await this.store.deleteChat(chatId);
-        if (!ok) return this.notFound('Chat not found');
-        return {
-          status: 200,
-          data: {
-            success: true,
-            message: '删除成功',
-            chatId,
-          },
-        };
       }
     }
 
@@ -852,7 +1331,14 @@ export class LocalBackendRouter {
     if (chatPinMatch && method === 'PUT') {
       const chatId = chatPinMatch[1];
       const payload = this.toRecord(request.body);
-      const updated = await this.store.updateChat(chatId, { isPinned: Boolean(payload.isPinned) });
+      const lease = this.tryChatLock(chatId);
+      if (!lease) return this.chatBusy();
+      let updated;
+      try {
+        updated = await this.store.updateChat(chatId, { isPinned: Boolean(payload.isPinned) });
+      } finally {
+        lease.release();
+      }
       if (!updated) return this.notFound('Chat not found');
       return {
         status: 200,
@@ -888,13 +1374,33 @@ export class LocalBackendRouter {
           return this.badRequest('projectId 必须是项目 id 字符串或 null');
         }
       }
-      const updated = await this.store.updateChat(chatId, {
-        title: typeof payload.title === 'string' ? payload.title : undefined,
-        systemPrompt: typeof payload.systemPrompt === 'string' ? payload.systemPrompt : undefined,
-        pinnedRefs: Array.isArray(payload.pinnedRefs) ? payload.pinnedRefs : undefined,
-        projectId: projectIdUpdate,
-      });
+      let titleUpdate: string | undefined;
+      if (typeof payload.title === 'string') {
+        const trimmed = payload.title.trim();
+        if (!trimmed) return this.badRequest('标题不能为空');
+        titleUpdate = trimmed;
+      }
+      const lease = this.tryChatLock(chatId);
+      if (!lease) return this.chatBusy();
+      let updated;
+      try {
+        updated = await this.store.updateChat(chatId, {
+          title: titleUpdate,
+          titleSource: titleUpdate !== undefined ? 'user' : undefined,
+          systemPrompt: typeof payload.systemPrompt === 'string' ? payload.systemPrompt : undefined,
+          pinnedRefs: Array.isArray(payload.pinnedRefs) ? payload.pinnedRefs : undefined,
+          projectId: projectIdUpdate,
+        });
+      } finally {
+        lease.release();
+      }
       if (!updated) return this.notFound('Chat not found');
+      if (titleUpdate !== undefined) {
+        this.broadcast?.('chat-title-updated', {
+          chatId,
+          title: updated.title,
+        });
+      }
       return {
         status: 200,
         data: {
@@ -994,6 +1500,36 @@ export class LocalBackendRouter {
       return { status: 200, data: { success: true } };
     }
 
+    const compactMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/compact$/);
+    if (compactMatch && method === 'POST') {
+      const chatId = compactMatch[1];
+      const chat = await this.store.getChat(chatId);
+      if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+      const plan = compactHistory(await this.historyTurns(chatId));
+      if (!plan) return { status: 200, data: { compacted: 0 } };
+      await this.store.deleteMessagesFrom(chatId, plan.deleteFromId);
+      for (const write of plan.writes) {
+        await this.store.addMessage(chatId, write.role, write.content, write.messageMetadata);
+      }
+      return { status: 200, data: { compacted: plan.compacted } };
+    }
+
+    const forkMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/fork$/);
+    if (forkMatch && method === 'POST') {
+      return await this.forkChat(forkMatch[1], request.body);
+    }
+
+    const rewindMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/rewind$/);
+    if (rewindMatch && method === 'POST') {
+      const chatId = rewindMatch[1];
+      const chat = await this.store.getChat(chatId);
+      if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+      const cut = rewindFrom(await this.historyTurns(chatId));
+      if (!cut) return { status: 200, data: { removed: 0 } };
+      const removed = await this.store.deleteMessagesFrom(chatId, cut.deleteFromId);
+      return { status: 200, data: { removed } };
+    }
+
     if (method === 'GET' && pathname === '/api/v2/chat-agents') {
       const includeArchived = url.searchParams.get('include_archived') === 'true';
       const agents = await this.store.listChatAgents(includeArchived);
@@ -1021,6 +1557,14 @@ export class LocalBackendRouter {
         allowExternalSkills:
           typeof payload.allowExternalSkills === 'boolean' ? payload.allowExternalSkills : true,
         loadAllSkills: Boolean(payload.loadAllSkills),
+        // R6: a role may pin the model and effort it delegates with. Absent
+        // (or null) means "follow the parent", so an unconfigured agent
+        // behaves exactly as before.
+        model: typeof payload.model === 'string' && payload.model.trim() ? payload.model.trim() : null,
+        reasoningEffort:
+          typeof payload.reasoningEffort === 'string' && payload.reasoningEffort.trim()
+            ? payload.reasoningEffort.trim()
+            : null,
         isBuiltin: false,
         isArchived: false,
         sortOrder: typeof payload.sortOrder === 'number' ? payload.sortOrder : 0,
@@ -1317,7 +1861,7 @@ export class LocalBackendRouter {
       const servers = registry.list().map((s) => {
         const cached = registry.getCachedTools(s.id);
         return {
-          ...s,
+          ...registry.toPublicEntry(s),
           serverKey: registry.serverKey(s),
           toolCount: cached?.tools.length ?? 0,
           toolsPreview: cached?.tools.slice(0, 8).map((t) => t.name) ?? [],
@@ -1333,22 +1877,37 @@ export class LocalBackendRouter {
       if (!registry) return { status: 503, data: { error: 'MCP 注册表不可用' } };
       try {
         const payload = this.toRecord(request.body);
-        const entry = registry.create({
-          name: String(payload.name ?? ''),
-          command: String(payload.command ?? ''),
-          args: Array.isArray(payload.args) ? payload.args.map((a) => String(a)) : [],
-          env:
-            payload.env && typeof payload.env === 'object' && !Array.isArray(payload.env)
-              ? Object.fromEntries(
-                  Object.entries(payload.env as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
-                )
-              : {},
-          cwd: typeof payload.cwd === 'string' ? payload.cwd : undefined,
-          enabled: payload.enabled !== false,
-        });
+        const entry = payload.transport === 'streamable-http'
+          ? registry.create({
+              name: String(payload.name ?? ''),
+              transport: 'streamable-http',
+              url: String(payload.url ?? ''),
+              headers: stringRecord(payload.headers),
+              headersFromEnv: stringRecord(payload.headersFromEnv),
+              bearerTokenEnvVar:
+                typeof payload.bearerTokenEnvVar === 'string'
+                  ? payload.bearerTokenEnvVar
+                  : undefined,
+              reconnect:
+                payload.reconnect &&
+                typeof payload.reconnect === 'object' &&
+                !Array.isArray(payload.reconnect)
+                  ? payload.reconnect as Record<string, number>
+                  : undefined,
+              enabled: payload.enabled !== false,
+            })
+          : registry.create({
+              name: String(payload.name ?? ''),
+              transport: 'stdio',
+              command: String(payload.command ?? ''),
+              args: Array.isArray(payload.args) ? payload.args.map((a) => String(a)) : [],
+              env: stringRecord(payload.env),
+              cwd: typeof payload.cwd === 'string' ? payload.cwd : undefined,
+              enabled: payload.enabled !== false,
+            });
         // 后台拉一次工具列表，下一轮对话即可用；失败不阻塞创建
         void registry.refreshTools(entry.id).catch(() => {});
-        return { status: 200, data: { server: entry } };
+        return { status: 200, data: { server: registry.toPublicEntry(entry) } };
       } catch (err) {
         return { status: 400, data: { error: err instanceof Error ? err.message : String(err) } };
       }
@@ -1367,7 +1926,7 @@ export class LocalBackendRouter {
         return {
           status: 200,
           data: {
-            added: result.added,
+            added: result.added.map((entry) => registry.toPublicEntry(entry)),
             skipped: result.skipped,
           },
         };
@@ -1390,19 +1949,36 @@ export class LocalBackendRouter {
           const payload = this.toRecord(request.body);
           const updated = registry.update(serverId, {
             name: typeof payload.name === 'string' ? payload.name : undefined,
+            transport:
+              payload.transport === 'stdio' || payload.transport === 'streamable-http'
+                ? payload.transport
+                : undefined,
             command: typeof payload.command === 'string' ? payload.command : undefined,
             args: Array.isArray(payload.args) ? payload.args.map((a) => String(a)) : undefined,
             env:
               payload.env && typeof payload.env === 'object' && !Array.isArray(payload.env)
-                ? Object.fromEntries(
-                    Object.entries(payload.env as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
-                  )
+                ? stringRecord(payload.env)
                 : undefined,
             cwd: typeof payload.cwd === 'string' ? payload.cwd : undefined,
+            url: typeof payload.url === 'string' ? payload.url : undefined,
+            headers:
+              payload.headers && typeof payload.headers === 'object' && !Array.isArray(payload.headers)
+                ? stringRecord(payload.headers)
+                : undefined,
+            headersFromEnv:
+              payload.headersFromEnv &&
+              typeof payload.headersFromEnv === 'object' &&
+              !Array.isArray(payload.headersFromEnv)
+                ? stringRecord(payload.headersFromEnv)
+                : undefined,
+            bearerTokenEnvVar:
+              typeof payload.bearerTokenEnvVar === 'string'
+                ? payload.bearerTokenEnvVar
+                : undefined,
             enabled: typeof payload.enabled === 'boolean' ? payload.enabled : undefined,
           });
           if (updated.enabled) void registry.refreshTools(updated.id).catch(() => {});
-          return { status: 200, data: { server: updated } };
+          return { status: 200, data: { server: registry.toPublicEntry(updated) } };
         } catch (err) {
           return { status: 400, data: { error: err instanceof Error ? err.message : String(err) } };
         }
@@ -1471,6 +2047,20 @@ export class LocalBackendRouter {
             typeof payload.allowExternalSkills === 'boolean' ? payload.allowExternalSkills : undefined,
           loadAllSkills:
             typeof payload.loadAllSkills === 'boolean' ? payload.loadAllSkills : undefined,
+          // A PATCH that omits the field keeps the stored value; only an
+          // explicit string (or explicit null) changes it.
+          model:
+            typeof payload.model === 'string'
+              ? payload.model.trim() || null
+              : payload.model === null
+                ? null
+                : undefined,
+          reasoningEffort:
+            typeof payload.reasoningEffort === 'string'
+              ? payload.reasoningEffort.trim() || null
+              : payload.reasoningEffort === null
+                ? null
+                : undefined,
           isArchived: typeof payload.isArchived === 'boolean' ? payload.isArchived : undefined,
           sortOrder: typeof payload.sortOrder === 'number' ? payload.sortOrder : undefined,
         });
@@ -1588,14 +2178,7 @@ export class LocalBackendRouter {
     // Bearer、Anthropic x-api-key、Google x-goog-api-key），再与 models.dev
     // 能力表 join。refresh=1 绕过 60s 缓存。凭证随设置显式下发。
     if (method === 'GET' && pathname === '/api/v2/llm/models') {
-      const supervisor = await whenSidecarSupervisor();
-      if (!supervisor) {
-        return {
-          status: 503,
-          data: { error: 'sidecar 未就绪', models: [], catalogStatus: 'offline' },
-        };
-      }
-      const settings = llmService.getSettings();
+      const settings = withResolvedApiKey(llmService.getSettings());
       const draftBase = url.searchParams.get('baseUrl');
       const draftKey = url.searchParams.get('apiKey');
       const provider = sanitizeLlmProvider(url.searchParams.get('provider') || settings.provider);
@@ -1611,7 +2194,16 @@ export class LocalBackendRouter {
         }
         // 设置页验的是用户当场填的地址，通常还没保存，所以不在 boot 时派生的
         // 代理白名单上。放行它，否则每次「测试」都被自己的代理 403。
+        // plain-http（本机 Ollama）放不进 CONNECT 代理，这里会重启 sidecar；
+        // 必须在重启之后再取 supervisor，否则 listModels 打到已退出的进程。
         await allowEgressForBaseUrl(baseUrl);
+        const supervisor = await whenSidecarSupervisor();
+        if (!supervisor) {
+          return {
+            status: 503,
+            data: { error: 'sidecar 未就绪', models: [], catalogStatus: 'offline' },
+          };
+        }
         const catalog = await supervisor.listModels({
           baseUrl,
           apiKey,
@@ -1634,9 +2226,22 @@ export class LocalBackendRouter {
     // W-llm-diagnose：LLM 链路诊断。设置页「诊断」按钮触发，在主进程内
     // 探测 DNS/TCP/TLS/HTTP/chat 五级连通性，并报告宿主机的 ambient 代理
     // 配置（sidecar 沙箱视角会隐藏用户需要看到的代理问题）。
+    if (method === 'POST' && pathname === '/api/v2/cli/install') {
+      const payload = this.toRecord(request.body);
+      const name = typeof payload.name === 'string' ? payload.name : '';
+      try {
+        return { status: 200, data: installProductCli(name) };
+      } catch (error) {
+        return {
+          status: 400,
+          data: { error: error instanceof Error ? error.message : String(error) },
+        };
+      }
+    }
+
     if (method === 'POST' && pathname === '/api/v2/llm/diagnose') {
       const payload = this.toRecord(request.body);
-      const settings = llmService.getSettings();
+      const settings = withResolvedApiKey(llmService.getSettings());
       const baseUrl =
         typeof payload.baseUrl === 'string' && payload.baseUrl.trim()
           ? payload.baseUrl.trim()
@@ -1682,6 +2287,34 @@ export class LocalBackendRouter {
         return { status: 503, data: { error: 'sidecar 未就绪', posture: null, egress } };
       }
       return { status: 200, data: { posture: supervisor.getSandboxPosture(), egress } };
+    }
+
+    if (method === 'GET' && pathname === '/api/v2/llm/account') {
+      const settings = resolveRuntimeLlmSettings(await this.store.getLlmSettings());
+      const account = await readLlmAccount(settings, {
+        refresh: url.searchParams.get('refresh') === '1',
+      });
+      return { status: 200, data: account };
+    }
+
+    // Whether a turn can start on the current credential. The web shell's
+    // first-run page and the CLI preflight both read this rather than
+    // inspecting the settings object themselves.
+    if (method === 'GET' && pathname === '/api/v2/llm/credential') {
+      const settings = resolveRuntimeLlmSettings(await this.store.getLlmSettings());
+      const resolved = resolveApiKey(settings, process.env);
+      return {
+        status: 200,
+        data: {
+          ok: Boolean(resolved.key) || resolved.source.kind === 'not_required',
+          source: resolved.source.kind,
+          ...(resolved.source.kind === 'env' ? { envName: resolved.source.name } : {}),
+          envNames: resolved.envNames,
+          provider: settings.provider,
+          vendorId: settings.vendorId ?? null,
+          model: settings.model,
+        },
+      };
     }
 
     if (pathname === '/api/v2/local-settings/llm') {
@@ -1861,6 +2494,15 @@ export class LocalBackendRouter {
       };
     }
 
+    // 二期 R4：网络失败统计。窗口默认 7 天（设置页「最近 7 天」那一块）。
+    if (method === 'GET' && pathname === '/api/v2/usage/reliability') {
+      const days = parsePositiveIntParam(url.searchParams.get('days'), 7);
+      return {
+        status: 200,
+        data: await this.store.getReliabilitySummary(days),
+      };
+    }
+
     if (method === 'POST' && pathname.match(/^\/api\/v2\/chats\/[^/]+\/suggest-replies$/)) {
       return {
         status: 200,
@@ -1989,6 +2631,16 @@ export class LocalBackendRouter {
       return { status: 200, data: { success: true } };
     }
 
+    // 回合产物「下载」：浏览器模式（团队版 / BS）没有系统应用可打开，
+    // 由宿主读回文件字节，前端落成 Blob 下载。路径必须来自本会话的回合
+    // 产物元数据或会话工作区，避免变成任意文件读取。
+    if (method === 'GET' && pathname === '/api/v2/local/download') {
+      return this.handleLocalFileDownload(
+        url.searchParams.get('chatId') ?? '',
+        url.searchParams.get('path') ?? '',
+      );
+    }
+
     // 正文里提到的路径能否点击打开：渲染层把行内代码里「像路径」的字面量
     // 批量送来，这里落地成绝对路径并 stat 验证，只有真实存在的才回。相对
     // 路径按对话绑定的项目根解析，无项目时按对话工作区。
@@ -2020,7 +2672,26 @@ export class LocalBackendRouter {
       });
     }
 
+    const packHttp = await invokePackHttpRoute(method, pathname, request.body);
+    if (packHttp) return packHttp;
+
     return this.fallbackResponse(method, pathname);
+  }
+
+  private startGoalWake(
+    chatId: string,
+    goal: { id: string; objective: string; turns: number },
+  ): void {
+    void this.wakeChat(chatId, {
+      trigger: 'goal',
+      message: buildGoalContinuationPrompt(goal),
+      sourceId: goal.id,
+    }).catch((error: unknown) => {
+      console.warn('[goal] chat wake failed', {
+        chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   /**
@@ -2078,8 +2749,92 @@ export class LocalBackendRouter {
   ): Promise<StreamResult> {
     return this.storeContext.run(
       this.resolveStore(request.principal),
-      () => this.handleStreamScoped(request, emit, options),
+      async () => {
+        const result = await this.handleStreamScoped(request, emit, options);
+        await this.continueActiveGoal(request, result, options);
+        return result;
+      },
     );
+  }
+
+  /**
+   * Start one host-initiated turn in an idle chat, then continue an active
+   * goal if that turn still leaves work to do.
+   */
+  async wakeChat(
+    chatId: string,
+    input: {
+      trigger: ChatWakeTrigger;
+      message: string;
+      sourceId: string;
+    },
+  ): Promise<WakeResult> {
+    return this.storeContext.run(this.store, async () => {
+      this.broadcast?.('chat-turn-started', {
+        chatId,
+        trigger: input.trigger,
+        sourceId: input.sourceId,
+      });
+      const result = await this.handleStreamScoped(
+        {
+          method: 'POST',
+          path: `/api/v2/chats/${encodeURIComponent(chatId)}/send`,
+          body: {
+            message: input.message,
+            internal: true,
+            trigger: input.trigger,
+            sourceId: input.sourceId,
+          },
+        },
+        () => {},
+      );
+      this.broadcast?.('chat-turn-finished', {
+        chatId,
+        trigger: input.trigger,
+        sourceId: input.sourceId,
+        status: result.turn?.completionStatus ?? result.status,
+      });
+      if (result.status === 409) return { started: false, reason: 'busy', status: result.status };
+      if (result.status !== 200) return { started: false, reason: 'failed', status: result.status };
+      await this.continueActiveGoal(
+        {
+          method: 'POST',
+          path: `/api/v2/chats/${encodeURIComponent(chatId)}/send`,
+          body: { internal: true, trigger: input.trigger, sourceId: input.sourceId },
+        },
+        result,
+        {},
+      );
+      return { started: true, status: result.status };
+    });
+  }
+
+  private async continueActiveGoal(
+    request: LocalBackendRequest,
+    result: StreamResult,
+    options: StreamOptions,
+  ): Promise<void> {
+    if (!result.turn) return;
+    const pathname = new URL(request.path, 'http://local.backend').pathname;
+    const match = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/(?:send|run|agent)$/);
+    if (!match) return;
+    const chatId = decodeURIComponent(match[1]);
+    const goals = this.toolRouter.goals();
+    const current = (await goals.get(chatId)).goal;
+    if (!current) return;
+    const recorded = await goals.recordTurn(chatId, current.id);
+    if (!recorded) return;
+    if (!shouldContinueGoal({
+      phase: recorded.phase,
+      completionStatus: result.turn.completionStatus,
+      madeProgress: result.turn.madeProgress,
+      aborted: options.signal?.aborted === true,
+    })) return;
+    await this.wakeChat(chatId, {
+      trigger: 'goal',
+      message: buildGoalContinuationPrompt(recorded),
+      sourceId: recorded.id,
+    });
   }
 
   private async handleStreamScoped(
@@ -2136,6 +2891,7 @@ export class LocalBackendRouter {
       return { status: 404 };
     }
 
+    return this.withChatWriteLock(chatId, emit, async (emit) => {
     // W7-1: resume=true（仅 send 路由）续跑 durable record 里被中断的 turn，
     // 不追加新用户消息；与 regenerate 互斥（regenerate 有自己的路径参数语义）。
     const isResume = !regenerateMatch && payload.resume === true;
@@ -2212,25 +2968,41 @@ export class LocalBackendRouter {
         deletedCount: deleted,
       });
     } else if (isResume) {
-      // W7-1: 继续被中断的 turn —— 不追加新用户消息（记录里已有），而是让
-      // sidecar 回放 durable record 的投影作为循环种子。只在检测确为
-      // interrupted 时接受：对一个已正常完结的 turn 续跑只会给完整对话
-      // 凭空多接一段回复。
+      // 继续上一轮 —— 不追加新用户消息（记录里已有），而是让 sidecar 回放
+      // durable record 的投影作为循环种子。允许续跑的三种终态见
+      // `resumable-turn.ts`：崩溃中断、失败、用户停止。正常完成的回合拒绝，
+      // 否则会给完整对话凭空多接一段回复。
       const prior = await this.store.listMessages(chatId, 200);
-      const interrupted = detectInterruptedTurn({
-        turnActive: await this.store.getTurnActive(chatId) !== null,
+      const lastAssistant = prior.find((m) => m.role === 'assistant');
+      const reason = resumableTurn({
+        turnActive: (await this.store.getTurnActive(chatId)) !== null,
         streamActive: getActiveCoreLoopStreamId(chatId) !== undefined,
         lastMessageRole: prior[0]?.role ?? null,
+        lastAssistantStatus: readCompletionStatus(lastAssistant),
       });
       const lastUser = prior.find(m => m.role === 'user');
-      if (!interrupted || !lastUser) {
-        emit(this.sse('error', { message: '没有可继续的中断回复' }));
+      if (!reason || !lastUser) {
+        emit(this.sse('error', { message: '没有可继续的回复' }));
         return { status: 409 };
       }
       // 触发轮的用户消息仍在库里（崩溃只丢了回复）——取其原文喂给
       // buildConversationMessages，让 mode  preamble / deferred-exec 检测
       // 仍然基于真实诉求。发给 sidecar 的 messages 为空（见下方调用点）。
       userMessageText = lastUser.content;
+      // 在原先失败/停止的那条回复上记下「已从这里继续」：界面据此把整张
+      // 失败卡片收成一行历史记录，重启后仍然是这一行，而不是又一次失败。
+      if (lastAssistant && reason !== 'interrupted') {
+        // 记不下来只会让卡片多留一张，不值得让续跑失败——所以吞掉异常，
+        // 但用 try/catch 而不是 `.catch()`：store 实现可以是同步的。
+        try {
+          await this.store.patchMessageMetadata(chatId, lastAssistant.id, {
+            continuedAt: new Date().toISOString(),
+            continuedReason: reason,
+          });
+        } catch (patchErr) {
+          console.warn('[local-backend] continue: metadata patch failed', patchErr);
+        }
+      }
     } else {
       userMessageText = String(payload.message || '').trim();
     }
@@ -2282,8 +3054,22 @@ export class LocalBackendRouter {
       chatAgents,
     );
     if (!regenerateMatch && !isResume) {
-      const userMeta = mentionedAgentIds.length > 0
-        ? JSON.stringify({ mentionedAgentIds })
+      const internal =
+        payload.internal === true &&
+        (payload.trigger === 'goal' || payload.trigger === 'loop') &&
+        typeof payload.sourceId === 'string';
+      const userMetadata = {
+        ...(mentionedAgentIds.length > 0 ? { mentionedAgentIds } : {}),
+        ...(internal
+          ? {
+              internal: true,
+              trigger: payload.trigger,
+              sourceId: payload.sourceId,
+            }
+          : {}),
+      };
+      const userMeta = Object.keys(userMetadata).length > 0
+        ? JSON.stringify(userMetadata)
         : null;
       const userMessage = await this.store.addMessage(chatId, 'user', userMessageText, userMeta);
       currentUserMessageId = userMessage.id;
@@ -2304,11 +3090,7 @@ export class LocalBackendRouter {
     const turnTools = this.toolRouter
       .listModelSchemas(turnAgents.capability.toolPolicy)
       .filter(schema => chatMode !== 'plan' || schema.mode === 'read')
-      .map(schema => ({
-        name: schema.name,
-        description: schema.description,
-        inputSchema: schema.inputSchema,
-      }));
+      .map(schema => toTurnTool(schema));
 
     // 用户通过 "/" 显式指定的 MCP 工具：从注册表补齐元信息，available 取决于
     // 该工具本轮是否真的在 turnTools 里（未启用/未连接/被 plan 模式过滤都算
@@ -2329,11 +3111,7 @@ export class LocalBackendRouter {
       ) {
         const schema = this.toolRouter.getSchemaByName(token);
         if (schema && (chatMode !== 'plan' || schema.mode === 'read')) {
-          turnTools.push({
-            name: schema.name,
-            description: schema.description,
-            inputSchema: schema.inputSchema,
-          });
+          turnTools.push(toTurnTool(schema));
         }
       }
       forcedMcpTool = {
@@ -2406,6 +3184,7 @@ export class LocalBackendRouter {
       ),
       parentAgentId: turnAgents.parent?.id ?? null,
     });
+    });
   }
 
   /**
@@ -2463,15 +3242,18 @@ export class LocalBackendRouter {
           });
           return;
         }
-        if (fresh.title && fresh.title !== '新对话') {
+        if (fresh.titleSource === 'user' || (fresh.title && fresh.title !== '新对话')) {
           console.log('[local-backend] title-gen skip', {
             chatId,
-            reason: 'user-changed-title',
+            reason: fresh.titleSource === 'user' ? 'user-title' : 'user-changed-title',
             currentTitle: fresh.title,
           });
           return;
         }
-        const updated = await this.store.updateChat(chatId, { title: result.title });
+        const updated = await this.store.updateChat(chatId, {
+          title: result.title,
+          titleSource: 'auto',
+        });
         if (!updated) {
           console.warn('[local-backend] title-gen write failed', { chatId });
           return;
@@ -2525,6 +3307,104 @@ export class LocalBackendRouter {
   }
 
   /**
+   * 回合产物下载。只允许本会话 `turnFiles` 元数据里列出的文件，或落在
+   * 本会话工作区内的文件；验证通过后按 base64 返回，前端落 Blob 下载。
+   */
+  private async handleLocalFileDownload(
+    chatIdRaw: string,
+    targetRaw: string,
+  ): Promise<LocalBackendResponse> {
+    if (!getResolvedHostTools()['local-fs'].capability) {
+      return { status: 403, data: { detail: '本地文件能力已关闭' } };
+    }
+    const chatId = chatIdRaw.trim();
+    if (!chatId || !isValidChatAttachmentsKey(chatId)) {
+      return { status: 400, data: { detail: 'chatId 无效' } };
+    }
+    const chat = await this.store.getChat(chatId);
+    if (!chat) {
+      return { status: 404, data: { detail: 'chat not found' } };
+    }
+    const target = targetRaw.trim();
+    if (!target || target.includes('\0') || !path.isAbsolute(target)) {
+      return { status: 400, data: { detail: '需要文件的绝对路径' } };
+    }
+
+    let realPath: string;
+    let fileStat: Awaited<ReturnType<typeof stat>>;
+    try {
+      realPath = await realpath(target);
+      fileStat = await stat(realPath);
+    } catch {
+      return { status: 404, data: { detail: '找不到这个文件' } };
+    }
+    if (!fileStat.isFile()) {
+      return { status: 404, data: { detail: '找不到这个文件' } };
+    }
+    if (fileStat.size > MAX_LOCAL_DOWNLOAD_BYTES) {
+      return {
+        status: 413,
+        data: {
+          detail: `文件太大，无法直接下载（上限 ${Math.round(MAX_LOCAL_DOWNLOAD_BYTES / 1024 / 1024)}MB）`,
+        },
+      };
+    }
+
+    const wanted = new Set([
+      canonicalFencePath(path.resolve(target)),
+      canonicalFencePath(realPath),
+    ]);
+    let allowed = false;
+    const teamUserRoot = process.env.DEEPPATH_TEAM_USER_DATA_ROOT?.trim();
+    if (teamUserRoot) {
+      // 团队版是同一台机器上的多租户宿主：下载根必须落在当前用户数据目录
+      // 或绑定项目内。只信任 turnFiles 元数据不够——符号链接可以指向别的
+      // 用户目录，realpath 必须在这些根里才放行。
+      const roots = [getUserDataDir()];
+      try {
+        const project = await this.resolveChatProject(chatId);
+        if (project) roots.push(project.folderPath, ...project.sourceFolders);
+      } catch {
+        // 项目注册表未就绪时只认用户数据目录。
+      }
+      allowed = roots.some((root) => isPathInsideRoot(root, realPath));
+    } else {
+      const messages = await this.store.listMessages(chatId, 1000);
+      for (const message of messages) {
+        for (const listed of turnFilePathsFromMetadata(message.messageMetadata)) {
+          if (wanted.has(canonicalFencePath(path.resolve(listed)))) {
+            allowed = true;
+            break;
+          }
+        }
+        if (allowed) break;
+      }
+      if (!allowed) {
+        try {
+          const workspaceRoot = await this.resolveChatWorkspaceRoot(chatId);
+          allowed = isPathInsideRoot(workspaceRoot, realPath);
+        } catch {
+          allowed = false;
+        }
+      }
+    }
+    if (!allowed) {
+      return { status: 404, data: { detail: '这个文件不属于当前对话' } };
+    }
+
+    const buffer = await readFile(realPath);
+    return {
+      status: 200,
+      data: {
+        fileName: path.basename(realPath),
+        mime: downloadMimeForPath(realPath),
+        size: buffer.length,
+        base64: buffer.toString('base64'),
+      },
+    };
+  }
+
+  /**
    * 解析本轮生效的智能体：人设前言、技能勾选、工具策略同源于这一次解析。
    *
    * 父代理 = payload.agentId（专家下拉）> chat.agentId。`@` 提及只进
@@ -2567,7 +3447,7 @@ export class LocalBackendRouter {
     chatId: string,
     latestUserMessage: string,
     payload: Record<string, unknown>,
-    turnTools: Array<{ name: string; description: string; inputSchema: unknown }>,
+    turnTools: TurnToolWire[],
     turnAgents: TurnAgents,
     forcedSkillName?: string,
     chatMode: 'agent' | 'plan' = 'agent',
@@ -2636,7 +3516,7 @@ export class LocalBackendRouter {
       })))
       .filter(Boolean) as LlmMessage[];
 
-    const settings = llmService.getSettings();
+    const settings = withResolvedApiKey(llmService.getSettings());
 
     const { personaAgents, capability, identityName } = turnAgents;
     let personaPreamble = '';
@@ -2657,13 +3537,27 @@ export class LocalBackendRouter {
       .join('\n\n');
 
     const polluted = this.detectToolDenialInHistory(historyAssistantTexts);
-    const runtimeEnvironment = this.buildRuntimeEnvironmentContext(chatMode);
+    const chatProject = await this.resolveChatProject(chatId);
+    const workspaceRoot = chatProject
+      ? chatProject.folderPath
+      : await this.resolveChatWorkspaceRoot(chatId);
+    // 与本回合发出的 execSandbox.enabled 同一条件。中途改成完整权限
+    // 只更新审批卡，这段提示已经发给模型。
+    const commandSandboxOn =
+      clampExecPolicy(parseExecPolicy(payload.execPolicy), getResolvedHostTools()) !== 'full' &&
+      process.env.STEERABLE_EXEC_SANDBOX !== '0';
+    const runtimeEnvironment = this.buildRuntimeEnvironmentContext(chatMode, workspaceRoot);
     // 名录进 realityCheck：两条系统提示拼装路径（技能拼装 / 用户整段覆盖）
     // 都会带上它，且位置在末尾——不动技能正文那段 prompt cache 前缀。
+    const activeGoal = (await this.toolRouter.goals().get(chatId)).goal;
+    const goalContext = activeGoal?.phase === 'active'
+      ? buildActiveGoalContext(activeGoal.objective)
+      : '';
     const realityCheck =
       runtimeEnvironment +
       this.buildToolRealityCheck(turnTools, polluted, chatMode) +
-      buildDelegateRosterHint([...delegates.mention, ...delegates.ambient]);
+      buildDelegateRosterHint([...delegates.mention, ...delegates.ambient]) +
+      goalContext;
 
     // 用户显式覆盖（payload.systemPrompt 优先 / settings.systemPrompt 自定义了且非默认值次之）走
     // "整段替换"路径，保持旧行为可被外部完全控制；否则交给 skill-based
@@ -2732,15 +3626,17 @@ export class LocalBackendRouter {
           ...conditionsFromTools(toolNames),
           ...(chatMode === 'plan' ? ['plan-mode'] : []),
         ],
-        // 勾选的技能正文已随系统提示词常驻，目录里不再重复列出——否则模型
-        // 会再调一次 `skill` 工具把同一份正文加载第二遍。
-        exclude: [
-          ...new Set([
-            ...excludeSkillNames,
-            ...built.modules
+        // 硬排除只放模式级/白名单排除。pinned 技能单独走 `pinned`：
+        // sidecar 不把它列进 catalog（宿主已 eager 注入正文），但仍允许
+        // `skill` 工具按需加载完整正文；否则大技能被 system prompt cap
+        // 截断后，模型重载会被误报成“not available in this mode”。
+        exclude: [...new Set(excludeSkillNames)],
+        pinned: [
+          ...new Set(
+            built.modules
               .filter((m) => isSkillPinned(m, capability.pinnedSkills))
               .map((m) => m.dirName || m.name),
-          ]),
+          ),
         ],
         ignoreConditions: capability.loadAllSkills,
       };
@@ -2755,22 +3651,27 @@ export class LocalBackendRouter {
     // 项目模式：绑定项目的对话在系统提示末尾追加沙箱约定（两条拼装路径
     // 都追加）。硬围栏在 ToolRouter/LocalExecutor，这里让模型事先知道边界，
     // 减少越界尝试。
-    const chatProject = await this.resolveChatProject(chatId);
-    const workspaceRoot = chatProject
-      ? chatProject.folderPath
-      : await this.resolveChatWorkspaceRoot(chatId);
     if (chatProject) {
+      const sourceFolderLine =
+        chatProject.sourceFolders.length > 0
+          ? `源文件夹及其子目录也可读写：${chatProject.sourceFolders.join('、')}。`
+          : '如确需读写家目录外的目录，可请用户把该目录附加为源文件夹。';
+      const shellFence = commandSandboxOn
+        ? `文件写入（local_write_file / local_edit_file）和命令写入可以落在家目录及其全部子目录内。` +
+          `${sourceFolderLine}` +
+          `这些范围之外的写入会被拒绝。命令未指定 cwd 时在家目录运行。` +
+          `只有 local_exec_shell 的显式 cwd 可以落在这些目录之外：命令仍在沙箱中运行，写入该目录会被拒绝；需要写入时，把它加为源文件夹。`
+        : `文件写入（local_write_file / local_edit_file）可以落在家目录及其全部子目录内。` +
+          `${sourceFolderLine}` +
+          `这些范围之外的文件写入会被拒绝。命令未指定 cwd 时在家目录运行。` +
+          `本回合命令沙箱已关闭：local_exec_shell 的显式 cwd 可以落在这些目录之外，写入该目录不会被沙箱拒绝。`;
       systemPrompt +=
         `\n\n【项目模式】当前对话绑定项目「${chatProject.name}」，家目录：${chatProject.folderPath}\n` +
-        `你的文件写入（local_write_file）和命令执行（local_exec_shell）都被限制在该家目录内：` +
-        `写入路径越界会被拒绝；命令默认在家目录下运行，显式指定的 cwd 越界也会被拒绝。` +
-        (chatProject.sourceFolders.length > 0
-          ? `另有源文件夹（只读）：${chatProject.sourceFolders.join('、')}。`
-          : '') +
-        `请一律使用项目目录内的路径（相对路径按家目录解析）。` +
-        `如确需读取项目外的文件，可请用户在项目里附加为源文件夹。\n` +
-        `例外：本会话的用户上传附件目录 ${chatAttachmentsDirPath(chatId)} 也在项目家目录外，` +
-        `但它已作为**只读放行根**开放给 local_read_file（用绝对路径可直接读取，不会被项目围栏拒绝）。` +
+        shellFence +
+        `pwsh 与代码片段的 cwd 必须留在这些目录内。` +
+        `相对路径按家目录解析。\n` +
+        `例外：本会话的用户上传附件目录 ${chatAttachmentsDirPath(chatId)} 只读，不在可写范围内，` +
+        `但 local_read_file 可以用绝对路径读取。` +
         /* shell-neutral:allow generic document extensions, not product identity */ `用户附到本条消息的文件都放在那里；需要转换（docx / pdf / xlsx / pptx 等）时，` +
         `把该绝对路径交给 local_exec_shell 的转换脚本处理即可，**不要**因为它在项目家目录外就拒绝读取或要求用户重新拷贝。`;
 
@@ -2791,11 +3692,15 @@ export class LocalBackendRouter {
         }
       }
     } else {
+      const shellFence = commandSandboxOn
+        ? '只有 local_exec_shell 的显式 cwd 可以在工作区外：命令仍在沙箱中运行，写入该目录会被拒绝。'
+        : '本回合命令沙箱已关闭：local_exec_shell 的显式 cwd 可以在工作区外，写入该目录不会被沙箱拒绝。';
       systemPrompt +=
         `\n\n【对话工作区】当前对话没有绑定项目。工作区：${workspaceRoot}\n` +
-        `你的文件写入（local_write_file）和命令执行（local_exec_shell）都被限制在该目录内：` +
-        `写入路径越界会被拒绝；命令默认在工作区下运行，显式指定的 cwd 越界也会被拒绝。` +
-        `请一律使用工作区内的路径（相对路径按工作区解析）。` +
+        `文件写入（local_write_file）被限制在该目录及其子目录内，写入路径越界会被拒绝。` +
+        `命令默认在工作区下运行。${shellFence}` +
+        `pwsh 与代码片段的 cwd 必须留在工作区内。` +
+        `需要保存的文件请放在工作区内（相对路径按工作区解析）。` +
         `用户若要把对话绑到已有项目，可在输入框上方选择项目。`;
     }
 
@@ -3091,10 +3996,10 @@ export class LocalBackendRouter {
     );
   }
 
-  private buildRuntimeEnvironmentContext(chatMode: 'agent' | 'plan'): string {
+  private buildRuntimeEnvironmentContext(chatMode: 'agent' | 'plan', workingDirectory: string): string {
     const platform = process.platform;
     const arch = process.arch;
-    const cwd = process.cwd();
+    const cwd = workingDirectory;
     const shell =
       platform === 'win32'
         ? 'Windows PowerShell（默认；不要使用 bash/Linux 专属语法，除非工具返回证明实际 shell 是 WSL/bash）'
@@ -3108,6 +4013,7 @@ export class LocalBackendRouter {
             ? 'Linux'
             : platform;
 
+    // 命令缺省 cwd 和相对路径都按这个目录解析，不按宿主进程的当前目录。
     const lines = [
       '',
       '',
@@ -3142,7 +4048,7 @@ export class LocalBackendRouter {
   }
 
   private buildToolRealityCheck(
-    turnTools: Array<{ name: string; description: string; inputSchema: unknown }>,
+    turnTools: TurnToolWire[],
     polluted: boolean,
     chatMode: 'agent' | 'plan' = 'agent',
   ): string {
@@ -3272,6 +4178,106 @@ export class LocalBackendRouter {
     return String(value);
   }
 
+  private chatBusy(): { status: 409; data: { code: 'chat_busy'; message: string } } {
+    return {
+      status: 409,
+      data: { code: 'chat_busy', message: '该会话正在另一个进程中运行' },
+    };
+  }
+
+  private async forkChat(chatId: string, body: unknown): Promise<LocalBackendResponse> {
+    const chat = await this.store.getChat(chatId);
+    if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+    const lease = this.tryChatLock(chatId);
+    if (!lease) return this.chatBusy();
+    let createdId: string | null = null;
+    let attachmentsDst: string | null = null;
+    let workspaceDst: string | null = null;
+    try {
+      const workspaceSrc = chat.projectId ? null : chatWorkspacePath(chatId);
+      const maxBytes = getProductConfig().forkWorkspaceMaxBytes ?? DEFAULT_FORK_WORKSPACE_MAX_BYTES;
+      if (workspaceSrc) {
+        const bytes = directorySizeBytes(workspaceSrc);
+        if (bytes > maxBytes) {
+          return {
+            status: 413,
+            data: {
+              code: 'workspace_too_large',
+              bytes,
+              maxBytes,
+              message: '工作区太大，无法分叉',
+            },
+          };
+        }
+      }
+      const title = forkTitle(chat.title, this.toRecord(body).locale);
+      const created = await this.store.createChat(title, chat.agentId, chat.projectId);
+      createdId = created.id;
+      await this.store.updateChat(created.id, { forkedFrom: chat.id });
+      attachmentsDst = chatAttachmentsDirPath(created.id);
+      await copyForkDirectory(chatAttachmentsDirPath(chatId), attachmentsDst);
+      if (workspaceSrc) {
+        workspaceDst = chatWorkspacePath(created.id);
+        await copyForkDirectory(workspaceSrc, workspaceDst);
+      }
+      const rewrite = forkPathRewriter(chatId, created.id);
+      for (const write of forkHistory(await this.historyTurns(chatId), rewrite)) {
+        await this.store.addMessage(created.id, write.role, write.content, write.messageMetadata);
+      }
+      return { status: 200, data: { chatId: created.id } };
+    } catch (err) {
+      console.warn('[local-backend] fork failed', { chatId, err });
+      if (createdId) {
+        try {
+          await this.store.deleteChat(createdId);
+        } catch (deleteErr) {
+          console.warn('[local-backend] fork rollback failed', { chatId: createdId, deleteErr });
+        }
+      }
+      if (attachmentsDst) await removeForkDirectory(attachmentsDst);
+      if (workspaceDst) await removeForkDirectory(workspaceDst);
+      return { status: 500, data: { detail: 'Fork failed' } };
+    } finally {
+      lease.release();
+    }
+  }
+
+  private tryChatLock(chatId: string): HeldWriteLease | null {
+    try {
+      return acquireChatWriteLock(getUserDataDir(), chatId);
+    } catch (error) {
+      if (error instanceof ChatBusyError) return null;
+      throw error;
+    }
+  }
+
+  private async withChatWriteLock(
+    chatId: string,
+    emit: StreamEmit,
+    body: (emit: StreamEmit) => Promise<StreamResult>,
+  ): Promise<StreamResult> {
+    const lease = this.tryChatLock(chatId);
+    if (!lease) {
+      emit(this.sse('error', { code: 'chat_busy', message: '该会话正在另一个进程中运行' }));
+      return { status: 409 };
+    }
+    let doneChunk: string | undefined;
+    let result: StreamResult;
+    try {
+      result = await body((chunk) => {
+        if (chunk === 'data: [DONE]\n\n') {
+          doneChunk = chunk;
+          return;
+        }
+        emit(chunk);
+      });
+    } finally {
+      lease.release();
+    }
+    if (doneChunk) emit(doneChunk);
+    return result;
+  }
+
   private sse(event: string, data: unknown): string {
     return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   }
@@ -3287,7 +4293,7 @@ export class LocalBackendRouter {
     systemPrompt: string;
     messages: LlmMessage[];
     skillContext: SkillTurnContext | null;
-    turnTools: Array<{ name: string; description: string; inputSchema: unknown }>;
+    turnTools: TurnToolWire[];
     /** 本轮智能体的工具准入策略；随 toolContext 下发供分发层复检。 */
     toolPolicy: AgentToolPolicy;
     chatMode: 'agent' | 'plan';
@@ -3313,7 +4319,7 @@ export class LocalBackendRouter {
       return { status: 503 };
     }
 
-    const settings = llmService.getSettings();
+    const settings = withResolvedApiKey(llmService.getSettings());
     const PLACEHOLDER_MODELS = new Set(['default', 'auto', '', 'undefined', 'null']);
     const rawModel = typeof payload.model === 'string' ? payload.model.trim() : '';
     const overrideModel = PLACEHOLDER_MODELS.has(rawModel) ? undefined : rawModel;
@@ -3326,7 +4332,7 @@ export class LocalBackendRouter {
     // spec (default.harness.yaml) is the single source of truth for
     // maxRounds / maxToolErrors, and an explicit request param overrides it.
     // W4-2: per-exec sandbox for shell tool calls, default-on. Writable
-    // roots = 项目家目录，或无项目时 Documents/<应用>/conversations/<chatId>。
+    // roots = 项目家目录（或无项目时的对话工作区）+ 源文件夹。每个根含其子目录。
     // `execPolicy: 'full'`（输入框「完整权限」）关闭这一层，让 mkdir
     // Downloads 这类工作区外写入不再被 Seatbelt 拦成 Operation not permitted。
     const chatProject = await this.resolveChatProject(chatId);
@@ -3334,12 +4340,18 @@ export class LocalBackendRouter {
       ? chatProject.folderPath
       : await this.resolveChatWorkspaceRoot(chatId);
     const execSandbox = buildExecSandbox(
-      [
+      // Landlock opens each writable root when it installs its rules and
+      // bwrap bind-mounts them, so a declared root that has no directory yet
+      // aborts the sandboxed spawn. The chat workspace is created by
+      // resolveChatWorkspaceRoot, but pack workspaces and a project's source
+      // folders are only names until something writes there.
+      ensureWritableRoots([
         // 场景包声明的每会话可写根（如文档包在项目根之外落盘产物的
         // 工作区）。
         ...collectPackExecWritableRoots(chatId),
         workspaceRoot,
-      ],
+        ...(chatProject?.sourceFolders ?? []),
+      ]),
       { policy: clampExecPolicy(parseExecPolicy(payload.execPolicy), getResolvedHostTools()) },
     );
 
@@ -3351,12 +4363,33 @@ export class LocalBackendRouter {
     const approval = resolveTurnApproval();
 
     let assistantText = '';
+    // Text this attempt streamed (reset on restart) and the timeline length
+    // when the attempt began, so a retry can withdraw exactly its own output.
+    let streamedText = '';
+    let attemptBlockStart = 0;
+    // A retry notice arrived and no output followed yet: the turn is waiting
+    // on the network, not on the model. `stream_restart` clears it because the
+    // retry has begun producing again.
+    let retrying = false;
+    // Reliability accounting for this turn (R4). A model request is either a
+    // pass (a fresh loop run) or a retry inside one (the sidecar re-issuing
+    // the same request), so attempts = passes + retries. The retry and direct
+    // flags are sticky: one retry anywhere in the turn is what the statistic
+    // asks about.
+    let turnPasses = 0;
+    let turnRetries = 0;
+    let retriedThisTurn = false;
+    let directThisTurn = false;
     const executedActions: Array<Record<string, unknown>> = [];
     const timeline: PersistedTurnBlock[] = [];
     // 编排子代理生命周期事件累积（切回后用于重建 currentTurnChildren）。
     const children: Array<Record<string, unknown>> = [];
     let completionStatus: string = 'completed';
     let completionReason = '';
+    // Provider classification of the failing request (see TurnFailureInfo).
+    // Stays empty for a clean sidecar-reported failure, which carries its own
+    // `completionReason` but no per-request detail.
+    let failureInfo: TurnFailureInfo | undefined;
     let outcomeTraceId: string | undefined;
     // Every pass records its own sidecar trace; all of them are persisted
     // against the one assistant message this turn produces.
@@ -3372,16 +4405,20 @@ export class LocalBackendRouter {
     // 实时快照：executedActions / timeline / children 传引用（原地 mutate），
     // content 由 onText 逐段更新。切走再切回的 renderer 靠 GET /live-stream 读它。
     const live = registerLiveStream(chatId, { executedActions, timeline, children });
+    live.notify = () => {
+      emit(this.sseData({ type: 'executed_actions', actions: [...executedActions] }));
+    };
     // 场景包的回合观察器（如识别包技能调用并广播产物更新）。
     const packObservers = beginPackTurnObservers({ chatId, broadcast: this.broadcast ?? undefined });
     // 回合产物文件列表（回合收尾时收集）：扫描根与 exec 沙箱可写根同源
     // （项目根 + 包工作区），与沙箱是否启用无关——「完整权限」下根列表只是
     // 不再被强制，产物仍大概率落在这里；根之外的显式写由工具参数并集补。
     const turnStartedAtMs = Date.now();
-    const turnFileRoots = [
+    const turnFileRoots = ensureWritableRoots([
       ...collectPackExecWritableRoots(chatId),
       workspaceRoot,
-    ];
+      ...(chatProject?.sourceFolders ?? []),
+    ]);
 
     try {
       const coreLoopOptions: StreamCoreLoopTurnOptions = {
@@ -3424,6 +4461,9 @@ export class LocalBackendRouter {
         provider: sidecarWireProvider(settings.provider),
         model: overrideModel || settings.model,
         reasoningEffort,
+        // 产品声明模型服务是否直连（跳过系统代理）。只在产品显式打开时下发，
+        // 未声明的产品线上字节与旧版完全一致。
+        ...(productConfigDirectConnection() ? { directConnection: true } : {}),
         // W2.2.2 凭证代理：broker 活跃且命中 provider 主机时，baseUrl 改写
         // 为 http（代理解析绝对 URI 后注入凭证转发 https），apiKey 不再下
         // 发——sidecar 进程（沙箱内、可被 agent 行为影响）永远拿不到真实
@@ -3472,7 +4512,9 @@ export class LocalBackendRouter {
           ...(toolPolicy.mode === 'all' ? {} : { toolPolicy }),
         },
         execSandbox,
-        approval,
+        approval: approval
+          ? { ...approval, writableRoots: turnFileRoots, pathBase: workspaceRoot }
+          : undefined,
         // delegate-on-pool 统一:模型的多代理面收敛为单工具
         // delegate_subagent(默认开)。内置画像集(explore/research/coder)
         // 带工具域/轮次/并发/系统提示,模型按画像 description 选委派
@@ -3480,17 +4522,41 @@ export class LocalBackendRouter {
         // 子运行执行,生命周期经 onChildEvent → SSE 进 UI 编排卡片。
         subagent,
         // 六件套(agent_spawn/send/wait/close/list/interrupt)收缩为
-        // opt-in 高级模式:STEERABLE_ORCHESTRATION=1 开启;开启后与
-        // delegate 共享同一 AgentPool(同一 maxParallel 预算)。
-        ...(process.env.STEERABLE_ORCHESTRATION === '1'
-          ? { orchestration: { enabled: true, maxDepth: 1, maxParallel: 4 } }
+        // opt-in 高级模式:STEERABLE_ORCHESTRATION 环境变量、回合 payload 或 product.json.orchestration 开启;
+        // 开启后与 delegate 共享同一 AgentPool(同一 maxParallel 预算)。
+        ...(resolveTurnOrchestration(payload)
+          ? { orchestration: resolveTurnOrchestration(payload) }
           : {}),
         signal,
         onText: (delta) => {
           assistantText += delta;
           appendTimelineDelta(timeline, 'text', delta);
           live.content = assistantText;
+          // Track what this attempt emitted so a retry can take exactly it
+          // back: the host has already handed these bytes to the renderer.
+          streamedText += delta;
           emit(this.sseData({ content: delta }));
+        },
+        onRestart: () => {
+          // The sidecar is re-issuing this request. Withdraw the attempt's
+          // text and reasoning — persisted, live, and renderer views — so the
+          // retry's reply does not arrive after a half sentence the model
+          // never finished. Tool blocks stay: those calls ran.
+          if (streamedText) {
+            assistantText = assistantText.slice(0, assistantText.length - streamedText.length);
+            streamedText = '';
+          }
+          // The retry is producing again; a Stop from here on is not a stop
+          // "during reconnection".
+          retrying = false;
+          live.content = assistantText;
+          dropAttemptBlocks(timeline, attemptBlockStart);
+          attemptBlockStart = timeline.length;
+          emit(this.sseData({
+            type: 'stream_restart',
+            content: assistantText,
+            blocks: timeline,
+          }));
         },
         onReasoning: (delta) => {
           appendTimelineDelta(timeline, 'reasoning', delta);
@@ -3505,6 +4571,7 @@ export class LocalBackendRouter {
             tool: call.tool,
             mode: chatMode,
             arguments: call.arguments,
+            view: presentToolCall(call.tool, call.arguments),
             threw: false,
           });
           syncTimelineTools(timeline, executedActions);
@@ -3514,18 +4581,22 @@ export class LocalBackendRouter {
           const idx = action.id
             ? executedActions.findIndex((row) => row.id === action.id)
             : -1;
+          const replay = action.tool === 'ask_user' ? this.takeAskReplay?.(args.chatId) : undefined;
+          const result = replay ? storedAskResult(replay) : action.result;
           const row = {
             id: action.id,
             tool: action.tool,
             mode: chatMode,
             arguments: action.arguments,
-            result: action.result,
+            view: presentToolCall(action.tool, action.arguments, result),
+            result,
             success: action.success,
             error: action.error,
             durationMs: action.durationMs,
             // W4-2: surface the per-exec sandbox marker on the tool card —
             // enforcement is a value the user can see, not a log line.
             ...(action.sandbox ? { sandbox: action.sandbox } : {}),
+            ...(action.approval ? { approval: action.approval } : {}),
             threw: false,
           };
           if (idx >= 0) executedActions[idx] = row;
@@ -3538,6 +4609,17 @@ export class LocalBackendRouter {
           }
         },
         onNotice: (kind, notice) => {
+          // A retry is a wait the user can feel: connection backoff runs for
+          // seconds. Announce it so the turn can show "reconnecting" instead
+          // of looking stuck, and so the wait itself is visible before the
+          // next attempt starts. Not persisted — history keeps outcomes only.
+          const retry = readRetryNotice(notice);
+          if (retry) {
+            retrying = true;
+            retriedThisTurn = true;
+            turnRetries += 1;
+            emit(this.sseData({ type: 'turn_retry', ...retry }));
+          }
           if (kind === 'budget_exhausted') {
             // 预算维度（rounds/tokens）在 notice.budget；notice.kind 是信封
             // 类型（loop 事件 data 里的 budget 键经 sidecar 透传）。message
@@ -3572,6 +4654,10 @@ export class LocalBackendRouter {
           const lifecycle: Record<string, unknown> = {
             kind: event.kind,
             childId: event.childId,
+            // Wall-clock for the elapsed column: the renderer has no other
+            // way to know when a child started once the turn is replayed
+            // from persisted events.
+            atMs: Date.now(),
             ...(event.task !== undefined ? { task: event.task } : {}),
             ...(event.depth !== undefined ? { depth: event.depth } : {}),
             ...(event.status !== undefined ? { status: event.status } : {}),
@@ -3579,6 +4665,11 @@ export class LocalBackendRouter {
             ...(event.profile !== undefined ? { profile: event.profile } : {}),
             // 子代理自己的 durable record：右侧过程面板据此回看它的推理与工具。
             ...(event.recordId !== undefined ? { recordId: event.recordId } : {}),
+            // R5：子代理的账单。行内的 token 与「不计」都只读这一份，
+            // 面板不再回头查注册表。
+            ...(event.usage !== undefined ? { usage: event.usage } : {}),
+            // R7-3：子代理在等用户回答。面板据此标「等待你的回答」。
+            ...(event.intro !== undefined ? { intro: event.intro } : {}),
           };
           children.push(lifecycle);
           emit(this.sseData({ type: 'orchestration_child', ...lifecycle }));
@@ -3607,8 +4698,12 @@ export class LocalBackendRouter {
             ),
           afterPass: async (outcome) => {
             if (outcome.traceId) passTraceIds.push(outcome.traceId);
+            turnPasses += 1;
             // W6-9 用量归因:落一条 chat 用量事件(含成本估算,无单价模型 costUsd=null)。
             // 每趟各落一条——续跑的花费是真实发生的，不该被合并掉。
+            // R5:子代理的花费进同一条记录（父级 + children[]），而不是散成
+            // 多条——一次回合的成本归因必须能一眼加总。外部引擎子代理不报
+            // token，此时 usage_note='partial'，不把缺失当零。
             if (outcome.usage) {
               try {
                 await this.store.recordUsageEvent({
@@ -3616,11 +4711,13 @@ export class LocalBackendRouter {
                   kind: 'chat',
                   provider: settings.provider,
                   model: overrideModel || settings.model,
-                  promptTokens: outcome.usage.promptTokens,
-                  completionTokens: outcome.usage.completionTokens,
-                  totalTokens: outcome.usage.totalTokens,
+                  promptTokens: outcome.usage.promptTokens + (outcome.usage.childPromptTokens ?? 0),
+                  completionTokens:
+                    outcome.usage.completionTokens + (outcome.usage.childCompletionTokens ?? 0),
+                  totalTokens: outcome.usage.totalTokens + (outcome.usage.childTotalTokens ?? 0),
                   cachedPromptTokens: outcome.usage.cachedPromptTokens,
                   costUsd: outcome.usage.costUsd ?? null,
+                  usageNote: (outcome.usage.unknownUsageChildren ?? 0) > 0 ? 'partial' : null,
                 });
               } catch (usageErr) {
                 console.warn('[local-backend] record usage event failed', usageErr);
@@ -3650,10 +4747,15 @@ export class LocalBackendRouter {
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         completionStatus = 'cancelled';
-        completionReason = 'aborted_by_user';
+        // Stop lands for two very different reasons, and the card says which:
+        // while waiting out a retry (almost always impatience with a slow
+        // reconnect) or while the model was writing (a deliberate stop).
+        // Recorded here because only the host saw whether a retry was pending.
+        completionReason = retrying ? 'aborted_during_retry' : 'aborted_by_user';
       } else {
         completionStatus = 'failed';
         completionReason = err instanceof Error ? err.message : String(err);
+        failureInfo = readTurnFailureInfo(err);
         emit(this.sse('error', { message: completionReason }));
       }
       // streamCoreLoopTurn attaches the sidecar trace id to failures — the
@@ -3663,6 +4765,78 @@ export class LocalBackendRouter {
         outcomeTraceId = failureTraceId;
         passTraceIds.push(failureTraceId);
       }
+    }
+
+    // 可靠性统计（R4）：一回合一条终态记录，与 token 用量分开记——用量
+    // 是每趟各一条（自动续跑的花费是真实发生的），终态只有一个。
+    // `usedDirect` 取产品当前配置：直连是产品级开关，不是每回合的决定。
+    try {
+      await this.store.recordUsageEvent({
+        chatId,
+        kind: 'turn',
+        provider: settings.provider,
+        model: overrideModel || settings.model,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        outcome:
+          completionStatus === 'failed'
+            ? 'failed'
+            : completionStatus === 'cancelled'
+              ? 'cancelled'
+              : 'completed',
+        failureKind: completionStatus === 'failed' ? (failureInfo?.errorKind ?? 'unknown') : null,
+        attempts: turnPasses + turnRetries || null,
+        retried: retriedThisTurn,
+        usedDirect: directThisTurn || productConfigDirectConnection(),
+      });
+    } catch (reliabilityErr) {
+      // 统计写不进去不该影响回合收尾——消息已经落库，用户看到的是结果。
+      console.warn('[local-backend] record turn outcome failed', reliabilityErr);
+    }
+
+    // 配了遥测就把这一回合的终态作为计数上报（R4）。指标只有类别与次数，
+    // 没有对话内容，所以 `metadata` 档位也可以发；没配 endpoint 就一条不发。
+    // 失败不阻断：回合已经完成，投递不了是收集端的事。
+    // 取遥测设置：读不到只意味着这一回合不上报，不该影响回合收尾。用
+    // try/catch 而不是 `.catch()`——store 实现是同步返回时没有 thenable，
+    // 链式 `.catch` 会直接抛。
+    let telemetryForTurn: Awaited<ReturnType<typeof this.store.getTelemetrySettings>> = null;
+    try {
+      telemetryForTurn = await this.store.getTelemetrySettings();
+    } catch (telemetryReadErr) {
+      console.warn('[local-backend] read telemetry settings failed', telemetryReadErr);
+    }
+    if (telemetryEnabled(telemetryForTurn) && telemetryForTurn?.endpoint) {
+      void supervisor
+        ?.call(
+          'metrics.export',
+          {
+            // 一个端点同时收 trace 与 metric 时，把 /v1/traces 换成 /v1/metrics。
+            endpoint: telemetryForTurn.endpoint.replace(/\/v1\/traces$/, '/v1/metrics'),
+            serviceName: telemetryForTurn.serviceName,
+            samples: [
+              {
+                outcome:
+                  completionStatus === 'failed'
+                    ? 'failed'
+                    : completionStatus === 'cancelled'
+                      ? 'cancelled'
+                      : 'completed',
+                ...(completionStatus === 'failed'
+                  ? { failureKind: failureInfo?.errorKind ?? 'unknown' }
+                  : {}),
+                attempts: turnPasses + turnRetries,
+                retried: retriedThisTurn,
+                usedDirect: directThisTurn || productConfigDirectConnection(),
+              },
+            ],
+          },
+          { timeoutMs: 10_000 },
+        )
+        .catch((err) => {
+          console.warn('[local-backend] telemetry metrics export failed', err);
+        });
     }
 
     const durationMs = turnDurationMs(
@@ -3678,6 +4852,7 @@ export class LocalBackendRouter {
         sinceMs: turnStartedAtMs,
         actions: executedActions,
         projectRoot: workspaceRoot,
+        finalText: assistantText,
       });
     } catch (turnFilesErr) {
       console.warn('[local-backend] collect turn files failed', turnFilesErr);
@@ -3700,6 +4875,7 @@ export class LocalBackendRouter {
         ...(durationMs != null ? { durationMs } : {}),
         ...(autoContinuations > 0 ? { autoContinuations } : {}),
         ...(turnFiles.length > 0 ? { turnFiles } : {}),
+        ...(failureInfo ? { failure: failureInfo } : {}),
       })
     );
     try {
@@ -3738,8 +4914,20 @@ export class LocalBackendRouter {
           trace?: Record<string, unknown>;
           spans?: unknown[];
           events?: unknown[];
-        }>('trace.fetch', { traceId }, { timeoutMs: 5_000 });
+          eventsTotal?: number;
+          eventsTruncated?: boolean;
+        }>('trace.fetch', { traceId }, { timeoutMs: traceFetchTimeoutMs() });
         const sidecarTrace = fetched.trace ?? {};
+        if (fetched.eventsTruncated) {
+          // 侧车把超长 trace 截成 头+尾（见 _handle_trace_fetch）。留痕，
+          // 否则被截断的 trace 会被当成完整现场读。
+          console.warn('[local-backend] coreloop trace truncated for storage', {
+            chatId,
+            traceId,
+            eventsReturned: (fetched.events ?? []).length,
+            eventsTotal: fetched.eventsTotal,
+          });
+        }
         const durationMs = typeof sidecarTrace.durationMs === 'number'
           ? sidecarTrace.durationMs
           : null;
@@ -3755,10 +4943,26 @@ export class LocalBackendRouter {
             trace: sidecarTrace,
             spans: fetched.spans ?? [],
             events: fetched.events ?? [],
+            ...(fetched.eventsTruncated
+              ? {
+                  eventsTruncated: true,
+                  eventsTotal: fetched.eventsTotal,
+                }
+              : {}),
           },
         });
       } catch (err) {
-        console.warn('[local-backend] coreloop trace persist failed', err);
+        // 丢了 trace 就没有现场：这条日志必须带够可定位信息，且措辞直白
+        // 到能直接 grep（历史事故里 259 轮/token 量最大的三个 run 全因此
+        // 没有任何 trace 可查）。
+        console.warn('[local-backend] coreloop trace persist failed', {
+          chatId,
+          traceId,
+          passStatus,
+          pass: index + 1,
+          of: passTraceIds.length,
+          err: err instanceof Error ? err.message : String(err),
+        });
       }
 
       // W6-6 遥测合规化:若用户配置了 OTLP collector,把这条 trace 按所选
@@ -3792,7 +4996,13 @@ export class LocalBackendRouter {
       assistantText,
       completionStatus,
     });
-    return { status: 200 };
+    return {
+      status: 200,
+      turn: {
+        completionStatus,
+        madeProgress: executedActions.length > 0 || assistantText.length > 0,
+      },
+    };
   }
 
   /**
@@ -3843,6 +5053,16 @@ export class LocalBackendRouter {
    */
   private sseData(data: unknown): string {
     return `data: ${JSON.stringify(data)}\n\n`;
+  }
+
+  private async historyTurns(chatId: string): Promise<StoredTurn[]> {
+    const messages = await this.store.listMessages(chatId);
+    return messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      messageMetadata: message.messageMetadata,
+    }));
   }
 
   private toRecord(body: unknown): Record<string, unknown> {

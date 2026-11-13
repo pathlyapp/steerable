@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # Install dist/* artifacts into throwaway envs and run minimal real code.
+#
+# Two npm modes matter here and both have caught real defects:
+#  * internal packages declare each other as registry dependencies, so this
+#    batch is installed through `pnpm.overrides` pointing at the local tarballs;
+#  * the check imports every package by name, because `tsc` in the monorepo
+#    resolves workspace packages to `src/` and cannot see a symbol missing from
+#    a published tarball.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -13,7 +20,7 @@ fi
 VENV=/tmp/steerable-verify-py
 NPMDIR=/tmp/steerable-verify-npm
 
-echo "== 1/2  Python wheels into clean venv"
+echo "== 1/3  Python wheels into clean venv"
 rm -rf "$VENV"
 uv venv "$VENV" --python 3.12 >/dev/null
 uv pip install --python "$VENV/bin/python" \
@@ -83,42 +90,27 @@ asyncio.run(main())
 PY
 
 echo
-echo "== 2/2  npm tarballs into clean Node ESM project"
+echo "== 2/3  npm tarballs into a clean project"
 rm -rf "$NPMDIR"
 mkdir -p "$NPMDIR"
-cat > "$NPMDIR/package.json" <<JSON
-{
-  "name": "verify",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@steerable/agent-protocol": "file:$DIST/npm/steerable-agent-protocol-0.1.0.tgz",
-    "@steerable/agent-harness":  "file:$DIST/npm/steerable-agent-harness-0.1.0.tgz"
-  },
-  "pnpm": {
-    "overrides": {
-      "@steerable/agent-protocol": "file:$DIST/npm/steerable-agent-protocol-0.1.0.tgz",
-      "@steerable/agent-harness":  "file:$DIST/npm/steerable-agent-harness-0.1.0.tgz"
-    }
-  }
-}
-JSON
+
+# Every publishable tarball in this batch, by package name. The dependency map
+# is also the override map: internal packages name each other by version, and
+# this batch is not on the registry yet.
+python3 scripts/release/wire_local_npm_project.py "$DIST/npm" "$NPMDIR/package.json"
+
 ( cd "$NPMDIR" && pnpm install --no-frozen-lockfile >/dev/null )
 
-cat > "$NPMDIR/smoke.mjs" <<'JS'
-import { decideToolMode, consumeBudget, isTerminalResult } from '@steerable/agent-harness';
-const proto = await import('@steerable/agent-protocol');
-const mode = decideToolMode('read_file');
-const { state } = consumeBudget(
-  { tokensUsed: 0, stepsUsed: 0, toolCallsUsed: 0 },
-  { maxTokens: 100, maxSteps: 5, maxToolCalls: 3 },
-  { toolCall: true, tokens: 10, step: true },
-);
-const done = isTerminalResult({ success: true, terminal: true });
-if (mode !== 'read' || !done) { console.error('TS FAILED'); process.exit(1); }
-console.log('TS OK:', JSON.stringify({ mode, state, done }));
-JS
+cp scripts/release/verify_npm_smoke.mjs "$NPMDIR/smoke.mjs"
 ( cd "$NPMDIR" && node smoke.mjs )
+
+echo
+echo "== 3/3  packed CLI loads and reports its version"
+# The CLI declares internal packages as dependencies, so it only installs in
+# this batch. `--version` proves the bin wiring; `--help` proves the whole
+# import chain (including the renderer-free module graph) loads.
+( cd "$NPMDIR" && node node_modules/@steerable/agent-cli/dist/bin.js --version )
+( cd "$NPMDIR" && node node_modules/@steerable/agent-cli/dist/bin.js --help | head -3 )
 
 echo
 echo "All artifact smoke-tests passed."

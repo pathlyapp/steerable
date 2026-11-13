@@ -49,17 +49,18 @@ export function lockPathForDb(dbPath: string): string {
   return path.join(parsed.dir, `${parsed.name}.lock`);
 }
 
-export function acquireWriteLease(lockPath: string): HeldWriteLease {
+export function acquireWriteLease(lockPath: string, timeoutMs = 0): HeldWriteLease {
+  const waitMs = Number.isFinite(timeoutMs) ? Math.max(0, Math.trunc(timeoutMs)) : 0;
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   // Loaded lazily so tests that only exercise lockPathForDb do not need
   // better-sqlite3's Electron ABI.
   const Database = require('better-sqlite3') as typeof import('better-sqlite3');
-  const db = new Database(lockPath, { timeout: 0 });
+  const db = new Database(lockPath, { timeout: waitMs });
   try {
     // Every statement here can hit the incumbent's lock, including the
     // journal_mode pragma — it rewrites the header and so needs the same
-    // write lock. busy_timeout 0 makes that immediate instead of a stall.
-    db.pragma('busy_timeout = 0');
+    // write lock. timeoutMs 0 makes that immediate instead of a stall.
+    db.pragma(`busy_timeout = ${waitMs}`);
     db.pragma('journal_mode = DELETE');
     db.exec('CREATE TABLE IF NOT EXISTS lease (id INTEGER PRIMARY KEY)');
     db.exec('BEGIN EXCLUSIVE');
@@ -79,6 +80,34 @@ export function acquireWriteLease(lockPath: string): HeldWriteLease {
       released = true;
       // Closing rolls the transaction back and drops the kernel lock. The
       // lock file itself is never deleted.
+      db.close();
+    },
+  };
+}
+
+/**
+ * Shared open registration. Many processes may hold this at once.
+ * An exclusive lease on the same file waits until every shared holder closes.
+ * The lock file must already contain the lease table (the exclusive opener creates it).
+ */
+export function acquireSharedLease(lockPath: string): HeldWriteLease {
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const Database = require('better-sqlite3') as typeof import('better-sqlite3');
+  const db = new Database(lockPath, { timeout: 5_000 });
+  try {
+    db.pragma('busy_timeout = 5000');
+    db.exec('BEGIN');
+    db.prepare('SELECT id FROM lease LIMIT 1').get();
+  } catch (err) {
+    db.close();
+    if (isSqliteBusy(err)) throw new StoreAlreadyOwnedError(lockPath);
+    throw err;
+  }
+  let released = false;
+  return {
+    release() {
+      if (released) return;
+      released = true;
       db.close();
     },
   };

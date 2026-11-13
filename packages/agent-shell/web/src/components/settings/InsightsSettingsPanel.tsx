@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LuChartBar } from 'react-icons/lu';
 import { BRAND_NAME } from '@/brand';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { t } from '@/i18n';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 
 type InsightsWire = {
   installId: string;
@@ -33,8 +34,8 @@ export function InsightsConsentBanner() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!isElectron()) return;
-    void getElectronBridge()!
+    if (!hasHostBridge()) return;
+    void getHostBridge()!
       .localBackend.request<InsightsWire>({ method: 'GET', path: '/api/v2/local-settings/insights' })
       .then((data) => {
         if (!data.promptedAt) setOpen(true);
@@ -43,10 +44,10 @@ export function InsightsConsentBanner() {
   }, []);
 
   const save = useCallback(async (upload: boolean) => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setSaving(true);
     try {
-      await getElectronBridge()!.localBackend.request({
+      await getHostBridge()!.localBackend.request({
         method: 'POST',
         path: '/api/v2/local-settings/insights',
         body: {
@@ -71,13 +72,13 @@ export function InsightsConsentBanner() {
       className="flex-shrink-0 border-t border-agent-border bg-agent-muted px-2.5 py-2"
       data-testid="insights-consent-banner"
       role="region"
-      aria-label="帮助改进产品同意"
+      aria-label={t('Consent to help improve the product')}
     >
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-medium text-agent-foreground">帮助改进{BRAND_NAME}</p>
+          <p className="text-xs font-medium text-agent-foreground">{t('Help improve {brand}', { brand: BRAND_NAME })}</p>
           <p className="mt-1 text-xs leading-relaxed text-agent-muted-foreground">
-            同意上传数据到服务器，帮助改进产品。之后可在设置里更改。
+            {t('Agree to upload data to the server to help improve the product. You can change this later in Settings.')}
           </p>
         </div>
         <div className="flex shrink-0 gap-2">
@@ -87,7 +88,7 @@ export function InsightsConsentBanner() {
             onClick={() => void save(true)}
             className="h-8 whitespace-nowrap rounded-full bg-agent-foreground px-3.5 text-xs text-agent-canvas disabled:opacity-50"
           >
-            保存
+            {t('Save')}
           </button>
           <button
             type="button"
@@ -95,7 +96,7 @@ export function InsightsConsentBanner() {
             onClick={() => void save(false)}
             className="h-8 whitespace-nowrap rounded-full border border-agent-border bg-agent-canvas px-3.5 text-xs text-agent-foreground disabled:opacity-50"
           >
-            取消
+            {t('Cancel')}
           </button>
         </div>
       </div>
@@ -111,11 +112,11 @@ export function InsightsSettingsPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<InsightsWire>({
+      const res = await getHostBridge()!.localBackend.request<InsightsWire>({
         method: 'GET',
         path: '/api/v2/local-settings/insights',
       });
@@ -132,11 +133,11 @@ export function InsightsSettingsPanel() {
   }, [load]);
 
   const save = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setSaving(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<InsightsWire>({
+      const res = await getHostBridge()!.localBackend.request<InsightsWire>({
         method: 'POST',
         path: '/api/v2/local-settings/insights',
         body: {
@@ -152,7 +153,7 @@ export function InsightsSettingsPanel() {
         },
       });
       setData({ ...empty, ...res, profile: { ...empty.profile, ...res.profile } });
-      setStatus('已保存。未勾选的种类只留在本机。');
+      setStatus(t('Saved. Unchecked categories stay on this device only.'));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -161,34 +162,38 @@ export function InsightsSettingsPanel() {
   };
 
   const exportFile = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setError(null);
     try {
-      const bundle = await getElectronBridge()!.localBackend.request<unknown>({
+      const bundle = await getHostBridge()!.localBackend.request<unknown>({
         method: 'GET',
         path: '/api/v2/insights/export',
       });
       const text = `${JSON.stringify(bundle, null, 2)}\n`;
-      const saved = await getElectronBridge()!.local?.saveTextFile?.({
-        title: '导出本地洞察记录',
+      const saved = await getHostBridge()!.local?.saveTextFile?.({
+        title: t('Export local insight records'),
         defaultPath: `deeppath-insights-${new Date().toISOString().slice(0, 10)}.json`,
         content: text,
       });
-      if (saved?.canceled === false) setStatus(`已保存到 ${saved.filePath}`);
+      if (saved?.canceled === false) setStatus(t('Saved to {path}', { path: saved.filePath ?? '' }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
 
   const uploadNow = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<{ ok: boolean; detail: string }>({
+      const res = await getHostBridge()!.localBackend.request<{ ok: boolean; detail: string }>({
         method: 'POST',
         path: '/api/v2/insights/upload-local',
       });
-      setStatus(res.ok ? `已上传到${BRAND_NAME}服务器` : '上传失败，记录仍在本机，可改导出文件发送');
+      setStatus(
+        res.ok
+          ? t('Uploaded to the {brand} server', { brand: BRAND_NAME })
+          : t('Upload failed. The records are still on this device. You can export a file and send it instead.'),
+      );
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -202,15 +207,17 @@ export function InsightsSettingsPanel() {
       <div className="rounded-agent-md border border-agent-border/60 bg-agent-muted/30 p-2.5 space-y-2">
         <h4 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
           <LuChartBar className="h-3.5 w-3.5 text-agent-muted-foreground" />
-          帮助改进产品（行为 / 对话 / 用户信息 分开确认）
+          {t('Help improve the product (behavior / conversations / user info are confirmed separately)')}
         </h4>
         <p className="text-[11px] text-agent-muted-foreground">
-          即使用户不同意上传，记录也会留在本机。可导出 JSON 发给产品团队，或点一次「现在上传」。
+          {t(
+            'Even if the user does not agree to upload, records stay on this device. You can export JSON and send it to the product team, or click "Upload now" once.',
+          )}
         </p>
-        {!isElectron() ? (
-          <p className="text-[11px] text-agent-muted-foreground">需要在桌面客户端中打开</p>
+        {!hasHostBridge() ? (
+          <p className="text-[11px] text-agent-muted-foreground">{t('Open this in the desktop app')}</p>
         ) : loading ? (
-          <p className="text-[11px] text-agent-muted-foreground">读取中…</p>
+          <p className="text-[11px] text-agent-muted-foreground">{t('Loading…')}</p>
         ) : (
           <>
             <label className="flex items-start gap-2 text-xs">
@@ -220,8 +227,8 @@ export function InsightsSettingsPanel() {
                 onChange={(e) => setData((d) => ({ ...d, shareBehavior: e.target.checked }))}
               />
               <span>
-                自动上传<strong>行为</strong>
-                <span className="block text-[10px] text-agent-muted-foreground">打开、发送、设置卡住等，不含问答正文</span>
+                {t('Auto-upload')} <strong>{t('behavior')}</strong>
+                <span className="block text-[10px] text-agent-muted-foreground">{t('Opens, sends, stuck settings, and so on. No question or answer text.')}</span>
               </span>
             </label>
             <label className="flex items-start gap-2 text-xs">
@@ -231,8 +238,8 @@ export function InsightsSettingsPanel() {
                 onChange={(e) => setData((d) => ({ ...d, shareConversation: e.target.checked }))}
               />
               <span>
-                自动上传<strong>对话</strong>
-                <span className="block text-[10px] text-agent-muted-foreground">提问与回答（已脱敏密钥和用户目录）</span>
+                {t('Auto-upload')} <strong>{t('conversations')}</strong>
+                <span className="block text-[10px] text-agent-muted-foreground">{t('Questions and answers (keys and user directories are redacted)')}</span>
               </span>
             </label>
             <label className="flex items-start gap-2 text-xs">
@@ -242,21 +249,21 @@ export function InsightsSettingsPanel() {
                 onChange={(e) => setData((d) => ({ ...d, shareProfile: e.target.checked }))}
               />
               <span>
-                自动上传<strong>用户信息</strong>
-                <span className="block text-[10px] text-agent-muted-foreground">与上面两项分开，不勾选则称呼/邮箱只留本机</span>
+                {t('Auto-upload')} <strong>{t('user info')}</strong>
+                <span className="block text-[10px] text-agent-muted-foreground">{t('Separate from the two above. If unchecked, your name and email stay on this device only.')}</span>
               </span>
             </label>
             <div className="grid grid-cols-2 gap-2">
               {(
                 [
-                  ['displayName', '称呼'],
-                  ['email', '邮箱'],
-                  ['company', '公司/团队'],
-                  ['note', '想告诉我们的'],
+                  ['displayName', 'Name'],
+                  ['email', 'Email'],
+                  ['company', 'Company/team'],
+                  ['note', 'Anything to tell us'],
                 ] as const
               ).map(([key, label]) => (
                 <label key={key} className="space-y-1 text-[11px] text-agent-muted-foreground">
-                  {label}
+                  {t(label)}
                   <input
                     value={data.profile[key]}
                     onChange={(e) =>
@@ -268,7 +275,15 @@ export function InsightsSettingsPanel() {
               ))}
             </div>
             <p className="text-[10px] text-agent-muted-foreground">
-              本机已记 行为 {stats.events} / 对话 {stats.turns} / 资料 {stats.profile}，待上传 {stats.pending}
+              {t(
+                'Recorded on this device: behavior {events} / conversations {turns} / profile {profile}, pending upload {pending}',
+                {
+                  events: stats.events,
+                  turns: stats.turns,
+                  profile: stats.profile,
+                  pending: stats.pending,
+                },
+              )}
               {data.installId ? ` · ${data.installId.slice(0, 8)}` : ''}
             </p>
             <div className="flex flex-wrap gap-2">
@@ -278,21 +293,21 @@ export function InsightsSettingsPanel() {
                 onClick={() => void save()}
                 className="h-8 rounded-full bg-agent-foreground px-4 text-xs text-agent-canvas"
               >
-                保存
+                {t('Save')}
               </button>
               <button
                 type="button"
                 onClick={() => void exportFile()}
                 className="h-8 rounded-full border border-agent-border px-4 text-xs"
               >
-                导出文件发给开发者
+                {t('Export a file for the developers')}
               </button>
               <button
                 type="button"
                 onClick={() => void uploadNow()}
                 className="h-8 rounded-full border border-agent-border px-4 text-xs"
               >
-                现在上传本地记录
+                {t('Upload local records now')}
               </button>
             </div>
           </>

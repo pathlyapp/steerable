@@ -47,6 +47,7 @@ from .todo import (
     TODO_SCHEMA,
     TODO_TOOL_NAME,
     TodoCompletionGate,
+    TodoPlanningNudge,
     TodoStore,
     make_todo_write_tool,
     todo_write_tool_descriptor,
@@ -82,6 +83,7 @@ from .branch import (
     lineage,
     resolve_fork_seq,
 )
+from .budget import SessionBudgetExceeded, TreeBudget, TreeBudgetReport
 from .cache_control import (
     CacheControlProvider,
     CacheDriftMonitor,
@@ -90,6 +92,22 @@ from .cache_control import (
     system_blocks_with_cache,
 )
 from .calibration import CalibratingProvider, ModelCalibration, UsageCalibration
+from .child_record import (
+    INTERRUPTED_CHILD_STATUS,
+    RESUMABLE_CHILD_STATUSES,
+    TERMINAL_CHILD_STATUSES,
+    ChildRecord,
+)
+from .child_notice import CHILD_NOTICE_KIND, ChildNoticeHooks, render_child_notice
+from .engines import (
+    AcpEngineSpec,
+    AcpOutcome,
+    AcpPermissionPolicy,
+    AcpToolBridge,
+    AcpUnavailable,
+    PermissionDiagnostic,
+    run_acp_child,
+)
 from .compaction_policy import (
     CompactionPolicy,
     is_large_window,
@@ -120,6 +138,7 @@ from .history import (
     RecordEntry,
     RecordFormatError,
     SystemPromptFragment,
+    completed_turn_prefix,
     entry_from_dict,
     render_fragment_capped,
     entry_to_dict,
@@ -162,9 +181,12 @@ from .mcp import (
     DEFAULT_MAX_SERVER_TOOLS,
     McpCallResult,
     McpCatalogError,
+    McpClient,
     McpError,
+    McpStreamableHttpClient,
     McpStdioClient,
     McpToolInfo,
+    create_mcp_client,
     mcp_invoker,
     parse_mcp_name,
     qualify_mcp_name,
@@ -189,7 +211,14 @@ from .orchestration import (
     OrchestrationExecutor,
     orchestration_tool_descriptors,
 )
-from .otel import PrivacyMode, export_otlp_http, export_trace, to_otlp_json
+from .otel import (
+    PrivacyMode,
+    export_metrics,
+    export_otlp_http,
+    export_trace,
+    to_otlp_json,
+    to_otlp_metrics_json,
+)
 from .pricing import (
     MODEL_PRICES,
     ModelPrice,
@@ -198,6 +227,13 @@ from .pricing import (
     register_model_price,
 )
 from .pseudo import extract_inline_tool_calls
+from .registry import (
+    ChildRegistry,
+    ChildStatusView,
+    SpawnedChild,
+    default_record_id,
+    registry_status,
+)
 from .recording import (
     DEFAULT_MAX_ITEM_TOKENS,
     InMemoryRequestSink,
@@ -242,6 +278,7 @@ from .skills import (
     matches_conditions,
     render_skill_catalog,
     select_catalog,
+    select_pinned_loadable,
     select_skills,
     skill_to_dict,
     skill_tool_descriptor,
@@ -280,6 +317,13 @@ from .world_state import (
 )
 
 __all__ = [
+    "AcpEngineSpec",
+    "AcpOutcome",
+    "AcpPermissionPolicy",
+    "AcpToolBridge",
+    "AcpUnavailable",
+    "PermissionDiagnostic",
+    "run_acp_child",
     "DEFAULT_MAX_ITEM_TOKENS",
     "DEFAULT_MAX_SERVER_TOOLS",
     "DEFAULT_SHELL_TOOLS",
@@ -326,6 +370,21 @@ __all__ = [
     "CacheControlProvider",
     "CacheDriftMonitor",
     "CacheRetention",
+    "ChildRecord",
+    "ChildRegistry",
+    "ChildNoticeHooks",
+    "CHILD_NOTICE_KIND",
+    "SessionBudgetExceeded",
+    "TreeBudget",
+    "TreeBudgetReport",
+    "render_child_notice",
+    "ChildStatusView",
+    "SpawnedChild",
+    "default_record_id",
+    "registry_status",
+    "INTERRUPTED_CHILD_STATUS",
+    "RESUMABLE_CHILD_STATUSES",
+    "TERMINAL_CHILD_STATUSES",
     "CalibratingProvider",
     "ChainHooks",
     "ChildOutcome",
@@ -342,6 +401,7 @@ __all__ = [
     "ContentPart",
     "ContextFragment",
     "ContextManager",
+    "completed_turn_prefix",
     "CoreLoop",
     "DecisionNote",
     "ExecutionBudget",
@@ -373,7 +433,9 @@ __all__ = [
     "LoopHooks",
     "McpCallResult",
     "McpCatalogError",
+    "McpClient",
     "McpError",
+    "McpStreamableHttpClient",
     "McpStdioClient",
     "McpToolInfo",
     "ModelCalibration",
@@ -424,6 +486,7 @@ __all__ = [
     "ToolExposure",
     "ToolRouter",
     "TodoCompletionGate",
+    "TodoPlanningNudge",
     "TodoStore",
     "TraceRecorder",
     "TranscriptAppend",
@@ -454,6 +517,8 @@ __all__ = [
     "estimate_tokens",
     "export_otlp_http",
     "export_trace",
+    "export_metrics",
+    "to_otlp_metrics_json",
     "extract_inline_tool_calls",
     "factor_for_model",
     "family_tree",
@@ -470,6 +535,7 @@ __all__ = [
     "make_todo_write_tool",
     "parent_input_tool_descriptor",
     "matches_conditions",
+    "create_mcp_client",
     "mcp_invoker",
     "merge_patch",
     "message_from_dict",
@@ -495,6 +561,7 @@ __all__ = [
     "resolve_model_info",
     "rule_from_amendment",
     "select_catalog",
+    "select_pinned_loadable",
     "select_skills",
     "should_run_grounding_judge",
     "skill_to_dict",

@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getPackHiddenSlashSkills } from '../packs/registry';
-import { getElectronBridge, isElectron } from './electron-bridge';
+import { getHostBridge, hasHostBridge } from './host-bridge';
 
 export type SkillItem = {
   /** Skill directory name (e.g. `70-plan-mode`); absent on hand-built items. */
@@ -125,7 +125,7 @@ let inflight: Promise<SlashSources> | null = null;
 const listeners = new Set<(sources: SlashSources) => void>();
 
 async function load(): Promise<SlashSources> {
-  const bridge = getElectronBridge();
+  const bridge = getHostBridge();
   if (!bridge) return cached;
 
   let skills = cached.skills;
@@ -159,7 +159,7 @@ async function load(): Promise<SlashSources> {
 
 /** Re-read the catalog. Concurrent callers share one in-flight request. */
 export function refreshSlashSources(): Promise<SlashSources> {
-  if (!isElectron()) return Promise.resolve(cached);
+  if (!hasHostBridge()) return Promise.resolve(cached);
   if (!inflight) {
     inflight = load().finally(() => {
       inflight = null;

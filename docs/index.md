@@ -6,28 +6,35 @@ hide:
 
 <div class="sf-hero" markdown>
 
-<img class="sf-hero-logo" src="assets/logo.svg" alt="OpenSteerable logo" />
+<img class="sf-hero-logo" src="assets/logo.png" alt="Steerable logo" />
 
-# OpenSteerable
+# Steerable
 
 <p class="sf-tagline">The model-quality layer that makes local, quantized, and cheap models behave.</p>
 
+<p class="sf-pills">
+<span class="sf-pill">Fewer hallucinations</span>
+<span class="sf-pill">Simple to use</span>
+<span class="sf-pill">Ready out of the box</span>
+<span class="sf-pill">Componentized</span>
+</p>
+
 <p class="sf-sub" markdown>
-Recovers and executes malformed tool calls · vetoes bad completion drafts · catches fabricated data · self-calibrates token estimates.
-Plus the plumbing you'd otherwise rewrite: typed wire protocol · pluggable LLM runtime · embeddable Python sidecar · headless React chat UI.
-Pick any subset, skip the rest — every layer ships on its own.
+**Fewer hallucinations, fewer silent failures — even on cheap models.** 79.0% on Terminal-Bench 2.1 with GLM-5.3-Flash.
+One command boots a full agent shell; every layer underneath ships as its own package, so you adopt only what you need.
 </p>
 
 <div class="sf-cta" markdown>
-[Get started](getting-started.md){ .md-button .md-button--primary }
+<a href="#run" class="md-button md-button--primary">Run it in one command</a>
 <a href="demo/" class="md-button">Live demo</a>
+[Get started](getting-started.md){ .md-button }
 <a href="storybook/" class="md-button">Storybook</a>
-[GitHub](https://github.com/pathlyapp/opensteerable){ .md-button }
+[GitHub](https://github.com/pathlyapp/steerable){ .md-button }
 </div>
 
 <p class="sf-badges">
-  <a href="https://github.com/pathlyapp/opensteerable/blob/main/LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" /></a>
-  <a href="https://github.com/pathlyapp/opensteerable/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/pathlyapp/opensteerable/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://github.com/pathlyapp/steerable/blob/main/LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" /></a>
+  <a href="https://github.com/pathlyapp/steerable/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/pathlyapp/steerable/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://www.npmjs.com/package/@steerable/agent-ui"><img alt="npm: @steerable/agent-ui" src="https://img.shields.io/npm/v/@steerable/agent-ui?label=%40steerable%2Fagent-ui&color=cb3837" /></a>
   <a href="https://pypi.org/project/steerable-agent-runtime/"><img alt="PyPI: steerable-agent-runtime" src="https://img.shields.io/pypi/v/steerable-agent-runtime?label=steerable-agent-runtime&color=3776ab" /></a>
 </p>
@@ -37,7 +44,7 @@ Pick any subset, skip the rest — every layer ships on its own.
 <div class="sf-score-strip" markdown>
 <div class="sf-score sf-score--ours" markdown>
 <span class="sf-score-value">79.0%</span>
-<span class="sf-score-label">OpenSteerable + GLM-5.3-Flash</span>
+<span class="sf-score-label">Steerable + GLM-5.3-Flash</span>
 <span class="sf-score-meta">TB 2.1 · 3-run mean @max · this repo</span>
 </div>
 <div class="sf-score" markdown>
@@ -52,44 +59,47 @@ Pick any subset, skip the rest — every layer ships on its own.
 </div>
 </div>
 
-<h2 class="sf-section">Why OpenSteerable</h2>
+<div class="sf-run" id="run">
+<div class="sf-run-copy">
+<span class="sf-pillar-kicker">Simple to start</span>
+<p class="sf-run-title">A full agent in one command</p>
+<p class="sf-run-text">Chat, an integrated terminal, bundled skills, a model picker, and a sandboxed sidecar, ready on first launch. Run it in the browser, as a desktop app, or from the command line — same shell, same data. Bring any OpenAI-compatible, Anthropic, or Gemini key.</p>
+<a href="#quickstart" class="md-button">More ways to install</a>
+</div>
+<div class="sf-run-term">
+<input type="radio" name="sf-run-mode" id="sf-run-web" class="sf-run-radio" checked>
+<input type="radio" name="sf-run-mode" id="sf-run-desktop" class="sf-run-radio">
+<input type="radio" name="sf-run-mode" id="sf-run-cli" class="sf-run-radio">
+<div class="sf-run-bar">
+<div class="sf-run-dots"><span></span><span></span><span></span></div>
+<label for="sf-run-web">Web</label>
+<label for="sf-run-desktop">Desktop app</label>
+<label for="sf-run-cli">Command line</label>
+</div>
+<div class="sf-run-pane sf-run-pane--web">
+<pre><code><span class="sf-cmd">git clone https://github.com/pathlyapp/steerable.git</span>
+<span class="sf-cmd">cd steerable &amp;&amp; pnpm install</span>
+<span class="sf-cmd"><b>pnpm agent-shell:web</b></span></code></pre>
+<div class="sf-out">→ Steerable Shell listening at http://127.0.0.1:4787</div>
+</div>
+<div class="sf-run-pane sf-run-pane--desktop">
+<pre><code><span class="sf-cmd"># in your product repo, with src-tauri wired to the shell crate</span>
+<span class="sf-cmd"><b>pnpm tauri dev</b></span></code></pre>
+<div class="sf-out">→ native window on the same host runtime and sidecar</div>
+</div>
+<div class="sf-run-pane sf-run-pane--cli">
+<pre><code><span class="sf-cmd">npm install -g @steerable/agent-cli</span>
+<span class="sf-cmd"><b>steerable-cli login</b></span>
+<span class="sf-cmd">steerable-cli run "summarize this repo"</span></code></pre>
+<div class="sf-out">→ one install brings the runtime; login verifies the key; Node 22.19 or newer (the terminal session needs 26.4)</div>
+</div>
+</div>
+</div>
+
+<h2 class="sf-section">Frontier results on Flash-priced models</h2>
 
 <p class="sf-lede" markdown>
-Every agent SDK assumes the model emits clean, structured `tool_calls`. Local, quantized, and cheap models don't.
-OpenSteerable is the model-quality layer that closes that gap — plus the plumbing layers you'd otherwise rewrite, each shippable on its own.
-</p>
-
-<div class="sf-grid" markdown>
-<div class="sf-card" markdown>
-### The model-quality layer
-Local, quantized, and cheap models break the structured-`tool_calls` assumptions every SDK makes. OpenSteerable recovers *and executes* malformed calls (MiniMax XML, DeepSeek `<function=>`, markdown), vetoes completion drafts (`accept` / `retry` / `narrate`), judges grounding, and self-calibrates token estimates. [Why this is the differentiator](roadmap.md#the-differentiator-the-model-quality-layer).
-</div>
-<div class="sf-card" markdown>
-### One wire protocol
-One JSON Schema → generated **TypeScript types + Pydantic models**. `content`, `tool_call`, `tool_result`, `error`, `done`, `budget_exhausted` — all standardised, with a conformance suite keeping both SDKs byte-compatible. All 13 published packages share one lockstep `X.Y.Z` (including the Rust CoreLoop wheel); npm tarballs ship **sigstore provenance** attestations.
-</div>
-<div class="sf-card" markdown>
-### Pure-function harness
-Policy, budget, retry, completion, tracing, safety patterns. **Zero I/O coupling** — drop into FastAPI, Celery, or a notebook. Unit and golden tests in CI.
-</div>
-<div class="sf-card" markdown>
-### Pluggable runtime
-One `LLMProvider` interface across **four wire protocols** — OpenAI-compatible chat/completions (Ollama, vLLM, DeepSeek, Groq, …), OpenAI Responses, Anthropic-native, Gemini-native — plus a live gateway model catalog, per-vendor sampling presets, `@tool` decorator, `ToolRouter`, SSE-over-HTTP and stdio JSON-RPC transports.
-</div>
-<div class="sf-card" markdown>
-### Embeddable sidecar
-A portable, signed CPython binary speaking JSON-RPC over stdio (34 methods). Ship local LLMs inside **Electron / Tauri / Wails** — macOS notarised, Windows code-signed — with an OS sandbox, per-host egress proxy, and plugin lifecycle built in.
-</div>
-<div class="sf-card" markdown>
-### Headless React UI
-7 components + 14 rich cards + 3 hooks + Tailwind preset. Every state covered by Storybook, axe a11y, and visual-regression baselines locked in CI.
-</div>
-</div>
-
-<h2 class="sf-section">Terminal-Bench 2.1</h2>
-
-<p class="sf-lede" markdown>
-The score of record is OpenSteerable + GLM-5.3-Flash **79.0%** at `reasoning_effort=max` (three-run mean, SD 3.4). The figures below are a **separate n=1** protocol: GLM-5.3-Flash and DeepSeek-V4-Flash 0731 at `high`, Qwen3.8-27B at `medium`, five harnesses, one OpenRouter account, Harbor catalog-89. Timeout, error, and missing trials count as fail. Terminus is omitted. DSH is on both figures (SHA `c576a88`); its dollars are OpenRouter analytics tokens for the catalog window, scored with the same pinned-host list formula as the twelve Harbor cells. Protocol and run list: [Evals](evals.md).
+Terminal-Bench 2.1, 89 real terminal tasks, hidden tests; timeouts count as fail. Same models, same protocol, five agent harnesses. [Methodology](evals.md)
 </p>
 
 <div class="sf-bench sf-bench--wide">
@@ -97,9 +107,9 @@ The score of record is OpenSteerable + GLM-5.3-Flash **79.0%** at `reasoning_eff
 <div class="sf-bench-duo">
 
 <div class="sf-bench-group sf-bench-group--focus">
-<div class="sf-bench-kicker">Same protocol · three Flash models · five harnesses</div>
-<p class="sf-bench-blurb">Grouped bars are pass/89. Color is the harness. This is n=1 at high/medium, not the 79.0% @max three-run baseline.</p>
-<svg class="sf-bars" viewBox="0 0 760 336" role="img" aria-label="Terminal-Bench 2.1 n=1 pass over 89 for three models and five harnesses: OpenSteerable, Pi, Claude Code, Codex, DSH.">
+<div class="sf-bench-kicker">Pass rate · three Flash models · five harnesses</div>
+<p class="sf-bench-blurb">Tasks solved out of 89. Color is the harness.</p>
+<svg class="sf-bars" viewBox="0 0 760 336" role="img" aria-label="Terminal-Bench 2.1 n=1 pass over 89 for three models and five harnesses: Steerable, Pi, Claude Code, Codex, DSH.">
 <line class="axis" x1="56" y1="48" x2="56" y2="280"/>
 <line class="axis" x1="56" y1="280" x2="730" y2="280"/>
 <text class="tick" x="50" y="284" text-anchor="end">0</text>
@@ -145,7 +155,7 @@ The score of record is OpenSteerable + GLM-5.3-Flash **79.0%** at `reasoning_eff
 <text class="barVal" x="650" y="138" text-anchor="middle">60.7</text>
 <text class="axisTitle" x="594" y="298" text-anchor="middle">Qwen @medium</text>
 <rect class="bar--steer" fill="#5c6bc0" x="56" y="314" width="10" height="10"/>
-<text class="tick" x="70" y="323">OpenSteerable</text>
+<text class="tick" x="70" y="323">Steerable</text>
 <rect class="bar--pi" fill="#0e7490" x="148" y="314" width="10" height="10"/>
 <text class="tick" x="162" y="323">Pi</text>
 <rect class="bar--cc" fill="#c2410c" x="198" y="314" width="10" height="10"/>
@@ -155,12 +165,12 @@ The score of record is OpenSteerable + GLM-5.3-Flash **79.0%** at `reasoning_eff
 <rect class="bar--dsh" fill="#15803d" x="396" y="314" width="10" height="10"/>
 <text class="tick" x="410" y="323">DSH</text>
 </svg>
-<p class="sf-bench-foot">Mean = pass/89. GLM/DS @high pin z-ai / alibaba; Qwen @medium pin alibaba (Pi maps medium to <code>--thinking high</code>). DeepSeek is 0731 GA, not the 0423 preview. OpenSteerable/Pi/CC/Codex SHA <code>6f70bf5</code> + fill <code>19213d7</code>. DSH SHA <code>c576a88</code> (Qwen missing <code>winning-avg-corewars</code> counts as fail).</p>
+<p class="sf-bench-foot">One run per cell at high effort (Qwen: medium). <a href="evals/">Run list and commit SHAs</a></p>
 </div>
 
 <div class="sf-bench-group sf-bench-group--focus">
-<div class="sf-bench-kicker">Cost × score · fifteen cells · same list-price formula</div>
-<p class="sf-bench-blurb">Color is the harness. Shape is the model: circle GLM, square DeepSeek, diamond Qwen. Larger marker is OpenSteerable. Dollars are OpenRouter list on the pinned host for this n=1 matrix, not a cross-date cost estimate for the current GLM @max baseline. Green DSH markers use OpenRouter analytics tokens for the catalog window (Harbor DSH trials still write no tokens).</p>
+<div class="sf-bench-kicker">Score vs cost per solved task</div>
+<p class="sf-bench-blurb">Color is the harness; shape is the model (circle GLM, square DeepSeek, diamond Qwen). Higher and further left is better.</p>
 <svg class="sf-scatter" viewBox="0 0 800 428" role="img" aria-label="Terminal-Bench 2.1 n=1 score against OpenRouter list dollars per solved task for fifteen catalog-89 cells. Color is harness, shape is model. DSH dollars inferred from OpenRouter analytics.">
 <line class="grid" x1="48.0" y1="32" x2="48.0" y2="332"/>
 <line class="grid" x1="216.6" y1="32" x2="216.6" y2="332"/>
@@ -198,7 +208,7 @@ The score of record is OpenSteerable + GLM-5.3-Flash **79.0%** at `reasoning_eff
 <text class="lbl" x="250" y="130">Pi · DS</text>
 <text class="sub" x="250" y="140">69.7% · $0.28</text>
 <circle class="pt pt--ours" fill="#5c6bc0" stroke="#5c6bc0" cx="381.4" cy="66.7" r="14"/>
-<text class="lbl lbl--ours" x="398" y="81">OpenSteerable · GLM</text>
+<text class="lbl lbl--ours" x="398" y="81">Steerable · GLM</text>
 <text class="sub" x="398" y="91">79.8% · $0.61</text>
 <rect class="pt pt--cc" fill="#c2410c" stroke="#c2410c" x="430.0" y="288.3" width="22" height="22"/>
 <text class="lbl" x="456" y="286">Claude Code · DS</text>
@@ -210,7 +220,7 @@ The score of record is OpenSteerable + GLM-5.3-Flash **79.0%** at `reasoning_eff
 <text class="lbl" x="548" y="116" text-anchor="end">Claude Code · Qwen</text>
 <text class="sub" x="548" y="126" text-anchor="end">70.8% · $1.68</text>
 <rect class="pt pt--ours" fill="#5c6bc0" stroke="#5c6bc0" x="602.3" y="61.0" width="26" height="26"/>
-<text class="lbl lbl--ours" x="598" y="58" text-anchor="end">OpenSteerable · DS</text>
+<text class="lbl lbl--ours" x="598" y="58" text-anchor="end">Steerable · DS</text>
 <text class="sub" x="598" y="72" text-anchor="end">78.7% · $2.18</text>
 <polygon class="pt pt--codex" fill="#71717a" stroke="#71717a" points="647.6,156.0 663.6,172.0 647.6,188.0 631.6,172.0"/>
 <text class="lbl" x="628" y="198" text-anchor="end">Codex · Qwen</text>
@@ -219,7 +229,7 @@ The score of record is OpenSteerable + GLM-5.3-Flash **79.0%** at `reasoning_eff
 <text class="lbl" x="686" y="176">Pi · Qwen</text>
 <text class="sub" x="678" y="186">62.9% · $2.87</text>
 <polygon class="pt pt--ours" fill="#5c6bc0" stroke="#5c6bc0" points="732.1,124.0 750.1,142.0 732.1,160.0 714.1,142.0"/>
-<text class="lbl lbl--ours" x="710" y="128" text-anchor="end">OpenSteerable · Qwen</text>
+<text class="lbl lbl--ours" x="710" y="128" text-anchor="end">Steerable · Qwen</text>
 <text class="sub" x="710" y="138" text-anchor="end">68.5% · $4.12</text>
 <rect class="pt pt--codex" fill="#71717a" stroke="#71717a" x="732.3" y="173.7" width="26" height="26"/>
 <text class="lbl" x="728" y="218" text-anchor="end">Codex · DS</text>
@@ -234,7 +244,7 @@ The score of record is OpenSteerable + GLM-5.3-Flash **79.0%** at `reasoning_eff
 <text class="lbl" x="694" y="248" text-anchor="middle">DSH · Qwen</text>
 <text class="sub" x="694" y="258" text-anchor="middle">60.7% · $3.36</text>
 <rect class="pt pt--steer" fill="#5c6bc0" stroke="#5c6bc0" x="48" y="388" width="14" height="14"/>
-<text class="legend" x="66" y="399">OpenSteerable</text>
+<text class="legend" x="66" y="399">Steerable</text>
 <rect class="pt pt--pi" fill="#0e7490" stroke="#0e7490" x="150" y="388" width="14" height="14"/>
 <text class="legend" x="168" y="399">Pi</text>
 <rect class="pt pt--cc" fill="#c2410c" stroke="#c2410c" x="200" y="388" width="14" height="14"/>
@@ -245,7 +255,7 @@ The score of record is OpenSteerable + GLM-5.3-Flash **79.0%** at `reasoning_eff
 <text class="legend" x="438" y="399">DSH</text>
 <text class="legend" x="490" y="399">circle GLM · square DeepSeek · diamond Qwen</text>
 </svg>
-<p class="sf-bench-foot">List dollars from per-trial Harbor <code>result.json</code> tokens on the pinned host (GLM Z.AI $0.15/$0.50/cache $0.03 per 1M; DeepSeek Alibaba $0.352/$1.056; Qwen Alibaba $0.425/$2.55). Cache billed at cache-read when <code>n_cache_tokens ≤ n_input_tokens</code> (DeepSeek/Qwen cache-read uses the input rate, matching the other twelve cells). Codex GLM/Qwen and Pi Qwen include GitHub 360-minute unfinished snapshots scored as fail. DSH tokens are OpenRouter analytics for 2026-09-14 13:14–20:00 UTC (catalog window; cheap-12 that morning excluded); Harbor DSH trials still write no tokens. Do not mix these dollars with the current GLM @max baseline, measured in a later pricing window.</p>
+<p class="sf-bench-foot">OpenRouter list prices on the pinned host. <a href="evals/">Pricing formula</a></p>
 </div>
 
 </div>
@@ -253,12 +263,86 @@ The score of record is OpenSteerable + GLM-5.3-Flash **79.0%** at `reasoning_eff
 </div>
 
 <p class="sf-lede" markdown>
-Same GLM-5.3-Flash and Harbor catalog-89 protocol: Claude Code 83.1%, OpenSteerable **79.0% ±3.4**, Pi 73.4% ±2.2. The current OpenSteerable baseline averages **229.9M input tokens per run**; provider prices changed between measurement windows, so cross-date dollar costs are not compared.
+GLM-5.3-Flash @high, same run as the charts: **Steerable 79.8%** · Claude Code 77.5% · Pi 73.0% · DSH 66.3% · Codex 56.2%.
 </p>
 
-<h2 class="sf-section">Quickstart — pick your path</h2>
+<h2 class="sf-section">Why Steerable</h2>
+
+<p class="sf-lede" markdown>
+Cheap models invent data, claim work they never did, and emit tool calls as plain text. Every agent SDK assumes they don't.
+Steerable checks the model at each of those points — and stays out of your way.
+</p>
+
+<div class="sf-pillars" markdown>
+<div class="sf-pillar" markdown>
+<span class="sf-pillar-kicker">01 · Fewer hallucinations</span>
+### Answers backed by real data
+Grounding judges reject answers the tool results don't support, a discipline retry catches claimed-but-undone work, and a completion veto can send a draft back before it reaches the user. Tool calls written as text are recovered and executed. On the DeepPath API this turns a class of 646 hard failures into retries.
+</div>
+<div class="sf-pillar" markdown>
+<span class="sf-pillar-kicker">02 · Simple to use</span>
+### Learn it in an afternoon
+No graph DSL or framework runtime to learn. Tools are plain functions with an `@tool` decorator, the harness is pure functions with zero I/O, and one JSON Schema generates both the TypeScript and Python types.
+</div>
+<div class="sf-pillar" markdown>
+<span class="sf-pillar-kicker">03 · Ready out of the box</span>
+### Everything already wired up
+Chat, terminal, skills, model picker, and an OS sandbox with a per-host egress allow-list come preconfigured. The hosted [live demo](demo/) runs in the browser with no key at all.
+</div>
+<div class="sf-pillar" markdown>
+<span class="sf-pillar-kicker">04 · Componentized</span>
+### Take one layer, skip the rest
+Five tiers and 13 independently published packages. Lower tiers never import higher ones, so you can use only the protocol types, only the React UI, or only the sidecar without pulling in anything else.
+</div>
+</div>
+
+<h2 class="sf-section">What's inside</h2>
+
+<div class="sf-grid" markdown>
+<div class="sf-card" markdown>
+### The model-quality layer
+Local, quantized, and cheap models break the structured-`tool_calls` assumptions every SDK makes. Steerable recovers *and executes* malformed calls (MiniMax XML, DeepSeek `<function=>`, markdown), vetoes completion drafts (`accept` / `retry` / `narrate`), judges grounding, and self-calibrates token estimates.
+</div>
+<div class="sf-card" markdown>
+### One wire protocol
+One JSON Schema → generated **TypeScript types + Pydantic models**. `content`, `tool_call`, `tool_result`, `error`, `done`, `budget_exhausted` — all standardised, with a conformance suite keeping both SDKs byte-compatible. All 13 published packages share one lockstep `X.Y.Z` (including the Rust CoreLoop wheel); npm tarballs ship **sigstore provenance** attestations.
+</div>
+<div class="sf-card" markdown>
+### Pure-function harness
+Policy, budget, retry, completion, tracing, safety patterns. **Zero I/O coupling** — drop into FastAPI, Celery, or a notebook. Unit and golden tests in CI.
+</div>
+<div class="sf-card" markdown>
+### Pluggable runtime
+One `LLMProvider` interface across **four wire protocols** — OpenAI-compatible chat/completions (Ollama, vLLM, DeepSeek, Groq, …), OpenAI Responses, Anthropic-native, Gemini-native — plus a live gateway model catalog, per-vendor sampling presets, `@tool` decorator, `ToolRouter`, SSE-over-HTTP and stdio JSON-RPC transports.
+</div>
+<div class="sf-card" markdown>
+### Embeddable sidecar
+A portable, signed CPython binary speaking JSON-RPC over stdio (36 methods). Ship local LLMs inside a **Tauri desktop app** (`@steerable/agent-shell-tauri`) or any native host — macOS notarised, Windows code-signed — with an OS sandbox, per-host egress proxy, and plugin lifecycle built in.
+</div>
+<div class="sf-card" markdown>
+### Headless React UI & Web Shell
+7 components + 14 rich cards + 3 hooks + Tailwind preset, each state covered by Storybook, axe a11y, and visual-regression baselines in CI. The same components power the full Web Shell (`pnpm agent-shell:web`).
+</div>
+</div>
+
+<h2 class="sf-section" id="quickstart">Quickstart — pick your path</h2>
 
 <div class="sf-tabs" markdown>
+
+=== "Web Shell (one command)"
+
+    ```bash
+    git clone https://github.com/pathlyapp/steerable.git
+    cd steerable && pnpm install
+
+    pnpm agent-shell:web      # full agent shell → http://127.0.0.1:4787
+    ```
+
+    Chat, integrated terminal, bundled skills, model picker, and a Seatbelt-sandboxed sidecar, all on the production code path. Add your model endpoint in settings and start working.
+
+    A desktop window comes from a product's own `src-tauri` crate calling `steerable_agent_shell_tauri::run` (`@steerable/agent-shell-tauri`); the framework repo boots the shell in the browser.
+
+    Only want to explore the UI? `pnpm shell:dev` opens a UI-only reference app on `http://localhost:5180` that replays all 14 rich cards from sample data, with no backend or API key.
 
 === "Python agent backend"
 
@@ -299,11 +383,11 @@ Same GLM-5.3-Flash and Harbor catalog-89 protocol: Claude Code 83.1%, OpenSteera
     }
     ```
 
-=== "Electron + local LLM"
+=== "Desktop app + local LLM"
 
     ```bash
     # Bundle the sidecar binary into resources/python-runtime/<platform>/
-    # TS hosts: link:../steerable-framework/packages/agent-runtime/ts
+    # TS hosts: link:../steerable/packages/agent-runtime/ts
     ```
 
     ```ts
@@ -332,11 +416,11 @@ Five tiers, strict no-upward-imports rule. Tier N never imports Tier N+1 — ado
 
 ```mermaid
 graph BT
-  T5["<b>Tier 5 · Host Shell</b> (TypeScript, private)<br/>@steerable/agent-shell · agent-shell-web · pack-sdk<br/>Electron main + headless HTTP server · local backend ·<br/>sidecar supervision · product-neutral renderer SPA"]
+  T5["<b>Tier 5 · Host Shell</b> (TypeScript + Rust)<br/>@steerable/agent-shell · agent-shell-tauri · agent-shell-web · pack-sdk<br/>Tauri native window · Node host runtime + headless HTTP server · local backend ·<br/>sidecar supervision · product-neutral renderer SPA"]
 
   T4["<b>Tier 4 · UI</b> (TypeScript / React)<br/>@steerable/agent-ui<br/>Hooks: useChatStream · useToolCallStatus · useAgentSession<br/>Components: ChatPanel · MessageList · AgentSelector · ModelSelector ·<br/>OrchestrationPlanCard · ToolCallRenderer · SSEStreamView + 14 cards<br/>Tailwind preset (dark-mode aware)"]
 
-  T3S["<b>Tier 3 · Sidecar</b> (portable CPython binary)<br/>steerable-sidecar<br/>JSON-RPC over stdio · 34 methods · graceful shutdown<br/>agent.chat.stream · tool.invoke · agent.session.* · plugin.* · models.list"]
+  T3S["<b>Tier 3 · Sidecar</b> (portable CPython binary)<br/>steerable-sidecar<br/>JSON-RPC over stdio · 36 methods · graceful shutdown<br/>agent.chat.stream · tool.invoke · agent.session.* · plugin.* · models.list"]
 
   T3R["<b>Tier 3 · Runtime</b> (Python only)<br/>steerable-agent-runtime<br/>CoreLoop · LLMProvider (OpenAI-compat / Responses / Anthropic / Gemini)<br/>ToolRouter · StorageAdapter · TransportAdapter (FastAPI SSE)"]
 
@@ -347,15 +431,12 @@ graph BT
   T5 -->|"spawns + supervises"| T3S
   T5 -.->|"renders with"| T4
   T4 -.->|"shared wire types"| T1
-  T4 -->|"spawns + JSON-RPC stdio (Electron)"| T3S
+  T4 -->|"spawns + JSON-RPC stdio (host bridge)"| T3S
   T3S -->|"embeds"| T2
   T3S -->|"validates against"| T1
   T3R -->|"embeds"| T2
   T3R -->|"validates against"| T1
   T2 -->|"imports types"| T1
-
-  classDef tier fill:#f4f4f5,stroke:#3f3f46,color:#18181b,rx:6,ry:6,padding:12;
-  class T1,T2,T3R,T3S,T4,T5 tier;
 ```
 
 <h2 class="sf-section">What's in the box</h2>
@@ -364,35 +445,71 @@ graph BT
 | ------- | ---- | ------------ |
 | [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent` envelope, `ToolCall` / `ToolResult`, `ChatMessage`, sidecar JSON-RPC types — codegen from `spec/`, drift-checked in CI |
 | `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, `is_terminal_result`, command-safety patterns |
-| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · `@steerable/agent-runtime` (TS, source-only) | 3 | `CoreLoop` + `LLMProvider` adapters (OpenAI-compat / Responses / Anthropic / Gemini), `ToolRouter` + `@tool`, storage & transport adapters (FastAPI SSE, stdio JSON-RPC); the TS package owns the sidecar process lifecycle for pure-TypeScript hosts |
+| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop` + `LLMProvider` adapters (OpenAI-compat / Responses / Anthropic / Gemini), `ToolRouter` + `@tool`, storage & transport adapters (FastAPI SSE, stdio JSON-RPC); the TS package owns the sidecar process lifecycle for pure-TypeScript hosts |
 | [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | Portable CPython binary — boots in <1s, macOS notarised, Windows signed — plus the bundled per-host CONNECT allow-list egress proxy |
 | [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | `ChatPanel`, `MessageList`, `AgentSelector`, `ModelSelector`, `OrchestrationPlanCard`, `ToolCallRenderer`, `SSEStreamView` + 14-card `/cards` subpath + hooks + Tailwind preset |
-| `@steerable/agent-shell` · `agent-shell-web` · `pack-sdk` | 5 | Electron + headless host shell, local backend, sidecar supervision, product-neutral renderer — published to npm (`dist` / source / pure-types respectively) |
+| `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri + headless host shell, shared Node HostRuntime, sidecar supervision, product-neutral renderer — published to npm (`dist` / source / pure-types respectively) |
+| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | Product-neutral command line and terminal session. `npm install -g @steerable/agent-cli`, then `steerable-cli login`. The install pulls one platform runtime package (sidecar, `run_code` interpreter, egress proxy) as an optional dependency, so nothing else has to be installed. Shares the host database with the desktop app. |
 
 <h2 class="sf-section">How it compares</h2>
 
 <p class="sf-lede" markdown>
-OpenSteerable isn't the only way to ship an agent. The short, honest version against the frameworks you're probably also evaluating:
+Steerable isn't the only way to ship an agent. The short, honest version against the frameworks you're probably also evaluating:
 </p>
 
-| Dimension | OpenSteerable | OpenAI Codex | DeepSeek Harness | LangGraph | OpenAI Agents SDK | Claude Code / Agent SDK |
+| Dimension | Steerable | OpenAI Codex | DeepSeek Harness | LangGraph | OpenAI Agents SDK | Claude Code / Agent SDK |
 | --------- | --------- | ------------ | ---------------- | --------- | ----------------- | ----------------------- |
 | **Form factor** | Layered library — the same loop in a desktop sidecar and a server | Product family: CLI, IDE, desktop, cloud — Rust core | Plugin-based harness (TS) on Cordis | Orchestration library — you write the graph | Lightweight framework over the Responses API | One closed-source bundle behind both the CLI and the Agent SDK |
-| **Loop / events** | `CoreLoop` + structured `LoopEvent` taxonomy; mid-turn `agent.chat.steer` | Session-owned turn loop; interrupt/abort; 12-event hooks | Inbox-driven ReactLoop; steer / inject / followup | Interrupts at node boundaries | Handoffs + guardrails; no mid-run steer | Mid-turn fold queue; hooks can veto continuation |
-| **Sandbox** | Seatbelt + bwrap/Landlock, fail-closed; command classifier; per-host egress proxy | Approvals + ExecPolicy + Seatbelt/Landlock + Guardian | `sandbox.confine`, fail-closed | None built-in | Guardrails; no sandbox | Permission modes; Seatbelt/bwrap opt-in, fail-open |
+| **Loop / events** | `CoreLoop` + structured `LoopEvent` taxonomy; mid-turn `agent.chat.steer` | Session-owned turn loop; `turn/steer`, interrupt, durable queue; 14-event hooks | Inbox-driven loop; steer / inject / followup | Interrupts at node boundaries | Handoffs + guardrails; no mid-run steer in stable | Mid-turn fold queue; hooks can veto continuation |
+| **Sandbox** | Seatbelt + bwrap/Landlock + Windows host spawn, fail-closed; command classifier; per-host egress proxy | Approvals + ExecPolicy + Seatbelt/bwrap+seccomp/Windows + Guardian | `sandbox.confine`, fail-closed | None built-in | Guardrails; Sandbox Agents on Docker or hosted providers | Permission modes; Seatbelt/bwrap opt-in, fail-open in the CLI |
 | **Model quality** | Recovers malformed tool calls; completion veto; grounding; token calibration | Assumes structured `tool_calls` | Assumes structured `tool_calls` | Substrate — you own the loop | Built for frontier models | Built for frontier models |
-| **Maturity** | `0.6.x`; one production consumer | Massive real-world usage | Pre-release (`0.1.x`); internal use | Widely adopted in production | Production, OpenAI-tied | Production; Anthropic models via first-party, Bedrock, Vertex, Foundry, Gateway |
+| **Maturity** | `0.8.x`; one consumer codebase shipping several branded desktop builds | Massive real-world usage | Public prerelease (`0.2.x` on npm, MIT) | Widely adopted in production | Production, OpenAI-tied | Production; Anthropic models via eight backends |
 
 <p class="sf-lede" markdown>
-Where OpenSteerable genuinely differs, where it lags, and how to choose: [Full comparison](comparison.md).
+Where Steerable genuinely differs, where it lags, and how to choose: [Full comparison](comparison.md).
 </p>
 
 <h2 class="sf-section">Who's using it</h2>
 
-<p class="sf-lede" markdown>
-**[DeepPath](https://deeppath.cc)** — web (`agent-protocol` + `agent-ui`), API (all three Python packages), Electron desktop (sidecar + UI).
-The framework was extracted from this codebase and is dogfooded back into it on every release.
-</p>
+<div class="sf-brand-grid">
+  <div class="sf-brand-group">
+    <div class="sf-brand-group-title">Enterprise & Products</div>
+    <div class="sf-brand-items">
+      <a href="https://deeppath.cc" target="_blank" rel="noopener noreferrer" class="sf-brand-item">
+        <img src="assets/users/deeppath.png" alt="DeepPath">
+        <span class="sf-brand-name">DeepPath</span>
+        <span class="sf-brand-domain">deeppath.cc</span>
+      </a>
+      <a href="https://aroli.work" target="_blank" rel="noopener noreferrer" class="sf-brand-item">
+        <img src="assets/users/aroli.png" alt="Aroli">
+        <span class="sf-brand-name">Aroli</span>
+        <span class="sf-brand-domain">aroli.work</span>
+      </a>
+      <div class="sf-brand-item">
+        <img src="assets/users/petrochina.svg" alt="PetroChina">
+        <span>PetroChina</span>
+      </div>
+      <div class="sf-brand-item">
+        <img src="assets/users/etown-mark.png" alt="E-Town Holdings">
+        <span>E-Town Holdings</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="sf-brand-group">
+    <div class="sf-brand-group-title">Research & Universities</div>
+    <div class="sf-brand-items">
+      <div class="sf-brand-item">
+        <img src="assets/users/tsinghua-university.png" alt="Tsinghua University">
+        <span>Tsinghua University</span>
+      </div>
+      <div class="sf-brand-item">
+        <img src="assets/users/ucas.svg" alt="University of Chinese Academy of Sciences">
+        <span>UCAS</span>
+      </div>
+    </div>
+  </div>
+</div>
 
 <h2 class="sf-section">Explore</h2>
 

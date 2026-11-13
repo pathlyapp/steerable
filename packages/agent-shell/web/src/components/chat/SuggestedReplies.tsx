@@ -1,4 +1,5 @@
 import { LuSparkles } from 'react-icons/lu';
+import { t } from '@/i18n';
 
 /**
  * WorkBuddy-style follow-up chips: next-turn user inputs rendered under the
@@ -20,9 +21,12 @@ export function SuggestedReplies({
       className="mx-auto mt-2.5 flex w-full max-w-[var(--chat-input-box-width)] flex-wrap items-center gap-1.5 px-1 pb-0.5"
       data-testid="suggested-replies"
     >
-      <div className="mr-0.5 inline-flex items-center gap-1 text-[11px] font-medium text-agent-muted-foreground/70 select-none">
+      <div
+        className="mr-0.5 inline-flex items-center select-none"
+        title={t('Suggestions')}
+        aria-label={t('Suggestions')}
+      >
         <LuSparkles className="h-3 w-3 text-agent-muted-foreground/80" />
-        <span>建议回复</span>
       </div>
       {suggestions.map((text) => (
         <button

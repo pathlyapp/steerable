@@ -1,12 +1,14 @@
 /**
  * 新建 / 编辑项目弹窗（Codex 式）：项目是带名字的容器，可附加多个源文件夹。
- * 家目录由后端建在 Documents/<应用名>/<项目名>/；源文件夹只放宽读取。
+ * 家目录由后端建在 Documents/<应用名>/<项目名>/；源文件夹及其子目录也可读写。
  */
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { LuFolder, LuFolderPlus, LuX } from 'react-icons/lu';
 import { BRAND_NAME } from '@/brand';
-import { getElectronBridge } from '@/lib/electron-bridge';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { getHostBridge } from '@/lib/host-bridge';
+import { t } from '@/i18n';
 
 export interface ProjectFormValues {
   name: string;
@@ -36,7 +38,7 @@ export function CreateProjectModal({
   const [folderDraft, setFolderDraft] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const initialFoldersKey = (initial?.sourceFolders ?? []).join('\0');
 
@@ -47,20 +49,24 @@ export function CreateProjectModal({
     setFolderDraft('');
     setSubmitting(false);
     setDeleting(false);
-    setConfirmDelete(false);
+    setDeleteConfirmOpen(false);
     setError(null);
+  }, [open, initial?.name, initialFoldersKey]);
+
+  useEffect(() => {
+    if (!open || deleteConfirmOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose, initial?.name, initialFoldersKey]);
+  }, [open, onClose, deleteConfirmOpen]);
 
   if (!open) return null;
   if (typeof document === 'undefined') return null;
 
   const trimmed = name.trim();
-  const homePreview = `~/Documents/${BRAND_NAME}/${trimmed || '项目名'}`;
+  const homePreview = `~/Documents/${BRAND_NAME}/${trimmed || t('project-name')}`;
   const titleId = isEdit ? 'edit-project-title' : 'create-project-title';
 
   const addSourceFolder = (folder: string) => {
@@ -77,13 +83,13 @@ export function CreateProjectModal({
       addSourceFolder(typed);
       return;
     }
-    const picker = getElectronBridge()?.local?.selectDirectory;
+    const picker = getHostBridge()?.local?.selectDirectory;
     if (!picker) {
-      setError('请输入文件夹路径');
+      setError(t('Enter a folder path'));
       return;
     }
     try {
-      const result = await picker({ title: '添加源文件夹' });
+      const result = await picker({ title: t('Add source folder') });
       if (!result || result.canceled || result.filePaths.length === 0) return;
       addSourceFolder(result.filePaths[0]);
     } catch (err) {
@@ -106,10 +112,6 @@ export function CreateProjectModal({
 
   const handleDelete = async () => {
     if (!onDelete || deleting || submitting) return;
-    if (!confirmDelete) {
-      setConfirmDelete(true);
-      return;
-    }
     setDeleting(true);
     setError(null);
     try {
@@ -118,6 +120,7 @@ export function CreateProjectModal({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setDeleting(false);
+      setDeleteConfirmOpen(false);
     }
   };
 
@@ -135,13 +138,13 @@ export function CreateProjectModal({
       <div className="flex w-[440px] max-w-[92vw] flex-col overflow-hidden rounded-2xl border border-agent-border bg-agent-canvas shadow-2xl">
         <div className="flex items-center justify-between px-5 pb-1 pt-4">
           <h2 id={titleId} className="text-base font-semibold text-agent-foreground">
-            {isEdit ? '编辑项目' : '新建项目'}
+            {isEdit ? t('Edit project') : t('New project')}
           </h2>
           <button
             type="button"
             onClick={onClose}
             className="rounded-full p-1 text-agent-muted-foreground transition-colors hover:bg-agent-muted hover:text-agent-foreground"
-            aria-label="关闭"
+            aria-label={t('Close')}
           >
             <LuX className="h-4 w-4" />
           </button>
@@ -157,7 +160,7 @@ export function CreateProjectModal({
               onKeyDown={(event) => {
                 if (event.key === 'Enter') void handleSubmit();
               }}
-              placeholder="项目名称"
+              placeholder={t('Project name')}
               autoFocus
               className="h-full min-w-0 flex-1 bg-transparent text-sm text-agent-foreground outline-none placeholder:text-agent-muted-foreground"
               data-testid={isEdit ? 'edit-project-name' : 'create-project-name'}
@@ -165,12 +168,15 @@ export function CreateProjectModal({
           </label>
           {!isEdit && (
             <p className="px-1 text-[11px] text-agent-muted-foreground">
-              默认位置：{homePreview}
+              {t('Default location: {path}', { path: homePreview })}
             </p>
           )}
 
           <div>
-            <div className="mb-2 text-sm text-agent-foreground">源文件夹</div>
+            <div className="mb-1 text-sm text-agent-foreground">{t('Source folders')}</div>
+            <p className="mb-2 text-[11px] text-agent-muted-foreground">
+              {t('These folders and their subfolders are readable and writable.')}
+            </p>
             <div className="overflow-hidden rounded-2xl border border-agent-border">
               {sourceFolders.map((folder) => (
                 <div
@@ -187,7 +193,7 @@ export function CreateProjectModal({
                       setSourceFolders((prev) => prev.filter((item) => item !== folder))
                     }
                     className="rounded-full p-0.5 text-agent-muted-foreground hover:text-agent-foreground"
-                    aria-label={`移除 ${folder}`}
+                    aria-label={t('Remove {folder}', { folder })}
                   >
                     <LuX className="h-3.5 w-3.5" />
                   </button>
@@ -205,7 +211,7 @@ export function CreateProjectModal({
                       void handleAddFolder();
                     }
                   }}
-                  placeholder="输入路径或点添加浏览"
+                  placeholder={t('Type a path, or click Add to browse')}
                   className="h-7 min-w-0 flex-1 bg-transparent text-xs text-agent-foreground outline-none placeholder:text-agent-muted-foreground"
                   data-testid={isEdit ? 'edit-project-folder-path' : 'create-project-folder-path'}
                 />
@@ -215,7 +221,7 @@ export function CreateProjectModal({
                   className="shrink-0 rounded-full px-2 py-1 text-xs font-medium text-agent-foreground hover:bg-agent-muted"
                   data-testid={isEdit ? 'edit-project-add-folder' : 'create-project-add-folder'}
                 >
-                  添加
+                  {t('Add')}
                 </button>
               </div>
             </div>
@@ -232,17 +238,13 @@ export function CreateProjectModal({
           {onDelete && (
             <button
               type="button"
-              onClick={() => void handleDelete()}
+              onClick={() => setDeleteConfirmOpen(true)}
               disabled={deleting || submitting}
-              title={
-                confirmDelete
-                  ? '再次点击确认删除（会话会保留为无项目对话）'
-                  : '删除项目（会话保留为无项目对话）'
-              }
+              title={t('Delete project (its chats stay as chats without a project)')}
               className="mr-auto h-9 rounded-full px-3 text-sm text-agent-destructive transition-colors hover:bg-agent-destructive/10 disabled:opacity-40"
               data-testid="edit-project-delete"
             >
-              {confirmDelete ? '再次点击确认删除' : '删除本地项目'}
+              {t('Delete local project')}
             </button>
           )}
           <button
@@ -252,7 +254,7 @@ export function CreateProjectModal({
               onDelete ? '' : 'ml-auto'
             }`}
           >
-            取消
+            {t('Cancel')}
           </button>
           <button
             type="button"
@@ -261,10 +263,34 @@ export function CreateProjectModal({
             className="h-9 rounded-full bg-agent-foreground px-4 text-sm font-medium text-agent-canvas transition-opacity disabled:opacity-40"
             data-testid={isEdit ? 'edit-project-submit' : 'create-project-submit'}
           >
-            {submitting ? (isEdit ? '保存中…' : '创建中…') : isEdit ? '保存' : '创建项目'}
+            {submitting
+              ? isEdit
+                ? t('Saving…')
+                : t('Creating…')
+              : isEdit
+                ? t('Save')
+                : t('Create project')}
           </button>
         </div>
       </div>
+      {onDelete && (
+        <ConfirmDialog
+          open={deleteConfirmOpen}
+          title={t('Delete project')}
+          description={t(
+            'Delete project "{name}"? Its chats will stay as chats without a project.',
+            { name: trimmed || t('Untitled') },
+          )}
+          confirmLabel={t('Delete project')}
+          pending={deleting}
+          onCancel={() => {
+            if (deleting) return;
+            setDeleteConfirmOpen(false);
+          }}
+          onConfirm={() => void handleDelete()}
+          testId="edit-project-delete-dialog"
+        />
+      )}
     </div>,
     document.body,
   );

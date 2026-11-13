@@ -15,9 +15,9 @@ vi.mock('@/lib/local-api', () => ({
   updateProject: (...args: unknown[]) => updateProject(...args),
 }));
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
-  getElectronBridge: () => ({
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => ({
     local: { selectDirectory: vi.fn() },
   }),
 }));
@@ -63,11 +63,11 @@ describe('ChatProjectBadge 空项目', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /选择项目/ }));
-    expect(screen.getByText('关联到项目')).toBeTruthy();
-    expect(screen.getByText('还没有项目')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Choose a project/ }));
+    expect(screen.getByText('Link to a project')).toBeTruthy();
+    expect(screen.getByText('No projects yet')).toBeTruthy();
 
-    fireEvent.click(screen.getAllByRole('button', { name: '新建项目' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'New project' })[0]);
     expect(screen.getByTestId('create-project-dialog')).toBeTruthy();
 
     fireEvent.change(screen.getByTestId('create-project-name'), { target: { value: '演示' } });
@@ -93,8 +93,8 @@ describe('ProjectPickerButton 空项目', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /选择项目/ }));
-    fireEvent.click(screen.getByRole('menuitem', { name: '新建项目' }));
+    fireEvent.click(screen.getByRole('button', { name: /Choose a project/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'New project' }));
     fireEvent.change(screen.getByTestId('create-project-name'), { target: { value: '演示' } });
     fireEvent.click(screen.getByTestId('create-project-submit'));
 

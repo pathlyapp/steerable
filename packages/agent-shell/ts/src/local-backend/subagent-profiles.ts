@@ -9,7 +9,9 @@
  * 设计约束：
  * - 画像的 toolFilter 引用的是桌面模型可见工具面（tool-router）里的
  *   真实工具名；收窄即权限边界（explore 够不到写工具是构造性的）。
- * - per-profile model 刻意不设：跟随父模型；模型路由留给设置面。
+ * - 画像可以钉模型与推理强度（`model` / `reasoningEffort`），未钉的项
+ *   跟随父级。钉住的值由 sidecar 的 provider factory 重建 provider；宿主
+ *   服务不了的名字在建 provider 时失败即拒绝，不静默退回父模型。
  * - 画像系统提示是种进子 loop 的第一条 system 消息（子代理看不到
  *   主对话的系统提示，画像提示就是它的全部角色设定）。
  * - W2 落地前 toolFilter 必须与父本轮工具面取交集（子 ⊆ 父）。
@@ -32,6 +34,14 @@ export interface BuiltinSubagentProfile {
   concurrent?: boolean;
   description: string;
   systemPrompt?: string;
+  /**
+   * Model this profile's children run on. Omitted follows the parent — a
+   * role that did not ask for a model must cost the same as the agent that
+   * spawned it.
+   */
+  model?: string;
+  /** Reasoning effort for this profile's children; omitted follows the parent. */
+  reasoningEffort?: string;
 }
 
 /** 映射用的智能体子集（身份 + 能力面），不依赖存储层类型。 */
@@ -41,6 +51,10 @@ export interface SubagentAgentInput extends AgentCapabilityInput {
   name: string;
   rolePrompt: string | null;
   description?: string | null;
+  /** R6: model this agent's children run on; null/absent follows the parent. */
+  model?: string | null;
+  /** R6: reasoning effort for this agent's children; null/absent follows the parent. */
+  reasoningEffort?: string | null;
   /** 画像缓存的失效依据：改配置即换键。缺省则该智能体的画像每轮重建。 */
   updatedAt?: string;
 }
@@ -61,8 +75,12 @@ export interface MentionDelegateProfile {
 /** 只读工具域：探索与调研画像共享的「摸不到写操作」基线。 */
 const READ_ONLY_TOOLS = [
   'local_read_file',
+  'view_image',
   'local_list_scripts',
   'local_open_path',
+  'grep',
+  'glob',
+  'get_goal',
   'web_search',
   'web_fetch',
   'mcp_list_tools',
@@ -74,6 +92,11 @@ export const BUILTIN_SUBAGENT_PROFILES: Record<string, BuiltinSubagentProfile> =
   explore: {
     toolFilter: READ_ONLY_TOOLS,
     concurrent: true,
+    // Read-only reconnaissance: finding something by searching and reading
+    // is not a reasoning-heavy task, so this role runs at the cheapest
+    // thinking level. No model is pinned — it follows whatever the parent
+    // conversation is already paying for.
+    reasoningEffort: 'low',
     description:
       '只读代码侦察。搜索、读文件、定位「在哪里/是什么」类问题；不做任何修改，返回带路径:行号的发现。',
     systemPrompt: [
@@ -87,6 +110,9 @@ export const BUILTIN_SUBAGENT_PROFILES: Record<string, BuiltinSubagentProfile> =
   research: {
     toolFilter: [...READ_ONLY_TOOLS, 'local_write_file'],
     concurrent: true,
+    // Cross-checking sources is mechanical reading and comparing; the deep
+    // thinking belongs to whoever acts on the report.
+    reasoningEffort: 'low',
     description:
       '深度调研。多轮 web 搜索/抓取并交叉验证，给出带来源 URL 的结论；可把报告写入文件。',
     systemPrompt: [
@@ -312,6 +338,8 @@ async function buildOneDelegateProfile(
         agent.updatedAt,
         agent.slug ?? '',
         agent.name,
+        agent.model ?? '',
+        agent.reasoningEffort ?? '',
         parentToolNames.join(','),
       ].join('\u0000')
     : null;
@@ -355,6 +383,10 @@ async function buildProfileUncached(
     concurrent: readOnly,
     description: profileDescription(agent),
     systemPrompt: built.prompt,
+    // A role that pinned nothing stays unpinned: the sidecar then reuses the
+    // parent's provider instead of rebuilding one at its defaults.
+    ...(agent.model ? { model: agent.model } : {}),
+    ...(agent.reasoningEffort ? { reasoningEffort: agent.reasoningEffort } : {}),
   };
 }
 

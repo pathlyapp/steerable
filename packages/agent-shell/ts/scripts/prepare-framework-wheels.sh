@@ -22,6 +22,7 @@ fi
 
 echo "[prepare-framework-wheels] building wheels in $FW"
 ( cd "$FW" && ./scripts/release/build-local-artifacts.sh )
+cp "$FW"/dist/native/steerable_agent_runtime_native-*.whl "$FW/dist/py/"
 
 echo "[prepare-framework-wheels] artifacts ready at:"
 ls -1 "$FW"/dist/py/steerable_*.whl

@@ -18,7 +18,7 @@ import {
 } from './slash-sources';
 
 afterEach(() => {
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
   vi.restoreAllMocks();
 });
 
@@ -129,7 +129,7 @@ describe('refreshSlashSources', () => {
       }
       return Promise.resolve({ mcpTools: [{ token: 'mcp__fs__read' }] });
     });
-    (window as { electron?: unknown }).electron = { localBackend: { request } };
+    (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
     const sources = await refreshSlashSources();
     expect(sources.skills).toEqual([{ name: 'commit', description: '提交' }]);
     expect(sources.mcpTools).toEqual([{ token: 'mcp__fs__read' }]);
@@ -151,7 +151,7 @@ describe('refreshSlashSources', () => {
       }
       return Promise.reject(new Error('mcp down'));
     });
-    (window as { electron?: unknown }).electron = { localBackend: { request } };
+    (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
     const sources = await refreshSlashSources();
     expect(sources.skills).toEqual([{ name: 'lint', description: '' }]);
     // 模块级缓存的语义是「保留最近一次成功」：上一用例拉到的 MCP 工具还在。

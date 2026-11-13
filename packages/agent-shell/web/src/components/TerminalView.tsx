@@ -5,15 +5,16 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { LuListTodo } from 'react-icons/lu';
 import '@xterm/xterm/css/xterm.css';
 import { DockHeaderButton, DockPanelHeader } from '@/components/DockPanelHeader';
-import { getElectronBridge } from '@/lib/electron-bridge';
+import { getHostBridge } from '@/lib/host-bridge';
 import { BRAND_NAME } from '@/brand';
+import { t } from '@/i18n';
 
 /**
  * Renders an xterm.js terminal wired up to the main-process PTY via the
  * `terminal.*` bridge. Ported from `deeppath/apps/web/src/app/agent/terminal/
  * TerminalView.tsx`, with these adaptations:
  *
- *   - `window.electron` direct access → `getElectronBridge()` helper so the
+ *   - `window.steerableHost` direct access → `getHostBridge()` helper so the
  *     "no bridge" path is type-safe.
  *   - Removed `'use client'` directive (not a Next.js project).
  *   - Container is `h-full` instead of `h-screen` so the component is
@@ -44,11 +45,11 @@ export function TerminalView({
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     const terminal = bridge?.terminal;
     if (!terminal) {
       setStatus('error');
-      setStatusMsg('window.electron.terminal 不可用');
+      setStatusMsg(t('The host terminal is unavailable'));
       return;
     }
 
@@ -84,6 +85,18 @@ export function TerminalView({
     //   Cmd+V / Ctrl+Shift+V → 从剪贴板读出来 paste 到 PTY
     //   Cmd/Ctrl+A  → 全选
     const isMac = navigator.platform.toUpperCase().includes('MAC');
+    // WKWebView's navigator.clipboard.readText() is empty or prompts; the
+    // desktop host reads the OS pasteboard directly.
+    const pasteFromClipboard = () => {
+      const readText = bridge?.readClipboardText
+        ? () => bridge.readClipboardText!()
+        : () => navigator.clipboard.readText();
+      void readText()
+        .then((text) => {
+          if (text) term.paste(text);
+        })
+        .catch(() => {});
+    };
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true;
       const mod = isMac ? event.metaKey : event.ctrlKey;
@@ -102,12 +115,8 @@ export function TerminalView({
         (isMac && mod && key === 'v') ||
         (!isMac && event.ctrlKey && event.shiftKey && key === 'v')
       ) {
-        void navigator.clipboard
-          .readText()
-          .then((text) => {
-            if (text) term.paste(text);
-          })
-          .catch(() => {});
+        event.preventDefault();
+        pasteFromClipboard();
         return false;
       }
       if (mod && key === 'a' && !event.shiftKey) {
@@ -124,19 +133,17 @@ export function TerminalView({
         void navigator.clipboard.writeText(sel).catch(() => {});
         term.clearSelection();
       } else {
-        void navigator.clipboard
-          .readText()
-          .then((text) => {
-            if (text) term.paste(text);
-          })
-          .catch(() => {});
+        pasteFromClipboard();
       }
     };
     containerRef.current.addEventListener('contextmenu', onContextMenu);
 
     let cancelled = false;
+    const pendingChunks: Array<{ sessionId: string; chunk: string }> = [];
     const offData = terminal.onData(({ sessionId, chunk }) => {
-      if (sessionIdRef.current && sessionId === sessionIdRef.current) {
+      if (sessionIdRef.current === null) {
+        pendingChunks.push({ sessionId, chunk });
+      } else if (sessionId === sessionIdRef.current) {
         term.write(chunk);
       }
     });
@@ -155,6 +162,12 @@ export function TerminalView({
         });
         if (cancelled) return;
         sessionIdRef.current = session.id;
+        for (const pending of pendingChunks) {
+          if (pending.sessionId === session.id) {
+            term.write(pending.chunk);
+          }
+        }
+        pendingChunks.length = 0;
         setStatus('ready');
         term.writeln(
           `\x1b[90m[agent-shell] ${session.shell} pid=${session.pid} cwd=${session.cwd}\x1b[0m`,
@@ -184,10 +197,15 @@ export function TerminalView({
     window.addEventListener('resize', handleResize);
     const ro = new ResizeObserver(handleResize);
     ro.observe(containerRef.current);
+    // Webview zoom changes CSS pixel size without a window resize on WKWebView.
+    const offZoom = bridge.onZoomChanged?.(() => {
+      requestAnimationFrame(() => handleResize());
+    });
 
     const containerEl = containerRef.current;
     return () => {
       cancelled = true;
+      offZoom?.();
       window.removeEventListener('resize', handleResize);
       containerEl?.removeEventListener('contextmenu', onContextMenu);
       ro.disconnect();
@@ -199,23 +217,27 @@ export function TerminalView({
   }, []);
 
   const statusLabel =
-    status === 'starting' ? '启动中…' : status === 'ready' ? '在线' : `错误：${statusMsg}`;
+    status === 'starting'
+      ? t('Starting…')
+      : status === 'ready'
+        ? t('Online')
+        : t('Error: {message}', { message: statusMsg });
 
   return (
     <div className="flex h-full w-full flex-col bg-[#0b0b0c]">
       <DockPanelHeader
-        title={`${BRAND_NAME} · 终端 · ${statusLabel}`}
+        title={t('{brand} · Terminal · {status}', { brand: BRAND_NAME, status: statusLabel })}
         onClose={onClose}
-        closeLabel="关闭终端面板"
+        closeLabel={t('Close terminal panel')}
         actions={
           onShowTaskProcess && (
             <DockHeaderButton
               icon={<LuListTodo className="h-3 w-3" />}
-              label="后台任务"
+              label={t('Background tasks')}
               title={
                 taskProcessTitle
-                  ? `切换到后台推理：${taskProcessTitle}`
-                  : '切换到后台推理'
+                  ? t('Switch to background reasoning: {title}', { title: taskProcessTitle })
+                  : t('Switch to background reasoning')
               }
               onClick={onShowTaskProcess}
             />

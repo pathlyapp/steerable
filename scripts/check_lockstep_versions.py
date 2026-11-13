@@ -38,8 +38,11 @@ TS_PACKAGES: list[tuple[str, str]] = [
     # pack-sdk / agent-shell / agent-shell-web 随 lockstep 一起 bump 并上 npm
     #（pack-sdk 纯类型、agent-shell-web 源码包，均为 agent-shell 的发布依赖）。
     ("@steerable/pack-sdk",       "packages/pack-sdk/ts/package.json"),
+    ("@steerable/agent-client",   "packages/agent-client/ts/package.json"),
+    ("@steerable/agent-cli",      "packages/agent-cli/ts/package.json"),
     ("@steerable/agent-shell",    "packages/agent-shell/ts/package.json"),
     ("@steerable/agent-shell-web", "packages/agent-shell/web/package.json"),
+    ("@steerable/agent-shell-tauri", "packages/agent-shell/tauri/package.json"),
 ]
 
 PY_PACKAGES: list[tuple[str, str]] = [
@@ -70,8 +73,11 @@ def _read_versions() -> dict[str, str]:
         versions[name] = tomllib.loads((ROOT / rel).read_text(encoding="utf-8"))["package"]["version"]
     lock = json.loads((ROOT / "rust-artifacts.lock.json").read_text(encoding="utf-8"))
     artifact_version = lock["artifactVersion"]
-    if lock.get("license") != "MIT":
-        raise SystemExit("ERROR: Rust artifact lock must declare the MIT license")
+    if lock.get("license") not in {
+        "MIT",
+        "LicenseRef-DeepPath-Steerable-Engine",
+    }:
+        raise SystemExit("ERROR: Rust artifact lock has an unsupported license")
     pin = f"{NATIVE_PACKAGE}=={artifact_version}"
     for rel in NATIVE_PIN_FILES:
         text = (ROOT / rel).read_text(encoding="utf-8")

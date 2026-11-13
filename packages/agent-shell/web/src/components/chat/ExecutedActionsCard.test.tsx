@@ -4,6 +4,178 @@ import { ToolsFlow } from './ExecutedActionsCard';
 
 afterEach(cleanup);
 
+describe('ToolsFlow / declared view', () => {
+  it('用声明的标题，不用参数名里先出现的 path', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'grep',
+            arguments: { path: '/tmp/secret', pattern: 'alpha' },
+            view: { card: 'search', kind: 'search', title: 'alpha', declared: true },
+            result: { success: true },
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText('alpha')).toBeTruthy();
+    expect(screen.queryByText('/tmp/secret')).toBeNull();
+  });
+
+  it('没有 view 的旧事件仍按参数名做摘要', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'grep',
+            arguments: { path: '/tmp/secret', pattern: 'alpha' },
+            result: { success: true },
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText('/tmp/secret')).toBeTruthy();
+  });
+
+  it('marks a call covered by a session allow', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'browser_click',
+            arguments: { ref: 'e1' },
+            result: { success: true },
+            durationMs: 120,
+            approval: { kind: 'allow_for_session', cached: true },
+          },
+        ]}
+      />,
+    );
+    const row = screen.getByText('Allowed for this chat').parentElement?.textContent ?? '';
+    expect(row.indexOf('0.1s')).toBeGreaterThan(row.indexOf('已完成'));
+    expect(row.indexOf('Allowed for this chat')).toBeGreaterThan(row.indexOf('0.1s'));
+  });
+
+  it('marks an unattended allow after the duration', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'shell',
+            arguments: { command: 'npm test' },
+            result: { success: true },
+            durationMs: 120,
+            approval: { kind: 'allow_once', auto: true },
+          },
+        ]}
+      />,
+    );
+    const row = screen.getByText('Auto').parentElement?.textContent ?? '';
+    expect(row.indexOf('Auto')).toBeGreaterThan(row.indexOf('0.1s'));
+  });
+
+  it('shows an unattended ask as questions and answers', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'ask_user',
+            arguments: { intro: '继续吗' },
+            result: {
+              intro: '继续吗',
+              questions: [{ id: 'q1', text: '要不要同时改重试次数？' }],
+              answers: { q1: '无人可答，请按最合理的默认继续。' },
+              unattended: true,
+            },
+            durationMs: 120,
+          },
+        ]}
+        defaultExpanded
+      />,
+    );
+    expect(screen.getByText('Answered automatically')).toBeTruthy();
+    expect(screen.getByText('Question 要不要同时改重试次数？')).toBeTruthy();
+    expect(screen.getByText('Answer 无人可答，请按最合理的默认继续。')).toBeTruthy();
+  });
+
+  it('titles an egress row with the host and drops ports 80 and 443', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'network_egress',
+            view: { card: 'generic', kind: 'other', title: 'network_egress', declared: true },
+            arguments: { host: 'registry.example.org', port: 443 },
+            result: { success: true },
+            approval: { kind: 'allow_once', auto: true },
+          },
+          {
+            tool: 'network_egress',
+            arguments: { host: 'pypi.example.org', port: 8443 },
+            result: { success: true },
+          },
+          {
+            tool: 'browser_navigate',
+            arguments: { url: 'https://www.example.com/about' },
+            result: { success: true },
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText('registry.example.org')).toBeTruthy();
+    expect(screen.queryByText('registry.example.org:443')).toBeNull();
+    expect(screen.getByText('pypi.example.org:8443')).toBeTruthy();
+    expect(screen.getByText('https://www.example.com/about')).toBeTruthy();
+    expect(screen.getByText('Auto')).toBeTruthy();
+  });
+
+  it('titles the ask row with the question and shares one answer', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'ask_user',
+            view: { card: 'generic', kind: 'other', title: '继续吗', declared: true },
+            arguments: { intro: '继续吗' },
+            result: {
+              questions: [
+                { id: 'q1', text: '要不要同时改重试次数？' },
+                { id: 'q2', text: '要不要记一条说明？' },
+              ],
+              answers: {
+                q1: '无人可答，请按最合理的默认继续。',
+                q2: '无人可答，请按最合理的默认继续。',
+              },
+              unattended: true,
+            },
+          },
+        ]}
+        defaultExpanded
+      />,
+    );
+    expect(screen.getByText('要不要同时改重试次数？')).toBeTruthy();
+    expect(screen.getAllByText('Answer 无人可答，请按最合理的默认继续。')).toHaveLength(1);
+    expect(screen.getByText('Question 要不要记一条说明？')).toBeTruthy();
+  });
+
+  it('does not mark a failed unattended call', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'shell',
+            arguments: { command: 'npm test' },
+            result: { success: false, error: 'exit 1' },
+            durationMs: 120,
+            approval: { kind: 'allow_once', auto: true },
+          },
+        ]}
+      />,
+    );
+    expect(screen.queryByText('Auto')).toBeNull();
+  });
+});
+
 describe('ToolsFlow / todo_write', () => {
   it('keeps the compact tool row in the turn process, not a checklist', () => {
     render(
@@ -50,7 +222,7 @@ describe('ToolsFlow / delegate_subagent', () => {
       />,
     );
 
-    expect(screen.getByText('委派 · 调研员')).toBeTruthy();
+    expect(screen.getByText('Delegate · 调研员')).toBeTruthy();
     expect(screen.getByText('调研 PDF 方案并给出带 URL 的结论')).toBeTruthy();
     expect(screen.getByText('执行中')).toBeTruthy();
     expect(screen.queryByText('delegate_subagent')).toBeNull();
@@ -70,7 +242,7 @@ describe('ToolsFlow / delegate_subagent', () => {
         ]}
       />,
     );
-    expect(screen.getByText('委派 · 探索')).toBeTruthy();
+    expect(screen.getByText('Delegate · Explore')).toBeTruthy();
     expect(screen.getByText('已完成')).toBeTruthy();
   });
 });
@@ -88,7 +260,7 @@ describe('ToolsFlow / task_run', () => {
         ]}
       />,
     );
-    expect(screen.getByText('后台任务')).toBeTruthy();
+    expect(screen.getByText('Background task')).toBeTruthy();
     expect(screen.getByText('写一份今晚的时间块安排，落成文件')).toBeTruthy();
     expect(screen.getByText('已完成')).toBeTruthy();
     expect(screen.queryByText('task_run')).toBeNull();
@@ -105,8 +277,8 @@ describe('ToolsFlow / task_run', () => {
         ]}
       />,
     );
-    expect(screen.getByText('后台任务 · 隔离')).toBeTruthy();
-    expect(screen.getByText('改代码 · 隔离工作区')).toBeTruthy();
+    expect(screen.getByText('Background task · Isolated')).toBeTruthy();
+    expect(screen.getByText('改代码 · Isolated workspace')).toBeTruthy();
   });
 });
 
@@ -125,7 +297,7 @@ describe('ToolsFlow / 展开输出', () => {
         ]}
       />,
     );
-    expect(screen.getByText('子代理因额度耗尽结束')).toBeTruthy();
+    expect(screen.getByText('Subagent ended due to budget exhausted')).toBeTruthy();
     expect(screen.getByText(/I'll start by exploring the target directory structure/)).toBeTruthy();
     expect(screen.queryByText(/"success": false/)).toBeNull();
   });
@@ -152,9 +324,9 @@ describe('ToolsFlow / 展开输出', () => {
         ]}
       />,
     );
-    expect(screen.getByText('查询任务')).toBeTruthy();
+    expect(screen.getByText('Check tasks')).toBeTruthy();
     expect(screen.getAllByText('3bcae2a7').length).toBeGreaterThan(0);
-    expect(screen.getByText('已启动')).toBeTruthy();
+    expect(screen.getByText('Started')).toBeTruthy();
     expect(screen.getByText(/你是"日程规划"角色/)).toBeTruthy();
     expect(screen.queryByText(/"success": true/)).toBeNull();
   });
@@ -182,7 +354,7 @@ describe('ToolsFlow / 委派展开', () => {
         ]}
       />,
     );
-    expect(screen.getByText('子代理')).toBeTruthy();
+    expect(screen.getByText('Subagent')).toBeTruthy();
     expect(screen.getAllByText('日程规划').length).toBeGreaterThan(0);
     expect(screen.queryByText('agent-85dd21394cbe4997')).toBeNull();
   });
@@ -340,7 +512,31 @@ describe('ToolsFlow / 后台任务跳转', () => {
       />,
     );
     expect(screen.queryByTestId('tool-activate')).toBeNull();
-    fireEvent.click(screen.getByText('后台任务'));
+    fireEvent.click(screen.getByText('Background task'));
     expect(onInspectTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('ToolsFlow / agent_* 多智能体编排六件套', () => {
+  it('保留朴素的工具卡片行，分别呈现 agent_spawn 与 agent_wait', () => {
+    render(
+      <ToolsFlow
+        actions={[
+          {
+            tool: 'agent_spawn',
+            arguments: { task: '心算 17+28' },
+            result: { success: true, message: JSON.stringify({ childId: '0.1', status: 'running' }) },
+          },
+          {
+            tool: 'agent_wait',
+            arguments: { childId: '0.1' },
+            result: { success: true, message: JSON.stringify({ childId: '0.1', status: 'completed', answer: '45' }) },
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText('agent_spawn')).toBeTruthy();
+    expect(screen.getByText('agent_wait')).toBeTruthy();
   });
 });

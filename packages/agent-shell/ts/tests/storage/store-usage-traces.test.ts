@@ -32,6 +32,7 @@ describe('LocalStore / 用量事件聚合', () => {
         totalTokens: 0,
         cachedPromptTokens: 0,
         costUsd: 0,
+        partialTurns: 0,
       },
     });
   });
@@ -117,8 +118,7 @@ describe('LocalStore / 用量事件聚合', () => {
     });
   });
 
-  it('sinceDays 窗口之外的事件不计入', async () => {
-    const { store, db } = await createTestStore();
+  it('sinceDays 窗口之外的事件不计入', async () => {    const { store, db } = await createTestStore();
     await store.recordUsageEvent({
       kind: 'chat',
       model: 'm',
@@ -134,6 +134,33 @@ describe('LocalStore / 用量事件聚合', () => {
 
     expect((await store.getUsageSummary(30)).byModel).toEqual([]);
     expect((await store.getUsageSummary(60)).byModel).toHaveLength(1);
+  });
+
+  it('usageNote = partial 的行计入 partialTurns，但不改变 token 合计', async () => {
+    // R5：外部引擎子代理不报 token，这一行只覆盖了部分花费。数字照常计入，
+    // 但必须能数出「有几条不是完整账单」。
+    const { store, db } = await createTestStore();
+    await store.recordUsageEvent({
+      kind: 'chat',
+      model: 'deepseek-chat',
+      provider: 'deepseek',
+      promptTokens: 100,
+      completionTokens: 20,
+      totalTokens: 120,
+      usageNote: 'partial',
+    });
+    await store.recordUsageEvent({
+      kind: 'chat',
+      model: 'deepseek-chat',
+      provider: 'deepseek',
+      promptTokens: 50,
+      completionTokens: 10,
+      totalTokens: 60,
+    });
+
+    const summary = await store.getUsageSummary();
+    expect(summary.totals.partialTurns).toBe(1);
+    expect(summary.totals.totalTokens).toBe(180);
   });
 });
 

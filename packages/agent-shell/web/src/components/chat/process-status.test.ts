@@ -59,21 +59,21 @@ describe('processStatusLabel', () => {
         isStreaming: true,
         elapsedMs: 12_000,
       }),
-    ).toBe('工作中');
+    ).toBe('Working');
     expect(
       processStatusLabel({
         process: [reasoning('想'), tool('local_run_snippet')],
         isStreaming: true,
         elapsedMs: 5000,
       }),
-    ).toBe('工作中');
+    ).toBe('Working');
     expect(
       processStatusLabel({
         process: [reasoning('想'), { type: 'text', content: '我先搜工具' }],
         isStreaming: true,
         elapsedMs: 4000,
       }),
-    ).toBe('工作中');
+    ).toBe('Working');
   });
 
   it('summarizes thinking rounds, tool calls, and duration after the turn ends', () => {
@@ -83,7 +83,7 @@ describe('processStatusLabel', () => {
         isStreaming: false,
         elapsedMs: 83_000,
       }),
-    ).toBe('工作了 1m 23s · 思考 2 次 · 工具调用 1 次');
+    ).toBe('Worked 1m 23s · Thought 2 times · 1 tool calls');
   });
 
   it('omits empty counts and sub-second work time', () => {
@@ -93,7 +93,7 @@ describe('processStatusLabel', () => {
         isStreaming: false,
         elapsedMs: 400,
       }),
-    ).toBe('工具调用 1 次');
+    ).toBe('1 tool calls');
   });
 });
 
@@ -105,7 +105,7 @@ describe('thinkingFoldLabel', () => {
         isLive: true,
         elapsedMs: 1000,
       }),
-    ).toBe('思考中 · 1s');
+    ).toBe('Thinking · 1s');
   });
 
   it('estimates turn tokens from reasoning and text', () => {
@@ -125,11 +125,11 @@ describe('thinkingFoldLabel', () => {
         isLive: false,
         elapsedMs: 8000,
       }),
-    ).toBe('思考 · 8s');
+    ).toBe('Thought for 8s');
   });
 
   it('is just 思考 when a finished round has no recorded duration', () => {
-    expect(thinkingFoldLabel({ content: '先读配置', isLive: false })).toBe('思考');
+    expect(thinkingFoldLabel({ content: '先读配置', isLive: false })).toBe('Thinking');
   });
 });
 

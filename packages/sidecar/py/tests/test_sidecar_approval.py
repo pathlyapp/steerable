@@ -11,8 +11,15 @@ import asyncio
 import json
 
 import pytest
-from steerable_agent_protocol.generated import ToolCall
-from steerable_agent_runtime.llm import LLMStreamChunk, LLMUsage
+from steerable_agent_protocol.generated import ToolCall, ToolResult
+from steerable_agent_runtime import (
+    ApprovalDecision,
+    ApprovalExecutor,
+    CoreLoop,
+    LoopContext,
+    SessionApprovalCache,
+)
+from steerable_agent_runtime.llm import LLMMessage, LLMStreamChunk, LLMUsage
 
 from steerable_sidecar.sidecar import Sidecar
 
@@ -24,11 +31,13 @@ class _ScriptedProvider:
     def __init__(self, script: list[list[LLMStreamChunk]]):
         self._script = script
         self._round = 0
+        self.seen_tools: list[object] = []
 
     async def complete(self, *args, **kwargs):
         raise NotImplementedError
 
     def stream(self, messages, **kwargs):
+        self.seen_tools.append(kwargs.get("tools"))
         chunks = self._script[min(self._round, len(self._script) - 1)]
         self._round += 1
 
@@ -199,12 +208,387 @@ async def test_host_mode_asks_and_executes_on_allow() -> None:
     )
     sidecar.server.attach_writer(host)
 
-    await _run_stream(sidecar, _base_params(approval={"mode": "host"}))
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host"},
+            chatId="task:1",
+            toolContext={"mode": "agent", "chatId": "chat-parent"},
+        ),
+    )
 
     assert len(host.approval_requests) == 1
     assert host.approval_requests[0]["toolName"] == "delete_file"
     assert host.approval_requests[0]["mode"] == "destructive"
+    # Task streams run under task:<id>; the card belongs to the parent chat.
+    assert host.approval_requests[0]["chatId"] == "chat-parent"
     assert [c["name"] for c in host.reverse_calls] == ["delete_file"]
+
+
+@pytest.mark.asyncio
+async def test_task_session_allow_reuses_the_parent_chat() -> None:
+    parent = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="browser_navigate", arguments={})),
+            _text_round("parent done"),
+        ]
+    )
+    task = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c2", name="browser_click", arguments={})),
+            _text_round("task done"),
+        ]
+    )
+    providers = iter([parent, task])
+    sidecar = Sidecar(llm_provider_factory=lambda _params: next(providers))
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {
+            "browser_navigate": {"success": True},
+            "browser_click": {"success": True},
+        },
+        approvals={"kind": "allow_for_session", "reason": "ok"},
+    )
+    sidecar.server.attach_writer(host)
+    tools = _browser_tools()
+
+    await _run_stream(
+        sidecar,
+        _base_params(approval={"mode": "host"}, tools=tools, chatId="chat-parent"),
+    )
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host"},
+            tools=tools,
+            chatId="task:1",
+            toolContext={"mode": "agent", "chatId": "chat-parent"},
+        ),
+    )
+
+    assert [item["toolName"] for item in host.approval_requests] == ["browser_navigate"]
+    assert [call["name"] for call in host.reverse_calls] == [
+        "browser_navigate",
+        "browser_click",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_skips_prompt_for_files_inside_writable_roots(tmp_path) -> None:
+    project = tmp_path / "111-2"
+    project.mkdir()
+    pptx = project / "自我介绍.pptx"
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="c1",
+                    name="present_files",
+                    arguments={"files": [{"path": str(pptx)}]},
+                )
+            ),
+            _text_round("shown"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"present_files": {"success": True, "data": {"files": []}}},
+        approvals={"kind": "deny_once", "reason": "should not ask"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host"},
+            execSandbox={"enabled": True, "writableRoots": [str(project)]},
+        ),
+    )
+
+    assert host.approval_requests == []
+    assert [c["name"] for c in host.reverse_calls] == ["present_files"]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_still_asks_for_files_outside_writable_roots(tmp_path) -> None:
+    project = tmp_path / "111-2"
+    project.mkdir()
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="c1",
+                    name="present_files",
+                    arguments={"files": [{"path": str(tmp_path / "other.pptx")}]},
+                )
+            ),
+            _text_round("shown"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"present_files": {"success": True, "data": {"files": []}}},
+        approvals={"kind": "allow_once"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host"},
+            execSandbox={"enabled": True, "writableRoots": [str(project)]},
+        ),
+    )
+
+    assert len(host.approval_requests) == 1
+    assert host.approval_requests[0]["toolName"] == "present_files"
+    assert host.approval_requests[0]["sandboxEnforced"] is True
+    assert [c["name"] for c in host.reverse_calls] == ["present_files"]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_asks_when_a_relative_symlink_leaves_path_base(tmp_path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    outside = tmp_path / "other"
+    outside.mkdir()
+    (project / "escape").symlink_to(outside, target_is_directory=True)
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="c1",
+                    name="present_files",
+                    arguments={"files": [{"path": "escape/secret.txt"}]},
+                )
+            ),
+            _text_round("shown"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"present_files": {"success": True, "data": {"files": []}}},
+        approvals={"kind": "allow_once"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={
+                "mode": "host",
+                "writableRoots": [str(project)],
+                "pathBase": str(project),
+            },
+            execSandbox={"enabled": True, "writableRoots": [str(project)]},
+        ),
+    )
+
+    assert len(host.approval_requests) == 1
+    assert host.approval_requests[0]["toolName"] == "present_files"
+    assert [c["name"] for c in host.reverse_calls] == ["present_files"]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_skips_in_project_files_when_exec_sandbox_is_off(tmp_path) -> None:
+    project = tmp_path / "111-2"
+    project.mkdir()
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="c1",
+                    name="present_files",
+                    arguments={"files": [{"path": str(project / "自我介绍.pptx")}]},
+                )
+            ),
+            _text_round("shown"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"present_files": {"success": True, "data": {"files": []}}},
+        approvals={"kind": "deny_once", "reason": "should not ask"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host", "writableRoots": [str(project)]},
+            execSandbox={"enabled": False, "writableRoots": []},
+        ),
+    )
+
+    assert host.approval_requests == []
+    assert [c["name"] for c in host.reverse_calls] == ["present_files"]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_skips_prompt_for_sandboxed_shell_inside_writable_roots(tmp_path) -> None:
+    project = tmp_path / "111-2"
+    (project / "notes").mkdir(parents=True)
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="c1",
+                    name="local_exec_shell",
+                    arguments={"command": "touch a.md", "cwd": str(project / "notes")},
+                )
+            ),
+            _text_round("wrote"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"local_exec_shell": {"success": True, "data": {"stdout": ""}}},
+        approvals={"kind": "deny_once", "reason": "should not ask"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host", "writableRoots": [str(project)]},
+            execSandbox={"enabled": True, "writableRoots": [str(project)], "requireBackend": False},
+        ),
+    )
+
+    assert host.approval_requests == []
+    assert [c["name"] for c in host.reverse_calls] == ["local_exec_shell"]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_still_asks_for_shell_when_exec_sandbox_is_off(tmp_path) -> None:
+    project = tmp_path / "111-2"
+    project.mkdir()
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="c1",
+                    name="local_exec_shell",
+                    arguments={"command": "ls", "cwd": str(project)},
+                )
+            ),
+            _text_round("ran"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {"local_exec_shell": {"success": True, "data": {"stdout": ""}}},
+        approvals={"kind": "allow_once"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host", "writableRoots": [str(project)]},
+            execSandbox={"enabled": False, "writableRoots": []},
+        ),
+    )
+
+    assert len(host.approval_requests) == 1
+    assert host.approval_requests[0]["toolName"] == "local_exec_shell"
+    assert host.approval_requests[0]["sandboxEnforced"] is False
+    assert [c["name"] for c in host.reverse_calls] == ["local_exec_shell"]
+
+
+@pytest.mark.asyncio
+async def test_steer_to_full_clears_sandbox_enforced_on_the_next_approval(tmp_path) -> None:
+    """A mid-turn switch to full access is on the next card, not the one already sent."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="delete_file", arguments={"path": "/x"})),
+            _tool_round(ToolCall(id="c2", name="delete_file", arguments={"path": "/y"})),
+            _text_round("done"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+
+    class _GateWriter(_HostWriter):
+        def __init__(self) -> None:
+            super().__init__(
+                sidecar.server,
+                {"delete_file": {"success": True}},
+                approvals={"kind": "allow_once"},
+            )
+            self._held = False
+
+        def write(self, data: bytes):
+            payload = json.loads(data)
+            if (
+                not self._held
+                and payload.get("method") == "tool.invoke"
+                and isinstance(payload.get("id"), str)
+            ):
+                self._held = True
+                self.reverse_calls.append(payload["params"])
+                started.set()
+
+                async def _later() -> None:
+                    await release.wait()
+                    await self._server.handle_frame(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": payload["id"],
+                                "result": {"success": True},
+                            }
+                        )
+                    )
+
+                asyncio.ensure_future(_later())
+                return len(data)
+            return super().write(data)
+
+    host = _GateWriter()
+    sidecar.server.attach_writer(host)
+    project = tmp_path / "proj"
+    project.mkdir()
+    response = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.stream",
+            _base_params(
+                approval={"mode": "host", "writableRoots": [str(project)]},
+                execSandbox={"enabled": True, "writableRoots": [str(project)]},
+            ),
+        )
+    )
+    assert "error" not in response, response
+    stream_id = response["result"]["streamId"]
+    task = sidecar._streams.get(stream_id)
+    assert task is not None
+    await asyncio.wait_for(started.wait(), timeout=2)
+    assert host.approval_requests[0]["sandboxEnforced"] is True
+    steer = await sidecar.server.handle_frame(
+        _frame(
+            "agent.chat.steer",
+            {"streamId": stream_id, "content": "改成完整权限", "execPolicy": "full"},
+        )
+    )
+    assert steer["result"] == {"ok": True}
+    release.set()
+    await task
+    assert [item["sandboxEnforced"] for item in host.approval_requests] == [True, False]
 
 
 @pytest.mark.asyncio
@@ -236,7 +620,7 @@ async def test_host_mode_denial_skips_execution() -> None:
 async def test_host_mode_unreachable_host_fails_closed() -> None:
     provider = _ScriptedProvider(
         [
-            _tool_round(ToolCall(id="c1", name="read_file", arguments={"path": "/a"})),
+            _tool_round(ToolCall(id="c1", name="delete_file", arguments={"path": "/a"})),
             _text_round("denied anyway"),
         ]
     )
@@ -244,7 +628,7 @@ async def test_host_mode_unreachable_host_fails_closed() -> None:
     sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
     # No approval handler on the host → the request is never answered.
     host = _HostWriter(
-        sidecar.server, {"read_file": {"success": True}}, approvals=None
+        sidecar.server, {"delete_file": {"success": True}}, approvals=None
     )
     sidecar.server.attach_writer(host)
 
@@ -253,7 +637,8 @@ async def test_host_mode_unreachable_host_fails_closed() -> None:
         _base_params(approval={"mode": "host", "timeoutMs": 100}),
     )
 
-    # Fail closed: even a read tool is denied when the host can't answer.
+    # A call that still prompts fails closed when the host never answers.
+    # Declared or name-inferred read tools do not ask, so they are not this case.
     assert host.reverse_calls == []
     events = sidecar._transport.events  # type: ignore[attr-defined]
     results = [p for m, p in events if m == "stream.chunk" and "toolResult" in p]
@@ -287,6 +672,7 @@ async def test_session_decision_carries_across_turns_of_one_chat() -> None:
     # second turn's decision came from the chat's session cache.
     assert [c["name"] for c in host.reverse_calls] == ["delete_file", "delete_file"]
     assert len(host.approval_requests) == 1
+    assert host.approval_requests[0]["chatId"] == "chat-session"
 
 
 @pytest.mark.asyncio
@@ -434,3 +820,455 @@ async def test_host_amendment_persists_and_applies_within_the_run(tmp_path) -> N
     assert persisted["rules"] == [
         {"tool": "shell", "decision": "allow", "commandPrefix": ["echo"]}
     ]
+
+
+def _browser_tools() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {"name": "browser_navigate", "parameters": {}},
+            "mode": "external",
+            "approvalCategory": "browser",
+        },
+        {
+            "type": "function",
+            "function": {"name": "browser_click", "parameters": {}},
+            "mode": "external",
+            "approvalCategory": "browser",
+        },
+        {
+            "type": "function",
+            "function": {"name": "browser_scroll", "parameters": {}},
+            "mode": "read",
+            "approvalCategory": "browser",
+        },
+        {
+            "type": "function",
+            "function": {"name": "local_read_file", "parameters": {}},
+            "mode": "read",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_host_mode_shares_declared_category_and_skips_read(tmp_path) -> None:
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="browser_scroll", arguments={})),
+            _tool_round(ToolCall(id="c2", name="browser_navigate", arguments={"url": "https://example.com"})),
+            _tool_round(ToolCall(id="c3", name="browser_click", arguments={})),
+            _tool_round(ToolCall(id="c4", name="mystery_tool", arguments={})),
+            _tool_round(
+                ToolCall(id="c5", name="local_read_file", arguments={"path": str(tmp_path / "id_rsa")})
+            ),
+            _text_round("done"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {
+            "browser_scroll": {"success": True},
+            "browser_navigate": {"success": True},
+            "browser_click": {"success": True},
+            "mystery_tool": {"success": True},
+            "local_read_file": {"success": True},
+        },
+        approvals={"kind": "allow_for_session", "reason": "ok"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host", "writableRoots": [str(tmp_path / "repo")]},
+            tools=_browser_tools(),
+            chatId="chat-declared",
+        ),
+    )
+
+    assert [item["toolName"] for item in host.approval_requests] == [
+        "browser_navigate",
+        "mystery_tool",
+        "local_read_file",
+    ]
+    assert host.approval_requests[0]["mode"] == "external"
+    assert host.approval_requests[0]["category"] == "browser"
+    assert host.approval_requests[1]["mode"] == "other"
+    assert host.approval_requests[1]["category"] == "mystery_tool"
+    assert host.approval_requests[2]["mode"] == "read"
+    assert host.approval_requests[2]["category"] == "local_read_file"
+    assert [call["name"] for call in host.reverse_calls] == [
+        "browser_scroll",
+        "browser_navigate",
+        "browser_click",
+        "mystery_tool",
+        "local_read_file",
+    ]
+    sent = provider.seen_tools[0]
+    assert isinstance(sent, list)
+    assert all("mode" not in tool and "approvalCategory" not in tool for tool in sent)
+
+
+@pytest.mark.asyncio
+async def test_listed_tools_without_fields_keep_name_inference() -> None:
+    """An old host omits ``mode`` and ``approvalCategory``.
+
+    ``read_`` still skips the card. ``delete_file`` asks as destructive under
+    its own name. A declared ``external`` mode without a category uses the
+    tool name. The model does not see those fields.
+    """
+    tools = [
+        {"type": "function", "function": {"name": "read_notes", "parameters": {}}},
+        {"type": "function", "function": {"name": "delete_file", "parameters": {}}},
+        {
+            "type": "function",
+            "function": {"name": "get_secret", "parameters": {}},
+            "mode": "external",
+        },
+    ]
+    provider = _ScriptedProvider(
+        [
+            _tool_round(ToolCall(id="c1", name="read_notes", arguments={})),
+            _tool_round(ToolCall(id="c2", name="delete_file", arguments={})),
+            _tool_round(ToolCall(id="c3", name="get_secret", arguments={})),
+            _text_round("done"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {
+            "read_notes": {"success": True},
+            "delete_file": {"success": True},
+            "get_secret": {"success": True},
+        },
+        approvals={"kind": "allow_once", "reason": "ok"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(approval={"mode": "host"}, tools=tools, chatId="chat-legacy-tools"),
+    )
+
+    assert [(item["toolName"], item["mode"], item["category"]) for item in host.approval_requests] == [
+        ("delete_file", "destructive", "delete_file"),
+        ("get_secret", "external", "get_secret"),
+    ]
+    assert [call["name"] for call in host.reverse_calls] == [
+        "read_notes",
+        "delete_file",
+        "get_secret",
+    ]
+    sent = provider.seen_tools[0]
+    assert isinstance(sent, list)
+    assert all("mode" not in tool and "approvalCategory" not in tool for tool in sent)
+
+
+@pytest.mark.asyncio
+async def test_subagent_scroll_skips_the_card_and_navigate_asks() -> None:
+    """A child loop uses the same approval executor as the parent.
+
+    ``browser_scroll`` is a declared read with no path, so it runs without a
+    card. ``browser_navigate`` is external and still asks. The child model
+    sees the tools with the approval fields already removed.
+    """
+    provider = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(id="d1", name="delegate_subagent", arguments={"task": "看页面"})
+            ),
+            _tool_round(ToolCall(id="c1", name="browser_scroll", arguments={})),
+            _tool_round(
+                ToolCall(
+                    id="c2",
+                    name="browser_navigate",
+                    arguments={"url": "https://example.com"},
+                )
+            ),
+            _text_round("child done"),
+            _text_round("parent done"),
+        ]
+    )
+    sidecar = Sidecar(llm_provider_factory=lambda _params: provider)
+    sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
+    host = _HostWriter(
+        sidecar.server,
+        {
+            "browser_scroll": {"success": True},
+            "browser_navigate": {"success": True},
+        },
+        approvals={"kind": "allow_once", "reason": "ok"},
+    )
+    sidecar.server.attach_writer(host)
+
+    await _run_stream(
+        sidecar,
+        _base_params(
+            approval={"mode": "host"},
+            tools=_browser_tools(),
+            chatId="chat-child-browser",
+            subagent=True,
+        ),
+    )
+
+    assert [item["toolName"] for item in host.approval_requests] == ["browser_navigate"]
+    assert host.approval_requests[0]["mode"] == "external"
+    assert host.approval_requests[0]["category"] == "browser"
+    assert host.approval_requests[0]["chatId"] == "chat-child-browser"
+    assert [call["name"] for call in host.reverse_calls] == [
+        "browser_scroll",
+        "browser_navigate",
+    ]
+    child_tools = provider.seen_tools[1]
+    assert isinstance(child_tools, list)
+    names = [tool["function"]["name"] for tool in child_tools]
+    assert "browser_scroll" in names
+    assert "browser_navigate" in names
+    assert "delegate_subagent" not in names
+    assert all(
+        "mode" not in tool and "approvalCategory" not in tool for tool in child_tools
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_approval_wins_over_the_preview() -> None:
+    transport = _CapturingTransport()
+
+    class _Event:
+        kind = "tool_call_result"
+        data = {
+            "id": "c1",
+            "name": "browser_click",
+            "success": True,
+            "approval": {"kind": "allow_once", "category": "browser", "waitMs": 12},
+            "resultPreview": json.dumps(
+                {
+                    "success": True,
+                    "data": {
+                        "_approval": {
+                            "kind": "allow_for_session",
+                            "category": "browser",
+                            "cached": True,
+                        }
+                    },
+                }
+            ),
+        }
+
+    await Sidecar._emit_loop_event(transport, "stream-1", _Event())
+    result = transport.events[0][1]["toolResult"]
+    assert result["approval"]["kind"] == "allow_once"
+    assert result["approval"]["waitMs"] == 12
+
+
+@pytest.mark.asyncio
+async def test_parallel_terminal_sibling_keeps_the_session_allow_marker() -> None:
+    class _Exec:
+        def concurrency_safe(self, _call: ToolCall) -> bool:
+            return True
+
+        async def execute(self, call: ToolCall, _ctx: object) -> ToolResult:
+            if call.name == "stop":
+                return ToolResult(
+                    success=True,
+                    terminal=True,
+                    data={"terminal_status": "waiting_user"},
+                )
+            if call.name == "write_a":
+                return ToolResult(
+                    success=True,
+                    data={
+                        "_sandbox": {"enforcement": "workspace"},
+                        "_approval": {
+                            "kind": "allow_for_session",
+                            "category": "browser",
+                            "cached": True,
+                        },
+                        "real": "w" * 500,
+                    },
+                )
+            return ToolResult(success=True, data={"real": call.name})
+
+    class _Prov:
+        name = "fake"
+        model = "fake"
+
+        def __init__(self) -> None:
+            self._round = 0
+
+        async def complete(self, *_args: object, **_kwargs: object) -> None:
+            raise NotImplementedError
+
+        def stream(self, _messages: object, **_kwargs: object):
+            self._round += 1
+            round_index = self._round
+
+            async def _gen():
+                if round_index == 1:
+                    for name, call_id in (("stop", "stop"), ("write_a", "a"), ("write_b", "b")):
+                        yield LLMStreamChunk(
+                            tool_call_delta=ToolCall(id=call_id, name=name, arguments={})
+                        )
+                    yield LLMStreamChunk(
+                        finish_reason="tool_calls",
+                        usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                    )
+                else:
+                    yield LLMStreamChunk(content_delta="done")
+                    yield LLMStreamChunk(
+                        finish_reason="stop",
+                        usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                    )
+
+            return _gen()
+
+    transport = _CapturingTransport()
+    loop = CoreLoop(_Prov(), _Exec())
+    async for event in loop.run([LLMMessage.text_of("user", "go")]):
+        if event.kind == "tool_call_result":
+            await Sidecar._emit_loop_event(transport, "stream-1", event)
+
+    results = {
+        params["toolResult"]["id"]: params["toolResult"]
+        for method, params in transport.events
+        if method == "stream.chunk" and "toolResult" in params
+    }
+    assert results["a"]["approval"] == {
+        "kind": "allow_for_session",
+        "category": "browser",
+        "cached": True,
+    }
+    assert results["a"]["sandbox"] == {"enforcement": "workspace"}
+    assert "approval" not in results["b"]
+
+
+@pytest.mark.asyncio
+async def test_cached_session_allow_survives_a_long_parallel_result() -> None:
+    class _AllowOnce:
+        async def approve(self, _request: object) -> ApprovalDecision:
+            return ApprovalDecision("allow_for_session")
+
+    class _Blob:
+        async def execute(self, _call: ToolCall, _ctx: object) -> ToolResult:
+            return ToolResult(
+                success=True,
+                data={"blob": "w" * 500, "_sandbox": {"enforcement": "workspace"}},
+            )
+
+    approval = ApprovalExecutor(
+        _Blob(),
+        _AllowOnce(),
+        session=SessionApprovalCache(),
+    )
+    await approval.execute(ToolCall(id="seed", name="write_a", arguments={}), LoopContext())
+
+    class _Exec:
+        def concurrency_safe(self, _call: ToolCall) -> bool:
+            return True
+
+        async def execute(self, call: ToolCall, ctx: object) -> ToolResult:
+            if call.name == "stop":
+                return ToolResult(
+                    success=True,
+                    terminal=True,
+                    data={"terminal_status": "waiting_user"},
+                )
+            if call.name == "write_a":
+                return await approval.execute(call, ctx)
+            return ToolResult(success=True, data={"real": call.name})
+
+    class _Prov:
+        name = "fake"
+        model = "fake"
+
+        def __init__(self) -> None:
+            self._round = 0
+
+        async def complete(self, *_args: object, **_kwargs: object) -> None:
+            raise NotImplementedError
+
+        def stream(self, _messages: object, **_kwargs: object):
+            self._round += 1
+            round_index = self._round
+
+            async def _gen():
+                if round_index == 1:
+                    for name, call_id in (("stop", "stop"), ("write_a", "a"), ("write_b", "b")):
+                        yield LLMStreamChunk(
+                            tool_call_delta=ToolCall(id=call_id, name=name, arguments={})
+                        )
+                    yield LLMStreamChunk(
+                        finish_reason="tool_calls",
+                        usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                    )
+                else:
+                    yield LLMStreamChunk(content_delta="done")
+                    yield LLMStreamChunk(
+                        finish_reason="stop",
+                        usage=LLMUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                    )
+
+            return _gen()
+
+    transport = _CapturingTransport()
+    loop = CoreLoop(_Prov(), _Exec())
+    previews: dict[str, str] = {}
+    async for event in loop.run([LLMMessage.text_of("user", "go")]):
+        if event.kind == "tool_call_result":
+            preview = event.data.get("resultPreview")
+            if isinstance(preview, str):
+                previews[str(event.data.get("id"))] = preview
+            await Sidecar._emit_loop_event(transport, "stream-1", event)
+
+    assert '"_approval"' in previews["a"]
+    results = {
+        params["toolResult"]["id"]: params["toolResult"]
+        for method, params in transport.events
+        if method == "stream.chunk" and "toolResult" in params
+    }
+    assert results["a"]["approval"] == {
+        "kind": "allow_for_session",
+        "category": "write_a",
+        "cached": True,
+    }
+    assert results["a"]["sandbox"] == {"enforcement": "workspace"}
+
+
+def test_truncated_preview_keeps_markers_placed_first() -> None:
+    from steerable_sidecar.sidecar import _markers_from_result_preview
+
+    full = json.dumps(
+        {
+            "success": True,
+            "data": {
+                "_sandbox": {"enforcement": "workspace"},
+                "_approval": {
+                    "kind": "allow_for_session",
+                    "category": "browser",
+                    "cached": True,
+                },
+                "blob": "x" * 500,
+            },
+        }
+    )
+    sandbox, approval = _markers_from_result_preview(full[:300] + "…")
+    assert sandbox == {"enforcement": "workspace"}
+    assert approval == {
+        "kind": "allow_for_session",
+        "category": "browser",
+        "cached": True,
+    }
+    buried = json.dumps(
+        {
+            "success": True,
+            "data": {
+                "blob": "x" * 500,
+                "_approval": {"kind": "allow_for_session", "cached": True},
+            },
+        }
+    )
+    assert _markers_from_result_preview(buried[:300] + "…") == (None, None)

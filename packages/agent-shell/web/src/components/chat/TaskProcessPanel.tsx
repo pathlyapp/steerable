@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { LuArrowDown, LuLoaderCircle, LuTerminal } from 'react-icons/lu';
 import { DockHeaderButton, DockPanelHeader } from '@/components/DockPanelHeader';
 import { getChildProcess, getTaskProcess } from '@/lib/local-api';
-import { getElectronBridge } from '@/lib/electron-bridge';
+import { getHostBridge } from '@/lib/host-bridge';
+import { t } from '@/i18n';
 import { Markdown } from '@/components/chat/Markdown';
 import { TurnProcessGroup } from '@/components/chat/TurnProcessGroup';
 import {
@@ -153,7 +154,7 @@ export function TaskProcessPanel({
 
   useEffect(() => {
     if (childRecordId) return;
-    const bridge = getElectronBridge();
+    const bridge = getHostBridge();
     if (!bridge?.onTaskProcess) return;
     return bridge.onTaskProcess((payload) => {
       if (payload.taskId !== inspected.id) return;
@@ -168,11 +169,11 @@ export function TaskProcessPanel({
   }, [inspected.id, childRecordId]);
 
   const statusLabel = live
-    ? '正在推理'
+    ? t('Reasoning')
     : stale
-      ? '进程已中断（表上仍是运行中）'
-      : '已结束';
-  const panelTitle = `${childRecordId ? '子代理推理' : '后台推理'} · ${statusLabel}`;
+      ? t('Process interrupted (still marked running in the table)')
+      : t('Finished');
+  const panelTitle = `${childRecordId ? t('Subagent reasoning') : t('Background reasoning')} · ${statusLabel}`;
 
   return (
     <div
@@ -182,13 +183,13 @@ export function TaskProcessPanel({
       <DockPanelHeader
         title={panelTitle}
         onClose={onClose}
-        closeLabel="关闭过程面板"
+        closeLabel={t('Close process panel')}
         actions={
           onShowTerminal && (
             <DockHeaderButton
               icon={<LuTerminal className="h-3 w-3" />}
-              label="终端"
-              title="切换到终端"
+              label={t('Terminal')}
+              title={t('Switch to terminal')}
               onClick={onShowTerminal}
             />
           )
@@ -208,7 +209,7 @@ export function TaskProcessPanel({
           {loading ? (
             <div className="flex items-center gap-2 text-xs text-agent-muted-foreground">
               <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
-              正在加载推理过程…
+              {t('Loading reasoning process...')}
             </div>
           ) : error ? (
             <div className="text-xs text-red-600 dark:text-red-300">{error}</div>
@@ -223,10 +224,10 @@ export function TaskProcessPanel({
               emptyFallback={
                 <div className="text-xs text-agent-muted-foreground">
                   {stale
-                    ? '任务流已随进程结束，没有留下可回放的推理记录。'
+                    ? t('The task stream ended with the process and left no reasoning record to replay.')
                     : live
-                      ? '任务已启动，推理过程会显示在这里。'
-                      : '没有可显示的推理过程。'}
+                      ? t('The task has started. Its reasoning process appears here.')
+                      : t('No reasoning process to show.')}
                 </div>
               }
               renderAnswer={(block) => (
@@ -246,8 +247,8 @@ export function TaskProcessPanel({
               scrollToBottom('smooth');
             }}
             className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full border border-agent-border bg-agent-canvas text-agent-foreground shadow-md transition-colors hover:bg-agent-foreground/5"
-            title="回到底部"
-            aria-label="回到底部"
+            title={t('Back to bottom')}
+            aria-label={t('Back to bottom')}
           >
             <LuArrowDown className="h-4 w-4" />
           </button>

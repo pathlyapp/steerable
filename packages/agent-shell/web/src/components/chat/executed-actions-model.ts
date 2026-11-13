@@ -8,6 +8,8 @@
  * result_count / status / bytes / truncated 这些小字段原样保留。
  */
 
+import { t } from '@/i18n';
+import { agentLabel } from '@/i18n/agent-label';
 import { findAgentForProfile } from './orchestration-children-model';
 
 interface WebToolResultData {
@@ -61,19 +63,21 @@ export function summarizeWebAction(
 
   if (tool === 'web_search') {
     const query = typeof obj.query === 'string' ? obj.query : '';
-    const head = `搜索“${query.length > 40 ? `${query.slice(0, 37)}…` : query}”`;
+    const head = t('Search "{query}"', {
+      query: query.length > 40 ? `${query.slice(0, 37)}…` : query,
+    });
     if (failed || !data) return head;
     const count = typeof data.result_count === 'number' ? data.result_count : null;
-    return count === null ? head : `${head} → ${count} 条结果`;
+    return count === null ? head : t('{head} → {count} results', { head, count });
   }
   if (tool === 'web_fetch') {
-    const head = `抓取 ${shortUrl(obj.url) ?? '未知地址'}`;
+    const head = t('Fetch {url}', { url: shortUrl(obj.url) ?? t('unknown address') });
     if (failed || !data) return head;
     const parts: string[] = [];
     if (typeof data.status === 'number') parts.push(String(data.status));
     const size = formatBytes(data.bytes);
     if (size) parts.push(size);
-    if (data.truncated === true) parts.push('已截断');
+    if (data.truncated === true) parts.push(t('truncated'));
     return parts.length > 0 ? `${head} → ${parts.join(' · ')}` : head;
   }
   return null;
@@ -99,28 +103,27 @@ export function summarizeRunCodeAction(
   const description =
     typeof obj.description === 'string' && obj.description.trim()
       ? obj.description.trim()
-      : '程序';
+      : t('Program');
   const head =
     description.length > 40 ? `${description.slice(0, 37)}…` : description;
-  const data = resultData(result);
-  const calls = Array.isArray((data as { calls?: unknown } | null)?.calls)
-    ? ((data as { calls: RunCodeCall[] }).calls)
-    : [];
-  const failed =
-    result &&
-    typeof result === 'object' &&
-    (result as { success?: unknown }).success === false;
-  if (failed) return `程序「${head}」失败`;
+  const parsed = asObject(parseJsonValue(result));
+  const calls = runCodeCalls(result);
+  const failed = parsed?.success === false;
+  if (failed) return t('Program "{name}" failed', { name: head });
   return calls.length > 0
-    ? `程序「${head}」· ${calls.length} 个内层工具`
-    : `程序「${head}」`;
+    ? t('Program "{name}" · {count} inner tools', { name: head, count: calls.length })
+    : t('Program "{name}"', { name: head });
 }
 
 export interface ExecutedActionLike {
+  id?: string;
   tool: string;
   arguments?: unknown;
   result?: unknown;
   sandbox?: { backend?: string; enforcement: string };
+  approval?: { kind?: string; cached?: boolean; auto?: boolean };
+  view?: { title?: string; declared?: boolean };
+  durationMs?: number;
 }
 
 export interface DelegateSubagentView {
@@ -129,11 +132,16 @@ export interface DelegateSubagentView {
 }
 
 const BUILTIN_DELEGATE_LABELS: Record<string, string> = {
-  explore: '探索',
-  research: '调研',
-  coder: '编程',
-  'general-purpose': '通用',
+  explore: 'Explore',
+  research: 'Research',
+  coder: 'Coding',
+  'general-purpose': 'General',
 };
+
+function builtinDelegateLabel(profile: string): string {
+  const source = BUILTIN_DELEGATE_LABELS[profile];
+  return source ? t(source) : profile;
+}
 
 const BUILTIN_DELEGATE_COLORS: Record<string, string> = {
   explore: '#0ea5e9',
@@ -157,7 +165,7 @@ function participantFromProfile(
   const match = findAgentForProfile(profile, agents);
   return {
     key: match?.id ?? profile,
-    name: match?.name ?? BUILTIN_DELEGATE_LABELS[profile] ?? profile,
+    name: match ? agentLabel(match) : builtinDelegateLabel(profile),
     color: match?.color || BUILTIN_DELEGATE_COLORS[profile] || '#7c3aed',
   };
 }
@@ -187,7 +195,7 @@ export function collectTurnParticipants(
   const pushAgent = (agent: AgentRef) => {
     push({
       key: agent.id,
-      name: agent.name,
+      name: agentLabel(agent),
       color: agent.color || '#7c3aed',
     });
   };
@@ -196,7 +204,7 @@ export function collectTurnParticipants(
     if (parent && !mentioned.includes(parent.id)) {
       push({
         key: parent.id,
-        name: parent.name,
+        name: agentLabel(parent),
         color: parent.color || '#7c3aed',
       });
     }
@@ -209,7 +217,7 @@ export function collectTurnParticipants(
   if (parent) {
     push({
       key: parent.id,
-      name: parent.name,
+      name: agentLabel(parent),
       color: parent.color || '#7c3aed',
     });
   }
@@ -285,10 +293,10 @@ export function delegateSubagentDisplayName(
   profile: string | null,
   agents: ReadonlyArray<{ id: string; slug: string | null; name: string }>,
 ): string {
-  if (!profile) return '子代理';
+  if (!profile) return t('Subagent');
   const match = findAgentForProfile(profile, agents);
-  if (match) return match.name;
-  return BUILTIN_DELEGATE_LABELS[profile] ?? profile;
+  if (match) return agentLabel(match);
+  return builtinDelegateLabel(profile);
 }
 
 /** 任务正文作行摘要；没有任务时返回 null，调用方不再回落 JSON。 */
@@ -374,22 +382,25 @@ export function parseToolEnvelope(result: unknown): ToolEnvelope {
   };
 }
 
-const DELEGATE_STATUS_ZH: Record<string, string> = {
-  budget_exhausted: '额度耗尽',
-  failed: '失败',
-  cancelled: '已取消',
+const DELEGATE_STATUS_LABELS: Record<string, string> = {
+  budget_exhausted: 'budget exhausted',
+  failed: 'failure',
+  cancelled: 'cancellation',
 };
 
 /** 把 sidecar 的英文失败句收成行头/错误栏可读的中文。 */
 export function humanizeDelegateError(error: string | null): string | null {
   if (!error) return null;
-  if (error.includes('orchestration_budget_exceeded')) return '编排额度已用尽';
+  if (error.includes('orchestration_budget_exceeded')) return t('Orchestration budget used up');
   const ended = error.match(/sub-agent ended with status:\s*(\S+)/i);
   if (ended) {
     const status = ended[1].replace(/[.,;]+$/, '');
-    return `子代理因${DELEGATE_STATUS_ZH[status] ?? status}结束`;
+    const label = DELEGATE_STATUS_LABELS[status];
+    return t('Subagent ended due to {reason}', { reason: label ? t(label) : status });
   }
-  if (error.includes('budget_exhausted')) return '子代理因额度耗尽结束';
+  if (error.includes('budget_exhausted')) {
+    return t('Subagent ended due to {reason}', { reason: t('budget exhausted') });
+  }
   return error;
 }
 
@@ -475,7 +486,7 @@ export interface InspectTaskInput {
 }
 
 export function inspectTaskTitle(input: InspectTaskInput): string {
-  return input.title ?? input.task ?? '后台任务';
+  return input.title ?? input.task ?? t('Background task');
 }
 
 /** 工具行能打开右侧「后台推理」时抽出 taskId 和标题。 */
@@ -493,7 +504,7 @@ export function inspectableTaskFromAction(
     parseTaskRun(args).task
     ?? parsed.items[0]?.task
     ?? parsed.items[0]?.hint
-    ?? '后台任务';
+    ?? t('Background task');
   return { id, title };
 }
 
@@ -539,13 +550,13 @@ export function isTaskFamilyTool(tool: string): tool is TaskFamilyTool {
 export function taskToolLabel(tool: string, args: unknown): string | null {
   switch (tool) {
     case 'task_run':
-      return parseTaskRun(args).worktree ? '后台任务 · 隔离' : '后台任务';
+      return parseTaskRun(args).worktree ? t('Background task · Isolated') : t('Background task');
     case 'task_send':
-      return '转达任务';
+      return t('Relay to task');
     case 'task_status':
-      return '查询任务';
+      return t('Check tasks');
     case 'task_result':
-      return '收取结果';
+      return t('Collect result');
     default:
       return null;
   }
@@ -569,8 +580,8 @@ export function summarizeTaskAction(
     const parsed = parseTaskRun(args);
     if (!parsed.task) return null;
     const head = clip(parsed.task);
-    if (taskRunStatus(result) === 'blocked') return `${head} · 等待依赖`;
-    if (parsed.worktree) return `${head} · 隔离工作区`;
+    if (taskRunStatus(result) === 'blocked') return t('{head} · Waiting on dependencies', { head });
+    if (parsed.worktree) return t('{head} · Isolated workspace', { head });
     return head;
   }
   if (tool === 'task_send') {
@@ -581,7 +592,7 @@ export function summarizeTaskAction(
     const id = stringField(asObject(args), 'taskId');
     if (id) return shortTaskId(id);
     const total = asObject(result)?.total;
-    return typeof total === 'number' ? `${total} 个任务` : '本会话';
+    return typeof total === 'number' ? t('{count} tasks', { count: total }) : t('This chat');
   }
   if (tool === 'task_result') {
     const id = stringField(asObject(args), 'taskId');
@@ -590,23 +601,164 @@ export function summarizeTaskAction(
   return null;
 }
 
+function runCodeBody(result: unknown): Record<string, unknown> | null {
+  const obj = asObject(parseJsonValue(result));
+  if (!obj) return null;
+  return asObject(obj.data) ?? obj;
+}
+
+function runCodeCalls(result: unknown): RunCodeCall[] {
+  const calls = runCodeBody(result)?.calls;
+  return Array.isArray(calls) ? (calls as RunCodeCall[]) : [];
+}
+
+function approvalFromNestedResult(result: unknown): ExecutedActionLike['approval'] {
+  const marker = asObject(runCodeBody(result)?._approval);
+  if (!marker || typeof marker.kind !== 'string') return undefined;
+  return {
+    kind: marker.kind,
+    ...(marker.cached === true ? { cached: true } : {}),
+    ...(marker.auto === true ? { auto: true } : {}),
+  };
+}
+
 /** Flatten a run_code action into the outer program plus inner tool rows. */
 export function expandRunCodeActions<T extends ExecutedActionLike>(actions: T[]): T[] {
   const out: T[] = [];
   for (const action of actions) {
     out.push(action);
     if (action.tool !== 'run_code') continue;
-    const data = resultData(action.result) as { calls?: RunCodeCall[] } | null;
-    const calls = Array.isArray(data?.calls) ? data.calls : [];
+    const calls = runCodeCalls(action.result);
     for (const call of calls) {
       const name = typeof call.tool === 'string' ? call.tool : 'tool';
       out.push({
         ...action,
+        id: undefined,
+        view: undefined,
+        durationMs: undefined,
         tool: name,
         arguments: call.arguments,
         result: call.result,
+        approval: approvalFromNestedResult(call.result),
       });
     }
   }
   return out;
+}
+
+export interface AskReplay {
+  unattended: boolean;
+  lines: string[];
+}
+
+/** First question, used as the folded tool-row title. The intro is only a fallback. */
+export function askRowSummary(action: { tool?: string; arguments?: unknown; result?: unknown }): string {
+  if (action.tool !== 'ask_user') return '';
+  return firstQuestionText(action.result) || firstQuestionText(action.arguments);
+}
+
+/** Host on a settled egress row. Ports 80 and 443 are omitted. */
+export function egressRowSummary(action: { tool?: string; arguments?: unknown }): string {
+  if (action.tool !== 'network_egress') return '';
+  const value = action.arguments;
+  if (!value || typeof value !== 'object') return '';
+  const record = value as { host?: unknown; port?: unknown };
+  const host = typeof record.host === 'string' ? record.host : '';
+  if (!host) return '';
+  const port = typeof record.port === 'number' ? record.port : null;
+  if (port === null || port === 80 || port === 443) return host;
+  return `${host}:${port}`;
+}
+
+/** Questions and answers from an ask_user result, including a JSON preview. */
+export function askReplay(result: unknown): AskReplay | null {
+  const record = unwrapAsk(result);
+  if (!record) return null;
+  const asked: string[] = [];
+  const rendered: string[] = [];
+  for (const question of record.questions) {
+    if (!question || typeof question !== 'object') continue;
+    const row = question as { id?: unknown; text?: unknown };
+    const text = typeof row.text === 'string' ? row.text.trim() : '';
+    if (!text) continue;
+    asked.push(text);
+    const id = typeof row.id === 'string' ? row.id : '';
+    rendered.push(id ? answerText(record.answers[id]) : '');
+  }
+  if (asked.length === 0) return null;
+  const filled = rendered.filter((value) => value.length > 0);
+  const first = filled[0];
+  const shared = first !== undefined && filled.length === asked.length && filled.every((value) => value === first);
+  const lines = shared
+    ? [...asked.map((text) => t('Question {text}', { text })), t('Answer {text}', { text: first })]
+    : asked.flatMap((text, index) => {
+        const answer = rendered[index] ?? '';
+        return answer
+          ? [t('Question {text}', { text }), t('Answer {text}', { text: answer })]
+          : [t('Question {text}', { text })];
+      });
+  return { unattended: record.unattended === true, lines };
+}
+
+function unwrapAsk(result: unknown): { questions: unknown[]; answers: Record<string, unknown>; unattended?: boolean } | null {
+  if (typeof result === 'string') {
+    const trimmed = result.trim();
+    if (!trimmed.startsWith('{')) return null;
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      return unwrapAsk(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+  const record = result as {
+    questions?: unknown;
+    answers?: unknown;
+    data?: unknown;
+    value?: unknown;
+    unattended?: unknown;
+  };
+  if (Array.isArray(record.questions) && record.answers && typeof record.answers === 'object' && !Array.isArray(record.answers)) {
+    return {
+      questions: record.questions,
+      answers: record.answers as Record<string, unknown>,
+      ...(record.unattended === true ? { unattended: true } : {}),
+    };
+  }
+  if (record.value && typeof record.value === 'object') {
+    const inner = unwrapAsk(record.value);
+    if (inner) return record.unattended === true ? { ...inner, unattended: true } : inner;
+  }
+  if (record.data && typeof record.data === 'object') {
+    const inner = unwrapAsk(record.data);
+    if (inner) return record.unattended === true ? { ...inner, unattended: true } : inner;
+  }
+  return null;
+}
+
+function firstQuestionText(value: unknown): string {
+  const unwrapped = unwrapAsk(value);
+  const questions = unwrapped?.questions ?? questionList(value);
+  for (const question of questions) {
+    if (!question || typeof question !== 'object') continue;
+    const text = (question as { text?: unknown }).text;
+    if (typeof text === 'string' && text.trim()) return text.trim();
+  }
+  return '';
+}
+
+function questionList(value: unknown): unknown[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const questions = (value as { questions?: unknown }).questions;
+  return Array.isArray(questions) ? questions : [];
+}
+
+function answerText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (!Array.isArray(value)) return '';
+  return value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim())
+    .join(', ');
 }

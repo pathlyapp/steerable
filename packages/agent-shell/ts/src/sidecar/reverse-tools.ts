@@ -23,10 +23,14 @@ export interface ReverseToolDeps {
    */
   resolveProjectRoot?: (chatId: string) => Promise<string | null>;
   /**
-   * 额外放行的只读根（会话附件目录等）。写入仍只受 projectRoot 围栏约束，
-   * 这里只放宽 local_read_file 的读取范围。
+   * 额外只读根（会话附件目录、源文件夹）。只放宽读取，含各自子目录。
    */
   resolveAdditionalReadRoots?: (chatId: string) => string[] | Promise<string[]>;
+  /**
+   * 额外可写根（项目源文件夹）。放宽写入、编辑和命令 cwd，含各自子目录。
+   * 附件目录不进这里。
+   */
+  resolveAdditionalWriteRoots?: (chatId: string) => string[] | Promise<string[]>;
 }
 
 /**
@@ -38,6 +42,24 @@ export interface ReverseToolDeps {
  * 2000 单字段，最坏情况纯 CJK 约 4.8k token）。
  */
 function capResultForModelContext(out: unknown): unknown {
+  if (out && typeof out === 'object') {
+    const record = out as Record<string, unknown>;
+    const data =
+      record.data && typeof record.data === 'object'
+        ? (record.data as Record<string, unknown>)
+        : null;
+    const image = data?._image;
+    if (image && typeof image === 'object') {
+      const textOnly = { ...record, data: { ...data } };
+      delete (textOnly.data as Record<string, unknown>)._image;
+      const capped = capResultForModelContext(textOnly) as Record<string, unknown>;
+      const cappedData =
+        capped.data && typeof capped.data === 'object'
+          ? (capped.data as Record<string, unknown>)
+          : {};
+      return { ...capped, data: { ...cappedData, _image: image } };
+    }
+  }
   const json = JSON.stringify(out);
   if (json.length <= 8000) return out;
   return JSON.parse(compactToolResultJson(json));
@@ -88,6 +110,9 @@ export function createToolInvokeHandler(deps: ReverseToolDeps): SidecarReverseHa
     const additionalReadRoots = p.context?.chatId
       ? await Promise.resolve(deps.resolveAdditionalReadRoots?.(p.context.chatId) ?? [])
       : [];
+    const additionalWriteRoots = p.context?.chatId
+      ? await Promise.resolve(deps.resolveAdditionalWriteRoots?.(p.context.chatId) ?? [])
+      : [];
     if (name === 'local_exec_shell') {
       const classification = classifyShellCommand(String(toolArgs.command ?? ''));
       if (classification.severity === 'critical') {
@@ -110,7 +135,11 @@ export function createToolInvokeHandler(deps: ReverseToolDeps): SidecarReverseHa
     const toolPolicy =
       normalizedPolicy && normalizedPolicy.mode !== 'all' ? normalizedPolicy : null;
     const execContext =
-      projectRoot || additionalReadRoots.length > 0 || p.context?.chatId || toolPolicy
+      projectRoot ||
+      additionalReadRoots.length > 0 ||
+      additionalWriteRoots.length > 0 ||
+      p.context?.chatId ||
+      toolPolicy
         ? {
             projectRoot,
             chatId: p.context?.chatId,
@@ -118,6 +147,7 @@ export function createToolInvokeHandler(deps: ReverseToolDeps): SidecarReverseHa
             // worktree_* 工具按它把任务绑定到来源对话。
             ...(toolPolicy ? { toolPolicy } : {}),
             ...(additionalReadRoots.length > 0 ? { additionalReadRoots } : {}),
+            ...(additionalWriteRoots.length > 0 ? { additionalWriteRoots } : {}),
           }
         : undefined;
     try {

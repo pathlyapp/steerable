@@ -8,6 +8,8 @@ import {
   LuLoaderCircle,
   LuX,
 } from 'react-icons/lu';
+import { useExclusiveExpand } from './composer-status-stack';
+import { t } from '@/i18n';
 import {
   summarizeTodos,
   type SessionTodo,
@@ -44,12 +46,12 @@ export function todoProgressCopy(todos: SessionTodo[]): string {
   const summary = summarizeTodos(todos);
   if (summary.total === 0) return '';
   if (summary.completed === summary.total) {
-    return `${summary.completed}/${summary.total} 已完成`;
+    return `${summary.completed}/${summary.total}`;
   }
   const currentIndex = todos.findIndex((todo) => todo.status === 'in_progress');
   const step =
     currentIndex >= 0 ? currentIndex + 1 : Math.min(summary.completed + 1, summary.total);
-  return `执行到 ${step}/${summary.total}`;
+  return `${step}/${summary.total}`;
 }
 
 export function TodoItems({
@@ -98,7 +100,7 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
   const progressLabel = useMemo(() => todoProgressCopy(todos), [todos]);
   
   const hasActive = useMemo(
-    () => todos.some((t) => t.status === 'in_progress'),
+    () => todos.some((todo) => todo.status === 'in_progress'),
     [todos],
   );
   const isAllCompleted = useMemo(() => {
@@ -106,9 +108,11 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
     return summary.total > 0 && summary.completed === summary.total;
   }, [todos]);
 
-  // 执行中默认展开，全部完成默认折叠；允许用户手动点击收起或展开
+  // 执行中默认展开，全部完成默认折叠；允许用户手动点击收起或展开。
+  // 与编排胶囊同列时，展开浮层互斥。
   const [userToggled, setUserToggled] = useState<boolean | null>(null);
-  const expanded = userToggled ?? hasActive;
+  const desired = userToggled ?? hasActive;
+  const { expanded, requestOpen } = useExclusiveExpand('todos', desired);
 
   // 当任务全部执行完毕时，自动收起为紧凑胶囊
   useEffect(() => {
@@ -147,7 +151,13 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
     >
       <button
         type="button"
-        onClick={() => setUserToggled(!expanded)}
+        onClick={() => {
+          if (expanded) setUserToggled(false);
+          else {
+            setUserToggled(true);
+            requestOpen();
+          }
+        }}
         className={[
           'flex h-6 max-w-[240px] sm:max-w-[320px] items-center gap-1.5 rounded-full px-2 text-left text-[11px] transition-all duration-200 select-none shadow-2xs',
           isAllCompleted
@@ -168,7 +178,7 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
           <LuListChecks className="h-3.5 w-3.5 shrink-0 text-agent-foreground" />
         )}
         <span className="min-w-0 flex-1 truncate font-medium">
-          {isAllCompleted ? '任务清单' : (current?.content ?? '任务清单')}
+          {isAllCompleted ? t('Task list') : (current?.content ?? t('Task list'))}
         </span>
         {progressLabel ? (
           <span
@@ -198,26 +208,15 @@ export function SessionTodoList({ todos }: { todos: SessionTodo[] }) {
           <div className="flex items-center justify-between border-b border-agent-border/60 bg-agent-muted/30 px-2.5 py-1.5">
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-agent-foreground">
               <LuListChecks className="h-3.5 w-3.5 text-agent-foreground" />
-              <span>任务清单</span>
+              <span>{t('Task list')}</span>
             </div>
             <div className="flex items-center gap-1.5">
-              {progressLabel && (
-                <span
-                  className={`rounded-full px-1.5 py-0.2 text-[10px] font-medium ${
-                    isAllCompleted
-                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                      : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                  }`}
-                >
-                  {progressLabel}
-                </span>
-              )}
               <button
                 type="button"
                 onClick={() => setUserToggled(false)}
                 className="flex h-5 w-5 items-center justify-center rounded text-agent-muted-foreground transition-colors hover:bg-agent-foreground/10 hover:text-agent-foreground"
-                title="收起清单"
-                aria-label="收起清单"
+                title={t('Collapse list')}
+                aria-label={t('Collapse list')}
               >
                 <LuX className="h-3 w-3" />
               </button>

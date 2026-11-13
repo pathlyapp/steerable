@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { LuChevronDown, LuFolderLock, LuLockOpen } from 'react-icons/lu';
 import type { ExecPolicy } from '@/lib/exec-policy';
+import { t } from '@/i18n';
 
 /**
  * ExecPolicyPicker — 输入框上的命令沙箱切换（类 Codex 底部权限档）。
  *
- * 切档立刻记住，下一轮才生效：当前回合的 `execSandbox` 已经随流发出。
- * 工作区 = Seatbelt/bwrap 只允许写项目家目录或本对话工作区；完整权限
+ * 切档立刻记住。排队的下一轮按当时的档开流；插进当前回合的消息会改
+ * 这一回合后面的命令沙箱。已经在跑的那条命令保持它开始时的档。
+ * 工作区 = Seatbelt/bwrap 只允许写项目家目录、源文件夹（含各自子目录）或本对话工作区；完整权限
  * = 不下发命令沙箱，本机路径（如 Downloads）不再被 Operation not permitted 拦住。
  */
 
@@ -17,14 +19,14 @@ const OPTIONS: Array<{
 }> = [
   {
     id: 'workspace',
-    label: '工作区',
-    description:
-      '命令只能写入当前项目或本对话工作区（文稿/<应用名>/conversations/）；工作区外路径会被系统拒绝。',
+    label: 'Workspace',
+    description: 'Can only write to the current workspace. Paths outside it are blocked.',
   },
   {
     id: 'full',
-    label: '完整权限',
-    description: '关闭命令沙箱，可写本机任意路径。工具审批仍然生效。',
+    label: 'Full access',
+    description:
+      'Turns off the command sandbox so any path on this computer can be written. Tool approvals still apply.',
   },
 ];
 
@@ -60,9 +62,9 @@ export function ExecPolicyPicker({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label="命令沙箱"
+        aria-label={t('Command sandbox')}
         data-testid="exec-policy-picker"
-        title={current.description}
+        title={t(current.description)}
         onClick={() => setOpen((next) => !next)}
         className={[
           'inline-flex h-6 max-w-[140px] items-center gap-1 rounded-full border px-1.5 text-[12px] leading-[1.45] transition-colors disabled:cursor-not-allowed disabled:opacity-70',
@@ -76,13 +78,13 @@ export function ExecPolicyPicker({
         ) : (
           <LuFolderLock className="h-3 w-3 shrink-0" />
         )}
-        <span className="truncate">{current.label}</span>
+        <span className="truncate">{t(current.label)}</span>
         <LuChevronDown className="h-3 w-3 shrink-0 text-agent-muted-foreground" />
       </button>
       {open && (
         <div
           role="listbox"
-          aria-label="命令沙箱"
+          aria-label={t('Command sandbox')}
           className="absolute bottom-full left-0 z-30 mb-1 w-64 overflow-hidden rounded-agent-md border border-agent-border bg-agent-canvas py-1 shadow-sm"
         >
           {OPTIONS.map((option) => {
@@ -106,10 +108,10 @@ export function ExecPolicyPicker({
                 ].join(' ')}
               >
                 <span className="text-[12px] font-medium leading-[1.45] text-agent-foreground">
-                  {option.label}
+                  {t(option.label)}
                 </span>
                 <span className="text-[11px] leading-snug text-agent-muted-foreground">
-                  {option.description}
+                  {t(option.description)}
                 </span>
               </button>
             );

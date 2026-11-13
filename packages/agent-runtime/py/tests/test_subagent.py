@@ -84,6 +84,54 @@ async def test_child_writes_its_own_durable_record_and_publishes_the_id() -> Non
 
 
 @pytest.mark.asyncio
+async def test_delegation_records_the_resolved_profile_in_the_index() -> None:
+    """The index row must name the profile the child actually ran under.
+
+    ``delegate_subagent`` resolves a named profile per call; the event stream
+    and the registry are read by different surfaces, so a row labelled
+    ``general-purpose`` for a ``coder`` child would make a resumed child come
+    back with the wrong tool domain.
+    """
+    from steerable_agent_runtime.registry import ChildRegistry
+    from steerable_agent_runtime.storage import InMemoryStorage
+
+    provider = make_provider(
+        [
+            {
+                "tool_calls": [
+                    tc(
+                        "delegate_subagent",
+                        {"task": "写代码", "subagent_type": "coder"},
+                    )
+                ]
+            },
+            {"content": "coder done"},
+            {"content": "parent done"},
+        ]
+    )
+    storage = InMemoryStorage()
+    registry = ChildRegistry(storage)
+    registry_obj = SubagentRegistry()
+    registry_obj.register("coder", SubagentConfig(max_rounds=2))
+    executor = SubagentExecutor(
+        RouterToolExecutor(ToolRouter()),
+        provider,
+        registry=registry_obj,
+        history_store=storage,
+        record_id_prefix="chat-1",
+        child_registry=registry,
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    async for _ in loop.run([LLMMessage.text_of("user", "go")]):
+        pass
+
+    rows = await registry.list_for_parent("chat-1")
+    assert len(rows) == 1
+    assert rows[0].record.profile == "coder"
+    assert rows[0].record.engine == "coreloop"
+
+
+@pytest.mark.asyncio
 async def test_children_use_their_record_ids_as_isolated_chat_contexts() -> None:
     """Session-scoped child tools such as todo_write must not share the empty
     chat id or overwrite the parent's state."""
@@ -505,10 +553,10 @@ async def test_subagent_type_without_registry_fails_closed() -> None:
 
 @pytest.mark.asyncio
 async def test_model_profile_uses_the_provider_factory() -> None:
-    calls: list[str] = []
+    calls: list[tuple[str | None, str | None]] = []
 
-    def factory(model: str):
-        calls.append(model)
+    def factory(model: str | None, effort: str | None):
+        calls.append((model, effort))
         return make_provider([{"content": "cheap-model answer"}])
 
     registry = SubagentRegistry()
@@ -532,7 +580,9 @@ async def test_model_profile_uses_the_provider_factory() -> None:
     loop = CoreLoop(provider, executor, LoopConfig())
     events = [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
 
-    assert calls == ["gpt-4o-mini"]
+    # The model is what the profile pinned; the effort inherits the parent's,
+    # so `None` here means "do not override it", not "clear it".
+    assert calls == [("gpt-4o-mini", None)]
     results = _tool_results(events)
     assert results[0]["success"] is True
     assert "cheap-model answer" in results[0].get("resultPreview", "")
@@ -561,6 +611,98 @@ async def test_model_profile_without_factory_fails_closed() -> None:
     results = _tool_results(events)
     assert results[0]["success"] is False
     assert "no provider factory" in results[0].get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_effort_profile_reaches_the_provider_factory() -> None:
+    """A profile can pin reasoning effort the same way it pins a model."""
+    calls: list[tuple[str | None, str | None]] = []
+
+    def factory(model: str | None, effort: str | None):
+        calls.append((model, effort))
+        return make_provider([{"content": "terse answer"}])
+
+    registry = SubagentRegistry()
+    registry.register("explore", SubagentConfig(reasoning_effort="low"))
+    provider = make_provider(
+        [
+            {
+                "tool_calls": [
+                    tc("delegate_subagent", {"task": "x", "subagent_type": "explore"})
+                ]
+            },
+            {"content": "parent done"},
+        ]
+    )
+    executor = SubagentExecutor(
+        RouterToolExecutor(ToolRouter()),
+        provider,
+        registry=registry,
+        provider_factory=factory,
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
+
+    # No model is pinned by this profile, so the child keeps the parent's.
+    assert calls == [(None, "low")]
+    assert _tool_results(events)[0]["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_effort_profile_without_factory_fails_closed() -> None:
+    """Pinning effort needs the same rebuild capability as pinning a model."""
+    registry = SubagentRegistry()
+    registry.register("explore", SubagentConfig(reasoning_effort="low"))
+    provider = make_provider(
+        [
+            {
+                "tool_calls": [
+                    tc("delegate_subagent", {"task": "x", "subagent_type": "explore"})
+                ]
+            },
+            {"content": "parent done"},
+        ]
+    )
+    executor = SubagentExecutor(
+        RouterToolExecutor(ToolRouter()), provider, registry=registry
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
+
+    results = _tool_results(events)
+    assert results[0]["success"] is False
+    assert "reasoning effort" in results[0].get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_an_unpinned_profile_reuses_the_parent_provider() -> None:
+    """No model and no effort means the child must cost exactly what it did."""
+    provider = make_provider(
+        [
+            {
+                "tool_calls": [
+                    tc("delegate_subagent", {"task": "x", "subagent_type": "plain"})
+                ]
+            },
+            {"content": "same-model answer"},
+        ]
+    )
+
+    def factory(_model: str | None, _effort: str | None):
+        raise AssertionError("an unpinned profile must not rebuild the provider")
+
+    registry = SubagentRegistry()
+    registry.register("plain", SubagentConfig())
+    executor = SubagentExecutor(
+        RouterToolExecutor(ToolRouter()),
+        provider,
+        registry=registry,
+        provider_factory=factory,
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    events = [e async for e in loop.run([LLMMessage.text_of("user", "go")])]
+
+    assert _tool_results(events)[0]["success"] is True
 
 
 def test_concurrency_safe_follows_the_resolved_profile() -> None:
@@ -724,7 +866,15 @@ async def test_concurrent_profiles_run_in_parallel_on_the_pool() -> None:
 @pytest.mark.asyncio
 async def test_concurrent_delegation_fails_closed_at_the_pool_cap() -> None:
     """The pool budget is fail-closed for delegations too: the delegation
-    over the cap returns orchestration_budget_exceeded, never a queue."""
+    over the cap returns orchestration_budget_exceeded, never a queue.
+
+    Both delegations are made to occupy the slot (both call ``work``), so
+    which one wins the race cannot decide whether the test can proceed: the
+    winner always reaches the blocking tool, and the loser is refused. A
+    version where only one side called ``work`` was order-dependent — if the
+    other side won the slot it finished instantly and the first was refused,
+    leaving nothing to assert on.
+    """
     from test_orchestration import _content_provider, _tc
 
     entered = asyncio.Event()
@@ -765,11 +915,16 @@ async def test_concurrent_delegation_fails_closed_at_the_pool_cap() -> None:
                 },
                 {"content": "wrapped up"},
             ],
+            # Both sides block on the same tool, so the winner always reaches
+            # it regardless of which call the scheduler runs first.
             "task a": [
                 {"tool_calls": [_tc("work", {}, call_id="ca")]},
                 {"content": "A finished"},
             ],
-            "task b": [{"content": "B finished"}],
+            "task b": [
+                {"tool_calls": [_tc("work", {}, call_id="cb")]},
+                {"content": "B finished"},
+            ],
         }
     )
     executor = SubagentExecutor(
@@ -1143,3 +1298,97 @@ def test_descriptor_advertises_profile_descriptions() -> None:
     desc = d["function"]["description"]
     assert "explore: Read-only codebase reconnaissance." in desc
     assert "coder: Full-tool implementation work." in desc
+
+
+@pytest.mark.asyncio
+async def test_a_child_asking_for_input_announces_its_source() -> None:
+    """R7-3: the panel marks the row and the question card names the child.
+
+    Without this event the host can only tell "some delegation wants input" by
+    matching a tool result against a card it has not rendered yet.
+    """
+    events: list[tuple[str, dict]] = []
+    # The child runs on its own script: the parent's provider is shared, so a
+    # single script would have the child consume the parent's next round.
+    child_provider = make_provider(
+        [
+            {
+                "tool_calls": [
+                    tc(
+                        "request_parent_input",
+                        {
+                            "intro": "Which test command?",
+                            "questions": [
+                                {
+                                    "id": "cmd",
+                                    "text": "Which one?",
+                                    "multiSelect": False,
+                                    "options": [
+                                        {"label": "npm test"},
+                                        {"label": "npm run test:unit"},
+                                    ],
+                                }
+                            ],
+                        },
+                    )
+                ]
+            },
+            {"content": "asked"},
+        ]
+    )
+    provider = make_provider(
+        [
+            {
+                "tool_calls": [
+                    tc(
+                        "delegate_subagent",
+                        {"task": "ask which test command", "subagent_type": "asker"},
+                    )
+                ]
+            },
+            {"content": "parent done"},
+        ]
+    )
+    registry = SubagentRegistry()
+    registry.register("asker", SubagentConfig())
+    executor = SubagentExecutor(
+        RouterToolExecutor(ToolRouter()),
+        provider,
+        registry=registry,
+        provider_factory=lambda model, effort: child_provider,
+        event_sink=lambda kind, data: events.append((kind, data)),
+        tools=[parent_input_tool_descriptor()],
+    )
+    # The profile must pin something for the factory to be used.
+    registry.register("asker", SubagentConfig(model="child-model"))
+    loop = CoreLoop(provider, executor, LoopConfig())
+    [event async for event in loop.run([LLMMessage.text_of("user", "go")])]
+
+    needs_input = [data for kind, data in events if kind == "child_needs_input"]
+    assert len(needs_input) == 1
+    assert needs_input[0]["childId"] == "0.1"
+    assert needs_input[0]["intro"] == "Which test command?"
+
+
+@pytest.mark.asyncio
+async def test_a_child_that_never_asks_emits_no_needs_input_event() -> None:
+    events: list[tuple[str, dict]] = []
+    provider = make_provider(
+        [
+            {
+                "tool_calls": [
+                    tc("delegate_subagent", {"task": "just answer"})
+                ]
+            },
+            {"content": "parent done"},
+        ]
+    )
+    executor = SubagentExecutor(
+        RouterToolExecutor(ToolRouter()),
+        provider,
+        event_sink=lambda kind, data: events.append((kind, data)),
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    [event async for event in loop.run([LLMMessage.text_of("user", "go")])]
+
+    assert [kind for kind, _ in events if kind == "child_needs_input"] == []

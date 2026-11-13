@@ -13,8 +13,16 @@ retry:
   - impl: informed_backtrack
   # max_attempts 3 pins the production default (RetryHooks()); the strategy
   # default of 4 would silently diverge the spec from the sidecar chat path.
+  # transport_* is the connection-failure policy: seconds-scale backoff under
+  # a wall-clock deadline, so a proxy or link outage is retried long enough to
+  # ride out a blip and fails within the deadline instead of after minutes.
   - impl: simple
-    params: {max_attempts: 3}
+    params:
+      max_attempts: 3
+      transport_max_attempts: 5
+      transport_base_delay_ms: 1000
+      transport_max_delay_ms: 8000
+      transport_deadline_ms: 60000
 # Quoted: bare `null` is YAML's null literal, not the implementation name.
 validator: "null"
 tools: full
@@ -22,7 +30,9 @@ memory: stateless
 orchestration: single
 # Loop limits the harness pins (W3.4.2.4): entrypoints read these instead of
 # hardcoding knobs. Absent fields fall back to the entrypoint's baseline.
+# max_rounds and max_tool_errors are absent on purpose — a cap here ends a
+# long task at budget_exhausted / consecutive tool errors. The baseline is
+# no cap. A caller that wants a wall passes maxRounds / maxToolErrors, and
+# Harbor passes --max-rounds 250.
 loop:
-  max_rounds: 80
-  max_tool_errors: 16
   tool_dedup: false

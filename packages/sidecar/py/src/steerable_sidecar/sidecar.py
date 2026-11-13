@@ -45,6 +45,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -71,9 +72,16 @@ from steerable_agent_runtime import (
     JsonApprovalStore,
     LoopConfig,
     LoopHooks,
-    McpStdioClient,
+    McpClient,
+    McpError,
+    ChildNoticeHooks,
+    AcpEngineSpec,
+    AcpPermissionPolicy,
+    AcpToolBridge,
     OrchestrationConfig,
     OrchestrationExecutor,
+    SessionBudgetExceeded,
+    TreeBudget,
     PluginLoadError,
     PluginStateError,
     PolicyDeniedError,
@@ -92,12 +100,15 @@ from steerable_agent_runtime import (
     ToolDispatchError,
     ToolRouter,
     TodoCompletionGate,
+    create_mcp_client,
+    TodoPlanningNudge,
     TraceRecorder,
     WorldStateHooks,
     branch_label,
     close_dangling_tool_calls,
     entry_from_dict,
     estimate_cost_usd,
+    export_metrics,
     export_trace,
     resolve_compaction_policy,
     is_large_window,
@@ -108,6 +119,7 @@ from steerable_agent_runtime import (
     orchestration_tool_descriptors,
     resolve_fork_seq,
     select_catalog,
+    select_pinned_loadable,
     select_skills,
     skill_to_dict,
     skill_tool_descriptor,
@@ -134,11 +146,20 @@ from steerable_agent_runtime.transport.stdio_jsonrpc import (
 from ._version import __version__ as SIDECAR_VERSION
 from .file_edit import EditError, EditOp, apply_edits
 from .host_tools import HostApprover, HostAskUserHandler, HostToolExecutor
-from .loop_limits import resolve_loop_limits
+from .loop_limits import UNLIMITED_LOOP_LIMIT, resolve_loop_limits
 from .sandbox import select_exec_backend
 from .stream_chunks import RawChunkBridgeHooks
 
 logger = logging.getLogger("steerable_sidecar")
+
+_AUTO_APPROVED_HOST_CONTROL_TOOLS = (
+    "get_goal",
+    "create_goal",
+    "update_goal",
+    "loop_create",
+    "loop_list",
+    "loop_stop",
+)
 
 PROTOCOL_VERSION = "0.1.0"
 
@@ -159,6 +180,29 @@ _APPROVAL_SESSION_CACHE_CAP = 64
 #: hard-cancel backstop. The loop normally winds down within one await
 #: point; 5s covers a slow final history flush without masking a wedge.
 _CANCEL_GRACE_S = 5.0
+
+
+class _TurnExecControl:
+    """Live command-sandbox switch for one running turn.
+
+    The composer can change workspace / full access after the stream has
+    started. Steer applies that choice here so the next shell call follows
+    it. The sandbox wrapper and the workspace auto-approver are optional:
+    a turn that never installed a wrapper cannot grow one mid-flight.
+    """
+
+    def __init__(self) -> None:
+        self.sandbox: Any = None
+        self.approver: Any = None
+
+    def apply(self, policy: str) -> None:
+        active = policy != "full"
+        sandbox = self.sandbox
+        if sandbox is not None:
+            sandbox.set_active(active)
+        approver = self.approver
+        if approver is not None:
+            approver.set_sandbox_enforced(active)
 
 
 @dataclass
@@ -211,10 +255,22 @@ class Sidecar:
         # request params, returns a LoopHooks (e.g. ChainHooks of retry +
         # compaction + spill). Defaults to RetryHooks alone.
         self._loop_hooks_factory = loop_hooks_factory
+        #: One child index per sidecar, over the same storage the records use.
+        #: Per-process (not per-stream) so a child spawned in one turn is
+        #: visible to the next turn's pool and to ``agent_list``.
+        from steerable_agent_runtime.registry import ChildRegistry
+
+        self._children_registry = ChildRegistry(self.storage)
         self._streams: dict[str, asyncio.Task[Any]] = {}
+        #: Live orchestration pools by chat id. The panel's 「停止」 needs to
+        #: reach a child that is running right now, and the per-turn executor
+        #: that owns the pool is otherwise only reachable through its stream.
+        self._pools: dict[str, Any] = {}
         #: Active CoreLoop instances by stream id — the steer RPC targets
         #: these to inject user messages into a running turn.
         self._coreloops: dict[str, CoreLoop] = {}
+        #: Per-stream command sandbox, toggled by agent.chat.steer execPolicy.
+        self._exec_controls: dict[str, _TurnExecControl] = {}
         #: Hard-cancel watchdogs armed by agent.chat.cancel on CoreLoop
         #: streams; tracked so the tasks are not garbage-collected early.
         self._cancel_watchdogs: set[asyncio.Task[None]] = set()
@@ -268,6 +324,7 @@ class Sidecar:
         register("skills.list", self._handle_skills_list)
         register("trace.fetch", self._handle_trace_fetch)
         register("trace.export", self._handle_trace_export)
+        register("metrics.export", self._handle_metrics_export)
         register("config.get", self._handle_config_get)
         register("config.set", self._handle_config_set)
         register("compat.describe", self._handle_compat_describe)
@@ -276,6 +333,7 @@ class Sidecar:
         register("plugin.enable", self._handle_plugin_enable)
         register("plugin.disable", self._handle_plugin_disable)
         register("plugin.reload", self._handle_plugin_reload)
+        register("plugin.tools.describe", self._handle_plugin_tools_describe)
         register("presets.describe", self._handle_presets_describe)
         register("presets.resolve", self._handle_presets_resolve)
         register("catalog.describe", self._handle_catalog_describe)
@@ -290,6 +348,8 @@ class Sidecar:
         register("agent.session.branches", self._handle_session_branches)
         register("agent.session.tree", self._handle_session_tree)
         register("agent.session.messages", self._handle_session_messages)
+        register("agent.children.list", self._handle_children_list)
+        register("agent.children.interrupt", self._handle_children_interrupt)
 
     # ------------------------------------------------------------------
     # Entrypoint
@@ -617,11 +677,29 @@ class Sidecar:
             )
         spans = await self.storage.list_spans(trace_id)
         events = await self.storage.list_events(trace_id)
-        return {
+        # Bound the payload. A long agentic turn logs events at roughly
+        # 200-800/round; the 259-round incident produced 161k events ≈ 39 MB of
+        # JSON, which the host's single-RPC fetch (5 s) could never pull — the
+        # trace was silently dropped, and the biggest runs are exactly the ones
+        # worth inspecting. Head + tail keeps the setup and (more importantly)
+        # *how the run ended*; the dropped middle is the thrash. The markers
+        # below tell the host — and the trace viewer — that the slice is
+        # partial, so a truncated trace is never mistaken for a whole one.
+        total_events = len(events)
+        max_events = _trace_fetch_max_events(params)
+        truncated = max_events is not None and total_events > max_events
+        if truncated and max_events is not None:
+            head = max(0, max_events // 4)
+            events = [*events[:head], *events[-(max_events - head) :]]
+        payload: dict[str, Any] = {
             "trace": trace.model_dump(exclude_none=True),
             "spans": [s.model_dump(exclude_none=True) for s in spans],
             "events": [e.model_dump(exclude_none=True) for e in events],
         }
+        if truncated:
+            payload["eventsTotal"] = total_events
+            payload["eventsTruncated"] = True
+        return payload
 
     async def _handle_trace_export(
         self, params: dict[str, Any] | None
@@ -669,6 +747,47 @@ class Sidecar:
                 f"trace export failed: {exc}", code=-32603, kind="internal"
             ) from exc
         return {"status": status, "traceId": trace_id, "privacyMode": privacy_mode}
+
+    async def _handle_metrics_export(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """POST turn-outcome counters to a collector's ``/v1/metrics`` (R4).
+
+        Params: ``samples`` (required) — one dict per finished turn with
+        ``outcome`` / ``failureKind`` / ``attempts`` / ``usedDirect`` —,
+        ``endpoint`` (required, the collector's ``/v1/metrics`` URL),
+        ``serviceName`` (optional).
+
+        Separate from ``trace.export`` because a collector may accept traces
+        and not metrics, or the reverse; the host calls this only when it has
+        turn outcomes to report. The payload carries no conversation content,
+        so there is nothing for the privacy mode to filter.
+        """
+        params = _require_params(params)
+        samples = params.get("samples")
+        endpoint = params.get("endpoint")
+        if not isinstance(samples, list) or not samples:
+            raise JsonRpcError("samples required", code=-32602, kind="invalid_params")
+        if not endpoint:
+            raise JsonRpcError("endpoint required", code=-32602, kind="invalid_params")
+        cleaned: list[dict[str, Any]] = []
+        for sample in samples:
+            if not isinstance(sample, dict):
+                raise JsonRpcError(
+                    "each sample must be an object", code=-32602, kind="invalid_params"
+                )
+            cleaned.append(sample)
+        try:
+            status = export_metrics(
+                cleaned,
+                str(endpoint),
+                service_name=str(params.get("serviceName") or "steerable-agent"),
+            )
+        except Exception as exc:  # collector unreachable / non-2xx
+            raise JsonRpcError(
+                f"metrics export failed: {exc}", code=-32603, kind="internal"
+            ) from exc
+        return {"status": status, "metrics": len(cleaned)}
 
     async def _handle_config_get(
         self, params: dict[str, Any] | None
@@ -810,6 +929,39 @@ class Sidecar:
         except (PluginStateError, PluginLoadError) as exc:
             raise JsonRpcError(str(exc), code=-32602, kind="invalid_params") from exc
         return {"plugin": self._plugin_record_dict(registry.get(name))}
+
+    async def _handle_plugin_tools_describe(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Descriptors for every tool an enabled plugin has on the router.
+
+        Hosts that own the model-visible tool list (``toolsViaHost``) use
+        this to advertise plugin tools and forward calls back over
+        ``tool.invoke``; ``tool.list`` carries no mode or plugin owner.
+        Disabled plugins have no tools on the router, so they contribute none.
+        """
+        registry = self._require_plugin_registry()
+        tools: list[dict[str, Any]] = []
+        for record in registry.plugins():
+            if not record.enabled:
+                continue
+            for name in record.tools:
+                tool = self.tools.get(name)
+                if tool is None:
+                    continue
+                tools.append(
+                    {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "schema": tool.schema,
+                        "mode": tool.mode,
+                        "exposure": tool.exposure,
+                        "requireConsent": tool.require_consent,
+                        "concurrencySafe": tool.concurrency_safe,
+                        "plugin": record.name,
+                    }
+                )
+        return {"tools": tools}
 
     async def _handle_presets_describe(
         self, _params: dict[str, Any] | None
@@ -1117,14 +1269,26 @@ class Sidecar:
         # as an unretrieved exception inside the background stream task).
         # Spawning/registration happens in _run_chat_stream_coreloop.
         mcp_param = params.get("mcp")
-        if isinstance(mcp_param, list):
+        if (
+            isinstance(mcp_param, list)
+            and not params.get("toolsViaHost")
+            and self._loop_hooks_factory is None
+        ):
             for index, server in enumerate(mcp_param):
-                if not isinstance(server, dict) or not server.get("command"):
+                if not isinstance(server, dict):
                     raise JsonRpcError(
-                        f"mcp[{index}] requires a non-empty 'command'",
+                        f"mcp[{index}] must be an object",
                         code=-32602,
                         kind="invalid_params",
                     )
+                try:
+                    create_mcp_client(server)
+                except McpError as exc:
+                    raise JsonRpcError(
+                        f"mcp[{index}]: {exc}",
+                        code=-32602,
+                        kind="invalid_params",
+                    ) from exc
         if use_coreloop:
             task = asyncio.create_task(
                 self._run_chat_stream_coreloop_guarded(
@@ -1496,6 +1660,105 @@ class Sidecar:
             )
         return {"recordId": str(record_id), "messages": messages}
 
+    async def _handle_children_interrupt(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Cooperatively interrupt one running child of a chat's live turn.
+
+        The panel's 「停止」 target. Not an `agent_interrupt` tool call: the
+        model is not the one asking, and routing it through a turn would make
+        the user wait for their own click. Returns `{interrupted: false}` when
+        the child is not running here, which is honest — the panel then just
+        refreshes its rows.
+        """
+        params = params or {}
+        chat_id = str(params.get("chatId") or "").strip()
+        child_id = str(params.get("childId") or "").strip()
+        if not chat_id or not child_id:
+            raise JsonRpcError(
+                "chatId and childId are required",
+                code=-32602,
+                kind="invalid_params",
+            )
+        pool = self._pools.get(chat_id)
+        if pool is None:
+            return {"interrupted": False, "reason": "no live turn for this chat"}
+        interrupted = bool(pool.interrupt(child_id))
+        return {
+            "interrupted": interrupted,
+            **({"reason": "not running"} if not interrupted else {}),
+        }
+
+    async def _handle_children_list(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Every child agent this sidecar has recorded for one parent.
+
+        ``{"parentRecordId", "children": [ChildStatusView.to_wire(), ...]}``
+        — the durable answer to "what did this session spawn", which the pool
+        cannot give once the turn that spawned them has ended.
+
+        ``includeFinished: false`` (default true) narrows to children that can
+        still run, which is what a "resume these" panel wants. A missing
+        ``parentRecordId`` lists the whole store under ``prefix`` (or
+        everything), for a host that wants a global view.
+        """
+        params = params or {}
+        include_finished = params.get("includeFinished", True) is not False
+        parent = params.get("parentRecordId") or params.get("recordId")
+        preview_chars = params.get("answerPreviewChars")
+        preview_len = int(preview_chars) if isinstance(preview_chars, int) else 0
+        prefix = params.get("prefix")
+
+        if parent:
+            views = await self._children_registry.list_for_parent(
+                str(parent), include_finished=include_finished
+            )
+        else:
+            views = await self._children_registry.list_all(
+                prefix=str(prefix) if prefix else None
+            )
+            if not include_finished:
+                views = [view for view in views if not view.record.terminal]
+
+        children: list[dict[str, Any]] = []
+        for view in views:
+            preview = None
+            if preview_len > 0:
+                preview = await self._child_answer_preview(
+                    view.record.record_id, preview_len
+                )
+            children.append(view.to_wire(answer_preview=preview))
+        return {
+            "parentRecordId": str(parent) if parent else None,
+            "children": children,
+        }
+
+    async def _child_answer_preview(
+        self, record_id: str, limit: int
+    ) -> str | None:
+        """The child's last assistant text, truncated.
+
+        Read from the child's own record rather than stored on the index row,
+        so the transcript keeps one authoritative copy (see ``child_record``).
+        """
+        from steerable_agent_runtime.resume import load_history_items
+
+        try:
+            items = await load_history_items(self.storage, record_id)
+        except Exception:  # noqa: BLE001 — a preview is never worth a failure
+            return None
+        if not items:
+            return None
+        for item in reversed(items):
+            if item.message.role != "assistant":
+                continue
+            text = item.message.content_text.strip()
+            if not text:
+                continue
+            return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+        return None
+
     async def _handle_chat_steer(self, params: dict[str, Any] | None) -> dict[str, Any]:
         """Inject a user message into a running CoreLoop turn.
 
@@ -1515,6 +1778,14 @@ class Sidecar:
         loop = self._coreloops.get(stream_id)
         if loop is None:
             return {"ok": False, "reason": "stream_not_active"}
+        # Composer sandbox (workspace / full) rides with the interjection so
+        # the next shell call in this turn matches the picker. Unknown values
+        # leave the turn's original sandbox alone.
+        policy = params.get("execPolicy")
+        if policy in ("full", "workspace"):
+            control = self._exec_controls.get(stream_id)
+            if control is not None:
+                control.apply(str(policy))
         loop.steer(content)
         return {"ok": True}
 
@@ -1645,9 +1916,9 @@ class Sidecar:
         terminal tool-free response reaches the host; the durable record and
         trace still retain every intermediate assistant turn.
 
-        ``mcp`` mounts per-turn MCP servers on the sidecar-local path:
-        ``[{"name", "command", "args"?, "env"?}]`` spawns one
-        ``McpStdioClient`` per entry, registers its catalog under the
+        ``mcp`` mounts per-turn MCP servers on the sidecar-local path.
+        Stdio entries use ``command`` and Streamable HTTP entries use
+        ``url``; each client registers its catalog under the
         ``mcp__<name>__<tool>`` prefix on this turn's router, and closes the
         clients when the stream ends (completion, error, or cancel). It is
         the sidecar-local counterpart of the ACP adapter's ``mcpServers``
@@ -1656,13 +1927,13 @@ class Sidecar:
         """
 
         # mcp: per-turn MCP servers on the sidecar-local path. Each entry
-        # spawns one McpStdioClient; its catalog is registered on this turn's
-        # router under the ``mcp__<name>__<tool>`` prefix. Clients are closed
+        # creates one transport client; its catalog is registered on this
+        # turn's router under the ``mcp__<name>__<tool>`` prefix. Clients close
         # in this method's ``finally`` so a completion, error, or cancel never
-        # leaks a subprocess. Skipped under toolsViaHost (the host owns
+        # leaks a transport. Skipped under toolsViaHost (the host owns
         # execution there) and when an embedder replaces the whole harness
         # (the hooks factory owns the tool surface).
-        mcp_clients: list[McpStdioClient] = []
+        mcp_clients: list[McpClient] = []
         mcp_param = params.get("mcp")
         if (
             isinstance(mcp_param, list)
@@ -1673,15 +1944,7 @@ class Sidecar:
             # Entries were shape-validated in _handle_chat_stream.
             for index, server in enumerate(mcp_param):
                 name = str(server.get("name") or f"mcp{index}")
-                client = McpStdioClient(
-                    str(server["command"]),
-                    [str(a) for a in server.get("args") or []],
-                    env={
-                        str(k): str(v)
-                        for k, v in (server.get("env") or {}).items()
-                    }
-                    or None,
-                )
+                client = create_mcp_client(server)
                 await client.start()
                 mcp_clients.append(client)
                 catalog = await client.list_tools()
@@ -1711,6 +1974,10 @@ class Sidecar:
         from .todo_tools import todo_store
 
         hooks = ChainHooks(hooks, TodoCompletionGate(todo_store()))
+        # Planning nudge: one reminder per turn when a long run never wrote
+        # a task list. Per-run instance — it counts this turn's tool calls.
+        if self.tools.get("todo_write") is not None:
+            hooks = ChainHooks(hooks, TodoPlanningNudge(todo_store()))
         # The bundled spec's tools dimension governs the host-supplied tool
         # surface; the sidecar's own additions below (subagent / skills /
         # orchestration) are orthogonal dimensions advertised past
@@ -1720,6 +1987,11 @@ class Sidecar:
         # the reverse channel, so there is no in-process ToolRouter to bind
         # — and must fail loud rather than offer a dead descriptor.
         tools = params.get("tools")
+        from steerable_agent_runtime.approval import declared_resolver as _declared_resolver
+
+        approval_resolve = _declared_resolver(tools if isinstance(tools, list) else None)
+        if isinstance(tools, list):
+            tools = [_model_tool(tool) for tool in tools]
         if tools is not None and tool_selection is not None:
             try:
                 tools = tool_selection.select(list(tools))
@@ -1779,6 +2051,9 @@ class Sidecar:
         # (requireFull refuses anything short of full; requireBackend
         # refuses only enforcement "none" — the desktop uses the latter so
         # honest-partial Seatbelt/bwrap still runs).
+        # Kept on the turn so a later steer can switch workspace / full
+        # access without rebuilding the executor chain.
+        exec_control = _TurnExecControl()
         exec_sandbox = params.get("execSandbox")
         if isinstance(exec_sandbox, dict) and exec_sandbox.get("enabled"):
             backend = select_exec_backend(
@@ -1814,6 +2089,7 @@ class Sidecar:
                     ),
                     command_arg=str(exec_sandbox.get("commandArg") or "command"),
                 )
+                exec_control.sandbox = executor
             else:
                 executor = SandboxedToolExecutor(
                     executor,
@@ -1827,6 +2103,7 @@ class Sidecar:
                     require_full=bool(exec_sandbox.get("requireFull")),
                     require_backend=bool(exec_sandbox.get("requireBackend")),
                 )
+                exec_control.sandbox = executor
         # approval: opt-in approval algebra (Wave 3). ``{"mode": "auto"}`` is
         # the headless policy (safe modes auto-approve, the rest auto-deny —
         # a run never hangs on a prompt nobody answers); ``{"mode": "host"}``
@@ -1844,7 +2121,58 @@ class Sidecar:
             # updates the live in-memory policy too, so an amendment takes
             # effect within the same run, not just on the next one.
             approver: Any
+            approval_chat_id = _approval_prompt_chat_id(params)
             policy_path = approval.get("policyPath")
+            # In-project file targets do not ask. Roots come from the host's
+            # project fence (still sent when 「完整权限」 turns the OS sandbox
+            # off). The exec sandbox list is the fallback for callers that
+            # only set that. Shell calls skip the prompt only while that
+            # sandbox is actually on and the cwd stays in the roots; with
+            # the sandbox off, or a cwd outside the roots, the prompt stays.
+            # allow_once is not cached, so the next call is judged on its
+            # own paths. Sits under policy rules so an explicit deny still wins.
+            raw_roots = approval.get("writableRoots")
+            if (
+                not raw_roots
+                and isinstance(exec_sandbox, dict)
+                and exec_sandbox.get("enabled")
+            ):
+                raw_roots = exec_sandbox.get("writableRoots")
+            writable_roots = (
+                [str(root) for root in (raw_roots or []) if root]
+                if approval["mode"] == "host"
+                else []
+            )
+            raw_base = approval.get("pathBase")
+            path_base = str(raw_base) if isinstance(raw_base, str) and raw_base.strip() else None
+
+            def _sandbox_enforced() -> bool:
+                # The wrapper is installed before the first approve call, and
+                # steer updates this flag for the next shell call.
+                approver = exec_control.approver
+                return bool(getattr(approver, "_sandbox_enforced", False))
+
+            def _host_approver(amendment_sink: Any | None = None) -> Any:
+                host = HostApprover(
+                    self.server,
+                    amendment_sink=amendment_sink,
+                    chat_id=approval_chat_id,
+                    sandbox_enforced=_sandbox_enforced,
+                )
+                from steerable_agent_runtime.approval import WorkspaceAutoApprover
+
+                approver = WorkspaceAutoApprover(
+                    host,
+                    writable_roots,
+                    sandbox_enforced=bool(
+                        isinstance(exec_sandbox, dict) and exec_sandbox.get("enabled")
+                    ),
+                    auto_allow_tools=_AUTO_APPROVED_HOST_CONTROL_TOOLS,
+                    path_base=path_base,
+                )
+                exec_control.approver = approver
+                return approver
+
             if policy_path:
                 from steerable_agent_runtime import (
                     JsonApprovalPolicyStore,
@@ -1861,19 +2189,20 @@ class Sidecar:
                 base = (
                     AutoApprover()
                     if approval["mode"] == "auto"
-                    else HostApprover(self.server, amendment_sink=_amendment_sink)
+                    else _host_approver(_amendment_sink)
                 )
                 approver = PolicyApprover(base, live_policy)
             elif approval["mode"] == "auto":
                 approver = AutoApprover()
             else:
-                approver = HostApprover(self.server)
+                approver = _host_approver()
             executor = ApprovalExecutor(
                 executor,
                 approver,
-                session=self._approval_session(params.get("chatId")),
+                session=self._approval_session(approval_chat_id or params.get("chatId")),
                 store=JsonApprovalStore(store_path) if store_path else None,
                 timeout_s=(float(timeout_ms) / 1000.0) if timeout_ms else None,
+                resolve=approval_resolve,
             )
         # Child-safe sidecar-local tools must be visible and dispatchable
         # before SubagentExecutor snapshots its tool domain. User interaction
@@ -1903,6 +2232,48 @@ class Sidecar:
         # agent.child notification stream, and a concurrent profile's
         # same-round delegations execute in parallel under the pool budget.
         loop_config = _build_loop_config(params)
+        # The tree budget is a second scope over the same number: `loop_config`
+        # budgets the parent run, this one budgets the parent plus every child
+        # it spawns. Both are created from `budgetTokens` so a host that asked
+        # for a limit gets one that the whole tree shares. Absent it, neither
+        # exists and behaviour is exactly as before.
+        tree_budget = (
+            _tree_budget_from(params) if params.get("budgetTokens") is not None else None
+        )
+        # The parent loop is created after both executors (the loop needs the
+        # executors, and a fork needs the loop's transcript). Both multi-agent
+        # surfaces read the transcript through this holder, filled in once the
+        # loop exists, so `fresh`/`fork` mean the same thing on either tool.
+        parent_loop_holder: list[CoreLoop] = []
+        parent_projection = lambda: (  # noqa: E731 — one expression, used twice
+            parent_loop_holder[0].history.projection if parent_loop_holder else []
+        )
+        # The parent's model route, for a cross-model fork to compare against.
+        # Same holder reasoning as the projection: the loop exists later.
+        parent_route = lambda: (  # noqa: E731 — one expression
+            (
+                str(getattr(parent_loop_holder[0]._provider, "model", "") or "") or None,
+                str(params.get("reasoningEffort") or "") or None,
+            )
+            if parent_loop_holder
+            else (None, None)
+        )
+
+        def _orchestration_provider_factory(
+            model: str | None, reasoning_effort: str | None
+        ) -> LLMProvider:
+            """Rebuild the provider at another route for a cross-model fork.
+
+            Same rule as the delegation profiles: `None` inherits, so a value
+            the caller did not ask for is not blanked. Validation happens in
+            the host factory, which fails a model or effort it cannot serve.
+            """
+            overridden = {**params}
+            if model is not None:
+                overridden["model"] = model
+            if reasoning_effort is not None:
+                overridden["reasoningEffort"] = reasoning_effort
+            return self._llm_provider_factory(overridden)
         subagent_param = params.get("subagent", True)
         subagent_executor: SubagentExecutor | None = None
         if subagent_param:
@@ -1912,20 +2283,22 @@ class Sidecar:
                 if isinstance(subagent_opts.get("toolFilter"), list)
                 else None
             )
-            # Named profiles (CC ``subagent_type`` parity): the host passes
-            # ``{"profiles": {"researcher": {"toolFilter": [...], "model":
+            # Named profiles (CC ``subagent_type`` parity): the host passes            # ``{"profiles": {"researcher": {"toolFilter": [...], "model":
             # "...", "maxRounds": N, "concurrent": bool}}}`` and the tool
             # schema advertises the names as a ``subagent_type`` enum. An
             # unknown name fails closed listing the registered ones.
             # Round / tool-error walls inherit the parent loop unless a
-            # profile pins its own — a child must not die at 8/12 rounds
-            # while the parent still has the spec's 80.
+            # profile pins its own. The parent default is no cap, so an
+            # unpinned child is not stopped at SubagentConfig's 8 / 3.
             registry = None
             profiles = subagent_opts.get("profiles")
             if isinstance(profiles, dict) and profiles:
                 registry = SubagentRegistry()
                 for name, profile_opts in profiles.items():
                     p = profile_opts if isinstance(profile_opts, dict) else {}
+                    engine_spec, engine_permission = _acp_engine_from_profile(
+                        str(name), p.get("engine")
+                    )
                     p_filter = (
                         frozenset(str(t) for t in p.get("toolFilter"))
                         if isinstance(p.get("toolFilter"), list)
@@ -1946,7 +2319,13 @@ class Sidecar:
                             model=(
                                 str(p["model"]) if p.get("model") is not None else None
                             ),
+                            reasoning_effort=(
+                                str(p["reasoningEffort"])
+                                if p.get("reasoningEffort") is not None
+                                else None
+                            ),
                             concurrent=bool(p.get("concurrent", False)),
+                            fork_context=bool(p.get("forkContext", False)),
                             system_prompt=(
                                 str(p["systemPrompt"])
                                 if p.get("systemPrompt") is not None
@@ -1957,15 +2336,33 @@ class Sidecar:
                                 if p.get("description") is not None
                                 else SubagentConfig().description
                             ),
+                            acp_engine=engine_spec,
+                            acp_permission=engine_permission,
+                            # The bridge is supplied once on the executor
+                            # (below): every external child's file and command
+                            # requests must pass the same fence the parent's
+                            # own tools do.
+                            acp_tool_bridge=None,
                         ),
                     )
 
             # Per-profile models resolve through a provider factory that
             # re-enters the host's own factory with the model overridden —
             # a profile naming a model the host cannot serve fails closed
-            # rather than silently running the parent's model.
-            def _subagent_provider_factory(model: str) -> LLMProvider:
-                overridden = {**params, "model": model}
+            # rather than silently running the parent's model. Reasoning
+            # effort travels the same way: a profile pinning it rebuilds the
+            # provider at that level, and an unsupportable level fails at
+            # construction (the factory validates strict).
+            def _subagent_provider_factory(
+                model: str | None, reasoning_effort: str | None
+            ) -> LLMProvider:
+                overridden = {**params}
+                # `None` means "inherit the parent" for that knob, so the
+                # parent's own value must survive rather than be blanked.
+                if model is not None:
+                    overridden["model"] = model
+                if reasoning_effort is not None:
+                    overridden["reasoningEffort"] = reasoning_effort
                 return self._llm_provider_factory(overridden)
 
             subagent_executor = SubagentExecutor(
@@ -2000,11 +2397,18 @@ class Sidecar:
                 event_sink=lambda kind, data: self._emit_child_event(
                     transport, stream_id, kind, data
                 ),
+                parent_projection=parent_projection,
+                # External-engine children reach files and commands through
+                # this bridge, which re-enters the same executor the parent
+                # uses — so the project fence and egress allow-list apply to
+                # them identically. Built once per turn; a bridge that cannot
+                # reach a capability refuses that request.
+                acp_tool_bridge=_acp_bridge_for(executor),
             )
             executor = subagent_executor
             tools = [
                 *(tools or []),
-                subagent_tool_descriptor(registry=registry),
+                subagent_tool_descriptor(registry=registry, fork_available=True),
             ]
             # requiredProfiles: the host named these sub-agents for the turn
             # (desktop ``@`` mentions), so finishing without delegating to
@@ -2055,27 +2459,49 @@ class Sidecar:
             roots = [str(r) for r in skills_param.get("roots") or []]
             conditions = set(skills_param.get("conditions") or [])
             exclude = list(skills_param.get("exclude") or [])
+            pinned = list(skills_param.get("pinned") or [])
             ignore_conditions = bool(skills_param.get("ignoreConditions"))
             if roots:
                 skill_provider = FilesystemSkillProvider(roots)
-                if select_catalog(
+                # `pinned` only suppresses the catalog entry: the host has
+                # already injected these bodies eagerly, but the model may
+                # still call `skill` (and must get the full body if eager
+                # injection was truncated). The readiness probe therefore
+                # also counts pinned skills that survive hard exclusion, so
+                # even a turn whose only visible skill is pinned still
+                # advertises the skill tool.
+                visible_catalog = select_catalog(
                     skill_provider.list(), conditions, exclude, ignore_conditions
-                ):
-                    hooks = ChainHooks(
-                        SkillHooks(
-                            skill_provider,
-                            conditions=conditions,
-                            exclude=exclude,
-                            ignore_conditions=ignore_conditions,
-                        ),
-                        hooks,
-                    )
+                )
+                pinned_loadable = select_pinned_loadable(
+                    skill_provider.list(), pinned, exclude
+                )
+                catalog = select_catalog(
+                    skill_provider.list(),
+                    conditions,
+                    exclude,
+                    ignore_conditions,
+                    pinned,
+                )
+                if visible_catalog or pinned_loadable:
+                    if catalog:
+                        hooks = ChainHooks(
+                            SkillHooks(
+                                skill_provider,
+                                conditions=conditions,
+                                exclude=exclude,
+                                ignore_conditions=ignore_conditions,
+                                pinned=pinned,
+                            ),
+                            hooks,
+                        )
                     executor = SkillExecutor(
                         executor,
                         skill_provider,
                         conditions=conditions,
                         exclude=exclude,
                         ignore_conditions=ignore_conditions,
+                        pinned=pinned,
                     )
                     tools = [*(tools or []), skill_tool_descriptor()]
         # orchestration: opt-in advanced multi-agent seam (P3.1) — the
@@ -2107,11 +2533,27 @@ class Sidecar:
                 "to opt into agent_spawn/send/wait/close/list/interrupt."
             )
         if isinstance(orchestration_param, dict) and orchestration_param.get("enabled"):
+            # Child round / tool-error walls inherit the parent loop unless the
+            # host pins them, matching the delegation profiles above.
             orch_config = OrchestrationConfig(
                 max_depth=int(orchestration_param.get("maxDepth", 1)),
                 max_parallel=int(orchestration_param.get("maxParallel", 4)),
-                child_max_rounds=int(orchestration_param.get("childMaxRounds", 8)),
+                child_max_rounds=int(
+                    orchestration_param.get("childMaxRounds", loop_config.max_rounds)
+                ),
+                child_max_tool_errors=int(
+                    orchestration_param.get(
+                        "childMaxToolErrors", loop_config.max_tool_errors
+                    )
+                ),
+                fork_turns=(
+                    int(orchestration_param["forkTurns"])
+                    if isinstance(orchestration_param.get("forkTurns"), int)
+                    else None
+                ),
             )
+            # The parent loop is created after this executor (the loop needs
+            # the executor), so a fork reads the transcript through a holder.
             orchestration = OrchestrationExecutor(
                 executor,
                 provider,
@@ -2120,6 +2562,21 @@ class Sidecar:
                 event_sink=lambda kind, data: self._emit_child_event(
                     transport, stream_id, kind, data
                 ),
+                # The durable child index: rows are what let a later turn
+                # (or a restarted process) list and resume this turn's
+                # children, and they only work if the pool writes them.
+                registry=self._children_registry,
+                # Children get their own record under the parent's, so the
+                # orchestration family matches delegate_subagent: both write
+                # a readable process log for every child.
+                history_store=self.storage,
+                parent_record_id=(
+                    params.get("recordId") or params.get("chatId") or None
+                ),
+                parent_projection=parent_projection,
+                parent_route=parent_route,
+                provider_factory=_orchestration_provider_factory,
+                budget=tree_budget,
             )
             if subagent_executor is not None:
                 subagent_executor.attach_pool(orchestration.pool)
@@ -2213,6 +2670,11 @@ class Sidecar:
         # toolCallDelta arrives whole — no incremental argument fragments.)
         if params.get("streamRawChunks"):
             hooks = ChainHooks(hooks, RawChunkBridgeHooks(transport, stream_id))
+        if orchestration is not None:
+            # Tell the parent when a child settles instead of making it poll
+            # `agent_wait`. Appended last so a notice still lands even when an
+            # earlier hook rewrites the transcript this step.
+            hooks = ChainHooks(hooks, ChildNoticeHooks(orchestration.pool))
         loop = CoreLoop(
             provider,
             executor,
@@ -2224,12 +2686,32 @@ class Sidecar:
             history_store=self.storage,
             record_id=params.get("recordId") or params.get("chatId"),
         )
+        # Hand the loop to the orchestration executor's fork path (see the
+        # holder's declaration above).
+        if orchestration is not None:
+            parent_loop_holder.append(loop)
+            # Expose the pool to the panel's live controls (interrupt a running
+            # child). Keyed by chat: one turn at a time per chat, so a later
+            # turn simply replaces it.
+            if params.get("chatId"):
+                self._pools[str(params["chatId"])] = orchestration.pool
         # Persist the run as it streams so the host can inspect it afterwards
         # via trace.fetch (and so a future resume projection has the events).
         recorder = TraceRecorder(self.storage, chat_id=params.get("chatId"))
         self._coreloops[stream_id] = loop
+        self._exec_controls[stream_id] = exec_control
         final_content_only = params.get("contentMode") == "final"
         pending_content: list[str] = []
+        #: Whether the parent's own spend has been charged to the tree. The
+        #: terminal completion carries the run's accumulated usage, and it is
+        #: emitted *before* the turn's `finally`, so charging there is what
+        #: makes `treeUsage` include the parent rather than reporting zero;
+        #: `finally` then only covers runs that produced no completion.
+        parent_charged = False
+        from .egress_ask import bind_turn_chat_id, reset_turn_chat_id
+
+        raw_chat_id = params.get("chatId")
+        chat_token = bind_turn_chat_id(raw_chat_id if isinstance(raw_chat_id, str) else None)
         try:
             async for event in recorder.tee(
                 loop.run(
@@ -2260,12 +2742,43 @@ class Sidecar:
                                 },
                             )
                             pending_content.clear()
+                if (
+                    not parent_charged
+                    and tree_budget is not None
+                    and event.kind == "completion"
+                    and event.data.get("status") != "executing"
+                ):
+                    # Charge the parent **before** the terminal event goes
+                    # out: `stream.done` reports the tree's spend, and the
+                    # parent is the largest part of it. Charging afterwards
+                    # (in `finally`) reported a tree that had spent nothing
+                    # while the child's numbers were already in.
+                    parent_charged = True
+                    try:
+                        tree_budget.charge(loop.last_run_usage, agent="parent")
+                    except SessionBudgetExceeded as exc:
+                        logger.warning("parent crossed the tree budget: %s", exc)
                 await self._emit_loop_event(
                     transport,
                     stream_id,
                     event,
                     recorder.trace_id,
                     model=params.get("model"),
+                    hooks=hooks,
+                    tree_report=(
+                        (lambda: _tree_report_of(tree_budget))
+                        if tree_budget is not None
+                        else None
+                    ),
+                    child_usage=(
+                        orchestration.pool.children_usage
+                        if orchestration is not None
+                        else (
+                            subagent_executor.pool.children_usage
+                            if subagent_executor is not None
+                            else None
+                        )
+                    ),
                 )
         except asyncio.CancelledError:
             await transport.emit_notification(
@@ -2291,10 +2804,22 @@ class Sidecar:
                 },
             )
         finally:
+            # Backstop for the paths that never reach a terminal completion
+            # (cancel, exception): the tree limit covers the parent too, and
+            # after this point the pool is gone and nobody can charge it. The
+            # normal path already charged at the terminal event, so this does
+            # not double-count.
+            if tree_budget is not None and not parent_charged:
+                try:
+                    tree_budget.charge(loop.last_run_usage, agent="parent")
+                except SessionBudgetExceeded as exc:
+                    logger.warning("parent crossed the tree budget: %s", exc)
+            reset_turn_chat_id(chat_token)
             self._coreloops.pop(stream_id, None)
+            self._exec_controls.pop(stream_id, None)
             for client in mcp_clients:
                 # Close every per-turn MCP client (completion, error, or
-                # cancel) so no server subprocess outlives its stream.
+                # cancel) so no transport outlives its stream.
                 await client.aclose()
             if orchestration is not None:
                 # Wind down any children still running when the parent ends
@@ -2305,6 +2830,11 @@ class Sidecar:
             elif subagent_executor is not None:
                 # Delegation-only turn: wind down the delegate pool.
                 await subagent_executor.shutdown()
+            if orchestration is not None and params.get("chatId"):
+                # Only drop the index entry if it is still this turn's pool:
+                # a later turn may already have replaced it.
+                if self._pools.get(str(params["chatId"])) is orchestration.pool:
+                    self._pools.pop(str(params["chatId"]), None)
             await recorder.finalize()
             self._streams.pop(stream_id, None)
 
@@ -2342,6 +2872,9 @@ class Sidecar:
         event: Any,
         trace_id: str | None = None,
         model: str | None = None,
+        hooks: Any | None = None,
+        tree_report: Callable[[], Any] | None = None,
+        child_usage: Callable[[], tuple[list[dict[str, Any]], int]] | None = None,
     ) -> None:
         kind = event.kind
         data = event.data
@@ -2352,6 +2885,21 @@ class Sidecar:
         elif kind == "reasoning_delta":
             await transport.emit_notification(
                 "stream.chunk", {"streamId": stream_id, "reasoningDelta": data["delta"]}
+            )
+        elif kind == "stream_restart":
+            # The engine is re-issuing the request it was streaming, so what
+            # the host already appended belongs to a discarded attempt. The
+            # host drops it instead of appending the retry's text after it.
+            await transport.emit_notification(
+                "stream.chunk",
+                {
+                    "streamId": stream_id,
+                    "restart": {
+                        "reason": data.get("reason") or "retry",
+                        "round": data.get("round"),
+                        "attempt": data.get("attempt"),
+                    },
+                },
             )
         elif kind == "tool_call_start":
             await transport.emit_notification(
@@ -2380,6 +2928,18 @@ class Sidecar:
             if "sandbox" in data:
                 # W4-2: per-exec sandbox marker for the host's tool card.
                 payload["sandbox"] = data["sandbox"]
+            if "approval" in data:
+                payload["approval"] = data["approval"]
+            # Older engines omit the top-level fields when a sibling already
+            # finished before a terminal tool. The preview still carries them.
+            if "sandbox" not in payload or "approval" not in payload:
+                lifted_sandbox, lifted_approval = _markers_from_result_preview(
+                    data.get("resultPreview")
+                )
+                if "sandbox" not in payload and lifted_sandbox is not None:
+                    payload["sandbox"] = lifted_sandbox
+                if "approval" not in payload and lifted_approval is not None:
+                    payload["approval"] = lifted_approval
             await transport.emit_notification(
                 "stream.chunk", {"streamId": stream_id, "toolResult": payload}
             )
@@ -2414,6 +2974,20 @@ class Sidecar:
                     "kind": "LoopError",
                     "message": data["message"],
                     **({"traceId": trace_id} if trace_id else {}),
+                    # The envelope `kind` stays "LoopError" for compatibility;
+                    # the engine's own classification travels separately so the
+                    # host can pick user-facing copy by category instead of
+                    # matching on message text.
+                    **(
+                        {"errorKind": data.get("kind")}
+                        if data.get("kind")
+                        else {}
+                    ),
+                    **{
+                        field: data[field]
+                        for field in ("proxy", "attempts", "statusCode")
+                        if data.get(field) is not None
+                    },
                 },
             )
         elif kind == "completion" and data.get("status") == "executing":
@@ -2435,14 +3009,30 @@ class Sidecar:
             # W6-9: forward the run's accumulated billable usage, plus a cost
             # estimate when the model is priced (None → key omitted, never a
             # fabricated $0.00 for unpriced/local models).
+            #
+            # Wrap-up laundering: when a narration round was granted after the
+            # turn already hit a wall, this round's natural-language summary
+            # makes the loop report `completed` — but the task did not finish.
+            # Reporting the wall keeps the host honest: it surfaces failed
+            # turns to the user and lets auto-continue resume a
+            # `budget_exhausted` pass instead of silently stopping.
+            status = data["status"]
+            reason = data["reason"]
+            wall_status = _hook_wall_status(hooks)
+            if status == "completed" and wall_status is not None:
+                status = wall_status
+                reason = (
+                    f"{reason or 'wrapped up'} [wall={wall_status}; "
+                    "narration round answered, task not finished]"
+                )
             done: dict[str, Any] = {
                 "streamId": stream_id,
-                "ok": data["status"] == "completed",
-                "status": data["status"],
-                "reason": data["reason"],
+                "ok": status == "completed",
+                "status": status,
+                "reason": reason,
                 **({"traceId": trace_id} if trace_id else {}),
             }
-            if data["status"] == "cancelled":
+            if status == "cancelled":
                 # Same terminal signal the hard-cancel path emits, so hosts
                 # handle cooperative and forced cancellation uniformly.
                 done["cancelled"] = True
@@ -2456,6 +3046,40 @@ class Sidecar:
                 )
                 if cost is not None:
                     done["usage"] = {**usage, "costUsd": cost}
+            if child_usage is not None:
+                # The parent's own bill is `usage` above; these are the
+                # children's, split per childId so a host can show the turn's
+                # real cost without walking the registry. `unknown` counts
+                # children whose engine reports no tokens at all — adding
+                # zeros silently would present a partial total as complete.
+                entries, unknown = child_usage()
+                if entries:
+                    totals = {
+                        key: sum(int(entry[key]) for entry in entries)
+                        for key in ("promptTokens", "completionTokens", "totalTokens")
+                    }
+                    done["usage"] = {
+                        **(done.get("usage") or {}),
+                        "childPromptTokens": totals["promptTokens"],
+                        "childCompletionTokens": totals["completionTokens"],
+                        "childTotalTokens": totals["totalTokens"],
+                        "children": entries,
+                        **({"unknownUsageChildren": unknown} if unknown else {}),
+                    }
+                elif unknown:
+                    done["usage"] = {
+                        **(done.get("usage") or {}),
+                        "unknownUsageChildren": unknown,
+                    }
+            if tree_report is not None:
+                tree = tree_report()
+                if tree is not None:
+                    # The parent's own bill is the `usage` above; this adds
+                    # what its children spent and the per-child split, so a
+                    # host can show the turn's real cost without re-reading
+                    # the registry for every child. `_tree_report_of` already
+                    # produced the wire shape, so this is a pass-through.
+                    done["treeUsage"] = tree
             await transport.emit_notification("stream.done", done)
 
     # ------------------------------------------------------------------
@@ -2597,6 +3221,79 @@ def _connect_stdio_threaded() -> tuple[asyncio.StreamReader, Any]:
         target=_pump_stdin, name="sidecar-stdin-pump", daemon=True
     ).start()
     return reader, _ThreadedStdoutWriter()
+
+
+def _markers_from_result_preview(preview: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Sandbox and approval objects embedded in a tool-result preview.
+
+    The loop event usually lifts these itself. When it does not, they remain
+    under ``data._sandbox`` and ``data._approval`` in the preview JSON. A
+    published loop also cuts that preview at 300 characters, so a marker
+    past the cut is gone; one that still fits is read without parsing the
+    rest of the truncated JSON.
+    """
+    if not isinstance(preview, str) or not preview.startswith("{"):
+        return None, None
+    try:
+        parsed = json.loads(preview)
+    except json.JSONDecodeError:
+        return (
+            _object_after_key(preview, "_sandbox"),
+            _object_after_key(preview, "_approval"),
+        )
+    if not isinstance(parsed, dict):
+        return None, None
+    body = parsed.get("data")
+    if not isinstance(body, dict):
+        return None, None
+    sandbox = body.get("_sandbox")
+    approval = body.get("_approval")
+    return (
+        sandbox if isinstance(sandbox, dict) else None,
+        approval if isinstance(approval, dict) else None,
+    )
+
+
+def _object_after_key(text: str, key: str) -> dict[str, Any] | None:
+    needle = f'"{key}"'
+    decoder = json.JSONDecoder()
+    start = 0
+    while True:
+        found = text.find(needle, start)
+        if found < 0:
+            return None
+        colon = text.find(":", found + len(needle))
+        if colon < 0:
+            return None
+        index = colon + 1
+        while index < len(text) and text[index] in " \t\r\n":
+            index += 1
+        try:
+            value, _end = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            start = found + len(needle)
+            continue
+        if isinstance(value, dict):
+            return value
+        start = found + len(needle)
+
+
+def _approval_prompt_chat_id(params: dict[str, Any]) -> str | None:
+    """Chat the approval card belongs to.
+
+    A background task streams under ``task:<id>`` while the user stays in
+    the parent conversation (``toolContext.chatId``). Otherwise the stream
+    ``chatId`` is that conversation.
+    """
+    tool_context = params.get("toolContext")
+    if isinstance(tool_context, dict):
+        raw = tool_context.get("chatId")
+        if isinstance(raw, str) and raw:
+            return raw
+    raw = params.get("chatId")
+    if isinstance(raw, str) and raw:
+        return raw
+    return None
 
 
 def _require_params(params: Any) -> dict[str, Any]:
@@ -2751,10 +3448,35 @@ def _coerce_tool_calls(items: Any) -> list[ToolCall] | None:
     return out or None
 
 
+def _model_tool(tool: Any) -> Any:
+    """Drop approval metadata before the provider sees the tool list.
+
+    ``mode`` and ``approvalCategory`` are host-to-sidecar fields. Provider
+    APIs reject unknown tool keys.
+    """
+    if not isinstance(tool, dict):
+        return tool
+    cleaned = {
+        key: value
+        for key, value in tool.items()
+        if key not in ("mode", "approvalCategory")
+    }
+    function = cleaned.get("function")
+    if isinstance(function, dict):
+        cleaned["function"] = {
+            key: value
+            for key, value in function.items()
+            if key not in ("mode", "approvalCategory")
+        }
+    return cleaned
+
+
 def _build_provider_kwargs(params: dict[str, Any]) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
     if (tools := params.get("tools")) is not None:
-        kwargs["tools"] = tools
+        kwargs["tools"] = (
+            [_model_tool(tool) for tool in tools] if isinstance(tools, list) else tools
+        )
     if (temp := params.get("temperature")) is not None:
         kwargs["temperature"] = float(temp)
     if (max_tokens := params.get("maxTokens")) is not None:
@@ -2791,6 +3513,48 @@ def _last_message_content(
             content = message.content_text
             return content[-tail:] if tail else content
     return ""
+
+
+def _hook_wall_status(hooks: Any | None) -> str | None:
+    """Pre-wrap-up terminal status a ``before_completion`` hook swallowed.
+
+    Optional capability, probed with ``getattr`` so any hooks assembly —
+    a bare ``NoopHooks``, a product chain, an embedder factory — answers
+    None without implementing it. See ``LoopHooks.wall_status``.
+    """
+
+    probe = getattr(hooks, "wall_status", None)
+    if not callable(probe):
+        return None
+    try:
+        status = probe()
+    except Exception:  # noqa: BLE001 — reporting must never break the stream
+        logger.exception("hook_wall_status_failed")
+        return None
+    return status if isinstance(status, str) and status else None
+
+
+#: ``trace.fetch`` event cap. ~50k events ≈ 12 MB of JSON — comfortably inside
+#: the host's fetch deadline and MySQL's default ``max_allowed_packet`` (64 MB),
+#: while still covering all but the longest runs whole. Override per call with
+#: ``maxEvents`` or globally with ``STEERABLE_TRACE_FETCH_MAX_EVENTS`` (``0``
+#: disables the cap and restores the old unbounded fetch).
+_DEFAULT_TRACE_FETCH_MAX_EVENTS = 50_000
+
+
+def _trace_fetch_max_events(params: dict[str, Any]) -> int | None:
+    """Resolve the ``trace.fetch`` event cap; None means unbounded."""
+
+    raw: Any = params.get("maxEvents")
+    if raw is None:
+        raw = os.environ.get("STEERABLE_TRACE_FETCH_MAX_EVENTS")
+    if raw is None:
+        return _DEFAULT_TRACE_FETCH_MAX_EVENTS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_TRACE_FETCH_MAX_EVENTS
+    return None if value <= 0 else value
 
 
 def _summarizer_for(provider: Any) -> Any | None:
@@ -2903,12 +3667,20 @@ def _retry_params_from_env() -> dict[str, int]:
     """STEERABLE_RETRY_* deployment overrides for the spec's simple retry.
 
     Desktop default is 3×200ms. Harbor OpenRouter 429s need minutes.
+
+    The ``TRANSPORT_`` prefixed names configure the connection-failure policy
+    (5 attempts, 1s base, 8s cap, 60s deadline) separately from the shared
+    one, because a proxy or a flaky link needs waits an API error does not.
     """
     params: dict[str, int] = {}
     for env_name, param in (
         ("STEERABLE_RETRY_MAX_ATTEMPTS", "max_attempts"),
         ("STEERABLE_RETRY_BASE_DELAY_MS", "base_delay_ms"),
         ("STEERABLE_RETRY_MAX_DELAY_MS", "max_delay_ms"),
+        ("STEERABLE_RETRY_TRANSPORT_ATTEMPTS", "transport_max_attempts"),
+        ("STEERABLE_RETRY_TRANSPORT_BASE_DELAY_MS", "transport_base_delay_ms"),
+        ("STEERABLE_RETRY_TRANSPORT_MAX_DELAY_MS", "transport_max_delay_ms"),
+        ("STEERABLE_RETRY_TRANSPORT_DEADLINE_MS", "transport_deadline_ms"),
     ):
         raw = os.environ.get(env_name, "").strip()
         if not raw:
@@ -2953,6 +3725,229 @@ def _spill_directory() -> str:
     return os.path.join(base, "steerable-spill")
 
 
+def _acp_bridge_for(executor: Any) -> AcpToolBridge:
+    """A file/terminal bridge that runs ACP requests through the parent's tools.
+
+    Two decisions here:
+
+    - **Same domain, same fence.** The bridge calls the parent's executor, so
+      an external agent's write hits the project fence and its command hits the
+      egress allow-list exactly as the parent's own would. A second,
+      independent path would be a second confinement story to keep correct.
+    - **Approval stays with the policy.** The bridge does not ask the user: the
+      engine's ``AcpPermissionPolicy`` already decided whether the call may
+      happen. Fence *after* approval is what makes "allowed but still confined"
+      a meaningful pair.
+
+    Args:
+        executor: The parent's tool executor (already wrapped by approval,
+            sandbox and filtering in the caller).
+
+    Returns:
+        A bridge wired to ``local_read_file`` / ``local_write_file`` /
+        ``local_exec_shell`` when the parent has them, and refusing otherwise.
+    """
+
+    async def invoke(name: str, arguments: dict[str, Any]) -> Any:
+        from steerable_agent_protocol.generated import ToolCall
+        from steerable_agent_runtime.loop import LoopContext
+
+        result = await executor.execute(
+            ToolCall(id=f"acp-{name}", name=name, arguments=arguments),
+            LoopContext(),
+        )
+        if not getattr(result, "success", False):
+            raise AcpUnavailable(
+                f"{name} was refused: {getattr(result, 'error', None) or 'no reason reported'}"
+            )
+        return result
+
+    async def read_text_file(
+        path: str, line: int | None, limit: int | None
+    ) -> str:
+        result = await invoke(
+            "local_read_file",
+            {
+                "path": path,
+                **({"offset": line} if isinstance(line, int) else {}),
+                **({"limit": limit} if isinstance(limit, int) else {}),
+            },
+        )
+        return str(getattr(result, "message", "") or "")
+
+    async def write_text_file(path: str, content: str) -> None:
+        await invoke("local_write_file", {"path": path, "content": content})
+
+    async def create_terminal(
+        command: str, args: list[str], env: Mapping[str, str] | None
+    ) -> Any:
+        argv = " ".join([command, *args]).strip()
+        result = await invoke("local_exec_shell", {"command": argv})
+        return {
+            "terminalId": f"acp-{abs(hash(argv)) % 100000}",
+            "output": str(getattr(result, "message", "") or ""),
+        }
+
+    return AcpToolBridge(
+        read_text_file=read_text_file,
+        write_text_file=write_text_file,
+        create_terminal=create_terminal,
+    )
+
+
+def _acp_engine_from_profile(
+    name: str, raw: Any
+) -> tuple[AcpEngineSpec | None, AcpPermissionPolicy | None]:
+    """One profile's `engine` block → the spec and policy that drive it.
+
+    Only `kind: "acp"` is supported. Anything else fails closed at load: a
+    profile naming an engine this build cannot run must not silently execute
+    locally, because the user asked for a *different* agent to do the work.
+
+    Args:
+        name: The profile name, for the error message.
+        raw: The profile's `engine` value (`None` = local loop).
+
+    Returns:
+        The engine spec and its permission policy, or `(None, None)` for a
+        local profile.
+
+    Raises:
+        JsonRpcError: on an unsupported kind or a missing command.
+    """
+    if raw is None:
+        return None, None
+    if not isinstance(raw, dict):
+        raise JsonRpcError(
+            f"profile {name!r}: engine must be an object",
+            code=-32602,
+            kind="invalid_params",
+        )
+    kind = raw.get("kind")
+    if kind != "acp":
+        raise JsonRpcError(
+            f"unsupported_engine: only \"acp\" is supported; got {kind!r} "
+            f"(profile {name!r})",
+            code=-32602,
+            kind="unsupported_engine",
+        )
+    command = str(raw.get("command") or "").strip()
+    if not command:
+        raise JsonRpcError(
+            f"profile {name!r}: engine.command is required for an acp engine",
+            code=-32602,
+            kind="invalid_params",
+        )
+    args = raw.get("args")
+    env = raw.get("env")
+    timeout = raw.get("timeoutSeconds")
+    spec = AcpEngineSpec(
+        command=command,
+        args=tuple(str(a) for a in args) if isinstance(args, list) else (),
+        env=(
+            {str(k): str(v) for k, v in env.items()}
+            if isinstance(env, dict)
+            else {}
+        ),
+        cwd=str(raw["cwd"]) if raw.get("cwd") else None,
+        timeout_s=float(timeout) if isinstance(timeout, (int, float)) else 1800.0,
+    )
+    return spec, _acp_permission_from_profile(name, raw.get("permission"))
+
+
+def _acp_permission_from_profile(
+    name: str, raw: Any
+) -> AcpPermissionPolicy:
+    """One profile's `engine.permission` → the fixed policy for that engine.
+
+    Accepts a bare string (`"allow"` / `"reject"`) or an object
+    `{default?, byKind?}`. Unknown decisions fail closed at load rather than
+    becoming an accidental grant.
+
+    Args:
+        name: The profile name, for the error message.
+        raw: The `permission` value (`None` = the policy default, reject).
+
+    Returns:
+        A permission policy over the ACP tool kinds.
+    """
+    if raw is None:
+        return AcpPermissionPolicy()
+    decisions = ("allow", "reject")
+    if isinstance(raw, str):
+        if raw not in decisions:
+            raise JsonRpcError(
+                f"profile {name!r}: engine.permission must be \"allow\" or "
+                f"\"reject\"; got {raw!r}",
+                code=-32602,
+                kind="invalid_params",
+            )
+        return AcpPermissionPolicy(default=raw)  # type: ignore[arg-type]
+    if not isinstance(raw, dict):
+        raise JsonRpcError(
+            f"profile {name!r}: engine.permission must be a string or an object",
+            code=-32602,
+            kind="invalid_params",
+        )
+    default = raw.get("default", "reject")
+    if default not in decisions:
+        raise JsonRpcError(
+            f"profile {name!r}: engine.permission.default must be \"allow\" or "
+            f"\"reject\"; got {default!r}",
+            code=-32602,
+            kind="invalid_params",
+        )
+    by_kind_raw = raw.get("byKind")
+    by_kind: dict[str, str] = {}
+    if isinstance(by_kind_raw, dict):
+        for kind, decision in by_kind_raw.items():
+            if decision not in decisions:
+                raise JsonRpcError(
+                    f"profile {name!r}: engine.permission.byKind[{kind!r}] must "
+                    f"be \"allow\" or \"reject\"; got {decision!r}",
+                    code=-32602,
+                    kind="invalid_params",
+                )
+            by_kind[str(kind)] = decision
+    return AcpPermissionPolicy(default=default, by_kind=by_kind)  # type: ignore[arg-type]
+
+
+def _tree_report_of(budget: TreeBudget) -> dict[str, Any]:
+    """The whole tree's spend as the wire object ``stream.done`` carries.
+
+    ``byAgent`` keys are the caller's agent labels (``"parent"``, ``"0.1"``),
+    which is what lets a host attribute a turn's bill without reading the
+    registry for every child.
+    """
+    report = budget.report()
+    return {"limit": report.limit, "spent": report.spent, "byAgent": dict(report.by_agent)}
+
+
+def _tree_budget_from(params: dict[str, Any]) -> TreeBudget:
+    """Build the turn tree's shared token limit from the request.
+
+    Same ``budgetTokens`` the parent run uses, because a host that asks for a
+    limit means the turn — not "each loop separately". A value that is not a
+    positive integer is a request error, not a silent zero budget.
+    """
+    raw = params.get("budgetTokens")
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise JsonRpcError(
+            "budgetTokens must be a positive integer",
+            code=-32602,
+            kind="invalid_params",
+        ) from exc
+    if limit <= 0:
+        raise JsonRpcError(
+            "budgetTokens must be a positive integer",
+            code=-32602,
+            kind="invalid_params",
+        )
+    return TreeBudget(limit=limit)
+
+
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
     # Loop-limit precedence (W3.4.2.4): explicit request param > the bundled
     # default spec's `loop:` section > the baseline. `resolve_loop_limits` is
@@ -2978,41 +3973,36 @@ def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
             max_tool_calls=int(params.get("budgetMaxToolCalls", 10_000)),
         )
     else:
-        # Default cost guard (2026-08-26, production-calibrated). The desktop
-        # TS loop had a fixed 60k token budget; the CoreLoop path launched
-        # with none — a default-on regression. Production distribution over
-        # 31k api traces: mean 145k total tokens/trace ≈ 1.1× deepseek's
-        # 131k window, and the api's fixed 120k cap cut 6% of real tasks
-        # (budget_exhausted terminal). maxRounds is the primary runaway
-        # guard; only the token axis of BudgetLimit is consumed by the loop
-        # today (steps/tool_calls stay inert).
-        #
-        # The token axis is cumulative over the run while a context window is
+        # Only the token axis of BudgetLimit is consumed by the loop
+        # (steps/tool_calls stay inert). The token axis is cumulative over
+        # the run while a context window is
         # a per-request size, so a flat multiple of the window caps the round
         # count instead of the spend: an agentic turn re-sends its prompt
         # every round, and even a fully cache-hit window still bills
-        # ``cached_token_weight × window``. The former flat 2× therefore
-        # exhausted around round 13-20 of the bundled spec's max_rounds=80 —
-        # the backstop guard fired four times sooner than the primary one.
-        # Scaling with the round budget restores that order: the token axis
-        # binds only when rounds cost more than a cached full window. The 2×
-        # floor keeps short-round configs (subagent profiles) where they were.
+        # ``cached_token_weight × window``. Scaling with an explicit round
+        # cap keeps that cap primary and leaves the token axis a backstop.
+        # The default cap is unlimited — a derived token budget would just
+        # re-introduce the wall — so an uncapped run has no token budget
+        # unless the caller passed ``budgetTokens``.
         from steerable_agent_runtime.tokens import resolve_context_window
 
-        window = resolve_context_window(
-            params.get("model"),
-            explicit=int(params.get("maxContextTokens") or 0) or None,
-            provider=params.get("provider"),
-            base_url=params.get("baseUrl"),
-        )
-        budget = BudgetLimit(
-            max_tokens=max(
-                2 * window,
-                math.floor(max_rounds * window * DEFAULT_CACHED_TOKEN_WEIGHT),
-            ),
-            max_steps=max_rounds,
-            max_tool_calls=10_000,
-        )
+        if max_rounds >= UNLIMITED_LOOP_LIMIT:
+            budget = None
+        else:
+            window = resolve_context_window(
+                params.get("model"),
+                explicit=int(params.get("maxContextTokens") or 0) or None,
+                provider=params.get("provider"),
+                base_url=params.get("baseUrl"),
+            )
+            budget = BudgetLimit(
+                max_tokens=max(
+                    2 * window,
+                    math.floor(max_rounds * window * DEFAULT_CACHED_TOKEN_WEIGHT),
+                ),
+                max_steps=max_rounds,
+                max_tool_calls=10_000,
+            )
     return LoopConfig(
         max_rounds=max_rounds,
         max_tool_errors=max_tool_errors,
@@ -3204,6 +4194,11 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
             strict=True,
         )
 
+    # The host asked this one endpoint to skip the proxy (see
+    # `ProviderConfig.force_direct`). Per request, not per process: a product
+    # may send one model service direct and leave the rest proxied.
+    direct_connection = bool(params.get("directConnection"))
+
     if provider_kind in {"openai", "openai_compat", "openai-compatible", "ollama"}:
         from steerable_agent_runtime.llm import (
             OpenAICompatFlags,
@@ -3246,6 +4241,7 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     reasoning_effort=(
                         str(reasoning_effort) if reasoning_effort else None
                     ),
+                    force_direct=direct_connection,
                 )
             )
         )
@@ -3283,6 +4279,7 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     reasoning_effort=(
                         str(reasoning_effort) if reasoning_effort else None
                     ),
+                    force_direct=direct_connection,
                 )
             )
         )
@@ -3297,6 +4294,7 @@ def default_llm_provider_factory(params: dict[str, Any]) -> LLMProvider:
                     api_key=api_key,
                     model=str(model),
                     preset=_resolve_preset_param(params),
+                    force_direct=direct_connection,
                 )
             )
         )

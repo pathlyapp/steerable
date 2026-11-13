@@ -194,7 +194,7 @@ def test_system_prompt_fragment_contract() -> None:
     assert fragment.role == "system"
     assert fragment.markers() == ("", "")
     assert fragment.render() == "你是助手。"  # bare body, no wrapper
-    assert SystemPromptFragment.effective_max_tokens() == 4096
+    assert SystemPromptFragment.effective_max_tokens() == FRAGMENT_TOKEN_CEILING
     assert SystemPromptFragment.review_note  # over the no-review line
 
     message = render_fragment_capped(fragment)
@@ -205,4 +205,19 @@ def test_system_prompt_fragment_contract() -> None:
     huge = SystemPromptFragment("规则。\n" * 10_000)
     capped = render_fragment_capped(huge)
     assert "fragment truncated" in capped.content_text
-    assert estimate_text_tokens(capped.content_text) <= 4096 + 20
+    assert estimate_text_tokens(capped.content_text) <= FRAGMENT_TOKEN_CEILING + 20
+
+
+def test_system_prompt_fragment_keeps_pinned_skill_scale_body() -> None:
+    """A 5k-token prompt must survive the cap: that is the scale of a real
+    pinned skill (ppt-master), and the old 4k backstop truncated it."""
+    from steerable_agent_runtime import (
+        SystemPromptFragment,
+        render_fragment_capped,
+    )
+
+    prompt = "规则。\n" * 2_500
+    assert estimate_text_tokens(prompt) > 4096  # would fail under old cap
+    rendered = render_fragment_capped(SystemPromptFragment(prompt))
+    assert "fragment truncated" not in rendered.content_text
+    assert rendered.content_text == prompt

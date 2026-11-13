@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LuLoaderCircle, LuSearch } from 'react-icons/lu';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { t } from '@/i18n';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 
 /**
  * Search backend settings. `ddg` registers `web_search` with no key.
@@ -32,11 +33,11 @@ export function WebSearchSettingsPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchSettings = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<WebSearchSettingsWire | null>({
+      const res = await getHostBridge()!.localBackend.request<WebSearchSettingsWire | null>({
         method: 'GET',
         path: '/api/v2/local-settings/web-search',
       });
@@ -54,13 +55,13 @@ export function WebSearchSettingsPanel() {
   }, [fetchSettings]);
 
   const handleSave = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setSaving(true);
     setError(null);
     setStatus(null);
     try {
       const posted = provider;
-      const saved = await getElectronBridge()!.localBackend.request<WebSearchSettingsWire>({
+      const saved = await getHostBridge()!.localBackend.request<WebSearchSettingsWire>({
         method: 'POST',
         path: '/api/v2/local-settings/web-search',
         body: { provider: posted, apiKey: apiKey.trim() },
@@ -71,11 +72,15 @@ export function WebSearchSettingsPanel() {
       setProvider(nextProvider);
       setApiKey(saved?.apiKey ?? '');
       if (nextProvider === 'ddg') {
-        setStatus('已保存 — 重启应用后 sidecar 会注册免费搜索（DuckDuckGo）');
+        setStatus(t('Saved. After you restart the app, the sidecar registers free search (DuckDuckGo).'));
       } else if (saved?.apiKey) {
-        setStatus('已保存 — 重启应用后 sidecar 会注册 web_search');
+        setStatus(t('Saved. After you restart the app, the sidecar registers web_search.'));
       } else {
-        setStatus('已保存 — 未配置则模型没有搜索工具（OpenAI 可用聊天凭证走托管搜索）');
+        setStatus(
+          t(
+            'Saved. Without a key the model has no search tool (OpenAI can use the chat credentials for hosted search).',
+          ),
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -89,25 +94,25 @@ export function WebSearchSettingsPanel() {
       <div className="bg-agent-muted/30 border border-agent-border/60 rounded-agent-md p-2.5 space-y-2">
         <h4 className="text-xs font-semibold text-agent-foreground flex items-center gap-1.5">
           <LuSearch className="h-3.5 w-3.5 text-agent-muted-foreground" />
-          网络搜索
+          {t('Web search')}
         </h4>
 
         {loading ? (
           <div className="flex items-center gap-2 py-2 text-xs text-agent-muted-foreground">
             <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            读取搜索设置...
+            {t('Loading search settings...')}
           </div>
         ) : (
           <>
             <div className="space-y-1.5">
               <label className="text-[11px] font-medium text-agent-muted-foreground">
-                搜索后端
+                {t('Search backend')}
               </label>
               <div className="flex gap-2">
                 {(
                   [
-                    { value: 'ddg', label: '免费', hint: 'DuckDuckGo，无需 Key' },
-                    { value: 'tavily', label: 'Tavily', hint: '需 API Key，结果更稳' },
+                    { value: 'ddg', label: 'Free', hint: 'DuckDuckGo, no key needed' },
+                    { value: 'tavily', label: 'Tavily', hint: 'Needs an API key, more reliable results' },
                   ] as const
                 ).map((opt) => (
                   <button
@@ -121,8 +126,8 @@ export function WebSearchSettingsPanel() {
                         : 'border-agent-border bg-agent-canvas hover:bg-agent-muted/40'
                     }`}
                   >
-                    <div className="text-xs font-medium text-agent-foreground">{opt.label}</div>
-                    <div className="text-[10px] text-agent-muted-foreground">{opt.hint}</div>
+                    <div className="text-xs font-medium text-agent-foreground">{t(opt.label)}</div>
+                    <div className="text-[10px] text-agent-muted-foreground">{t(opt.hint)}</div>
                   </button>
                 ))}
               </div>
@@ -137,7 +142,7 @@ export function WebSearchSettingsPanel() {
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="tvly-...（留空 = 不注册 Tavily）"
+                  placeholder={t('tvly-... (leave blank = do not register Tavily)')}
                   className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
                   autoComplete="off"
                 />
@@ -147,8 +152,12 @@ export function WebSearchSettingsPanel() {
             <div className="flex items-center justify-between gap-2">
               <p className="text-[10px] text-agent-muted-foreground">
                 {provider === 'ddg'
-                  ? '免费后端走 DuckDuckGo 公开搜索页，无需 Key。质量与稳定性不如 Tavily；国内网络可能需要系统代理。Harbor 评测仍关闭网络工具。'
-                  : 'GLM / OpenRouter / DeepSeek 需要这把钥；OpenAI（api.openai.com）可用聊天凭证走托管搜索，不必另配。Harbor 评测仍关闭网络工具。'}
+                  ? t(
+                      'The free backend uses the public DuckDuckGo search page and needs no key. Quality and reliability are lower than Tavily, and networks in mainland China may need a system proxy. Harbor evaluations still turn off network tools.',
+                    )
+                  : t(
+                      'GLM / OpenRouter / DeepSeek need this key. OpenAI (api.openai.com) can use the chat credentials for hosted search with no extra setup. Harbor evaluations still turn off network tools.',
+                    )}
               </p>
               <button
                 type="button"
@@ -160,7 +169,7 @@ export function WebSearchSettingsPanel() {
                     : 'bg-agent-foreground text-agent-canvas hover:opacity-90'
                 }`}
               >
-                {saving ? <LuLoaderCircle className="h-3 w-3 animate-spin" /> : '保存'}
+                {saving ? <LuLoaderCircle className="h-3 w-3 animate-spin" /> : t('Save')}
               </button>
             </div>
 

@@ -99,33 +99,59 @@ Headless React hooks + components, Tailwind preset. Designed so a single
 React tree can mount either:
 
 - a transport that hits HTTP+SSE (web app)
-- a transport that uses Electron IPC bridged to the sidecar (desktop)
+- a transport that talks to the host runtime, which bridges to the sidecar
+  (desktop app)
 
 without any component-level changes.
 
 ## Tier 5 — Host Shell
 
-**Packages:** `@steerable/agent-shell` · `@steerable/agent-shell-web` ·
-`@steerable/pack-sdk` — versioned in lockstep and **published to npm** so
-product repos can pin semantic versions. `agent-shell` ships its compiled
-`dist/`; `agent-shell-web` ships its `src/` (products compile it via the
+**Packages:** `@steerable/agent-shell` · `@steerable/agent-shell-tauri` ·
+`@steerable/agent-shell-web` · `@steerable/pack-sdk` — versioned in lockstep
+and **published to npm** so product repos can pin semantic versions. The npm
+surface is `@steerable/agent-shell`, `@steerable/agent-shell-tauri` (the Rust
+crate source ships inside that package; it is not published to crates.io),
+`@steerable/agent-shell-web` and `@steerable/pack-sdk`, all at the release
+version. `agent-shell` ships its compiled `dist/`;
+`agent-shell-web` ships its `src/` (products compile it via the
 `createProductViteConfig` factory and the `@/` alias); `pack-sdk` ships pure
 `types/` (zero runtime). Products may still use source/`link:` during local
 development.
 
-The assemble-a-product tier: an Electron desktop shell (main process, IPC,
-strict CSP, visible PTY) and a headless HTTP server (`/api/v2/*`, SSE) built
-from the same `HostRuntime`; a local backend (chat/project/agent CRUD,
-CoreLoop streaming, skill loader, subagent profiles, worktree service,
-background tasks, usage/insights storage); sidecar supervision (boot, health,
-egress proxy, exec sandbox, reverse approval/ask-user bridges); and a
-product-neutral renderer SPA. Brand, telemetry endpoints, help links, and
-data-directory names are injected by the consuming product's assembly root —
-the `shell:neutral` CI gate fails on any product hardcoding in shell sources.
+The assemble-a-product tier: a Tauri desktop host (a Rust crate that owns the
+native window, menus, dialogs, single-instance behaviour, screenshot clipboard
+transfer, resource paths, process containment and updates, and supervises the
+product's Node entry on an ephemeral loopback port) and a headless HTTP server
+(`/api/v2/*`, SSE) built from the same `HostRuntime`; a local backend
+(chat/project/agent CRUD, CoreLoop streaming, skill loader, subagent profiles,
+worktree service, background tasks, usage/insights storage); sidecar
+supervision (boot, health, egress proxy, exec sandbox, reverse
+approval/ask-user bridges); and a product-neutral renderer SPA. Brand,
+telemetry endpoints, help links, and data-directory names are injected by the
+consuming product's assembly root — the `shell:neutral` CI gate fails on any
+product hardcoding in shell sources.
 
 Tier 5 is how [DeepPath](https://deeppath.cc) ships its desktop app, and it
-runs standalone for evaluation: `pnpm agent-shell:web` (headless server +
-neutral web app) or `pnpm agent-shell:client` (Electron window).
+runs standalone for evaluation: `pnpm agent-shell:web` boots the headless
+server with the neutral web app. A desktop window comes from a product's own
+`src-tauri` crate calling `steerable_agent_shell_tauri::run`.
+
+### Where the bundled runtime comes from
+
+The Python sidecar, its `run_code` interpreter and the egress proxy are binary
+artifacts, so the shell resolves them from the first place that has them:
+an explicit `STEERABLE_SIDECAR_PYTHON` (or the `host-runtime.json` a desktop
+product writes), the packaged `python-runtime/` directory, the
+`@steerable/runtime-<target>` npm package, then a repository `.venv`.
+`@steerable/agent-runtime` resolves the interpreter the same way so a plain
+TypeScript host needs one dependency.
+
+The npm package is what makes `npm install -g @steerable/agent-cli` work
+without a checkout. It carries a `runtime.json` descriptor with relative paths
+and SHA-256 digests; the shell hashes the interpreter and proxy on first use
+and refuses to start when a digest does not match, rather than running a
+modified binary. npm installs only the package whose `os`/`cpu` match the host,
+which is why the five platform packages are `optionalDependencies` of the CLI.
 
 ## Data flow at runtime
 
@@ -159,7 +185,7 @@ neutral web app) or `pnpm agent-shell:client` (Electron window).
        └──────────────────┘
 ```
 
-## Why Python-only Tier 2 / 3
+## Why one Python sidecar facade
 
 The split avoids maintaining duplicate business logic:
 
@@ -167,17 +193,19 @@ The split avoids maintaining duplicate business logic:
 2. The desktop app needed to share **business logic**, not just types.
 3. Maintaining two implementations of policy/budget/retry/tools/storage
    in TS+Py guaranteed drift.
-4. Embedding a portable Python sidecar in Electron lets the desktop app
+4. Embedding a portable Python sidecar in a desktop host lets the desktop app
    call the same harness + runtime the server uses, with zero drift.
 
-The TS facade for Tier 2 stays only as a parity test surface — your
-production TS code should not import from it.
+The Python sidecar owns the complete Tier 2 / 3 API and business behavior.
+Rust owns the CoreLoop execution engine loaded through the native bridge; it
+is not a second sidecar implementation.
 
 ### Official TS production entry: the embedded-sidecar runtime
 
-Python is the only production implementation of Tiers 2 / 3. There is no
-TS CoreLoop and there will not be one — a second loop implementation is
-the drift trap this architecture exists to avoid. The supported way for a
+Python is the only production sidecar implementation. Rust is the only
+production CoreLoop implementation. There is no TS CoreLoop or standalone
+Rust sidecar product path — either would recreate the drift trap this
+architecture exists to avoid. The supported way for a
 pure-TypeScript product to run the framework in production is
 `@steerable/agent-runtime` (`packages/agent-runtime/ts`): an official
 runtime package that owns the sidecar process lifecycle (spawn,

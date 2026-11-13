@@ -1,7 +1,6 @@
 """Typed append-only history — the model-visible record and its projection.
 
-Wave 1 foundation (docs/roadmap.md "Wave 1 — the foundation"): the
-model-visible transcript becomes a *projection* of a typed, append-only
+The model-visible transcript is a *projection* of a typed, append-only
 record instead of a mutable ``list[LLMMessage]`` that hooks rewrite in
 place.
 
@@ -189,6 +188,11 @@ class HistorySeed:
     turn_id: str | None = None
     kind: str = KIND_HISTORY_SEED
     message_kinds: tuple[str, ...] = ()
+    #: Which model produced the seeded history. Recorded so a reader can tell
+    #: "this transcript came from another model" — a cross-model fork re-reads
+    #: the whole prefix on a new route, and that cost has to be explainable
+    #: afterwards. Audit metadata only: never read at projection time.
+    source_model: str | None = None
 
 
 #: The record is a linear log of items, declared-rewrite markers, region
@@ -371,14 +375,18 @@ class SystemPromptFragment(ContextFragment):
 
     role: LLMRole = "system"
     content_kind: str = "system_prompt"
-    max_tokens: int | None = 4096
+    #: Align the system-prompt backstop with the framework's absolute
+    #: per-fragment ceiling. Desktop prompts with pinned/eager skills (e.g.
+    #: word-master + ppt-master) legitimately reach ~6-8k tokens; the old
+    #: 4k cap silently truncated the very skill body the agent bound.
+    max_tokens: int | None = FRAGMENT_TOKEN_CEILING
     review_note: str | None = (
-        "Desktop production prompts (persona + eager skill layer + runtime "
-        "environment + tool reality check) measure 1-3k tokens; 4k is the "
-        "headroom for larger skill stacks, not the target. Crossings "
-        "degrade with a visible marker so an over-budget assembly is "
-        "discoverable in the transcript instead of silently inflating every "
-        "request."
+        "Desktop production prompts (persona + pinned/eager skill stack + "
+        "runtime environment + tool reality check) legitimately reach 6-8k "
+        "tokens when an agent pins large skills. Reusing the absolute "
+        "per-fragment ceiling (10k) keeps a bounded backstop without "
+        "truncating the bound skill body; crossings still degrade with a "
+        "visible marker."
     )
 
     def __init__(self, prompt: str) -> None:
@@ -555,6 +563,7 @@ class ContextManager:
         source_record_id: str | None = None,
         source_until_seq: int | None = None,
         turn_id: str | None = None,
+        source_model: str | None = None,
     ) -> HistorySeed:
         """Inline-seed a projected prefix as ONE entry (fork/regenerate).
 
@@ -570,6 +579,7 @@ class ContextManager:
             source_record_id=source_record_id,
             source_until_seq=source_until_seq,
             turn_id=turn_id or self.turn_id,
+            source_model=source_model,
         )
         self._record.append(entry)
         self._pending.append(entry)
@@ -624,7 +634,6 @@ class ContextManager:
             for entry in self._record[self._boundary_index + 1 :]
             if isinstance(entry, HistoryItem)
         ]
-
     @property
     def latest_boundary(self) -> CompactionBoundary | None:
         if self._boundary_index < 0:
@@ -723,6 +732,108 @@ def message_from_dict(data: dict[str, Any]) -> LLMMessage:
     )
 
 
+def completed_turn_prefix(
+    messages: Sequence["LLMMessage"],
+    *,
+    max_turns: int | None = None,
+) -> list["LLMMessage"]:
+    """The balanced prefix of a transcript — the fork seed primitive.
+
+    A fork seed must be a transcript a provider accepts and a loop can
+    replay. Two rules, both load-bearing:
+
+    - it ends at an **assistant** message whose tool calls are all answered
+      (a dangling call cannot be replayed, and a trailing user message is a
+      question the parent never got to answer);
+    - everything before that point is kept.
+
+    This is deliberately *not* "drop the last turn". A Steerable turn is one
+    user request that may contain dozens of tool rounds — dropping it would
+    throw away the very investigation a child is asked to continue ("verify
+    these findings"), which is the main reason to fork at all. The in-flight
+    round is dropped; the work before it is kept.
+
+    Args:
+        messages: a projection, oldest first.
+        max_turns: keep only the last N *user* messages and everything after
+            the first of them. ``None`` keeps the whole prefix; this is the
+            escape hatch for an over-long parent conversation.
+
+    Returns:
+        A transcript ending at a completed assistant turn, or an empty list
+        when the transcript contains no such point (a fork then behaves like
+        a fresh child).
+    """
+    if not messages:
+        return []
+    cut = _balanced_prefix_length(messages)
+    if cut <= 0:
+        return []
+    prefix = list(messages[:cut])
+    if max_turns is not None:
+        prefix = _last_turns(prefix, max_turns)
+    return prefix
+
+
+def _balanced_prefix_length(messages: Sequence["LLMMessage"]) -> int:
+    """Index one past the last assistant message that closes a balanced run.
+
+    Walks forward pairing ``tool_calls`` with the ``tool`` results that
+    answer them, so a partly-answered assistant message is excluded whole
+    rather than truncated mid-call. Only an assistant message advances the
+    kept boundary: a trailing user message or a stray tool result is waiting
+    on something, which is exactly what a seed cannot contain.
+    """
+    last_balanced_end = 0
+    index = 0
+    total = len(messages)
+    while index < total:
+        message = messages[index]
+        index += 1
+        if message.role != "assistant":
+            continue
+        pending = {call.id for call in (message.tool_calls or [])}
+        if pending:
+            # Consume the results that belong to this assistant message. A
+            # result for anything else ends the pairing: the transcript did
+            # not come back in the order a replay needs.
+            while index < total and messages[index].role == "tool":
+                call_id = messages[index].tool_call_id
+                if call_id is not None:
+                    pending.discard(call_id)
+                index += 1
+            if pending:
+                return last_balanced_end
+            last_balanced_end = index
+            continue
+        # Text-only assistant message: balanced by construction, unless a
+        # result follows it, which would mean the log is out of order.
+        while index < total and messages[index].role == "tool":
+            index += 1
+        last_balanced_end = index
+    return last_balanced_end
+
+
+def _last_turns(
+    messages: Sequence["LLMMessage"], max_turns: int
+) -> list["LLMMessage"]:
+    """Keep the trailing ``max_turns`` user messages and what follows.
+
+    Counting user messages rather than assistant turns keeps the cut at a
+    request boundary, so the kept span still starts where a user spoke.
+    """
+    if max_turns <= 0:
+        return []
+    seen = 0
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role != "user":
+            continue
+        seen += 1
+        if seen >= max_turns:
+            return list(messages[index:])
+    return list(messages)
+
+
 def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
     """Serialize one record entry for ``StorageAdapter.append_history``."""
     if isinstance(entry, HistoryItem):
@@ -794,6 +905,10 @@ def entry_to_dict(entry: RecordEntry) -> dict[str, Any]:
             "token_estimate": entry.token_estimate,
             "source_record_id": entry.source_record_id,
             "source_until_seq": entry.source_until_seq,
+            # Additive + optional: a seed written before this field existed
+            # has no `source_model`, and a reader that does not know it
+            # ignores the key.
+            **({"source_model": entry.source_model} if entry.source_model else {}),
             "messages": [message_to_dict(m) for m in entry.messages],
             "message_kinds": list(entry.message_kinds),
         }
@@ -931,6 +1046,7 @@ def entry_from_dict(data: dict[str, Any]) -> RecordEntry:
             source_until_seq=data.get("source_until_seq"),
             turn_id=data.get("turn_id"),
             message_kinds=tuple(str(k) for k in data.get("message_kinds") or ()),
+            source_model=data.get("source_model"),
         )
     raise RecordFormatError(f"unknown record entry envelope: {envelope!r}")
 

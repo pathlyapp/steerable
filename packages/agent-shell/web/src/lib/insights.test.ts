@@ -2,7 +2,7 @@
  * insights.trackBehavior：fire-and-forget 的行为事件入队。
  * 锁定三条契约：桥缺失时静默返回（浏览器演示态不产生遥测）、
  * 请求形状逐字锁定（端点 / 方法 / body 键）、后端失败绝不抛进 UI。
- * 桥走真实的 window.electron 路径，不 mock 模块。
+ * 桥走真实的 window.steerableHost 路径，不 mock 模块。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { trackBehavior } from './insights';
@@ -11,12 +11,12 @@ type RequestInput = { method: string; path: string; body?: unknown };
 
 function installBridge() {
   const request = vi.fn<(input: RequestInput) => Promise<unknown>>();
-  (window as { electron?: unknown }).electron = { localBackend: { request } };
+  (window as { steerableHost?: unknown }).steerableHost = { localBackend: { request } };
   return request;
 }
 
 afterEach(() => {
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 describe('trackBehavior', () => {

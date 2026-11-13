@@ -69,6 +69,7 @@ packages/sidecar/dist/
 packages/agent-ui/ts/storybook-static/
 packages/agent-ui/ts/playwright-report/
 packages/agent-ui/ts/test-results/
+packages/agent-cli/ts/test-results/
 
 # MkDocs local build output (CI builds into _site/ for the Pages artifact)
 _site/
@@ -93,3 +94,6 @@ evals/jobs/
 
 # MkDocs default local build output (mkdocs build without -d)
 site/
+
+# Packed release artifacts left in a package directory by manual checks
+*.tgz

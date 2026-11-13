@@ -5,7 +5,7 @@
  * 可写根不同。两边各建一份的时候，`requireFull` 在其中一边改错就只在另一边
  * 暴露——所以这里收成一个 `buildExecSandbox`。
  */
-import log from 'electron-log';
+import { log } from '../log.js';
 import { llmService } from '../llm/index.js';
 import { getActiveEgressProxyEndpoint } from './egress-proxy.js';
 import type { SidecarSupervisor } from './supervisor.js';

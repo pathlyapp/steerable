@@ -20,13 +20,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from .compaction import CompactionHooks
 from .history import ContextFragment
 from .hooks import LoopHooks, NoopHooks
 from .llm import LLMProvider
-from .retry import RetryHooks
+from .retry import RetryHooks, TransportRetryPolicy
 from .storage import InMemoryStorage, StorageAdapter
 from .tool_search import DEFAULT_MAX_RESULTS
 from .tools import ToolRouter
@@ -328,11 +329,20 @@ class NoRetry:
 
 @dataclass(frozen=True, slots=True)
 class SimpleRetry:
-    """The existing bounded exponential backoff (RetryHooks)."""
+    """Bounded exponential backoff (RetryHooks).
+
+    The ``transport_*`` fields configure the connection-failure policy, which
+    is deliberately more patient than the shared one and stops at a deadline:
+    see :class:`TransportRetryPolicy`.
+    """
 
     max_attempts: int = 4
     base_delay_ms: int = 200
     max_delay_ms: int = 5000
+    transport_max_attempts: int = 5
+    transport_base_delay_ms: int = 1000
+    transport_max_delay_ms: int = 8000
+    transport_deadline_ms: int = 60_000
     name: str = "simple"
     assumes: str = (
         "failures are dominated by transient transport/rate-limit/server "
@@ -349,7 +359,13 @@ class SimpleRetry:
                     max_attempts=self.max_attempts,
                     base_delay_ms=self.base_delay_ms,
                     max_delay_ms=self.max_delay_ms,
-                )
+                ),
+                transport_policy=TransportRetryPolicy(
+                    max_attempts=self.transport_max_attempts,
+                    base_delay_ms=self.transport_base_delay_ms,
+                    max_delay_ms=self.transport_max_delay_ms,
+                    deadline_ms=self.transport_deadline_ms,
+                ),
             )
         )
 
@@ -719,10 +735,12 @@ class DiscoveredNotesState:
 
     Unlike ``FilesystemState`` (one explicit path the model maintains), this
     is read-only discovery: the notes are project/user/managed-owned context
-    the session reads, not a working file it edits.
+    the session reads, not a working file it edits. ``trusted`` gates the
+    ``project`` and ``local`` levels; ``managed`` and ``user`` are always read.
     """
 
     cwd: Path | str
+    trusted: Callable[[Path], bool]
     max_chars: int = 8_000
     name: str = "discovered-notes"
     assumes: str = (
@@ -737,15 +755,16 @@ class DiscoveredNotesState:
         return InMemoryStorage()
 
     def hooks(self, *, provider: LLMProvider | None = None) -> LoopHooks:
-        return _DiscoveredNotesInjection(Path(self.cwd), self.max_chars)
+        return _DiscoveredNotesInjection(Path(self.cwd), self.max_chars, self.trusted)
 
 
 class _DiscoveredNotesInjection(NoopHooks):
     """pre_step slice: discover and append the notes union once per turn."""
 
-    def __init__(self, cwd: Path, max_chars: int) -> None:
+    def __init__(self, cwd: Path, max_chars: int, trusted: Callable[[Path], bool]) -> None:
         self._cwd = cwd
         self._max_chars = max_chars
+        self._trusted = trusted
 
     async def pre_step(self, transcript: Any, ctx: Any) -> Any:
         from .hooks import PreStepAction, TranscriptAppend
@@ -755,6 +774,8 @@ class _DiscoveredNotesInjection(NoopHooks):
         sections: list[tuple[str, Path, str]] = []
         budget = self._max_chars
         for level, path in discover_notes_files(self._cwd):
+            if level in ("project", "local") and not self._trusted(path.parent):
+                continue
             if budget <= 0:
                 break
             try:

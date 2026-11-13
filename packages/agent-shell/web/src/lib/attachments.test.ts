@@ -18,15 +18,15 @@ import {
   type AttachmentFile,
 } from './attachments';
 
-vi.mock('./electron-bridge', () => ({
-  isElectron: vi.fn(),
-  getElectronBridge: vi.fn(),
+vi.mock('./host-bridge', () => ({
+  hasHostBridge: vi.fn(),
+  getHostBridge: vi.fn(),
 }));
 
-import { getElectronBridge, isElectron } from './electron-bridge';
+import { getHostBridge, hasHostBridge } from './host-bridge';
 
-const isElectronMock = vi.mocked(isElectron);
-const getBridgeMock = vi.mocked(getElectronBridge);
+const hasHostBridgeMock = vi.mocked(hasHostBridge);
+const getBridgeMock = vi.mocked(getHostBridge);
 
 const CHAT_ID = 'chat-1';
 
@@ -35,7 +35,7 @@ function browserFile(name: string): AttachmentFile {
 }
 
 function attachBridge(save: ReturnType<typeof vi.fn>): void {
-  isElectronMock.mockReturnValue(true);
+  hasHostBridgeMock.mockReturnValue(true);
   getBridgeMock.mockReturnValue({ attachments: { save } } as never);
 }
 
@@ -50,7 +50,7 @@ beforeEach(() => {
 
 describe('saveChatAttachments', () => {
   it('空 chatId / 空列表原样返回，不报失败', async () => {
-    isElectronMock.mockReturnValue(true);
+    hasHostBridgeMock.mockReturnValue(true);
     getBridgeMock.mockReturnValue(null);
     const files = [browserFile('a.docx')];
 
@@ -151,7 +151,7 @@ describe('appendAttachmentRefs / collectImageAttachments（文件优先，图片
       { name: 'p.png', path: '/d/att/p.png' },
     ]);
     expect(content.startsWith('帮我做PPT')).toBe(true);
-    expect(content).toContain('关联文件:');
+    expect(content).toContain('Related files:');
     expect(content).toContain('- `/d/att/a.docx`');
     expect(content).toContain('- `/d/att/b.pdf`');
     expect(content).toContain('- `/d/att/p.png`');
@@ -159,7 +159,7 @@ describe('appendAttachmentRefs / collectImageAttachments（文件优先，图片
 
   it('只有正文为空时，正文退化为引用段', () => {
     expect(appendAttachmentRefs('', [{ name: 'a.docx', path: '/d/a.docx' }])).toBe(
-      '关联文件:\n- `/d/a.docx`',
+      'Related files:\n- `/d/a.docx`',
     );
     expect(appendAttachmentRefs('hi', [])).toBe('hi');
   });

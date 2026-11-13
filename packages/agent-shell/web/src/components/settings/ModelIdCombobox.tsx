@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { LuChevronDown } from 'react-icons/lu';
+import { t } from '@/i18n';
 import { ModelCapabilityChips } from '@/components/settings/ModelCapabilityChips';
 import type { ModelPickerRow } from '@/components/settings/llm-vendors';
 
@@ -164,7 +165,7 @@ export function ModelIdCombobox({
       <button
         type="button"
         tabIndex={-1}
-        aria-label="打开模型列表"
+        aria-label={t('Open model list')}
         onClick={() => {
           if (open) setOpen(false);
           else show();

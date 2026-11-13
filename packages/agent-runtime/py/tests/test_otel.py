@@ -290,3 +290,137 @@ async def test_export_trace_convenience_posts_metadata_by_default() -> None:
     assert status == 200
     blob = json.dumps(received["body"])
     assert "sk-live0000000000000000deadbeef" not in blob  # metadata default
+
+
+# ---------------------------------------------------------------------------
+# Metrics — turn-outcome counters (phase 2, R4)
+# ---------------------------------------------------------------------------
+
+
+def _metrics(samples: list[dict], now_ms: int = 1_700_000_000_000) -> dict:
+    from steerable_agent_runtime import to_otlp_metrics_json
+
+    return to_otlp_metrics_json(samples, now_ms=now_ms)
+
+
+def _metric(payload: dict, name: str) -> dict:
+    metrics = payload["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]
+    return next(metric for metric in metrics if metric["name"] == name)
+
+
+def test_metrics_payload_groups_turns_by_outcome() -> None:
+    payload = _metrics(
+        [
+            {"outcome": "completed", "attempts": 1},
+            {"outcome": "completed", "attempts": 1},
+            {"outcome": "failed", "failureKind": "transport", "attempts": 5},
+        ]
+    )
+
+    points = _metric(payload, "steerable.turn.outcome")["sum"]["dataPoints"]
+    by_outcome = {
+        point["attributes"][0]["value"]["stringValue"]: int(point["asInt"]) for point in points
+    }
+    assert by_outcome["completed"] == 2
+    assert by_outcome["failed"] == 1
+
+
+def test_metrics_payload_separates_failure_kinds() -> None:
+    """A merged bucket would hide whether the network or the key is the problem."""
+    payload = _metrics(
+        [
+            {"outcome": "failed", "failureKind": "transport"},
+            {"outcome": "failed", "failureKind": "auth"},
+        ]
+    )
+
+    points = _metric(payload, "steerable.turn.outcome")["sum"]["dataPoints"]
+    kinds = sorted(
+        point["attributes"][1]["value"]["stringValue"] for point in points
+    )
+    assert kinds == ["auth", "transport"]
+
+
+def test_metrics_carry_no_conversation_content() -> None:
+    """The payload must be labels and counts only — nothing to filter."""
+    payload = _metrics(
+        [
+            {
+                "outcome": "failed",
+                "failureKind": "transport",
+                "attempts": 3,
+                # A caller that mistakenly passes content must not leak it.
+                "message": "secret prompt text",
+                "model": "deepseek-v4-flash",
+            }
+        ]
+    )
+    body = json.dumps(payload)
+    assert "secret prompt text" not in body
+    assert "deepseek-v4-flash" not in body
+
+
+def test_metrics_attempt_counter_sums_requests() -> None:
+    payload = _metrics(
+        [
+            {"outcome": "completed", "attempts": 2},
+            {"outcome": "completed", "attempts": 3},
+        ]
+    )
+
+    points = _metric(payload, "steerable.turn.attempts")["sum"]["dataPoints"]
+    assert sum(int(point["asInt"]) for point in points) == 5
+
+
+def test_metrics_are_cumulative_monotonic_sums() -> None:
+    payload = _metrics([{"outcome": "completed", "attempts": 1}])
+
+    for name in ("steerable.turn.outcome", "steerable.turn.attempts"):
+        summary = _metric(payload, name)["sum"]
+        assert summary["aggregationTemporality"] == 2  # cumulative
+        assert summary["isMonotonic"] is True
+
+
+def test_metrics_labels_are_stable_across_exports() -> None:
+    """Same input, same bytes: a collector's series must not churn."""
+    first = _metrics([{"outcome": "failed", "failureKind": "transport", "usedDirect": True}])
+    second = _metrics([{"outcome": "failed", "failureKind": "transport", "usedDirect": True}])
+    assert json.dumps(first) == json.dumps(second)
+
+
+def test_metrics_with_no_samples_emit_no_series() -> None:
+    """An empty export must not create a bogus zero series."""
+    payload = _metrics([])
+    assert payload["resourceMetrics"][0]["scopeMetrics"][0]["metrics"] == []
+
+
+def test_export_metrics_posts_to_the_given_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    from steerable_agent_runtime import export_metrics
+
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    def fake_urlopen(request, timeout=None):  # noqa: ANN001, ARG001
+        captured["url"] = request.full_url
+        captured["body"] = request.data
+        return _Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    status = export_metrics(
+        [{"outcome": "completed", "attempts": 1}],
+        "http://127.0.0.1:4318/v1/metrics",
+    )
+
+    assert status == 200
+    assert captured["url"] == "http://127.0.0.1:4318/v1/metrics"
+    body = json.loads(captured["body"])  # type: ignore[arg-type]
+    assert body["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]

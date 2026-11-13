@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execSync } from 'node:child_process';
-import { LocalExecutor } from '../src/local-executor.js';
+import { expandFencePath, LocalExecutor } from '../src/local-executor.js';
 import { ToolRouter } from '../src/tool-router.js';
 
 const hasPython = (() => {
@@ -148,7 +148,7 @@ describe('ToolRouter / local_run_snippet', () => {
       { name: 'local_run_snippet', arguments: { language: 'node', code: '1' } },
       { projectRoot: root },
     );
-    expect(seenCwd).toBe(root);
+    expect(seenCwd).toBe(expandFencePath(root));
 
     const outside = process.platform === 'win32' ? 'C:\\other' : '/etc';
     const rejected = await router.execute(
@@ -157,6 +157,33 @@ describe('ToolRouter / local_run_snippet', () => {
         arguments: { language: 'node', code: '1', cwd: outside },
       },
       { projectRoot: root },
+    );
+    expect((rejected as { success: boolean }).success).toBe(false);
+    expect((rejected as { error: string }).error).toContain('路径越界');
+  });
+
+  it('项目沙箱：源文件夹及其子目录可作为 cwd，同级目录仍拒绝', async () => {
+    let seenCwd: string | undefined;
+    const router = makeRouter(async (req) => {
+      seenCwd = req.cwd;
+      return { success: true };
+    });
+    const root = process.platform === 'win32' ? 'C:\\proj\\a' : '/tmp/proj-a';
+    const source = process.platform === 'win32' ? 'C:\\src\\lib' : '/tmp/src-lib';
+    const nested = process.platform === 'win32' ? 'C:\\src\\lib\\pkg' : '/tmp/src-lib/pkg';
+    await router.execute(
+      { name: 'local_run_snippet', arguments: { language: 'node', code: '1', cwd: nested } },
+      { projectRoot: root, additionalWriteRoots: [source] },
+    );
+    expect(seenCwd).toBe(expandFencePath(nested));
+
+    const sibling = process.platform === 'win32' ? 'C:\\src\\other' : '/tmp/src-other';
+    const rejected = await router.execute(
+      {
+        name: 'local_run_snippet',
+        arguments: { language: 'node', code: '1', cwd: sibling },
+      },
+      { projectRoot: root, additionalWriteRoots: [source] },
     );
     expect((rejected as { success: boolean }).success).toBe(false);
     expect((rejected as { error: string }).error).toContain('路径越界');

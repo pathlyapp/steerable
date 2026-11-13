@@ -32,8 +32,6 @@ export interface SidecarSandboxPosture {
 export interface SidecarStartOptions {
   /** Override the python binary; defaults to the bundled portable runtime. */
   pythonExecutable?: string;
-  /** Optional Rust sidecar binary; used when STEERABLE_RUST_SIDECAR is on. */
-  rustSidecarBin?: string;
   /** Override the entrypoint module; defaults to ``steerable_sidecar``. */
   entryModule?: string;
   /** Extra arguments appended after ``-m <entryModule>``. */
@@ -200,6 +198,36 @@ export interface SidecarSessionMessages {
 }
 
 /**
+ * `agent.children.list` result: the durable child-agent index for one parent
+ * session. `status` is composed, never stored raw — a terminal row reports
+ * its own status, a non-terminal row with a live handle reports `running`,
+ * and one with no handle reports `interrupted` (`resumable` says whether a
+ * send can continue it).
+ */
+export interface SidecarChildAgent {
+  recordId: string;
+  parentRecordId: string;
+  childId: string;
+  depth: number;
+  profile: string | null;
+  engine: string;
+  status: string;
+  resumable: boolean;
+  live: boolean;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  usageKnown: boolean;
+  createdAt: string;
+  updatedAt: string;
+  answerPreview?: string;
+}
+
+export interface SidecarChildrenList {
+  parentRecordId: string | null;
+  children: SidecarChildAgent[];
+}
+
+/**
  * W6-1: `workspace.apply_edits` result — the pure structured-edit algorithm
  * run in the sidecar on host-supplied content. The host owns all file I/O.
  */
@@ -293,6 +321,13 @@ export interface SidecarChatStreamRequest {
    * never a silently dropped field); omitted → env/preset defaults apply.
    */
   reasoningEffort?: string;
+  /**
+   * Send this turn's model requests direct, skipping every declared proxy
+   * (the product config's `directModelConnection`). The sidecar applies it
+   * per request, not per process, so one model service can go direct while
+   * everything else keeps the proxy. Omitted → the proxy keeps its say.
+   */
+  directConnection?: boolean;
   tools?: unknown[];
   streamId?: string;
   providerOptions?: Record<string, unknown>;
@@ -339,12 +374,15 @@ export interface SidecarChatStreamRequest {
    * executor with the six-tool orchestration family (agent_spawn /
    * agent_send / agent_wait / agent_close / agent_list / agent_interrupt).
    * When delegation is also on (it is by default), both surfaces share one
-   * agent pool — one maxParallel budget, one lineage space. */
+   * agent pool — one maxParallel budget, one lineage space.
+   * `childMaxRounds` / `childMaxToolErrors` default to the parent loop's
+   * limits. */
   orchestration?: {
     enabled?: boolean;
     maxDepth?: number;
     maxParallel?: number;
     childMaxRounds?: number;
+    childMaxToolErrors?: number;
   };
   /**
    * Sub-agent delegation (delegate-on-pool). ON BY DEFAULT on the sidecar —
@@ -364,6 +402,12 @@ export interface SidecarChatStreamRequest {
     profiles?: Record<string, {
       toolFilter?: string[];
       model?: string;
+      /**
+       * R6: reasoning effort for this profile's children. Omitted follows
+       * the parent's request; an unsupportable level fails at provider
+       * construction rather than being silently dropped.
+       */
+      reasoningEffort?: string;
       maxRounds?: number;
       maxToolErrors?: number;
       concurrent?: boolean;
@@ -386,7 +430,17 @@ export interface SidecarChatStreamRequest {
   skills?: {
     roots: string[];
     conditions?: string[];
+    /**
+     * Hard mode/whitelist exclusions. Sidecar's skill tool refuses these
+     * names with `not available in this mode`.
+     */
     exclude?: string[];
+    /**
+     * Host-injected/eager skills. Suppressed from the sidecar catalog (the
+     * host already put the body in the system prompt) but still loadable by
+     * the skill tool, so truncation or a model re-load never dead-ends.
+     */
+    pinned?: string[];
     ignoreConditions?: boolean;
     mode?: 'layered' | 'eager';
   };
@@ -449,13 +503,27 @@ export interface SidecarChatStreamRequest {
    * `mode: 'host'` asks the host UI over the reverse channel
    * (`approval.request`); `storePath` enables the durable scope
    * (`allow_always` / `deny_always` persisted per category);
-   * `timeoutMs` fails closed as `timed_out` (a denial) when the UI does
-   * not answer in time. Absent → no approval layer (legacy behavior).
+   * `timeoutMs`, when set, fails closed as `timed_out` (a denial) when the
+   * UI does not answer in time. Omitted, the prompt waits until the user
+   * decides. Absent `approval` → no approval layer (legacy behavior).
    */
   approval?: {
     mode: 'host' | 'auto';
     timeoutMs?: number;
     storePath?: string;
+    /**
+     * Project home, source folders, and other configured write roots.
+     * File tools whose targets all sit inside these directories skip the
+     * host prompt. Independent of whether the OS exec sandbox is on.
+     */
+    writableRoots?: string[];
+    /**
+     * Directory relative tool paths are joined to before the inside-root
+     * check. This is the project home, or the conversation workspace when
+     * the chat has no project. Absent, a relative path is inside unless it
+     * starts with `..`.
+     */
+    pathBase?: string;
   };
 }
 
@@ -501,9 +569,18 @@ export interface SidecarStreamChunk {
     resultPreview?: string;
     /** W4-2: `data._sandbox` marker lifted out of the result for the card. */
     sandbox?: { backend?: string; enforcement: string };
+    /** Session-allow reuse. `cached` means this call did not show a card. `auto` is an unattended allow. */
+    approval?: { kind?: string; category?: string; cached?: boolean; waitMs?: number; auto?: boolean };
   };
   /** CoreLoop notices: soft_timeout / budget_exhausted / round_end / hook_action. */
   notice?: { kind: string; [key: string]: unknown };
+  /**
+   * The sidecar abandoned the attempt it was streaming and re-issued the
+   * request. Deltas received before this point belong to a reply that will
+   * never be completed, so the host withdraws them from the display rather
+   * than appending the retry's text after them.
+   */
+  restart?: { reason: string; round?: number; attempt?: number };
   finishReason?: string;
   usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
 }
@@ -521,6 +598,12 @@ export interface SidecarStreamDone {
    * W6-9: the run's accumulated billable usage (summed over every provider
    * request this turn), plus `costUsd` when the model is priced. Absent on
    * paths that don't report usage.
+   *
+   * R5: when the turn delegated, the same object also carries the children's
+   * share — `child*` totals and a per-child `children` split, so a host can
+   * show the turn's real cost without walking the registry. Children whose
+   * engine reports no tokens at all (an external ACP agent) are counted in
+   * `unknownUsageChildren` rather than folded in as zeros.
    */
   usage?: {
     promptTokens: number;
@@ -528,7 +611,27 @@ export interface SidecarStreamDone {
     totalTokens: number;
     cachedPromptTokens?: number;
     costUsd?: number;
+    childPromptTokens?: number;
+    childCompletionTokens?: number;
+    childTotalTokens?: number;
+    children?: SidecarChildUsage[];
+    unknownUsageChildren?: number;
   };
+  /**
+   * R5: the whole turn tree's spend against `budgetTokens`. Absent when the
+   * host asked for no tree limit — "no limit" must stay distinguishable from
+   * "spent nothing".
+   */
+  treeUsage?: { limit: number; spent: number; byAgent: Record<string, number> };
+}
+
+/** One child's bill inside `stream.done`'s `usage.children`. */
+export interface SidecarChildUsage {
+  childId: string;
+  profile?: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
 }
 
 export interface SidecarStreamError {
@@ -537,6 +640,22 @@ export interface SidecarStreamError {
   traceId?: string;
   kind: string;
   message: string;
+  /**
+   * Provider classification (`transport` / `auth` / `rate_limit` / `server` /
+   * `context_overflow` / `invalid_request` / `unknown`). Absent from older
+   * sidecars and from non-provider failures; treat missing as `unknown` rather
+   * than parsing the message.
+   */
+  errorKind?: string;
+  /**
+   * Proxy the model request went through, credentials stripped. Absent means
+   * the request went direct or the sidecar predates this field.
+   */
+  proxy?: string;
+  /** Provider attempts spent on the failing request, including the last. */
+  attempts?: number;
+  /** HTTP status when the provider answered with one. */
+  statusCode?: number;
 }
 
 /**
@@ -562,6 +681,18 @@ export interface SidecarChildEvent {
    * back to render the delegation's reasoning + tool calls.
    */
   recordId?: string;
+  /**
+   * R5: this child's bill, on the terminal event. Absent means it has not
+   * settled yet; a settled external-engine child carries no `usage` at all,
+   * and the row says "not counted" rather than "0 tok".
+   */
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  /**
+   * R7-3: the child's intro when it is blocked on the user
+   * (`child_needs_input`). The panel marks the row and the question card
+   * names the child it came from.
+   */
+  intro?: string;
 }
 
 export interface SidecarChatStreamHandlers {

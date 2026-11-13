@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Steerable Example",
+  "version": "0.0.0",
+  "identifier": "com.example.steerable",
+  "build": {
+    "frontendDist": "assets"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Productivity",
+    "shortDescription": "A Steerable desktop host",
+    "icon": ["assets/icon.png"],
+    "resources": []
+  }
+}

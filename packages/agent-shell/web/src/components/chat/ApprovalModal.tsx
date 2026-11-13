@@ -2,7 +2,8 @@ import { LuShieldAlert, LuTriangleAlert } from 'react-icons/lu';
 import {
   type ApprovalDecisionKind,
   type ApprovalPromptRequest,
-} from '@/lib/electron-bridge';
+} from '@/lib/host-bridge';
+import { t } from '@/i18n';
 
 /**
  * ApprovalPromptMenu — W4-1 审批代数的输入区 UI。
@@ -19,10 +20,10 @@ import {
  */
 
 const MODE_LABEL: Record<string, string> = {
-  read: '只读',
-  safe_write: '写入',
-  destructive: '危险',
-  other: '其他',
+  read: 'Read only',
+  safe_write: 'Write',
+  destructive: 'Dangerous',
+  other: 'Other',
 };
 
 function summarizeArguments(args: Record<string, unknown>): string {
@@ -44,16 +45,33 @@ interface DecisionButton {
   tone: 'allow' | 'deny' | 'abort';
 }
 
-const ALLOW_BUTTONS: DecisionButton[] = [
-  { kind: 'allow_once', label: '允许一次', tone: 'allow' },
-  { kind: 'allow_for_session', label: '本次会话允许', tone: 'allow' },
-  { kind: 'allow_always', label: '始终允许', tone: 'allow' },
-];
+function categoryName(label: string): string {
+  return t(label);
+}
+
+function allowButtons(request: ApprovalPromptRequest): DecisionButton[] {
+  const category = request.category !== request.toolName && request.categoryLabel
+    ? categoryName(request.categoryLabel)
+    : undefined;
+  return [
+    { kind: 'allow_once', label: 'Allow once', tone: 'allow' },
+    {
+      kind: 'allow_for_session',
+      label: category ? t('Allow {category} for this chat', { category }) : 'Allow for this chat',
+      tone: 'allow',
+    },
+    {
+      kind: 'allow_always',
+      label: category ? t('Always allow {category}', { category }) : 'Always allow',
+      tone: 'allow',
+    },
+  ];
+}
 
 const DENY_BUTTONS: DecisionButton[] = [
-  { kind: 'deny_once', label: '拒绝一次', tone: 'deny' },
-  { kind: 'deny_for_session', label: '本次会话拒绝', tone: 'deny' },
-  { kind: 'deny_always', label: '始终拒绝', tone: 'deny' },
+  { kind: 'deny_once', label: 'Deny once', tone: 'deny' },
+  { kind: 'deny_for_session', label: 'Deny for this chat', tone: 'deny' },
+  { kind: 'deny_always', label: 'Always deny', tone: 'deny' },
 ];
 
 function DecisionRow({
@@ -77,7 +95,7 @@ function DecisionRow({
               : 'rounded-agent-md border border-agent-border px-3 py-1.5 text-xs font-medium text-agent-foreground transition hover:bg-agent-muted'
           }
         >
-          {b.label}
+          {t(b.label)}
         </button>
       ))}
     </div>
@@ -99,6 +117,16 @@ export function ApprovalPromptMenu({
   // 出口没有意义——只给一次性/会话两档，且默认焦点在拒绝（安全默认：
   // 用户能认出 api.github.com，认不出 cdn.jsdelivr.net.evil.com）。
   const isEgress = current.category === 'network_egress';
+  const isSandboxEscalation = current.category === 'sandbox_escalation';
+  const isBrowser = current.category === 'browser';
+  const sandboxOff = current.sandboxEnforced === false;
+  const outsideWorkspace =
+    current.outsideWorkspace === true &&
+    !isEgress &&
+    !isSandboxEscalation &&
+    !isBrowser &&
+    !sandboxOff;
+  const cwd = typeof current.arguments.cwd === 'string' ? current.arguments.cwd : '';
   const egressHost =
     typeof current.arguments.host === 'string' ? current.arguments.host : '';
   const egressPort =
@@ -119,25 +147,53 @@ export function ApprovalPromptMenu({
             <div className="text-xs font-medium text-agent-foreground">
               {isEgress ? (
                 <>
-                  Agent 请求访问外网
+                  {t('Agent requests internet access')}
                   <span className="mx-1 font-mono">
                     {egressHost}
                     {egressPort !== null ? `:${egressPort}` : ''}
                   </span>
+                  {current.categoryLabel ? (
+                    <span className="text-agent-muted-foreground">
+                      {t('({category})', { category: categoryName(current.categoryLabel) })}
+                    </span>
+                  ) : null}
+                </>
+              ) : isSandboxEscalation ? (
+                <>
+                  {t('Agent requests to run a command outside the workspace')}
+                  {current.categoryLabel ? (
+                    <span className="ml-1 text-agent-muted-foreground">
+                      {t('({category})', { category: categoryName(current.categoryLabel) })}
+                    </span>
+                  ) : null}
+                </>
+              ) : isBrowser && current.toolName === 'browser_navigate' ? (
+                <>
+                  {t('Agent requests to open a page')}
+                  <span className="mx-1 font-mono">{current.toolName}</span>
+                  {current.categoryLabel ? (
+                    <span className="text-agent-muted-foreground">
+                      {t('({category})', { category: categoryName(current.categoryLabel) })}
+                    </span>
+                  ) : null}
                 </>
               ) : (
                 <>
-                  Agent 请求执行
+                  {t('Agent requests to run')}
                   <span className="mx-1 font-mono">{current.toolName}</span>
                   <span className="text-agent-muted-foreground">
-                    （{MODE_LABEL[current.mode] ?? current.mode}操作）
+                    {current.categoryLabel
+                      ? t('({category})', { category: categoryName(current.categoryLabel) })
+                      : t('({mode} action)', {
+                          mode: MODE_LABEL[current.mode] ? t(MODE_LABEL[current.mode]) : current.mode,
+                        })}
                   </span>
                 </>
               )}
             </div>
             {pendingCount > 0 && (
               <div className="mt-0.5 text-[11px] text-agent-muted-foreground">
-                还有 {pendingCount} 个待审批
+                {t('{count} more awaiting approval', { count: pendingCount })}
               </div>
             )}
           </div>
@@ -149,22 +205,59 @@ export function ApprovalPromptMenu({
           </pre>
             {isEgress ? (
             <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-              该域名不在出网白名单内。放行前请核对完整域名拼写（仿冒域名常
-              用相似拼写，如 cdn.jsdelivr.net.evil.com）。放行仅对本次会话
-              生效；要持久放行请把域名加入设置的出网白名单。
+              {t(
+                'This domain is not on the egress allowlist. Check the full spelling before allowing it (lookalike domains often use similar spellings, such as cdn.jsdelivr.net.evil.com). Allowing it applies only to this chat. To allow it permanently, add the domain to the egress allowlist in Settings.',
+              )}
+            </p>
+          ) : isSandboxEscalation ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+              {t(
+                'The workspace sandbox blocked this command. Allowing it retries only this command, without limiting where it can write.',
+              )}
+            </p>
+          ) : isBrowser ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+              {t(
+                'Opening pages, clicking, filling, and pressing keys act on that site and can send information off this computer. Scrolling, reading, and screenshots do not need approval.',
+              )}
+            </p>
+          ) : outsideWorkspace ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+              {current.outsideWorkspaceKind === 'workspace'
+                ? cwd
+                  ? t(
+                      'The command runs in the sandbox. Working directory {cwd} is outside this chat workspace, so writes there are blocked.',
+                      { cwd },
+                    )
+                  : t(
+                      'The command runs in the sandbox. Its working directory is outside this chat workspace, so writes there are blocked.',
+                    )
+                : cwd
+                  ? t(
+                      'The command runs in the sandbox. Working directory {cwd} is outside the project, so writes there are blocked. Add that directory as a project source folder when a write is required.',
+                      { cwd },
+                    )
+                  : t(
+                      'The command runs in the sandbox. Its working directory is outside the project, so writes there are blocked. Add that directory as a project source folder when a write is required.',
+                    )}
             </p>
           ) : (
             <>
               {current.category !== current.toolName && (
                 <p className="mt-2 text-[11px] text-agent-muted-foreground">
-                  持久化类别：{current.category}（会话/始终决定对该类别所有调用生效）
+                  {t(
+                    'Saved category: {category} (a chat or always decision applies to every call in this category)',
+                    { category: current.category },
+                  )}
                 </p>
               )}
-              <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-                默认在工作区沙箱中执行（只能写入当前项目或本对话工作区）。写入
-                Downloads 等工作区外路径会被系统拒绝；需要时在输入框把沙箱切到「完整权限」后再让
-                Agent 重试。
-              </p>
+              {!sandboxOff && (
+                <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+                  {t(
+                    'Runs in the workspace sandbox. Writes outside it are blocked. To write outside, switch the sandbox to "Full access" and try again.',
+                  )}
+                </p>
+              )}
             </>
           )}
         </div>
@@ -173,8 +266,8 @@ export function ApprovalPromptMenu({
           <DecisionRow
             buttons={
               isEgress
-                ? ALLOW_BUTTONS.filter((b) => b.kind !== 'allow_always')
-                : ALLOW_BUTTONS
+                ? allowButtons(current).filter((b) => b.kind !== 'allow_always')
+                : allowButtons(current)
             }
             onPick={onDecide}
           />
@@ -193,13 +286,13 @@ export function ApprovalPromptMenu({
               className="shrink-0 rounded-agent-md bg-agent-destructive px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90"
               data-testid="approval-abort"
             >
-              中止本轮
+              {t('Abort this turn')}
             </button>
           </div>
           <p className="text-[11px] leading-relaxed text-agent-muted-foreground">
             {isEgress
-              ? '「会话」决定在本对话内记住（代理进程退出即失效）。不操作约 3 分钟后按拒绝处理。'
-              : '「会话」决定在本对话内记住；「始终」决定写入本机 ~/.steerable/approvals.json，跨对话生效。不操作约 2 分钟后按拒绝处理。'}
+              ? t('With no action for about 3 minutes, the request is denied and that network access fails.')
+              : t('"This chat" applies only to this chat. "Always" is saved on this computer and applies to every chat.')}
           </p>
         </div>
     </div>

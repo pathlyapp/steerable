@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   bump:
-    if: github.repository == 'pathlyapp/opensteerable'
+    if: github.repository == 'pathlyapp/steerable'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout release branch
@@ -39,7 +39,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '26'
           cache: pnpm
 
       - uses: actions/setup-python@v6

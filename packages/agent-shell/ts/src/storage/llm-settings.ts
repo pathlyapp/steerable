@@ -308,6 +308,136 @@ export function mergeLlmSettings(settings: LlmSettings): LlmSettings {
   return merged;
 }
 
+// ─── 凭据解析 ────────────────────────────────────────────────────────────────
+
+/** 环境变量里找到的 key，或配置里存的 key；`not_required` = 本地提供方。 */
+export type ApiKeySource =
+  | { kind: 'config' }
+  | { kind: 'env'; name: string }
+  | { kind: 'not_required' }
+  | { kind: 'missing' };
+
+export interface ResolvedApiKey {
+  key: string | null;
+  source: ApiKeySource;
+  /** 当前提供方按顺序会检查的环境变量名，用于提示文案。 */
+  envNames: readonly string[];
+}
+
+/**
+ * 环境变量名按提供方声明；openai-compat 的主机区分 DeepSeek 与 OpenAI，
+ * 其他网关按先后顺序取第一个有值的。
+ */
+const PROVIDER_API_KEY_ENV: Record<LlmProvider, readonly string[]> = {
+  'openai-compat': ['DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'OPENAI_COMPAT_API_KEY'],
+  anthropic: ['ANTHROPIC_API_KEY'],
+  google: ['GEMINI_API_KEY'],
+  'openai-responses': ['OPENAI_API_KEY'],
+  ollama: [],
+};
+
+const VENDOR_API_KEY_ENV: Record<string, readonly string[]> = {
+  deepseek: ['DEEPSEEK_API_KEY'],
+  openai: ['OPENAI_API_KEY'],
+  anthropic: ['ANTHROPIC_API_KEY'],
+  google: ['GEMINI_API_KEY'],
+  openrouter: ['OPENROUTER_API_KEY'],
+  'alibaba-cn': ['DASHSCOPE_API_KEY'],
+  'moonshotai-cn': ['MOONSHOT_API_KEY'],
+  moonshot: ['MOONSHOT_API_KEY'],
+  zhipuai: ['ZHIPU_API_KEY'],
+  groq: ['GROQ_API_KEY'],
+  xai: ['XAI_API_KEY'],
+  lmstudio: ['LMSTUDIO_API_KEY'],
+};
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '0.0.0.0']);
+
+function hostnameOf(baseUrl: string | undefined): string {
+  if (!baseUrl) return '';
+  try {
+    return new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isLoopback(baseUrl: string | undefined): boolean {
+  const host = hostnameOf(baseUrl);
+  return host.length > 0 && LOOPBACK_HOSTS.has(host);
+}
+
+/**
+ * Environment variables consulted for this provider and vendor, in order.
+ *
+ * @returns Variable names; empty when the provider runs locally and needs no key.
+ */
+export function apiKeyEnvNames(settings: Pick<LlmSettings, 'provider' | 'vendorId' | 'baseUrl'>): readonly string[] {
+  if (settings.provider === 'ollama' || isLoopback(settings.baseUrl)) return [];
+  const vendor = settings.vendorId?.trim().toLowerCase();
+  const fromVendor = vendor ? VENDOR_API_KEY_ENV[vendor] : undefined;
+  if (fromVendor) return fromVendor;
+  if (settings.provider === 'openai-compat') {
+    // A custom gateway keeps the general list; the vendor entry (above) wins
+    // when the settings name one.
+    return PROVIDER_API_KEY_ENV['openai-compat'];
+  }
+  return PROVIDER_API_KEY_ENV[settings.provider] ?? [];
+}
+
+/**
+ * Resolves the credential for one turn: stored settings first, then the
+ * provider's environment variables.
+ *
+ * An environment key never reaches storage, so `config get apiKey` can report
+ * where a working key came from without copying it into the database.
+ *
+ * @param settings Current LLM settings.
+ * @param env Environment to read; defaults to `process.env`.
+ * @returns The key and its source.
+ */
+export function resolveApiKey(
+  settings: Pick<LlmSettings, 'provider' | 'vendorId' | 'baseUrl' | 'apiKey'>,
+  env: Record<string, string | undefined> = process.env,
+): ResolvedApiKey {
+  const stored = settings.apiKey?.trim();
+  if (stored) return { key: stored, source: { kind: 'config' }, envNames: apiKeyEnvNames(settings) };
+  const envNames = apiKeyEnvNames(settings);
+  if (envNames.length === 0) return { key: null, source: { kind: 'not_required' }, envNames };
+  for (const name of envNames) {
+    const value = env[name]?.trim();
+    if (value) return { key: value, source: { kind: 'env', name }, envNames };
+  }
+  return { key: null, source: { kind: 'missing' }, envNames };
+}
+
+/**
+ * Applies {@link resolveApiKey} to a settings object.
+ *
+ * @returns Settings whose `apiKey` is the resolved key (absent when none).
+ */
+export function withResolvedApiKey(
+  settings: LlmSettings,
+  env: Record<string, string | undefined> = process.env,
+): LlmSettings {
+  const resolved = resolveApiKey(settings, env);
+  const { apiKey: _stored, ...rest } = settings;
+  return resolved.key ? { ...rest, apiKey: resolved.key } : rest;
+}
+
+/**
+ * Masks a key for display: the first three and last four characters survive.
+ *
+ * @param key The credential, or null/undefined when none is configured.
+ * @returns Display text: `sk-…a1b2`, `…12`, or an empty string.
+ */
+export function maskApiKey(key: string | null | undefined): string {
+  const value = key?.trim() ?? '';
+  if (!value) return '';
+  if (value.length < 12) return `…${value.slice(-2)}`;
+  return `${value.slice(0, 3)}…${value.slice(-4)}`;
+}
+
 const COMPAT_BOOL_KEYS = [
   'supportsUsageInStreaming',
   'supportsReasoningEffort',

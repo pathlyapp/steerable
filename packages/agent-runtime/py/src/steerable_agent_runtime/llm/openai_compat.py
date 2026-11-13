@@ -30,10 +30,15 @@ from ..model_info import (
 )
 from . import LLMMessage, LLMStreamChunk, LLMUsage
 from .compat import OpenAICompatFlags
-from .errors import LLMError, classify_http_status, parse_retry_after_ms
+from .errors import (
+    LLMError,
+    classify_http_status,
+    describe_transport_error,
+    parse_retry_after_ms,
+)
 from .parts import ImagePart, TextPart
 from .presets import ProviderPreset, preset_for
-from .system_proxy import client_env_kwargs
+from .system_proxy import client_env_kwargs, egress_path
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +150,11 @@ class OpenAICompatProvider:
     #: a ``ProviderPreset`` instance pins that preset regardless of the
     #: registry (host settings UIs send an explicit choice this way).
     preset: ProviderPreset | Literal["auto", "off"] = "auto"
+    #: Send this endpoint's requests direct even when the host declares a
+    #: proxy. Set for a model service the user redirected after a proxy turned
+    #: a working connection into a timeout; the proxy stays configured for
+    #: everything else.
+    force_direct: bool = False
     #: Per-request reasoning effort from the host's model picker; wins over
     #: ``STEERABLE_REASONING_EFFORT`` and the preset default. Explicitly
     #: requested effort is validated strict (``clamp_reasoning_effort``) —
@@ -197,7 +207,7 @@ class OpenAICompatProvider:
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(60.0),
-                **client_env_kwargs(self.base_url),
+                **client_env_kwargs(self.base_url, force_direct=self.force_direct),
             ) as client:
                 response = await client.post(
                     f"{self.base_url.rstrip('/')}/chat/completions",
@@ -211,9 +221,10 @@ class OpenAICompatProvider:
                 payload = response.json()
         except httpx.TransportError as exc:
             raise LLMError(
-                f"{self.name}: transport error: {exc}",
+                f"{self.name}: transport error: {describe_transport_error(exc)}",
                 kind="transport",
                 provider=self.name,
+                proxy=None if self.force_direct else egress_path(self.base_url).proxy,
             ) from exc
 
         choice = payload["choices"][0]
@@ -250,7 +261,7 @@ class OpenAICompatProvider:
             async with (
                 httpx.AsyncClient(
                     timeout=_stream_timeout(),
-                    **client_env_kwargs(self.base_url),
+                    **client_env_kwargs(self.base_url, force_direct=self.force_direct),
                 ) as client,
                 client.stream(
                     "POST",
@@ -306,9 +317,10 @@ class OpenAICompatProvider:
                     yield LLMStreamChunk(tool_call_delta=call)
         except httpx.TransportError as exc:
             raise LLMError(
-                f"{self.name}: transport error: {exc}",
+                f"{self.name}: transport error: {describe_transport_error(exc)}",
                 kind="transport",
                 provider=self.name,
+                proxy=None if self.force_direct else egress_path(self.base_url).proxy,
             ) from exc
 
     # ------------------------------------------------------------------

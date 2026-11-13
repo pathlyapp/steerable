@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { LuLoaderCircle, LuActivity } from 'react-icons/lu';
-import { getElectronBridge, isElectron } from '@/lib/electron-bridge';
+import { t } from '@/i18n';
+import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 
 /**
  * TelemetrySettingsPanel — W6-6 遥测合规化的桌面 collector 配置面板。
@@ -35,11 +36,11 @@ export function TelemetrySettingsPanel() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchSettings = useCallback(async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await getElectronBridge()!.localBackend.request<TelemetrySettingsWire | null>({
+      const res = await getHostBridge()!.localBackend.request<TelemetrySettingsWire | null>({
         method: 'GET',
         path: '/api/v2/local-settings/telemetry',
       });
@@ -57,12 +58,12 @@ export function TelemetrySettingsPanel() {
   }, [fetchSettings]);
 
   const handleSave = async () => {
-    if (!isElectron()) return;
+    if (!hasHostBridge()) return;
     setSaving(true);
     setError(null);
     setStatus(null);
     try {
-      const saved = await getElectronBridge()!.localBackend.request<TelemetrySettingsWire>({
+      const saved = await getHostBridge()!.localBackend.request<TelemetrySettingsWire>({
         method: 'POST',
         path: '/api/v2/local-settings/telemetry',
         body: { endpoint: endpoint.trim(), privacyMode },
@@ -70,8 +71,10 @@ export function TelemetrySettingsPanel() {
       setEndpoint(saved.endpoint ?? '');
       setStatus(
         saved.endpoint
-          ? `已保存 — 遥测开启(${saved.privacyMode === 'full' ? '完整(已脱敏)' : '仅元数据'})`
-          : '已保存 — 未配置 collector 地址,遥测保持关闭',
+          ? t('Saved. Telemetry is on ({mode})', {
+              mode: saved.privacyMode === 'full' ? t('Full (redacted)') : t('Metadata only'),
+            })
+          : t('Saved. No collector URL is set, so telemetry stays off'),
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -91,32 +94,32 @@ export function TelemetrySettingsPanel() {
         {loading ? (
           <div className="flex items-center gap-2 py-2 text-xs text-agent-muted-foreground">
             <LuLoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            读取遥测设置...
+            {t('Loading telemetry settings...')}
           </div>
         ) : (
           <>
             <div className="space-y-1.5">
               <label className="text-[11px] font-medium text-agent-muted-foreground">
-                Collector 地址(/v1/traces)
+                {t('Collector URL (/v1/traces)')}
               </label>
               <input
                 type="text"
                 value={endpoint}
                 onChange={(e) => setEndpoint(e.target.value)}
-                placeholder="http://127.0.0.1:4318/v1/traces(留空 = 关闭遥测)"
+                placeholder={t('http://127.0.0.1:4318/v1/traces (leave blank = telemetry off)')}
                 className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 font-mono text-[11px] text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
               />
             </div>
 
             <div className="space-y-1.5">
               <label className="text-[11px] font-medium text-agent-muted-foreground">
-                隐私档位
+                {t('Privacy level')}
               </label>
               <div className="flex gap-2">
                 {(
                   [
-                    { value: 'metadata', label: '仅元数据', hint: '结构/时延/状态,不含内容' },
-                    { value: 'full', label: '完整(已脱敏)', hint: '含 payload,密钥已打码' },
+                    { value: 'metadata', label: 'Metadata only', hint: 'Structure, latency, and status. No content.' },
+                    { value: 'full', label: 'Full (redacted)', hint: 'Includes payloads. Secrets are masked.' },
                   ] as const
                 ).map((opt) => (
                   <button
@@ -129,8 +132,8 @@ export function TelemetrySettingsPanel() {
                         : 'border-agent-border bg-agent-canvas hover:bg-agent-muted/40'
                     }`}
                   >
-                    <div className="text-xs font-medium text-agent-foreground">{opt.label}</div>
-                    <div className="text-[10px] text-agent-muted-foreground">{opt.hint}</div>
+                    <div className="text-xs font-medium text-agent-foreground">{t(opt.label)}</div>
+                    <div className="text-[10px] text-agent-muted-foreground">{t(opt.hint)}</div>
                   </button>
                 ))}
               </div>
@@ -138,7 +141,7 @@ export function TelemetrySettingsPanel() {
 
             <div className="flex items-center justify-between gap-2">
               <p className="text-[10px] text-agent-muted-foreground">
-                无论哪一档,密钥/令牌在导出前都会被脱敏;留空地址则完全不导出。
+                {t('At either level, keys and tokens are redacted before export. Leave the URL blank to export nothing.')}
               </p>
               <button
                 type="button"
@@ -150,7 +153,7 @@ export function TelemetrySettingsPanel() {
                     : 'bg-agent-foreground text-agent-canvas hover:opacity-90'
                 }`}
               >
-                {saving ? <LuLoaderCircle className="h-3 w-3 animate-spin" /> : '保存'}
+                {saving ? <LuLoaderCircle className="h-3 w-3 animate-spin" /> : t('Save')}
               </button>
             </div>
 

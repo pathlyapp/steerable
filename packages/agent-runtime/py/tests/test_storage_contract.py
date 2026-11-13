@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 from steerable_agent_protocol.generated import AgentSession, ChatMessage
+from steerable_agent_runtime.child_record import ChildRecord
 from steerable_agent_runtime.storage import InMemoryStorage, SqliteStorage
 
 
@@ -133,3 +134,149 @@ async def test_contract_list_history_records_with_prefix(stores) -> None:
 
         prefixed = await store.list_history_records(prefix="chat/")
         assert sorted(prefixed) == ["chat/a", "chat/b"], name
+
+
+def _child(
+    record_id: str,
+    *,
+    parent: str = "chat/p",
+    child_id: str = "0.1",
+    depth: int = 1,
+    profile: str | None = "explore",
+    engine: str = "coreloop",
+    status: str = "running",
+    resumable: bool = False,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    usage_known: bool = True,
+    created: str = "2026-08-30T00:00:00Z",
+) -> ChildRecord:
+    return ChildRecord(
+        record_id=record_id,
+        parent_record_id=parent,
+        child_id=child_id,
+        depth=depth,
+        profile=profile,
+        engine=engine,
+        status=status,
+        resumable=resumable,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        usage_known=usage_known,
+        created_at=created,
+        updated_at=created,
+    )
+
+
+@pytest.mark.asyncio
+async def test_contract_child_round_trip(stores) -> None:
+    for name, store in stores:
+        record = _child("chat/p:child:0.1")
+        await store.upsert_child(record)
+
+        fetched = await store.get_child("chat/p:child:0.1")
+        assert fetched is not None, name
+        assert fetched.child_id == "0.1", name
+        assert fetched.depth == 1, name
+        assert fetched.profile == "explore", name
+        assert fetched.engine == "coreloop", name
+        assert fetched.status == "running", name
+        assert fetched.usage_known is True, name
+
+        assert await store.get_child("chat/p:child:0.9") is None, name
+
+
+@pytest.mark.asyncio
+async def test_contract_child_upsert_replaces_whole_row(stores) -> None:
+    for name, store in stores:
+        await store.upsert_child(_child("chat/p:child:0.1", profile="explore"))
+        await store.upsert_child(_child("chat/p:child:0.1", profile="coder", depth=2))
+
+        fetched = await store.get_child("chat/p:child:0.1")
+        assert fetched is not None, name
+        assert fetched.profile == "coder", name
+        assert fetched.depth == 2, name
+        # Upsert must not duplicate the row.
+        listed = await store.list_children("chat/p")
+        assert len(listed) == 1, name
+
+
+@pytest.mark.asyncio
+async def test_contract_finish_child_writes_terminal_state(stores) -> None:
+    for name, store in stores:
+        await store.upsert_child(_child("chat/p:child:0.1"))
+
+        wrote = await store.finish_child(
+            "chat/p:child:0.1",
+            status="completed",
+            prompt_tokens=120,
+            completion_tokens=30,
+            usage_known=True,
+            resumable=False,
+            updated_at="2026-08-30T01:00:00Z",
+        )
+        assert wrote is True, name
+
+        fetched = await store.get_child("chat/p:child:0.1")
+        assert fetched is not None, name
+        assert fetched.status == "completed", name
+        assert fetched.prompt_tokens == 120, name
+        assert fetched.completion_tokens == 30, name
+        assert fetched.updated_at.startswith("2026-08-30T01:00:00"), name
+
+
+@pytest.mark.asyncio
+async def test_contract_finish_child_reports_unknown_record(stores) -> None:
+    for name, store in stores:
+        wrote = await store.finish_child(
+            "chat/p:child:0.9",
+            status="completed",
+            updated_at="2026-08-30T01:00:00Z",
+        )
+        assert wrote is False, name
+
+
+@pytest.mark.asyncio
+async def test_contract_list_children_scopes_and_orders(stores) -> None:
+    for name, store in stores:
+        await store.upsert_child(
+            _child("chat/p:child:0.2", child_id="0.2", created="2026-08-30T02:00:00Z")
+        )
+        await store.upsert_child(
+            _child("chat/p:child:0.1", child_id="0.1", created="2026-08-30T01:00:00Z")
+        )
+        await store.upsert_child(
+            _child("chat/q:child:0.1", parent="chat/q", created="2026-08-30T00:00:00Z")
+        )
+
+        scoped = await store.list_children("chat/p")
+        assert [r.child_id for r in scoped] == ["0.1", "0.2"], name
+        assert all(r.parent_record_id == "chat/p" for r in scoped), name
+
+        everything = await store.list_all_children()
+        assert len(everything) == 3, name
+
+        prefixed = await store.list_all_children(prefix="chat/p")
+        assert [r.child_id for r in prefixed] == ["0.1", "0.2"], name
+
+
+@pytest.mark.asyncio
+async def test_contract_list_children_can_exclude_finished(stores) -> None:
+    for name, store in stores:
+        await store.upsert_child(_child("chat/p:child:0.1", child_id="0.1"))
+        await store.upsert_child(
+            _child("chat/p:child:0.2", child_id="0.2", status="running")
+        )
+        await store.finish_child(
+            "chat/p:child:0.2",
+            status="completed",
+            updated_at="2026-08-30T01:00:00Z",
+        )
+
+        live = await store.list_children("chat/p", include_finished=False)
+        # 0.1 was written with a non-terminal status and never finished;
+        # 0.2 reached completed. Only the unfinished one remains.
+        assert [r.child_id for r in live] == ["0.1"], name
+
+        everything = await store.list_children("chat/p")
+        assert [r.child_id for r in everything] == ["0.1", "0.2"], name

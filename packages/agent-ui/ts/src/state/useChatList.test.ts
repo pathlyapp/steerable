@@ -83,6 +83,52 @@ describe('useChatList', () => {
     expect(result.current.hasMoreChats).toBe(false);
   });
 
+  it('coalesces concurrent loadMoreChats calls for the same page', async () => {
+    const { transport, listChats } = makeTransport();
+    const { result } = renderHook(() => useChatList({ transport, pageSize: 50 }));
+
+    await waitFor(() => expect(result.current.chats.length).toBe(2));
+
+    await act(async () => {
+      const first = result.current.loadMoreChats();
+      const second = result.current.loadMoreChats();
+      await Promise.all([first, second]);
+    });
+
+    expect(listChats).toHaveBeenCalledTimes(2);
+    expect(result.current.chats.map((c) => c.id)).toEqual(['c1', 'c2', 'c3']);
+  });
+
+  it('does not automatically retry a failed page until the list is refreshed', async () => {
+    const { transport, listChats } = makeTransport();
+    listChats.mockImplementation(async ({ page }: { page: number }) => {
+      if (page === 2) throw new Error('second page unavailable');
+      return {
+        chats: [
+          { id: 'c1', title: 'First' },
+          { id: 'c2', title: 'Second' },
+        ],
+        hasMore: true,
+      };
+    });
+    const { result } = renderHook(() => useChatList({ transport, pageSize: 50 }));
+    await waitFor(() => expect(result.current.chats.length).toBe(2));
+
+    await act(async () => {
+      await result.current.loadMoreChats();
+      await result.current.loadMoreChats();
+    });
+    expect(listChats).toHaveBeenCalledTimes(2);
+    expect(result.current.error?.message).toBe('second page unavailable');
+    expect(result.current.chats.map((chat) => chat.id)).toEqual(['c1', 'c2']);
+
+    await act(async () => {
+      await result.current.refreshChats();
+      await result.current.loadMoreChats();
+    });
+    expect(listChats).toHaveBeenCalledTimes(4);
+  });
+
   it('patchChatTitle updates without re-fetching', async () => {
     const { transport, listChats } = makeTransport();
     const { result } = renderHook(() => useChatList({ transport, pageSize: 50 }));

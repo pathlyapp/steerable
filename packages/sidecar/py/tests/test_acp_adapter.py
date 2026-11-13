@@ -152,6 +152,8 @@ async def test_initialize_advertises_text_only_capabilities() -> None:
     resp = await agent.initialize(protocol_version=1)
     assert resp.agent_info.name == "steerable-sidecar"
     assert resp.agent_capabilities.prompt_capabilities.image is False
+    assert resp.agent_capabilities.mcp_capabilities.http is True
+    assert resp.agent_capabilities.mcp_capabilities.sse is False
     # W3.4.1.1: session lifecycle is served (list/load/resume/fork).
     assert resp.agent_capabilities.load_session is True
 
@@ -293,18 +295,65 @@ async def test_set_config_option_overrides_provider_params() -> None:
 
 
 @pytest.mark.asyncio
-async def test_new_session_rejects_non_stdio_mcp() -> None:
-    """W3.4.2.1: HTTP/SSE MCP servers are an honest gap — fail loud."""
+async def test_new_session_accepts_streamable_http_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import acp
-    from acp.schema import HttpMcpServer
+    from acp.schema import HttpHeader, HttpMcpServer
+    import steerable_agent_runtime.mcp as mcp_module
 
     agent, _ = _agent(_ScriptedProvider([_text_round("hi")]))
+    response = await agent.new_session(
+        cwd="/tmp",
+        mcp_servers=[
+            HttpMcpServer(
+                name="web",
+                url="https://mcp.example.test/",
+                headers=[HttpHeader(name="X-Tenant", value="acme")],
+                type="http",
+            )
+        ],
+    )
+    captured: list[dict] = []
+
+    class _Client:
+        async def start(self) -> None:
+            return None
+
+        async def list_tools(self) -> list:
+            return []
+
+        async def aclose(self) -> None:
+            return None
+
+    def _create(config):
+        captured.append(config)
+        return _Client()
+
+    monkeypatch.setattr(mcp_module, "create_mcp_client", _create)
+    clients = await agent._mount_mcp(
+        ToolRouter(), agent._sessions[response.session_id]
+    )
+    assert len(clients) == 1
+    assert captured == [
+        {
+            "transport": "streamable-http",
+            "url": "https://mcp.example.test/",
+            "headers": {"X-Tenant": "acme"},
+        }
+    ]
+
+    from acp.schema import SseMcpServer
+
     with pytest.raises(acp.RequestError):
         await agent.new_session(
             cwd="/tmp",
             mcp_servers=[
-                HttpMcpServer(
-                    name="web", url="https://mcp.example.test/", headers=[], type="http"
+                SseMcpServer(
+                    name="legacy",
+                    url="https://mcp.example.test/sse",
+                    headers=[],
+                    type="sse",
                 )
             ],
         )

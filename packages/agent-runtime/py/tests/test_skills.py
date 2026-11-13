@@ -27,6 +27,7 @@ from steerable_agent_runtime import (
     ToolRouter,
     render_skill_catalog,
     select_catalog,
+    select_pinned_loadable,
     skill_tool_descriptor,
     tool,
 )
@@ -313,6 +314,42 @@ def test_select_catalog_filters(skills_root: Path) -> None:
     assert select_catalog(provider.list(), {"tool:csv_list_rows"}, exclude=["90-csv-tools"]) == []
 
 
+def test_select_catalog_pins_suppress_listing_only(skills_root: Path) -> None:
+    provider = FilesystemSkillProvider([skills_root])
+    # `pinned` keeps an otherwise-visible catalog skill out of the listing
+    # (the host already injected its body) ...
+    assert (
+        select_catalog(
+            provider.list(),
+            {"tool:csv_list_rows"},
+            pinned=["csv-tools"],
+        )
+        == []
+    )
+    # ... but a hard exclude still wins: pinned is not an access bypass.
+    assert (
+        select_catalog(
+            provider.list(),
+            {"tool:csv_list_rows"},
+            exclude=["csv-tools"],
+            pinned=["90-csv-tools"],
+        )
+        == []
+    )
+
+
+def test_select_pinned_loadable_ignores_conditions(skills_root: Path) -> None:
+    provider = FilesystemSkillProvider([skills_root])
+    # local-exec's condition is not active, but the host pinned it and can
+    # still reload it; the readiness probe must see it as loadable.
+    pinned = select_pinned_loadable(provider.list(), ["local-exec"])
+    assert [s.name for s in pinned] == ["local-exec"]
+    # A hard mode/whitelist exclude still blocks it.
+    assert select_pinned_loadable(
+        provider.list(), ["local-exec"], exclude=["local-exec"]
+    ) == []
+
+
 def test_render_skill_catalog(skills_root: Path) -> None:
     provider = FilesystemSkillProvider([skills_root])
     catalog = select_catalog(provider.list(), {"tool:csv_list_rows", "tool:local_read_file"})
@@ -370,18 +407,17 @@ async def test_catalog_injected_first_round_only(skills_root: Path) -> None:
         )
     )
 
-    # Wave 1: the catalog is an appended standalone system message (hooks
+    # Wave 1: the catalog is an appended standalone user message (hooks
     # never rewrite in place) — the base prompt stays byte-identical and the
     # catalog lands right after the first user message.
     first_request = provider.calls[0]
     assert first_request[0].role == "system"
     assert first_request[0].content_text == "BASE PROMPT"
     catalog_msgs = [
-        m
-        for m in first_request
-        if m.role == "system" and "# Available skills" in m.content_text
+        m for m in first_request if "# Available skills" in m.content_text
     ]
     assert len(catalog_msgs) == 1
+    assert catalog_msgs[0].role == "user"
     assert "- local-exec:" in catalog_msgs[0].content_text
     # Injection is a declared append → hook_action with the skill label.
     actions = [e for e in events if e.kind == "hook_action"]
@@ -391,12 +427,78 @@ async def test_catalog_injected_first_round_only(skills_root: Path) -> None:
     ), [e.data for e in actions]
     # Second round: not re-appended (single catalog copy, identical prompt).
     second_catalog = [
-        m
-        for m in provider.calls[1]
-        if m.role == "system" and "# Available skills" in m.content_text
+        m for m in provider.calls[1] if "# Available skills" in m.content_text
     ]
     assert len(second_catalog) == 1
     assert second_catalog[0].content_text == catalog_msgs[0].content_text
+
+
+def nonleading_system_indices(messages: list[LLMMessage]) -> list[int]:
+    """Positions Qwen3.8's chat template rejects.
+
+    ``Qwen3.8-27B`` ``chat_template.jinja`` raises
+    ``System message must be at the beginning.`` for every system message
+    that is not ``messages[0]``.
+    """
+    return [
+        index
+        for index, message in enumerate(messages)
+        if message.role == "system" and index != 0
+    ]
+
+
+async def test_qwen_template_rejects_a_system_role_catalog(skills_root: Path) -> None:
+    """The skill catalog must not be a second system message.
+
+    The product's first turn is one system prompt plus the user text. Appending
+    the catalog as ``role=system`` made a self-hosted Qwen3.8-27B-W8A8
+    return HTTP 400. The follow-up tool round has to keep that shape too.
+    """
+    from steerable_agent_runtime.llm.openai_compat import _encode_message
+
+    provider = make_provider(
+        [
+            {"tool_calls": [tc("get_data")]},
+            {"content": "done"},
+        ]
+    )
+    router = ToolRouter()
+
+    @tool(name="get_data", description="fetch")
+    async def get_data() -> str:
+        return "data"
+
+    router.register(get_data)
+    loop = CoreLoop(
+        provider,
+        RouterToolExecutor(router),
+        LoopConfig(),
+        hooks=SkillHooks(
+            FilesystemSkillProvider([skills_root]),
+            conditions={"tool:local_read_file"},
+        ),
+    )
+    await collect(
+        loop.run(
+            [
+                LLMMessage.text_of("system", "BASE PROMPT"),
+                LLMMessage.text_of("user", "hi"),
+            ],
+            tools=[{"type": "function", "function": {"name": "get_data"}}],
+        )
+    )
+
+    assert len(provider.calls) == 2
+    first = provider.calls[0]
+    assert [message.role for message in first] == ["system", "user", "user"]
+    assert first[0].content_text == "BASE PROMPT"
+    assert first[1].content_text == "hi"
+    assert "# Available skills" in first[2].content_text
+    for request in provider.calls:
+        assert nonleading_system_indices(request) == []
+        wire_roles = [_encode_message(message)["role"] for message in request]
+        assert wire_roles[0] == "system"
+        assert wire_roles.count("system") == 1
 
 
 async def test_catalog_injected_without_system_message(skills_root: Path) -> None:
@@ -415,7 +517,7 @@ async def test_catalog_injected_without_system_message(skills_root: Path) -> Non
     first_request = provider.calls[0]
     assert first_request[0].role == "user"
     catalog = first_request[1]
-    assert catalog.role == "system"
+    assert catalog.role == "user"
     assert "# Available skills" in catalog.content_text
 
 
@@ -545,6 +647,35 @@ async def test_skill_tool_rejects_excluded(skills_root: Path) -> None:
     assert results[0].data["success"] is False
     tool_messages = [m for m in provider.calls[1] if m.role == "tool"]
     assert "not available in this mode" in tool_messages[0].content_text
+
+
+async def test_skill_tool_still_loads_pinned_excluded_from_catalog(skills_root: Path) -> None:
+    """Pinned is catalog suppression, not an access-control exclusion.
+
+    The host puts a pinned body in the system prompt but still needs the
+    `skill` tool to work if the model re-loads it (e.g. the eager copy was
+    truncated by the system-prompt cap). This is the regression guard for
+    `Skill 'ppt-master' is not available in this mode.`
+    """
+    provider = make_provider(
+        [{"tool_calls": [tc("skill", {"name": "csv-tools"})]}, {"content": "ok"}]
+    )
+    executor = SkillExecutor(
+        RouterToolExecutor(ToolRouter()),
+        FilesystemSkillProvider([skills_root]),
+        conditions={"tool:csv_list_rows"},
+        pinned=["csv-tools"],
+    )
+    loop = CoreLoop(provider, executor, LoopConfig())
+    events = await collect(
+        loop.run([LLMMessage.text_of("user", "hi")], tools=[skill_tool_descriptor()])
+    )
+    results = [e for e in events if e.kind == "tool_call_result"]
+    assert results[0].data["success"] is True
+    tool_messages = [m for m in provider.calls[1] if m.role == "tool"]
+    assert "<skill_content" in tool_messages[0].content_text
+    assert "csv-tools" in tool_messages[0].content_text
+    assert "CSV Tools" in tool_messages[0].content_text
 
 
 async def test_skill_executor_passes_through_other_tools(skills_root: Path) -> None:

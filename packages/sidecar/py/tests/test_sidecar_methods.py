@@ -806,3 +806,227 @@ async def test_executing_completion_forwards_round_end_notice() -> None:
             },
         )
     ]
+
+
+class _WallHooks:
+    """Minimal stand-in for AntiHallucinationHooks.wall_status."""
+
+    def __init__(self, status: str | None) -> None:
+        self._status = status
+
+    def wall_status(self) -> str | None:
+        return self._status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wall", ["budget_exhausted", "failed"])
+async def test_terminal_keeps_wall_status_when_narration_swallowed_it(wall: str) -> None:
+    """撞墙后由 narration 兜底轮收尾时，终态必须还原成墙本身。
+
+    兜底轮会产出一段自然语言总结，loop 因此报 completed；但任务并没有做完。
+    若把 completed 透给 host，`shouldAutoContinue` 就不再接力（它只认
+    budget_exhausted），于是半成品任务静默停止——这正是实测事故的成因。
+    """
+    from steerable_agent_runtime.loop import LoopEvent
+    from steerable_sidecar.sidecar import Sidecar as SidecarCls
+
+    class Capture:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit_notification(self, method: str, params: dict | None = None) -> None:
+            self.events.append((method, params or {}))
+
+    transport = Capture()
+    await SidecarCls._emit_loop_event(
+        transport,  # type: ignore[arg-type]
+        "s1",
+        LoopEvent(
+            "completion",
+            {
+                "status": "completed",
+                "reason": "assistant produced final response with no pending tools",
+            },
+        ),
+        hooks=_WallHooks(wall),
+    )
+
+    method, done = transport.events[-1]
+    assert method == "stream.done"
+    assert done["status"] == wall
+    assert done["ok"] is False
+    assert f"wall={wall}" in done["reason"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_completed_untouched_without_wrap_up() -> None:
+    """没有兜底轮时 completed 必须原样透传（不误伤正常完成）。"""
+    from steerable_agent_runtime.loop import LoopEvent
+    from steerable_sidecar.sidecar import Sidecar as SidecarCls
+
+    class Capture:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict]] = []
+
+        async def emit_notification(self, method: str, params: dict | None = None) -> None:
+            self.events.append((method, params or {}))
+
+    for hooks in (None, _WallHooks(None)):
+        transport = Capture()
+        await SidecarCls._emit_loop_event(
+            transport,  # type: ignore[arg-type]
+            "s1",
+            LoopEvent("completion", {"status": "completed", "reason": "done"}),
+            hooks=hooks,
+        )
+        method, done = transport.events[-1]
+        assert method == "stream.done"
+        assert done["status"] == "completed"
+        assert done["ok"] is True
+        assert done["reason"] == "done"
+
+
+async def test_children_interrupt_reports_no_live_turn(sidecar: Sidecar) -> None:
+    """No turn for the chat → nothing to stop, and that is not an error.
+
+    The panel pressed stop on a row that may have settled between the render
+    and the click; an RPC error there would surface as a failure for something
+    that already succeeded.
+    """
+    response = await _call(
+        sidecar,
+        "agent.children.interrupt",
+        {"chatId": "chat-none", "childId": "0.1"},
+    )
+
+    assert response["result"] == {
+        "interrupted": False,
+        "reason": "no live turn for this chat",
+    }
+
+
+async def test_children_interrupt_requires_both_ids(sidecar: Sidecar) -> None:
+    response = await _call(
+        sidecar, "agent.children.interrupt", {"chatId": "chat-1"}
+    )
+
+    assert "error" in response
+    assert "childId" in response["error"]["message"]
+
+
+async def test_children_interrupt_reaches_the_live_pool(
+    sidecar: Sidecar,
+) -> None:
+    """The pool indexed for the chat is the one asked to interrupt."""
+
+    class _Pool:
+        def __init__(self) -> None:
+            self.asked: list[str] = []
+
+        def interrupt(self, child_id: str) -> bool:
+            self.asked.append(child_id)
+            return child_id == "0.2"
+
+    pool = _Pool()
+    sidecar._pools["chat-9"] = pool
+
+    hit = await _call(
+        sidecar, "agent.children.interrupt", {"chatId": "chat-9", "childId": "0.2"}
+    )
+    miss = await _call(
+        sidecar, "agent.children.interrupt", {"chatId": "chat-9", "childId": "0.7"}
+    )
+
+    assert hit["result"] == {"interrupted": True}
+    assert miss["result"] == {"interrupted": False, "reason": "not running"}
+    assert pool.asked == ["0.2", "0.7"]
+
+
+def test_acp_profile_requires_a_supported_kind() -> None:
+    """`kind: "codex-exec"` fails at load, not by running something else.
+
+    A profile naming an engine this build cannot run must not silently execute
+    locally — the user asked for a *different* agent to do the work.
+    """
+    from steerable_sidecar.sidecar import _acp_engine_from_profile
+
+    with pytest.raises(Exception) as excinfo:
+        _acp_engine_from_profile("codex-exec", {"kind": "codex-exec", "command": "x"})
+
+    message = str(excinfo.value)
+    assert "unsupported_engine" in message
+    assert "acp" in message
+
+
+def test_acp_profile_requires_a_command() -> None:
+    from steerable_sidecar.sidecar import _acp_engine_from_profile
+
+    with pytest.raises(Exception) as excinfo:
+        _acp_engine_from_profile("x", {"kind": "acp"})
+
+    assert "command" in str(excinfo.value)
+
+
+def test_acp_profile_carries_args_env_and_timeout() -> None:
+    from steerable_sidecar.sidecar import _acp_engine_from_profile
+
+    spec, policy = _acp_engine_from_profile(
+        "x",
+        {
+            "kind": "acp",
+            "command": "codex-acp",
+            "args": ["--stdio"],
+            "env": {"A": "1"},
+            "cwd": "/tmp",
+            "timeoutSeconds": 60,
+            "permission": "allow",
+        },
+    )
+
+    assert spec is not None
+    assert spec.command == "codex-acp"
+    assert spec.args == ("--stdio",)
+    assert spec.env == {"A": "1"}
+    assert spec.cwd == "/tmp"
+    assert spec.timeout_s == 60.0
+    assert policy is not None
+    assert policy.default == "allow"
+
+
+def test_a_local_profile_has_no_engine() -> None:
+    """No `engine` block means the local loop, unchanged."""
+    from steerable_sidecar.sidecar import _acp_engine_from_profile
+
+    assert _acp_engine_from_profile("plain", None) == (None, None)
+
+
+def test_acp_permission_rejects_an_unknown_decision() -> None:
+    """`"maybe"` is not a decision; failing closed beats granting by typo."""
+    from steerable_sidecar.sidecar import _acp_permission_from_profile
+
+    with pytest.raises(Exception) as excinfo:
+        _acp_permission_from_profile("x", {"default": "maybe"})
+
+    assert "allow" in str(excinfo.value)
+
+
+def test_acp_permission_accepts_a_bare_decision() -> None:
+    """The short form `permission: "allow"` is the whole-engine default."""
+    from steerable_sidecar.sidecar import _acp_permission_from_profile
+
+    policy = _acp_permission_from_profile("x", "allow")
+
+    assert policy.default == "allow"
+    assert policy.decide("execute") == "allow"
+
+
+def test_acp_permission_by_kind_narrows_a_permissive_default() -> None:
+    from steerable_sidecar.sidecar import _acp_permission_from_profile
+
+    policy = _acp_permission_from_profile(
+        "x", {"default": "allow", "byKind": {"execute": "reject"}}
+    )
+
+    assert policy.decide("read") == "allow"
+    assert policy.decide("execute") == "reject"
+    assert policy.matched_by("execute") == "kind"

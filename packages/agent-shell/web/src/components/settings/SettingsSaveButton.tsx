@@ -1,4 +1,5 @@
 import { LuCheck, LuLoaderCircle } from 'react-icons/lu';
+import { t } from '@/i18n';
 
 interface SettingsSaveButtonProps {
   saving: boolean;
@@ -29,7 +30,7 @@ export function SettingsSaveButton({
       ) : savedOk ? (
         <LuCheck className="h-3.5 w-3.5" />
       ) : null}
-      保存
+      {t('Save')}
     </button>
   );
 }

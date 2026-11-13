@@ -11,17 +11,18 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { spawnMock, execFileImpl, seatbelt, winHelper, rustBin } = vi.hoisted(() => ({
+const { spawnMock, execFileImpl, seatbelt, winHelper } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   execFileImpl: vi.fn(),
   // Tests run on Linux CI too: the sandboxed-path cases stub their way onto
   // a macOS host where /usr/bin/sandbox-exec exists.
   seatbelt: { exists: true },
   winHelper: { exists: false },
-  rustBin: { exists: false, path: '/fake/steerable-sidecar' },
 }));
 
 vi.mock('node:child_process', async (importOriginal) => {
@@ -45,7 +46,6 @@ vi.mock('node:fs', async (importOriginal) => {
       const s = String(p);
       if (s === '/usr/bin/sandbox-exec') return seatbelt.exists;
       if (s.includes('win-spawn-helper')) return winHelper.exists;
-      if (s === rustBin.path) return rustBin.exists;
       return mod.existsSync(p);
     },
   };
@@ -60,12 +60,16 @@ function fakeChild() {
   const child = new EventEmitter() as EventEmitter & {
     stdout: EventEmitter & { setEncoding: (enc: string) => void };
     stderr: EventEmitter & { setEncoding: (enc: string) => void };
-    stdin: { write: (data: string, cb?: (err?: Error | null) => void) => void };
-    kill: () => void;
+    stdin: EventEmitter & {
+      write: (data: string, cb?: (err?: Error | null) => void) => void;
+    };
+    kill: ReturnType<typeof vi.fn>;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
   };
   child.stdout = Object.assign(new EventEmitter(), { setEncoding: () => {} });
   child.stderr = Object.assign(new EventEmitter(), { setEncoding: () => {} });
-  child.stdin = {
+  child.stdin = Object.assign(new EventEmitter(), {
     write: (data, cb) => {
       // Graceful shutdown handshake: respond to the RPC, then exit — on a
       // later macrotask so the supervisor's `await call(...)` continuation
@@ -84,8 +88,16 @@ function fakeChild() {
       }
       cb?.();
     },
-  };
-  child.kill = () => {};
+  });
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = vi.fn((signal: NodeJS.Signals = 'SIGTERM') => {
+    queueMicrotask(() => {
+      child.signalCode = signal;
+      child.emit('exit', null, signal);
+    });
+    return true;
+  });
   queueMicrotask(() => child.stderr.emit('data', READY_LINE));
   return child;
 }
@@ -127,14 +139,11 @@ describe('SidecarSupervisor sandbox spawn plan', () => {
     spawnMock.mockImplementation(() => fakeChild());
     execFileImpl.mockResolvedValue({ stdout: PROFILE, stderr: '' });
     delete process.env.STEERABLE_SIDECAR_SANDBOX;
-    delete process.env.STEERABLE_RUST_SIDECAR;
-    delete process.env.STEERABLE_RUST_SIDECAR_BIN;
     SidecarSupervisor.lastSpawnRefusal = null;
     // Default to a Seatbelt-capable macOS host; the off-macOS case restubs.
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     seatbelt.exists = true;
     winHelper.exists = false;
-    rustBin.exists = false;
   });
 
   afterEach(() => {
@@ -160,6 +169,34 @@ describe('SidecarSupervisor sandbox spawn plan', () => {
     expect(execFileImpl).toHaveBeenCalledOnce();
   });
 
+  it('does not spawn after shutdown begins during profile generation', async () => {
+    let finishProfile:
+      | ((value: { stdout: string; stderr: string }) => void)
+      | undefined;
+    execFileImpl.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishProfile = resolve;
+        }),
+    );
+    let supervisor: SidecarSupervisor | undefined;
+    const starting = SidecarSupervisor.start(
+      {
+        pythonExecutable: '/fake/python3',
+        healthIntervalMs: 0,
+      },
+      (created) => {
+        supervisor = created;
+      },
+    );
+    await vi.waitFor(() => expect(finishProfile).toBeDefined());
+    await supervisor!.shutdown();
+    finishProfile!({ stdout: PROFILE, stderr: '' });
+
+    await expect(starting).rejects.toThrow('startup cancelled by shutdown');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it('spawns python directly when sandbox: false', async () => {
     await startAndStop({ sandbox: false });
     expect(spawnMock).toHaveBeenCalledOnce();
@@ -167,6 +204,36 @@ describe('SidecarSupervisor sandbox spawn plan', () => {
     expect(command).toBe('/fake/python3');
     expect(args).toEqual(['-m', 'steerable_sidecar']);
     expect(execFileImpl).not.toHaveBeenCalled();
+  });
+
+  it('handles stdin EPIPE during shutdown without crashing the host', async () => {
+    const supervisor = await SidecarSupervisor.start({
+      pythonExecutable: '/fake/python3',
+      healthIntervalMs: 0,
+      sandbox: false,
+    });
+    const child = spawnMock.mock.results[0].value as ReturnType<typeof fakeChild>;
+    const error = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+    expect(() => child.stdin.emit('error', error)).not.toThrow();
+    await supervisor.shutdown();
+  });
+
+  it('forceShutdown kills the host child without a graceful shutdown RPC', async () => {
+    const supervisor = await SidecarSupervisor.start({
+      pythonExecutable: '/fake/python3',
+      healthIntervalMs: 0,
+      sandbox: false,
+    });
+    const child = spawnMock.mock.results[0].value as ReturnType<typeof fakeChild>;
+    const write = vi.spyOn(child.stdin, 'write');
+
+    await supervisor.forceShutdown();
+
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(write.mock.calls.some(([frame]) => String(frame).includes('system.shutdown'))).toBe(
+      false,
+    );
   });
 
   it('wraps the spawn in sandbox-exec when sandbox: true', async () => {
@@ -186,19 +253,11 @@ describe('SidecarSupervisor sandbox spawn plan', () => {
     expect(args.slice(2)).toEqual(['/fake/python3', '-m', 'steerable_sidecar']);
     // The sandbox denies __pycache__ writes; bytecode caching is disabled.
     expect(spawnOptions.env.PYTHONDONTWRITEBYTECODE).toBe('1');
-  });
-
-  it('generates the Seatbelt profile from the rust sidecar when the flag is on', async () => {
-    process.env.STEERABLE_RUST_SIDECAR = '1';
-    rustBin.exists = true;
-    await startAndStop({ rustSidecarBin: '/fake/steerable-sidecar', sandbox: true });
-    const [bin, cliArgs] = execFileImpl.mock.calls[0];
-    expect(bin).toBe('/fake/steerable-sidecar');
-    expect(cliArgs.slice(0, 2)).toEqual(['sandbox', 'profile']);
-    expect(cliArgs).toContain('--writable-root');
-    const [command, args] = spawnMock.mock.calls[0];
-    expect(command).toBe('/usr/bin/sandbox-exec');
-    expect(args.slice(2)).toEqual(['/fake/steerable-sidecar']);
+    // macOS launchd TMPDIR is /var/folders, which Seatbelt does not allow.
+    const confinedTmp = join(homedir(), '.steerable', 'tmp');
+    expect(spawnOptions.env.TMPDIR).toBe(confinedTmp);
+    expect(spawnOptions.env.TMP).toBe(confinedTmp);
+    expect(spawnOptions.env.TEMP).toBe(confinedTmp);
   });
 
   it('STEERABLE_SIDECAR_SANDBOX=0 opts out when the option is unset', async () => {
@@ -304,28 +363,6 @@ describe('SidecarSupervisor sandbox spawn plan', () => {
     expect(lines.some((l) => l.includes('bwrap') && l.includes('active'))).toBe(true);
   });
 
-  it('wraps the Linux rust sidecar via sandbox linux-wrap', async () => {
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    process.env.STEERABLE_RUST_SIDECAR = '1';
-    rustBin.exists = true;
-    execFileImpl.mockResolvedValue({
-      stdout:
-        JSON.stringify({
-          argv: ['/usr/bin/bwrap', '--ro-bind', '/', '/', '--', '/fake/steerable-sidecar'],
-          backend: 'bwrap',
-          enforcement: 'partial',
-        }) + '\n',
-      stderr: '',
-    });
-    await startAndStop({ rustSidecarBin: '/fake/steerable-sidecar', sandbox: true });
-    const [bin, cliArgs] = execFileImpl.mock.calls[0];
-    expect(bin).toBe('/fake/steerable-sidecar');
-    expect(cliArgs.slice(0, 2)).toEqual(['sandbox', 'linux-wrap']);
-    const [command, args] = spawnMock.mock.calls[0];
-    expect(command).toBe('/usr/bin/bwrap');
-    expect(args.at(-1)).toBe('/fake/steerable-sidecar');
-  });
-
   it('logs the honest egress story on Linux when the proxy holds the host list (3.1c)', async () => {
     // linux-wrap has no per-host pinning: under the egress proxy the
     // per-host enforcement lives in the proxy (HTTPS_PROXY env) plus the
@@ -404,13 +441,10 @@ describe('SidecarSupervisor sandbox posture (W4-3 disclosure contract)', () => {
     spawnMock.mockImplementation(() => fakeChild());
     execFileImpl.mockResolvedValue({ stdout: PROFILE, stderr: '' });
     delete process.env.STEERABLE_SIDECAR_SANDBOX;
-    delete process.env.STEERABLE_RUST_SIDECAR;
-    delete process.env.STEERABLE_RUST_SIDECAR_BIN;
     SidecarSupervisor.lastSpawnRefusal = null;
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
     seatbelt.exists = true;
     winHelper.exists = false;
-    rustBin.exists = false;
   });
 
   afterEach(() => {

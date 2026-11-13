@@ -19,7 +19,6 @@ import {
   LuArrowUp,
   LuBot,
   LuChevronDown,
-  LuSettings,
   LuSquare,
   LuBlocks,
   LuPlug,
@@ -33,8 +32,18 @@ import {
 import type { LocalChat, LocalChatAgent } from '@/lib/local-api';
 import type { ExecPolicy } from '@/lib/exec-policy';
 import { getWebChatModes, hostToolCapability, settingsChrome } from '@/lib/host-tools';
-import type { AttachmentFile } from '@/lib/attachments';
+import {
+  hostClipboardAvailable,
+  releaseComposerPasteTarget,
+  requestHostPaste,
+  setComposerPasteTarget,
+  type HostClipboardFile,
+} from '@/lib/host-paste';
+import { attachmentFromPath, type AttachmentFile } from '@/lib/attachments';
+import { dropPointHitsRect, hostFileDropAvailable, listenHostFileDrop } from '@/lib/host-file-drop';
 import type { SteerOutcome } from '@steerable/agent-ui';
+import { t } from '@/i18n';
+import { agentLabel } from '@/i18n/agent-label';
 import {
   isHiddenSlashSkill,
   resolveSlashTool,
@@ -45,6 +54,7 @@ import {
 } from '@/lib/slash-sources';
 import { useAskUserPrompt } from './AskUserPromptProvider';
 import { AskUserQuestionMenu } from './AskUserQuestionMenu';
+import { childAwaitingInput, type ChildInfo } from './orchestration-children-model';
 import { useApprovalPrompt } from './ApprovalPromptProvider';
 import { ApprovalPromptMenu } from './ApprovalModal';
 import { ExecPolicyPicker } from './ExecPolicyPicker';
@@ -60,7 +70,7 @@ export type { ExecPolicy, McpToolItem, SkillItem };
  *     product's `chat-input-box`).
  *   - Auto-growing rich text input (1 → 8 lines) that grows as the user types.
  *   - `Enter` to send, `Shift+Enter` for newline (`Cmd/Ctrl+Enter` also sends;
- *     IME composition is guarded so confirming a candidate never submits).
+ *     while streaming, Enter queues and Cmd/Ctrl+Enter steers the current turn).
  *   - Send button on the right; turns into a Stop button when streaming.
  *   - Externally-controlled value (`LocalChatPanel` lifts it so EmptyChat can
  *     inject prompts via `setAndFocusInputMessage`).
@@ -82,7 +92,10 @@ export type { ExecPolicy, McpToolItem, SkillItem };
  *   - Compact-mode responsive layout.
  */
 
-const MIN_HEIGHT_PX = 36;
+// Empty field should read as two lines of space. Two lines of text measure
+// 40px (`pt-2` + two 16px line boxes) and still look like one row, so the
+// floor is one line box taller.
+const MIN_HEIGHT_PX = 56;
 const MAX_HEIGHT_PX = 220;
 const MENTION_PATTERN = /(@[^\s@]+)/g;
 const MAX_MENTION_SUGGESTIONS = 8;
@@ -106,15 +119,21 @@ export interface ChatInputProps {
   onSubmit: () => void | Promise<void>;
   onCancel?: () => void;
   /**
-   * 轮中转向（streaming 期间 Enter）：优先把文本注入运行中的回合；注入
+   * R7-3: this turn's sub-agents. Only used to say which child a structured
+   * question came from, so the answer's owner is visible while several agents
+   * are running.
+   */
+  orchestrationChildren?: ChildInfo[];
+  /**
+   * 轮中插队（streaming 期间 ⌘/Ctrl+Enter）：优先把文本注入运行中的回合；注入
    * 失败由 hook 兜底——回合仍在跑则排入 W6-2 follow-up 队列（'queued'，
    * 本组件提示"已改为排队"），回合恰好已结束则作为新消息直接发出
    * （'sent'）。三种结果消息都已落地，调用方据此清空草稿。
    */
   onSteer?: (text: string) => Promise<SteerOutcome>;
   /**
-   * W6-2 follow-up 队列：streaming 期间按 ⌘/Ctrl+Enter 把当前文本排入
-   * 待发队列，本轮结束后自动作为下一轮发出（与 Enter 的轮中转向相对）。
+   * W6-2 follow-up 队列：streaming 期间按 Enter 把当前文本排入待发队列，
+   * 本轮结束后自动作为下一轮发出（与 ⌘/Ctrl+Enter 的轮中插队相对）。
    */
   onFollowUp?: (text: string) => void;
   /** 当前排队待发的 follow-up 文本（用于在输入框上方展示待发队列）。 */
@@ -162,6 +181,8 @@ export interface ChatInputProps {
   skills?: SkillItem[];
   /** MCP tools for slash command autocomplete and chip rendering. */
   mcpTools?: McpToolItem[];
+  /** Chat this composer belongs to. Ask-user cards for other chats stay hidden. */
+  chatId?: string | null;
 }
 
 export type MentionReference = {
@@ -219,7 +240,6 @@ function mentionChipClassName(ref?: MentionReference): string {
 function getEditableText(element: HTMLDivElement): string {
   return (element.textContent ?? '').replace(/\u00a0/g, ' ');
 }
-
 function isEditorDomEmpty(editor: HTMLDivElement): boolean {
   return getEditableText(editor).length === 0;
 }
@@ -276,11 +296,11 @@ function parseMentionSegments(
       if (!ranges.some((range) => offset < range.end && end > range.start)) {
         const name = match.slice(1);
         const agent = agents.find((a) => a.name === name || a.slug === name);
-        const chat = chats.find((c) => (c.title || '未命名对话') === name);
+        const chat = chats.find((c) => (c.title || t('Untitled chat')) === name);
         const ref: MentionReference | undefined = agent
           ? { type: 'agent', id: agent.id, label: agent.name }
           : chat
-            ? { type: 'chat', id: chat.id, label: chat.title || '未命名对话' }
+            ? { type: 'chat', id: chat.id, label: chat.title || t('Untitled chat') }
             : undefined;
 
         ranges.push({ start: offset, end, text: match, ref });
@@ -371,7 +391,7 @@ function writeEditorValue(
       const isChat = seg.ref?.type === 'chat';
       const isSkill = seg.ref?.type === 'skill';
       const isMcp = seg.ref?.type === 'mcp';
-      const removeLabel = `移除 ${seg.text}`;
+      const removeLabel = t('Remove {name}', { name: seg.text });
 
       const chip = document.createElement('button');
       chip.type = 'button';
@@ -503,10 +523,17 @@ function getSelectionOffsets(root: HTMLDivElement): { start: number; end: number
     return measureRange.toString().length;
   };
 
-  return {
-    start: getOffset(range.startContainer, range.startOffset),
-    end: getOffset(range.endContainer, range.endOffset),
-  };
+  try {
+    return {
+      start: getOffset(range.startContainer, range.startOffset),
+      end: getOffset(range.endContainer, range.endOffset),
+    };
+  } catch {
+    // The caret can sit on the empty scaffold's <br> with an offset the
+    // range rejects. Paste still belongs at the end of the draft.
+    const end = getEditableText(root).length;
+    return { start: end, end };
+  }
 }
 
 function setCaretOffset(root: HTMLDivElement, offset: number) {
@@ -677,6 +704,113 @@ function getMentionRanges(
   return ranges;
 }
 
+/** 截图粘贴常见的空名 / `image.png`，同一秒再贴会按文件名被去重掉。 */
+const GENERIC_CLIPBOARD_IMAGE_NAME =
+  /^(image|clipboard|pasted-image|blob)(\.[a-z0-9]+)?$/i;
+
+const IMAGE_MIME_EXT: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+};
+
+function clipboardFiles(data: DataTransfer | null): File[] {
+  if (!data) return [];
+  const fromItems: File[] = [];
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== 'file') continue;
+    const file = item.getAsFile();
+    if (file) fromItems.push(file);
+  }
+  if (fromItems.length > 0) return fromItems;
+  return Array.from(data.files ?? []);
+}
+
+function clipboardPlainText(data: DataTransfer | null): string {
+  if (!data) return '';
+  // `text/plain` before any other type: older WebKit clears plain text
+  // if `text/html` is read first.
+  return data.getData('text/plain') || data.getData('text') || '';
+}
+
+function clipboardOf(event: ClipboardEvent<HTMLDivElement>): DataTransfer | null {
+  const native = event.nativeEvent as { clipboardData?: DataTransfer | null };
+  return native.clipboardData ?? event.clipboardData ?? null;
+}
+
+function fileFromHostClipboard(file: HostClipboardFile): File | null {
+  if (!file.dataBase64) return null;
+  let binary: string;
+  try {
+    binary = atob(file.dataBase64);
+  } catch {
+    return null;
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new File([bytes], file.name || 'image.png', {
+    type: file.mime || 'application/octet-stream',
+  });
+}
+
+function namePastedImage(file: File, serial: number, now: Date): File {
+  if (!file.type.startsWith('image/')) return file;
+  if (file.name.trim() && !GENERIC_CLIPBOARD_IMAGE_NAME.test(file.name.trim())) return file;
+  const ext = IMAGE_MIME_EXT[file.type.toLowerCase()] ?? 'png';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return new File([file], `pasted-${stamp}-${serial}.${ext}`, {
+    type: file.type,
+    lastModified: file.lastModified,
+  });
+}
+
+function AttachmentChip({
+  file,
+  onRemove,
+}: {
+  file: AttachmentFile;
+  onRemove: () => void;
+}) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const blob = file.file;
+    if (!blob?.type.startsWith('image/')) {
+      setPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file.file]);
+
+  return (
+    <div
+      className="group flex items-center gap-1.5 rounded border border-agent-border bg-agent-muted/60 px-2.5 py-1 text-xs text-agent-foreground transition-all duration-150 select-none hover:bg-agent-muted max-w-xs"
+      title={file.path || file.name}
+    >
+      {previewUrl ? (
+        <img src={previewUrl} alt="" className="h-8 w-8 shrink-0 rounded object-cover" />
+      ) : (
+        <LuFile className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
+      )}
+      <span className="max-w-[160px] truncate font-medium">{file.name}</span>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="flex h-4 w-4 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/10 hover:text-agent-foreground"
+        aria-label={t('Remove file {name}', { name: file.name })}
+      >
+        <LuX className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
   function ChatInput(
     {
@@ -690,13 +824,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       onRemoveFollowUp,
       isStreaming = false,
       disabled = false,
-      placeholder = '向 Agent 发送消息…',
+      placeholder = t('Message the Agent...'),
       currentAgent,
       agents = [],
       chats = [],
+      orchestrationChildren = [],
       selectedAgentId,
       onSelectAgent,
-      onOpenSettings,
+      onOpenSettings: _onOpenSettings,
       toolbarExtras,
       leadingChrome,
       trailingChrome,
@@ -709,11 +844,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       onMentionReferencesChange,
       skills: propSkills,
       mcpTools: propMcpTools,
+      chatId,
     },
     ref,
   ) {
-    const askUserPrompt = useAskUserPrompt();
-    const approvalPrompt = useApprovalPrompt();
+    const askUserPrompt = useAskUserPrompt(chatId);
+    // R7-3: which child is waiting on the user. The card says so, so the
+    // answer is not attributed to the parent's own reasoning.
+    const askUserSource = childAwaitingInput(orchestrationChildren);
+    const approvalPrompt = useApprovalPrompt(chatId);
     const editorRef = useRef<HTMLDivElement>(null);
     const agentMenuRef = useRef<HTMLDivElement>(null);
     const skillOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -721,7 +860,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const pendingCaretOffsetRef = useRef<number | null>(null);
     // Overlay editor + IME: never rewrite textContent/selection while the
     // user is composing. macOS Pinyin otherwise commits the first letter as
-    // Latin instead of starting a marked-text session.
+    // Latin instead of starting a marked-text session. Set only by real
+    // composition events: WKWebView also reports keyCode 229 for committed
+    // keys, with no compositionend to clear a flag guessed from keydown.
     const isComposingRef = useRef(false);
     // Last value we pushed from the editor (or accepted from the parent).
     // While focused, a matching value must not rewrite contenteditable DOM —
@@ -741,6 +882,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const compositionEndAtRef = useRef<number>(0);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const dropBoxRef = useRef<HTMLDivElement>(null);
+    const pasteSerialRef = useRef(0);
+    const attachDroppedRef = useRef<(paths: string[]) => void>(() => {});
+    const dragHoverRef = useRef<(hovering: boolean) => void>(() => {});
+    const hostPasteFilesRef = useRef<(files: HostClipboardFile[]) => void>(() => {});
+    const adoptPastedTextRef = useRef<(text: string) => void>(() => {});
     // 工具栏"空间不足时优先隐藏快捷键提示"的测量 refs，见下方 useLayoutEffect。
     const toolbarRowRef = useRef<HTMLDivElement>(null);
     const toolbarLeftRef = useRef<HTMLDivElement>(null);
@@ -766,7 +913,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null);
     const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
     const [mentionReferences, setMentionReferences] = useState<MentionReference[]>([]);
-    // 转向降级提示：Enter 转向失败被兜底进 W6-2 队列时告知用户"不是注入"，
+    // 插队降级提示：⌘/Ctrl+Enter 插队失败被兜底进 W6-2 队列时告知用户，
     // 几秒后自动消失（队列横幅本身常驻，提示只是动作反馈）。
     const [steerNotice, setSteerNotice] = useState<string | null>(null);
     const steerNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -823,8 +970,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         .map((chat) => ({
           type: 'chat',
           id: chat.id,
-          label: chat.title || '未命名对话',
-          description: chat.updatedAt ? `历史对话 · ${new Date(chat.updatedAt).toLocaleString()}` : '历史对话',
+          label: chat.title || t('Untitled chat'),
+          description: chat.updatedAt
+            ? t('Past chat · {time}', { time: new Date(chat.updatedAt).toLocaleString() })
+            : t('Past chat'),
         }));
 
       return [...agentSuggestions, ...chatSuggestions].slice(0, MAX_MENTION_SUGGESTIONS);
@@ -924,11 +1073,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       const mcpGroup = suggestions.filter((s) => s.kind === 'mcp');
       let idx = 0;
       if (skillGroup.length > 0) {
-        rows.push({ type: 'header', label: '指定运行的本地技能 (Skill)' });
+        rows.push({ type: 'header', label: t('Run a local skill (Skill)') });
         for (const s of skillGroup) rows.push({ type: 'item', item: s, idx: idx++ });
       }
       if (mcpGroup.length > 0) {
-        rows.push({ type: 'header', label: '指定调用的 MCP 工具 (MCP Tool)' });
+        rows.push({ type: 'header', label: t('Call an MCP tool (MCP Tool)') });
         for (const s of mcpGroup) rows.push({ type: 'item', item: s, idx: idx++ });
       }
       return rows;
@@ -1012,9 +1161,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     // or while the focused editor already owns this value.
     useLayoutEffect(() => {
       const editor = editorRef.current;
-      if (!editor || isComposingRef.current || editor.hasAttribute('data-composing')) {
-        return;
-      }
+      if (!editor || isComposingRef.current) return;
+      editor.removeAttribute('data-composing');
       const editorText = getEditableText(editor);
       const focused = document.activeElement === editor;
       const pendingCaretOffset = pendingCaretOffsetRef.current;
@@ -1025,6 +1173,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         return;
       }
 
+      const wrote =
+        editorText !== value ||
+        pendingCaretOffset !== null ||
+        (!value && !hasEmptyImeScaffold(editor));
       if (editorText !== value || pendingCaretOffset !== null) {
         writeEditorValue(
           editor,
@@ -1043,21 +1195,25 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       lastPushedValueRef.current = value;
       updateEditorHeight(editor);
 
-      if (pendingCaretOffset !== null && focused) {
-        setCaretOffset(editor, Math.min(pendingCaretOffset, value.length));
+      // replaceChildren drops the DOM selection. Without a caret inside the
+      // field, WKWebView ignores Ctrl/Cmd+V after a send.
+      if (focused && wrote) {
+        setCaretOffset(editor, Math.min(pendingCaretOffset ?? value.length, value.length));
         pendingCaretOffsetRef.current = null;
       }
     }, [value, mentionReferences, agents, chats, disabled, skills, mcpTools]);
 
-    // `Cmd+.` / `Ctrl+.` cancels the in-flight stream — matches macOS's
-    // conventional "interrupt" chord (Xcode, Terminal). Bound at the window
-    // level so users can hit it without the textarea being focused.
+    // Escape stops the current turn, matching Codex's graphical composer.
+    // Cmd/Ctrl+. remains as a compatibility alias. Bound at the window level
+    // so users can stop without the editor being focused.
     // Confined to the `isStreaming` window so it never fights with other
     // app-level shortcuts when the chat is idle.
     useEffect(() => {
       if (!isStreaming || !onCancel) return;
       const onKey = (event: globalThis.KeyboardEvent) => {
-        if ((event.metaKey || event.ctrlKey) && event.key === '.') {
+        const isStopAlias = (event.metaKey || event.ctrlKey) && event.key === '.';
+        const isEscape = event.key === 'Escape' && !event.metaKey && !event.ctrlKey && !event.altKey;
+        if (!event.defaultPrevented && (isStopAlias || isEscape)) {
           event.preventDefault();
           onCancel();
         }
@@ -1128,11 +1284,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       setIsDragging(false);
     };
 
-    // 把新文件并入列表：按 path（有路径时）或 name（浏览器模式无路径）去重。
+    // 桌面壳的真实 path 可去重；浏览器 File 没有 path，同名文件可能来自
+    // 不同目录，必须全部保留，提交落盘时由宿主生成唯一文件名。
     const addFiles = (incoming: AttachmentFile[]) => {
-      const keyOf = (f: AttachmentFile) => f.path || f.name;
-      const existingKeys = new Set(actualFiles.map(keyOf));
-      const filteredNewFiles = incoming.filter((f) => !existingKeys.has(keyOf(f)));
+      const existingPaths = new Set(actualFiles.map((file) => file.path).filter(Boolean));
+      const filteredNewFiles = incoming.filter(
+        (file) => !file.path || !existingPaths.has(file.path),
+      );
       if (filteredNewFiles.length > 0) {
         actualOnFilesChange([...actualFiles, ...filteredNewFiles]);
       }
@@ -1143,6 +1301,33 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       path: (file as { path?: string }).path || '',
       file,
     });
+    attachDroppedRef.current = (paths) => {
+      if (disabled || !allowFileAttach) return;
+      addFiles(paths.map(attachmentFromPath));
+    };
+    dragHoverRef.current = (hovering) => {
+      if (disabled || !allowFileAttach) {
+        setIsDragging(false);
+        return;
+      }
+      setIsDragging(hovering);
+    };
+    hostPasteFilesRef.current = (incoming) => {
+      if (disabled || !allowFileAttach) return;
+      const now = new Date();
+      const next: AttachmentFile[] = [];
+      for (const item of incoming) {
+        if (item.path) {
+          next.push(attachmentFromPath(item.path));
+          continue;
+        }
+        const blob = fileFromHostClipboard(item);
+        if (!blob) continue;
+        pasteSerialRef.current += 1;
+        next.push(toAttachment(namePastedImage(blob, pasteSerialRef.current, now)));
+      }
+      if (next.length > 0) addFiles(next);
+    };
 
     // 按钮点击 → 触发隐藏的 <input type="file" multiple>，由浏览器/Electron
     // 直接弹出系统文件选择框（不依赖 IPC，避免「点击无反应」）。
@@ -1196,9 +1381,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       if (value[removeEnd] === ' ') removeEnd += 1;
       replaceRange(start, removeEnd, '');
       if (ref) {
-        setMentionReferences((prev) =>
-          prev.filter((item) => !(item.type === ref.type && item.id === ref.id)),
+        const nextReferences = mentionReferences.filter(
+          (item) => !(item.type === ref.type && item.id === ref.id),
         );
+        setMentionReferences(nextReferences);
+        onMentionReferencesChange?.(nextReferences);
       }
     };
 
@@ -1255,7 +1442,20 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       const { end } = getSelectionOffsets(editor);
       const nextValue = getEditableText(editor);
       lastPushedValueRef.current = nextValue;
-      pendingCaretOffsetRef.current = end;
+      // The browser already rendered this text. Rewrite the DOM only when a
+      // typed token must become a mention chip; any other rewrite detaches the
+      // input method from the text node.
+      const mentionCount = parseMentionSegments(
+        nextValue,
+        mentionReferences,
+        agents,
+        chats,
+        skills,
+        mcpTools,
+      ).filter((segment) => segment.type === 'mention').length;
+      if (mentionCount !== editor.querySelectorAll('[data-mention-chip]').length) {
+        pendingCaretOffsetRef.current = end;
+      }
       onChange(nextValue);
       syncMentionQuery(nextValue, end);
     };
@@ -1282,6 +1482,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         syncFromEditor();
       }, 0);
     };
+
+    adoptPastedTextRef.current = replaceSelection;
 
     const handleBeforeInput = (event: FormEvent<HTMLDivElement>) => {
       const native = event.nativeEvent as unknown as InputEvent;
@@ -1322,6 +1524,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     useLayoutEffect(() => {
       const editor = editorRef.current;
       if (!editor) return;
+      setComposerPasteTarget(editor);
       const onCompositionStart = () => {
         isComposingRef.current = true;
         inputSyncGenRef.current += 1;
@@ -1331,15 +1534,75 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         }
         editor.setAttribute('data-composing', 'true');
       };
+      const onHostPaste = (event: Event) => {
+        const text = (event as CustomEvent<string>).detail;
+        if (typeof text !== 'string' || !text) return;
+        event.preventDefault();
+        adoptPastedTextRef.current(text);
+      };
+      const onHostPasteFiles = (event: Event) => {
+        const files = (event as CustomEvent<HostClipboardFile[]>).detail;
+        if (!Array.isArray(files) || files.length === 0) return;
+        event.preventDefault();
+        hostPasteFilesRef.current(files);
+      };
       editor.addEventListener('compositionstart', onCompositionStart, true);
+      editor.addEventListener('hostpaste', onHostPaste);
+      editor.addEventListener('hostpastefiles', onHostPasteFiles);
       return () => {
+        releaseComposerPasteTarget(editor);
         editor.removeEventListener('compositionstart', onCompositionStart, true);
+        editor.removeEventListener('hostpaste', onHostPaste);
+        editor.removeEventListener('hostpastefiles', onHostPasteFiles);
       };
     }, []);
 
+    useEffect(() => {
+      if (!hostFileDropAvailable()) return undefined;
+      return listenHostFileDrop((event) => {
+        const box = dropBoxRef.current;
+        if (event.type === 'leave' || !box || event.x == null || event.y == null) {
+          dragHoverRef.current(false);
+          return;
+        }
+        const hit = dropPointHitsRect(
+          { x: event.x, y: event.y },
+          box.getBoundingClientRect(),
+          window.devicePixelRatio,
+        );
+        if (event.type === 'drop') {
+          dragHoverRef.current(false);
+          if (hit) attachDroppedRef.current(event.paths);
+          return;
+        }
+        dragHoverRef.current(hit);
+      });
+    }, []);
+
     const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
+      // Read before preventDefault. WebKit clears clipboardData once the paste is canceled.
+      const data = clipboardOf(event);
+      const text = clipboardPlainText(data);
+      const pasted = !disabled && allowFileAttach ? clipboardFiles(data) : [];
+      if (!text && pasted.length === 0) {
+        // WKWebView hands the page an empty clipboard; read the OS pasteboard.
+        if (hostClipboardAvailable()) {
+          event.preventDefault();
+          requestHostPaste(event.currentTarget);
+        }
+        return;
+      }
       event.preventDefault();
-      replaceSelection(event.clipboardData.getData('text/plain'));
+      if (pasted.length > 0) {
+        const now = new Date();
+        addFiles(
+          pasted.map((file) => {
+            pasteSerialRef.current += 1;
+            return toAttachment(namePastedImage(file, pasteSerialRef.current, now));
+          }),
+        );
+      }
+      if (text) replaceSelection(text);
     };
 
     const handleEditorScroll = () => {
@@ -1347,32 +1610,26 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     };
 
     const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-      // Honor IME composition (`isComposing` true while Chinese input is mid-
-      // selection) — only intercept on plain key events.
-      if (isComposingRef.current || event.nativeEvent.isComposing) return;
-      // Windows / some Chromium IMEs report keyCode 229 on the first
-      // Pinyin keydown, before compositionstart.
-      if (event.keyCode === 229) {
-        markComposing();
-        return;
-      }
-      // Hide the placeholder on the first letter of an empty editor so it
-      // does not cover IME marked text. Do this even when `isComposing` is
-      // still false (macOS Pinyin first keydown).
-      if (
-        !event.metaKey &&
-        !event.ctrlKey &&
+      // Cmd/Ctrl+V never reaches a paste event when the app menu owns the
+      // shortcut, and WKWebView leaves that event's clipboard empty. Read the
+      // OS pasteboard instead. Match `code` too: with an IME, `key` may not be "v".
+      const pasteShortcut =
+        (event.metaKey || event.ctrlKey) &&
         !event.altKey &&
-        event.key.length === 1 &&
-        !value
-      ) {
-        editorRef.current?.setAttribute('data-composing', 'true');
-      }
-      // See `compositionEndAtRef` above: treat an Enter that lands right after
-      // `compositionend` as "confirm candidate", not "submit/newline".
-      if (event.key === 'Enter' && Date.now() - compositionEndAtRef.current < 50) {
+        (event.key.toLowerCase() === 'v' || event.key === '\u0016' || event.code === 'KeyV');
+      if (hostClipboardAvailable() && pasteShortcut) {
+        event.preventDefault();
+        requestHostPaste(event.currentTarget);
         return;
       }
+      // An open composition session owns the keystroke, including Enter used
+      // to confirm the highlighted candidate. Returning without
+      // preventDefault lets the IME commit the word. WKWebView can report
+      // isComposing / keyCode 229 on Enter after the session has already
+      // ended; that case is not an open session (`isComposingRef` is false)
+      // and must still send.
+      if (isComposingRef.current) return;
+      if (event.key !== 'Enter' && event.nativeEvent.isComposing) return;
 
       if (event.key === 'Backspace' || event.key === 'Delete') {
         const editor = editorRef.current;
@@ -1391,6 +1648,23 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             }
           }
         }
+      }
+      // Hide the placeholder on the first letter of an empty editor so it
+      // does not cover IME marked text. Do this even when `isComposing` is
+      // still false (macOS Pinyin first keydown).
+      if (
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        event.key.length === 1 &&
+        !value
+      ) {
+        editorRef.current?.setAttribute('data-composing', 'true');
+      }
+      // See `compositionEndAtRef` above: treat an Enter that lands right after
+      // `compositionend` as "confirm candidate", not "submit/newline".
+      if (event.key === 'Enter' && Date.now() - compositionEndAtRef.current < 50) {
+        return;
       }
 
       if (mentionQuery && mentionSuggestions.length > 0) {
@@ -1442,31 +1716,36 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         }
       }
 
-      // Enter 发送，Shift+Enter 换行（⌘/Ctrl+Enter 作为老习惯保留，同样发送）。
+      // 空闲时 Enter / ⌘/Ctrl+Enter 发送，Shift+Enter 换行。
       // IME 候选确认的 Enter 已被上面的 composition 守卫拦截，不会误发送。
       const isSendCombo =
         event.key === 'Enter' && !event.shiftKey;
       if (isSendCombo) {
         event.preventDefault();
-        // streaming 期间：Enter = 轮中转向（注入运行中的回合；注入不了时
-        // hook 兜底为 W6-2 排队或新回合直发，消息不会丢）；⌘/Ctrl+Enter =
-        // follow-up 排队（本轮结束后自动作为下一轮发出）。
+        const submittedText = getEditableText(event.currentTarget).trim();
+        // streaming 期间：Enter = follow-up 排队（本轮结束后自动作为下一轮
+        // 发出）；⌘/Ctrl+Enter = 轮中插队（注入运行中的回合；注入不了时
+        // hook 兜底为 W6-2 排队或新回合直发，消息不会丢）。
         if (isStreaming) {
-          if ((event.metaKey || event.ctrlKey) && onFollowUp && trimmed) {
-            onFollowUp(trimmed);
-            onChange('');
-            return;
-          }
-          if (onSteer && trimmed) {
-            void onSteer(trimmed).then((outcome) => {
+          if ((event.metaKey || event.ctrlKey) && onSteer && submittedText) {
+            void onSteer(submittedText).then((outcome) => {
               // steered / queued / sent 三种结果消息都已落地（注入当前回合 /
               // 进入待发队列 / 作为新回合发出），草稿都可以清；queued 额外
               // 提示用户"不是追加进当前回合"。
               if (outcome === 'queued') {
-                showSteerNotice('当前回合无法追加，已加入排队，本轮结束后自动发出');
+                showSteerNotice(
+                  t(
+                    'This turn cannot take an interjection. The message was queued and will be sent when this turn ends.',
+                  ),
+                );
               }
               onChange('');
             });
+            return;
+          }
+          if (onFollowUp && submittedText) {
+            onFollowUp(submittedText);
+            onChange('');
           }
           return;
         }
@@ -1543,9 +1822,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             questions={request.questions}
             onSubmit={askUserPrompt.answer}
             onAutoContinue={() => askUserPrompt.answer({})}
+            source={
+              askUserSource
+                ? {
+                    childId: askUserSource.childId,
+                    ...(askUserSource.profile
+                      ? { profile: askUserSource.profile }
+                      : {}),
+                  }
+                : undefined
+            }
             bottomHint={
               askUserPrompt.pendingCount > 0
-                ? `还有 ${askUserPrompt.pendingCount} 组问题待回答`
+                ? t('{count} more question groups to answer', {
+                    count: askUserPrompt.pendingCount,
+                  })
                 : undefined
             }
           />
@@ -1559,7 +1850,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       <div className="chat-input-container @container relative px-2.5 pb-2.5 pt-1">
         {(leadingChrome || selectedAgent || trailingChrome) && (
           <div
-            className="relative mb-1.5 flex min-w-0 items-center gap-1.5"
+            className="relative mb-1.5 flex min-w-0 items-end gap-1.5"
             data-testid="composer-meta-row"
           >
             {leadingChrome}
@@ -1585,7 +1876,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         {mentionQuery && mentionSuggestions.length > 0 && (
           <div className="absolute bottom-full left-3 z-50 mb-1 max-h-72 w-80 max-w-[calc(100%-0.75rem)] overflow-y-auto rounded-agent-md border border-agent-border bg-agent-canvas p-1 shadow-lg">
             <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-agent-muted-foreground">
-              @ 选择 Agent 或历史对话
+              {t('@ Choose an Agent or past chat')}
             </div>
             {mentionSuggestions.map((item, idx) => (
               <button
@@ -1619,7 +1910,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                   <span className="flex items-center gap-1.5">
                     <span className="truncate text-xs font-medium">@{item.label}</span>
                     <span className="shrink-0 rounded-full bg-agent-muted px-1.5 py-0.5 text-[10px] text-agent-muted-foreground">
-                      {item.type === 'agent' ? 'Agent' : '对话'}
+                      {item.type === 'agent' ? 'Agent' : t('Chat')}
                     </span>
                   </span>
                   {item.description && (
@@ -1672,7 +1963,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                         <div className="text-xs font-medium truncate">
                           {row.item.skill.displayName ? (
                             <>
-                              {row.item.skill.displayName}
+                              {t(row.item.skill.displayName)}
                               <span className="ml-1.5 text-[10px] font-normal text-agent-muted-foreground/70">
                                 /{row.item.skill.name}
                               </span>
@@ -1712,6 +2003,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           </div>
         )}
         <div
+          ref={dropBoxRef}
           className={`chat-input-box flex flex-col rounded-agent-lg border bg-agent-canvas shadow-sm transition-all duration-200 ${
             isDragging
               ? 'border-blue-500 ring-2 ring-blue-500/20'
@@ -1726,7 +2018,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           {pendingFollowUps.length > 0 && (
             <div className="flex flex-col gap-1 border-b border-agent-border bg-agent-muted/30 px-2.5 py-1.5">
               <div className="text-[11px] font-medium text-agent-muted-foreground">
-                排队中（{pendingFollowUps.length}）· 本轮结束后自动发出 · 停止将丢弃
+                {t(
+                  'Queued ({count}) · Sent when this turn ends · Restored to the input box if stopped',
+                  { count: pendingFollowUps.length },
+                )}
               </div>
               {pendingFollowUps.map((text, i) => (
                 <div
@@ -1737,7 +2032,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                   {onRemoveFollowUp && (
                     <button
                       type="button"
-                      aria-label={`撤回排队消息 ${i + 1}`}
+                      aria-label={t('Withdraw queued message {index}', { index: i + 1 })}
                       onClick={() => onRemoveFollowUp(i)}
                       className="shrink-0 text-agent-muted-foreground opacity-0 transition-opacity hover:text-agent-destructive group-hover:opacity-100"
                     >
@@ -1791,24 +2086,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           {actualFiles.length > 0 && (
             <div className="flex flex-wrap gap-1.5 px-2.5 pb-1.5 pt-0.5">
               {actualFiles.map((file, idx) => (
-                <div
-                  key={idx}
-                  className="group flex items-center gap-1.5 rounded bg-agent-muted/60 hover:bg-agent-muted px-2.5 py-1 text-xs border border-agent-border text-agent-foreground select-none max-w-xs transition-all duration-150"
-                  title={file.path}
-                >
-                  <LuFile className="h-3.5 w-3.5 shrink-0 text-agent-muted-foreground" />
-                  <span className="truncate max-w-[160px] font-medium">
-                    {file.name}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveFile(idx)}
-                    className="flex h-4 w-4 items-center justify-center rounded-full text-agent-muted-foreground hover:bg-agent-foreground/10 hover:text-agent-foreground transition-colors"
-                    aria-label={`移除文件 ${file.name}`}
-                  >
-                    <LuX className="h-3 w-3" />
-                  </button>
-                </div>
+                <AttachmentChip
+                  key={`${file.path || file.name}-${idx}`}
+                  file={file}
+                  onRemove={() => handleRemoveFile(idx)}
+                />
               ))}
             </div>
           )}
@@ -1842,8 +2124,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 onClick={handlePickFiles}
                 disabled={disabled || isStreaming}
                 className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                title="上传文件（可多选）"
-                aria-label="上传文件"
+                title={t('Upload files, or paste images into the input box')}
+                aria-label={t('Upload files')}
                 data-testid="chat-attach"
               >
                 <LuPaperclip className="h-3 w-3" />
@@ -1860,18 +2142,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               />
                 </>
               )}
-              {onOpenSettings && (
-                <button
-                  type="button"
-                  onClick={onOpenSettings}
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
-                  title="LLM 设置"
-                  aria-label="LLM 设置"
-                  data-testid="chat-llm-settings"
-                >
-                  <LuSettings className="h-3 w-3" />
-                </button>
-              )}
             </div>
             {/* shrink-0：发送键是固定尺寸圆钮，窄容器下不允许被压扁；
                 收缩量由左侧可截断的选择器吸收。 */}
@@ -1883,23 +2153,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               >
                 {isStreaming ? (
                   <>
-                    <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
-                      {MOD_KEY_LABEL}
-                    </kbd>
-                    <span className="mx-0.5">+</span>
-                    <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
-                      .
-                    </kbd>
-                    <span className="ml-1">停止</span>
-                    {onSteer && (
+                    {onFollowUp && (
                       <span className="ml-2">
                         <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
                           Enter
                         </kbd>
-                        <span className="ml-1">追加</span>
+                        <span className="ml-1">{t('Queue')}</span>
                       </span>
                     )}
-                    {onFollowUp && (
+                    {onSteer && (
                       <span className="ml-2">
                         <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
                           {MOD_KEY_LABEL}
@@ -1908,16 +2170,22 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                         <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
                           Enter
                         </kbd>
-                        <span className="ml-1">排队</span>
+                        <span className="ml-1">{t('Interject')}</span>
                       </span>
                     )}
+                    <span className="ml-2">
+                      <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
+                        Esc
+                      </kbd>
+                      <span className="ml-1">{t('Stop')}</span>
+                    </span>
                   </>
                 ) : (
                   <>
                     <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
                       Enter
                     </kbd>
-                    <span className="ml-1">发送</span>
+                    <span className="ml-1">{t('Send')}</span>
                     <span className="ml-2">
                       <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
                         Shift
@@ -1926,7 +2194,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                       <kbd className="rounded border border-agent-border bg-agent-muted px-1 font-sans text-[10px]">
                         Enter
                       </kbd>
-                      <span className="ml-1">换行</span>
+                      <span className="ml-1">{t('New line')}</span>
                     </span>
                   </>
                 )}
@@ -1946,11 +2214,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
                 title={
                   isStreaming
                     ? pendingFollowUps.length > 0
-                      ? `停止生成 (${MOD_KEY_LABEL}+.) · 将丢弃 ${pendingFollowUps.length} 条排队消息`
-                      : `停止生成 (${MOD_KEY_LABEL}+.)`
-                    : '发送 (Enter)'
+                      ? t(
+                          'Stop generating (Esc) · {count} queued messages will be restored to the input box',
+                          { count: pendingFollowUps.length },
+                        )
+                      : t('Stop generating (Esc)')
+                    : t('Send (Enter)')
                 }
-                aria-label={isStreaming ? '停止生成' : '发送消息'}
+                aria-label={isStreaming ? t('Stop generating') : t('Send message')}
                 data-testid="chat-send"
               >
                 {isStreaming ? (
@@ -1968,7 +2239,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 );
 
 function agentInitial(agent: LocalChatAgent): string {
-  return agent.name.trim()[0]?.toUpperCase() ?? 'A';
+  return agentLabel(agent).trim()[0]?.toUpperCase() ?? 'A';
 }
 
 /**
@@ -1990,7 +2261,7 @@ function ModeToggle({
     <div
       className="inline-flex h-6 shrink-0 items-center rounded-full border border-agent-border bg-agent-canvas p-0.5"
       role="radiogroup"
-      aria-label="对话模式"
+      aria-label={t('Chat mode')}
       data-testid="mode-toggle"
     >
       <button
@@ -1999,7 +2270,7 @@ function ModeToggle({
         aria-checked={mode === 'agent'}
         disabled={disabled}
         onClick={() => onChange('agent')}
-        title="Agent 模式：直接执行任务"
+        title={t('Agent mode: carry out the task directly')}
         data-testid="mode-agent"
         className={[
           'inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-[12px] leading-[1.45] transition-colors disabled:cursor-not-allowed disabled:opacity-70',
@@ -2017,7 +2288,7 @@ function ModeToggle({
         aria-checked={mode === 'plan'}
         disabled={disabled}
         onClick={() => onChange('plan')}
-        title="Plan 模式：先制定计划，只读不执行"
+        title={t('Plan mode: make a plan first, read only and no execution')}
         data-testid="mode-plan"
         className={[
           'inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-[12px] leading-[1.45] transition-colors disabled:cursor-not-allowed disabled:opacity-70',
@@ -2064,14 +2335,14 @@ function AgentSelect({
 
   const buttonTitle = useMemo(() => {
     const activeNames = [
-      agent.name,
+      agentLabel(agent),
       ...mentionReferences
         .filter((ref) => ref.type === 'agent' && ref.id !== agent.id)
         .map((ref) => ref.label),
     ].filter(Boolean) as string[];
 
-    return `当前激活专家：${activeNames.join(', ')}`;
-  }, [agent.name, agent.id, mentionReferences]);
+    return t('Active experts: {names}', { names: activeNames.join(', ') });
+  }, [agent, mentionReferences]);
 
   return (
     <div
@@ -2090,7 +2361,7 @@ function AgentSelect({
       >
         <AgentDot agent={agent} />
         <span className="truncate font-medium">
-          {agent.name}
+          {agentLabel(agent)}
           {mentionedAgentCount > 0 ? ` +${mentionedAgentCount}` : ''}
         </span>
         <LuChevronDown className="h-3 w-3 shrink-0 text-agent-muted-foreground" />
@@ -2102,7 +2373,7 @@ function AgentSelect({
           className="absolute bottom-full left-0 z-50 mb-1 max-h-64 w-72 overflow-y-auto rounded-agent-md border border-agent-border bg-agent-canvas p-1 shadow-lg"
         >
           <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-agent-muted-foreground">
-            选择专家
+            {t('Choose an expert')}
           </div>
           {agents.map((item) => {
             const isPrimary = item.id === agent.id;
@@ -2129,16 +2400,16 @@ function AgentSelect({
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
                     <span className="block truncate text-xs font-medium">
-                      {item.name}
+                      {agentLabel(item)}
                     </span>
                     {isPrimary && (
                       <span className="inline-flex items-center rounded bg-agent-foreground/10 px-1 py-0.5 text-[9px] font-medium text-agent-foreground">
-                        当前
+                        {t('Current')}
                       </span>
                     )}
                     {!isPrimary && isMentioned && (
                       <span className="inline-flex items-center rounded bg-agent-muted px-1 py-0.5 text-[9px] font-medium text-agent-muted-foreground border border-agent-border">
-                        已引入
+                        {t('Mentioned')}
                       </span>
                     )}
                   </span>
@@ -2158,12 +2429,12 @@ function AgentSelect({
             data-testid="agent-manage"
             onClick={() => {
               onOpenChange(false);
-              navigate('/settings?section=agents');
+              navigate('/settings?section=plugins&tab=agents');
             }}
             className="mt-0.5 flex w-full items-center gap-2 rounded border-t border-agent-border/50 px-2 py-2 text-left text-agent-muted-foreground transition-colors hover:bg-agent-foreground/5 hover:text-agent-foreground"
           >
             <LuBot className="h-3.5 w-3.5 shrink-0" />
-            <span className="text-xs font-medium">管理智能体</span>
+            <span className="text-xs font-medium">{t('Manage agents')}</span>
           </button>
           )}
         </div>

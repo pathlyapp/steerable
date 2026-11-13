@@ -1,19 +1,19 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AskUserPromptRequest } from '@/lib/electron-bridge';
+import type { AskUserPromptRequest } from '@/lib/host-bridge';
 import { AskUserPromptProvider } from './AskUserPromptProvider';
 import { ChatInput } from './ChatInput';
 
 afterEach(() => {
   cleanup();
-  delete (window as { electron?: unknown }).electron;
+  delete (window as { steerableHost?: unknown }).steerableHost;
 });
 
 function installBridge(pendingRequests: AskUserPromptRequest[] = []) {
   const listeners = new Set<(request: AskUserPromptRequest) => void>();
   const answer = vi.fn().mockResolvedValue(undefined);
   const pending = vi.fn().mockResolvedValue(pendingRequests);
-  (window as { electron?: unknown }).electron = {
+  (window as { steerableHost?: unknown }).steerableHost = {
     askUser: {
       onRequest: (callback: (request: AskUserPromptRequest) => void) => {
         listeners.add(callback);
@@ -92,6 +92,50 @@ describe('AskUserPromptProvider', () => {
     expect(screen.queryByTestId('ask-user-composer')).toBeNull();
   });
 
+  it('binds an unscoped prompt to the open chat and hides it elsewhere', () => {
+    window.location.hash = '#/agent/chat-a';
+    const bridge = installBridge();
+    const { rerender } = render(
+      <AskUserPromptProvider>
+        <ChatInput chatId="chat-b" value="" onChange={vi.fn()} onSubmit={vi.fn()} />
+      </AskUserPromptProvider>,
+    );
+    act(() => bridge.emit(REQUEST));
+
+    expect(screen.queryByTestId('ask-user-composer')).toBeNull();
+    expect(screen.getByTestId('chat-composer')).toBeTruthy();
+
+    rerender(
+      <AskUserPromptProvider>
+        <ChatInput chatId="chat-a" value="" onChange={vi.fn()} onSubmit={vi.fn()} />
+      </AskUserPromptProvider>,
+    );
+    expect(screen.getByTestId('ask-user-composer')).toBeTruthy();
+    window.location.hash = '';
+  });
+
+  it('hides a prompt that belongs to another chat', () => {
+    const bridge = installBridge();
+    const { rerender } = render(
+      <AskUserPromptProvider>
+        <ChatInput chatId="chat-b" value="" onChange={vi.fn()} onSubmit={vi.fn()} />
+      </AskUserPromptProvider>,
+    );
+    act(() => bridge.emit({ ...REQUEST, chatId: 'chat-a' }));
+
+    expect(screen.queryByTestId('ask-user-composer')).toBeNull();
+    expect(screen.getByTestId('chat-composer')).toBeTruthy();
+
+    rerender(
+      <AskUserPromptProvider>
+        <ChatInput chatId="chat-a" value="" onChange={vi.fn()} onSubmit={vi.fn()} />
+      </AskUserPromptProvider>,
+    );
+
+    expect(screen.getByTestId('ask-user-composer')).toBeTruthy();
+    expect(screen.getByText('部署前确认')).toBeTruthy();
+  });
+
   it('keeps queued prompts in FIFO order inside the composer', () => {
     const bridge = installBridge();
     renderComposer();
@@ -100,8 +144,8 @@ describe('AskUserPromptProvider', () => {
       bridge.emit({ ...REQUEST, requestId: 'req-2', intro: '第二组问题' });
     });
 
-    expect(screen.getByText(/还有 1 组问题待回答/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /交给我决定/ }));
+    expect(screen.getByText(/1 more question groups to answer/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Let AI decide/ }));
 
     expect(screen.getByText('第二组问题')).toBeTruthy();
     expect(bridge.answer).toHaveBeenCalledWith({

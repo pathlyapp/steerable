@@ -12,6 +12,7 @@
  * 写下的终态，不会进入本卡片：前者是用户的明确意图，后者已有错误展示。
  */
 import { LuTriangleAlert } from 'react-icons/lu';
+import { t } from '@/i18n';
 
 export interface InterruptedTurnCardProps {
   /** 点击「继续上次回复」——触发 resume 流（不再追加用户消息）。 */
@@ -28,7 +29,7 @@ export function InterruptedTurnCard({ onContinue, onDismiss }: InterruptedTurnCa
     >
       <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
         <LuTriangleAlert className="h-4 w-4 shrink-0" />
-        <span>上次回复因应用退出或异常中断，未能完成。</span>
+        <span>{t('The last reply was interrupted because the app quit or crashed, so it did not finish.')}</span>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <button
@@ -36,14 +37,14 @@ export function InterruptedTurnCard({ onContinue, onDismiss }: InterruptedTurnCa
           onClick={onDismiss}
           className="rounded px-1.5 py-0.5 text-amber-700/80 transition-colors hover:text-amber-900 dark:text-amber-300/80 dark:hover:text-amber-100"
         >
-          忽略
+          {t('Dismiss')}
         </button>
         <button
           type="button"
           onClick={onContinue}
           className="inline-flex items-center gap-1 rounded-full bg-agent-foreground px-3 py-1 font-medium text-agent-canvas transition hover:opacity-90"
         >
-          继续上次回复
+          {t('Continue last reply')}
         </button>
       </div>
     </div>

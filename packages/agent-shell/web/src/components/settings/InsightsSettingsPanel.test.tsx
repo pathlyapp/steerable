@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const request = vi.fn();
 
-vi.mock('@/lib/electron-bridge', () => ({
-  isElectron: () => true,
-  getElectronBridge: () => ({
+vi.mock('@/lib/host-bridge', () => ({
+  hasHostBridge: () => true,
+  getHostBridge: () => ({
     localBackend: { request },
     local: { saveTextFile: vi.fn() },
   }),
@@ -33,17 +33,17 @@ describe('InsightsConsentBanner', () => {
     const banner = await screen.findByTestId('insights-consent-banner');
     expect(banner.className).toContain('bg-agent-muted');
     // 3.1 起品牌由产品注入；测试环境无注入 = shell 中性默认。
-    expect(screen.getByText('帮助改进Steerable Shell')).toBeTruthy();
-    expect(screen.getByText(/同意上传数据到服务器/)).toBeTruthy();
+    expect(screen.getByText('Help improve Steerable Shell')).toBeTruthy();
+    expect(screen.getByText(/Agree to upload data to the server/)).toBeTruthy();
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
-    expect(screen.getByRole('button', { name: '保存' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: '取消' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
   });
 
   it('save agrees to upload; cancel keeps data local', async () => {
     render(<InsightsConsentBanner />);
     await screen.findByTestId('insights-consent-banner');
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => {
       expect(request).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -63,7 +63,7 @@ describe('InsightsConsentBanner', () => {
   it('cancel declines upload and still dismisses the prompt', async () => {
     render(<InsightsConsentBanner />);
     await screen.findByTestId('insights-consent-banner');
-    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => {
       expect(request).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -102,19 +102,19 @@ describe('InsightsConsentBanner', () => {
 describe('InsightsSettingsPanel', () => {
   it('shows separate toggles for behavior, conversation, and profile', async () => {
     render(<InsightsSettingsPanel />);
-    expect(await screen.findByText(/帮助改进产品（行为 \/ 对话 \/ 用户信息 分开确认）/)).toBeTruthy();
-    expect(screen.getAllByText(/自动上传/).length).toBe(3);
+    expect(await screen.findByText(/Help improve the product \(behavior \/ conversations \/ user info are confirmed separately\)/)).toBeTruthy();
+    expect(screen.getAllByText(/Auto-upload/).length).toBe(3);
     expect(screen.getAllByRole('checkbox')).toHaveLength(3);
-    expect(screen.getByText(/导出文件发给开发者/)).toBeTruthy();
-    expect(screen.getByText(/现在上传本地记录/)).toBeTruthy();
+    expect(screen.getByText(/Export a file for the developers/)).toBeTruthy();
+    expect(screen.getByText(/Upload local records now/)).toBeTruthy();
   });
 
   it('saves the three flags independently', async () => {
     render(<InsightsSettingsPanel />);
-    await screen.findByText(/本机已记/);
+    await screen.findByText(/Recorded on this device/);
     const boxes = screen.getAllByRole('checkbox');
     fireEvent.click(boxes[0]);
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => {
       expect(request).toHaveBeenCalledWith(
         expect.objectContaining({

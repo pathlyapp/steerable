@@ -33,29 +33,124 @@ Design:
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
-from .llm import LLMProvider
+from .budget import TreeBudget
+from .hooks import ChainHooks, CompletionAction, CompletionDraft, NoopHooks
+from .history import completed_turn_prefix
+from .llm import LLMMessage, LLMProvider
 from .loop import CoreLoop, LoopConfig, LoopContext, LoopHooks, ToolExecutor
 from .pool import (
     AgentPool,
     ChildOutcome,
     OrchestrationBudgetExceeded,
     OrchestrationConfig,
+    SeedProvenance,
 )
+from .registry import ChildRegistry, default_record_id
+from .resume import load_history_transcript
 from .subagent import FilteredToolsExecutor, _schema_name
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "AgentPool",
     "ChildOutcome",
+    "ChildBudgetWrapUp",
+    "ForkRoute",
     "OrchestrationBudgetExceeded",
     "OrchestrationConfig",
     "OrchestrationExecutor",
     "orchestration_tool_descriptors",
 ]
+
+#: Terminal status of a run stopped by ``max_rounds`` or the token budget.
+_BUDGET_WALL_STATUS = "budget_exhausted"
+
+_BUDGET_WRAP_UP_REQUEST = (
+    "[system notice] This run has used its round budget and tools are now "
+    "withheld. Answer the original task now from what you have already "
+    "gathered: give your concrete findings first, then list what you could "
+    "not finish or verify. Do not describe the steps you took."
+)
+
+_RESUME_HINT = (
+    "The child stopped at its round budget; `answer` is its interim report. "
+    "To continue, agent_send this childId a message naming what is still "
+    "missing — it resumes with its prior context and a fresh budget. Do not "
+    "spawn a new child for the same task."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ForkRoute:
+    """How a fork child's model route relates to its parent's.
+
+    A fork is allowed to run on a different model or effort — the parent's
+    findings are the input, and the cheapest way to check them is often a
+    smaller model. The cost of doing that is real and has to be visible, not
+    silent: the parent's cached prompt prefix belongs to the parent's model,
+    so the child's first request is a full re-prefill, and the same
+    transcript is then interpreted by two different models.
+    """
+
+    parent_model: str | None
+    child_model: str | None
+    parent_effort: str | None
+    child_effort: str | None
+
+    @property
+    def diverged(self) -> bool:
+        """True when the fork re-reads the parent history on a different route."""
+        return (self.parent_model, self.parent_effort) != (
+            self.child_model,
+            self.child_effort,
+        )
+
+    def to_wire(self) -> dict[str, str | None]:
+        """The `forkRoute` object a spawn result carries."""
+        return {
+            "parentModel": self.parent_model,
+            "childModel": self.child_model,
+            "parentEffort": self.parent_effort,
+            "childEffort": self.child_effort,
+        }
+
+
+class ChildBudgetWrapUp(NoopHooks):
+    """``before_completion``: one no-tools answer round at a child's budget wall.
+
+    Without it a child stopped by ``max_rounds`` or the token budget returns
+    whatever text its last working round produced — usually a progress note,
+    not an answer. The parent then gets ``budget_exhausted`` with nothing
+    usable. The ``narrate`` action runs one round without tools and keeps the
+    ``budget_exhausted`` status, so the parent can still tell the answer is
+    interim and resume the child with ``agent_send``.
+
+    One instance per child loop. A resumed child runs the same loop with a new
+    ``LoopContext``, so the one-round limit applies per run.
+    """
+
+    def __init__(self) -> None:
+        self._wrapped_run: LoopContext | None = None
+
+    async def before_completion(
+        self, draft: CompletionDraft, ctx: LoopContext
+    ) -> CompletionAction:
+        """Narrate once per run when the draft stops at the budget wall."""
+        if draft.status != _BUDGET_WALL_STATUS or self._wrapped_run is ctx:
+            return CompletionAction(kind="accept")
+        self._wrapped_run = ctx
+        return CompletionAction(
+            kind="narrate",
+            message=_BUDGET_WRAP_UP_REQUEST,
+            reason="child_budget_wrap_up",
+        )
 
 
 def orchestration_tool_descriptors(
@@ -84,13 +179,18 @@ def orchestration_tool_descriptors(
             config.spawn_tool,
             "Spawn a sub-agent with its own reasoning loop to work on a "
             "self-contained task concurrently. Returns immediately with a "
-            "childId; use agent_wait to collect its answer.",
+            "childId. For independent subtasks, emit several agent_spawn "
+            "calls in ONE message: they run in parallel up to the pool's "
+            "concurrency limit, and a call beyond that limit fails while the "
+            "earlier ones keep running. Collect answers with agent_wait, "
+            "which returns whichever child settles first.",
             {
                 "task": {
                     "type": "string",
                     "description": (
                         "Complete, self-contained instructions for the "
-                        "sub-agent — it sees none of this conversation."
+                        "sub-agent — it sees none of this conversation unless "
+                        "context is \"fork\"."
                     ),
                 },
                 "toolFilter": {
@@ -99,6 +199,36 @@ def orchestration_tool_descriptors(
                     "description": (
                         "Optional allow-list of tool names the child may "
                         "call; omitted delegates the full tool domain."
+                    ),
+                },
+                "context": {
+                    "type": "string",
+                    "enum": ["fresh", "fork"],
+                    "description": (
+                        "\"fresh\" (default) starts the child with only the "
+                        "task. \"fork\" seeds it with this conversation's "
+                        "completed turns — the questions that were answered "
+                        "and the tool work behind them — so a child can "
+                        "continue an investigation without being told again. "
+                        "An in-flight turn is excluded: its tool calls have "
+                        "no results yet."
+                    ),
+                },
+                "model": {
+                    "type": "string",
+                    "description": (
+                        "Model for the child. Requires context=\"fork\": a "
+                        "fresh child has no parent route to diverge from. "
+                        "The parent's cached prompt prefix does not apply to "
+                        "another model, so the result reports "
+                        "cacheNote=\"cold\"."
+                    ),
+                },
+                "reasoningEffort": {
+                    "type": "string",
+                    "description": (
+                        "Reasoning effort for the child; context=\"fork\" "
+                        "required, same as model."
                     ),
                 },
             },
@@ -118,13 +248,21 @@ def orchestration_tool_descriptors(
         ),
         fn(
             config.wait_tool,
-            "Wait for a sub-agent to finish and return its outcome. A child "
-            "still running at the timeout returns status 'running'.",
+            "Wait for the first sub-agent to finish and return its outcome. "
+            "Omit childIds to wait for whichever unfinished child of this "
+            "pool settles first — after spawning several, one wait collects "
+            "one answer. Pass childIds to restrict the wait to those. A child "
+            "still running at the timeout returns status 'running' with the "
+            "ids still pending. A child that hit its round budget returns "
+            "status 'budget_exhausted' with an interim answer and "
+            "resumable: true — continue it with agent_send instead of "
+            "spawning a new child.",
             {
                 "childId": {"type": "string"},
+                "childIds": {"type": "array", "items": {"type": "string"}},
                 "timeoutMs": {"type": "integer"},
             },
-            ["childId"],
+            [],
         ),
         fn(
             config.close_tool,
@@ -173,6 +311,13 @@ class OrchestrationExecutor:
         tools: list[dict[str, Any]] | None = None,
         hooks: LoopHooks | None = None,
         event_sink: Callable[[str, dict[str, Any]], None] | None = None,
+        registry: ChildRegistry | None = None,
+        history_store: Any | None = None,
+        parent_record_id: str | None = None,
+        parent_projection: Callable[[], list[LLMMessage]] | None = None,
+        budget: TreeBudget | None = None,
+        parent_route: Callable[[], tuple[str | None, str | None]] | None = None,
+        provider_factory: Callable[[str | None, str | None], LLMProvider] | None = None,
         _depth: int = 0,
         _lineage: str = "0",
     ) -> None:
@@ -182,6 +327,32 @@ class OrchestrationExecutor:
         self._parent_tools = list(tools or [])
         self._hooks = hooks
         self._event_sink = event_sink
+        self._registry = registry
+        #: The parent's durable record channel. Children get their own record
+        #: under ``<parent>:child:<lineage>`` so their reasoning is readable
+        #: afterwards (``delegate_subagent`` already does this; without the
+        #: same wiring here, the two multi-agent surfaces report differently).
+        self._history_store = history_store
+        self._parent_record_id = parent_record_id
+        #: The parent's model-visible transcript, read lazily at spawn time.
+        #: A callable rather than a list because the parent keeps appending
+        #: between the executor's construction and a ``fork`` spawn — a
+        #: snapshot taken at construction would seed the child with a stale
+        #: conversation. ``None`` means this executor cannot fork (the caller
+        #: did not wire it), and ``context: "fork"`` then fails closed rather
+        #: than silently degrading to ``fresh``.
+        self._parent_projection = parent_projection
+        #: The parent's model route, read lazily for the same reason as the
+        #: projection: the loop that answers it is built after this executor.
+        #: Only the fork path reads it, and only to say whether the child is
+        #: re-reading the prefix on a different route.
+        self._parent_route = parent_route
+        #: Rebuilds a provider at another model/effort. Only a cross-model
+        #: fork needs it; without one, `agent_spawn` cannot change the route
+        #: and says so instead of silently ignoring the request.
+        self._provider_factory = provider_factory
+        #: The tree's shared token limit; ``None`` keeps per-run accounting.
+        self._budget = budget
         self._depth = _depth
         self._lineage = _lineage
         self._pool = AgentPool(
@@ -190,6 +361,11 @@ class OrchestrationExecutor:
             lineage=_lineage,
             loop_factory=self._child_loop,
             event_sink=event_sink,
+            registry=registry,
+            parent_record_id=parent_record_id,
+            budget=budget,
+            # Needed to write a fork seed's provenance into the child's record.
+            history_store=history_store,
         )
 
     @property
@@ -203,9 +379,36 @@ class OrchestrationExecutor:
     # child construction
     # ------------------------------------------------------------------
 
+    def _child_record_id(self, child_id: str) -> str | None:
+        """The child's own durable record id, or ``None`` without a parent
+        record: a host that never persisted the parent has nothing to name
+        the child's log after."""
+        if self._parent_record_id is None:
+            return None
+        return default_record_id(self._parent_record_id, child_id)
+
     def _child_loop(
-        self, child_id: str, tool_filter: frozenset[str] | None
+        self,
+        child_id: str,
+        tool_filter: frozenset[str] | None,
+        *,
+        depth: int | None = None,
+        provider: LLMProvider | None = None,
     ) -> tuple[CoreLoop, list[dict[str, Any]] | None]:
+        """Build a child loop and its advertised tools.
+
+        ``depth`` defaults to this executor's depth + 1 (the fresh-spawn
+        case). Resume passes the child's **recorded** depth instead: a child
+        created when ``max_depth`` was 1 must not gain orchestration tools
+        because the setting was later raised — the nesting decision is a
+        permission, so it follows creation, not the current configuration.
+
+        ``provider`` overrides the parent's for this child (a cross-model
+        fork). The default keeps the parent's, which is the only route a
+        same-model fork may use.
+        """
+        child_depth = self._depth + 1 if depth is None else depth
+        child_provider = provider or self._provider
         base: ToolExecutor = self._inner
         if tool_filter is not None:
             base = FilteredToolsExecutor(base, tool_filter)
@@ -216,24 +419,45 @@ class OrchestrationExecutor:
             if _schema_name(schema) not in orch_names
             and (tool_filter is None or _schema_name(schema) in tool_filter)
         ]
-        if self._depth + 1 < self._config.max_depth:
+        # A nested executor is built before the loop that will drive it (the
+        # loop needs the executor), yet its fork seed must come from that very
+        # loop's transcript. This holder breaks the cycle: the executor reads
+        # through the closure at spawn time, by which point the loop exists.
+        own_loop: list[CoreLoop] = []
+        if child_depth < self._config.max_depth:
             base = OrchestrationExecutor(
                 base,
-                self._provider,
+                child_provider,
                 self._config,
                 tools=schemas,
                 hooks=self._hooks,
                 event_sink=self._event_sink,
-                _depth=self._depth + 1,
+                registry=self._registry,
+                history_store=self._history_store,
+                # The grandchild's record hangs off the child's, so a trace
+                # walks down the lineage the same way the ids do.
+                parent_record_id=self._child_record_id(child_id),
+                parent_projection=lambda: (
+                    own_loop[0].history.projection if own_loop else []
+                ),
+                budget=self._budget,
+                _depth=child_depth,
                 _lineage=child_id,
             )
             schemas = [*schemas, *orchestration_tool_descriptors(self._config)]
+        wrap_up = ChildBudgetWrapUp()
         loop = CoreLoop(
-            self._provider,
+            child_provider,
             base,
-            LoopConfig(max_rounds=self._config.child_max_rounds),
-            hooks=self._hooks,
+            LoopConfig(
+                max_rounds=self._config.child_max_rounds,
+                max_tool_errors=self._config.child_max_tool_errors,
+            ),
+            hooks=wrap_up if self._hooks is None else ChainHooks(self._hooks, wrap_up),
+            history_store=self._history_store,
+            record_id=self._child_record_id(child_id),
         )
+        own_loop.append(loop)
         return loop, schemas or None
 
     # ------------------------------------------------------------------
@@ -250,7 +474,7 @@ class OrchestrationExecutor:
         if call.name == self._config.close_tool:
             return await self._close(call)
         if call.name == self._config.list_tool:
-            return self._list(call)
+            return await self._list(call)
         if call.name == self._config.interrupt_tool:
             return await self._interrupt(call)
         return await self._inner.execute(call, ctx)
@@ -265,23 +489,148 @@ class OrchestrationExecutor:
             if isinstance(raw_filter, list)
             else None
         )
+        profile = str(call.arguments.get("subagent_type") or "").strip() or None
+        raw_context = str(call.arguments.get("context") or "fresh").strip().lower()
+        if raw_context not in ("fresh", "fork"):
+            return ToolResult(
+                success=False,
+                error=f'unknown context {raw_context!r}; expected "fresh" or "fork"',
+                needsFollowup=True,
+            )
+        # A fork may run on another model/effort; a fresh child has no
+        # inherited route to diverge from, so a model there is a request the
+        # six-tool family cannot honour (it has no profile registry).
+        child_model = str(call.arguments.get("model") or "").strip() or None
+        child_effort = (
+            str(call.arguments.get("reasoningEffort") or "").strip() or None
+        )
+        child_provider: LLMProvider | None = None
+        route: ForkRoute | None = None
+        if child_model or child_effort:
+            if raw_context != "fork":
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "changing model or reasoningEffort needs "
+                        'context="fork": a fresh child has no parent route to '
+                        "diverge from. Name a subagent_type instead, or fork."
+                    ),
+                    needsFollowup=True,
+                )
+            if self._provider_factory is None:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "this host cannot build a provider for another model; "
+                        "spawn with the parent's route"
+                    ),
+                    needsFollowup=True,
+                )
+            parent_model, parent_effort = (
+                self._parent_route() if self._parent_route is not None else (None, None)
+            )
+            route = ForkRoute(
+                parent_model=parent_model,
+                child_model=child_model or parent_model,
+                parent_effort=parent_effort,
+                child_effort=child_effort or parent_effort,
+            )
+            child_provider = self._provider_factory(
+                child_model, child_effort
+            )
+        seed: list[LLMMessage] | None = None
+        seed_provenance: SeedProvenance | None = None
+        if raw_context == "fork":
+            if self._parent_projection is None:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        'context="fork" needs the parent transcript, which this '
+                        "host did not wire; use \"fresh\""
+                    ),
+                    needsFollowup=True,
+                )
+            fork_seed = completed_turn_prefix(
+                self._parent_projection(), max_turns=self._config.fork_turns
+            )
+            if not fork_seed:
+                # Nothing answered yet: a fork has nothing to inherit. Falling
+                # back to a fresh child is the honest outcome — the alternative
+                # is a child that believes it has context it was never given.
+                seed = None
+            else:
+                # The parent's system prompt describes the parent's job. A
+                # child carrying it alongside its own would be two competing
+                # instructions, so the seed keeps only the conversation; the
+                # child's own system message (below, if any) takes that slot.
+                seed = [m for m in fork_seed if m.role != "system"]
+                if self._parent_record_id is not None and seed:
+                    # Record where this came from: the child's own record must
+                    # answer "why does it already know that?" without reading
+                    # the parent's transcript. The producing model is recorded
+                    # even for a same-model fork — the question "which model
+                    # wrote this history" has an answer either way.
+                    parent_model = (
+                        route.parent_model
+                        if route is not None
+                        else (
+                            self._parent_route()[0]
+                            if self._parent_route is not None
+                            else None
+                        )
+                    )
+                    seed_provenance = SeedProvenance(
+                        source_record_id=self._parent_record_id,
+                        source_model=parent_model,
+                    )
         try:
-            handle = self._pool.spawn(task, tool_filter)
+            # ``profile`` is recorded, not resolved: the six-tool family has no
+            # profile registry (``delegate_subagent`` owns that). It reaches the
+            # index so a resumed child is rebuilt with the same label; the tool
+            # domain here comes from ``toolFilter`` alone.
+            handle = self._pool.spawn(
+                task,
+                tool_filter,
+                profile=profile,
+                seed=seed,
+                seed_provenance=seed_provenance,
+                **(
+                    {
+                        "loop_factory": (
+                            lambda child_id, filter_: self._child_loop(
+                                child_id, filter_, provider=child_provider
+                            )
+                        )
+                    }
+                    if child_provider is not None
+                    else {}
+                ),
+            )
         except OrchestrationBudgetExceeded as exc:
             return ToolResult(
                 success=False,
                 error=f"orchestration_budget_exceeded: {exc}",
                 needsFollowup=True,
             )
+        payload: dict[str, Any] = {
+            "childId": handle.child_id,
+            "depth": self._depth + 1,
+            "status": "running",
+        }
+        record_id = handle.loop.record_id
+        if record_id:
+            payload["recordId"] = record_id
+        if route is not None and route.diverged:
+            # Not an error: the fork succeeded. But its first request re-reads
+            # the whole parent prefix on a route whose prompt cache does not
+            # exist, and the same transcript is now interpreted by two models.
+            # Saying so is what keeps that cost explainable afterwards.
+            payload["cacheNote"] = "cold"
+            payload["forkRoute"] = route.to_wire()
+            payload["usageNote"] = "crossModelFork"
         return ToolResult(
             success=True,
-            message=json.dumps(
-                {
-                    "childId": handle.child_id,
-                    "depth": self._depth + 1,
-                    "status": "running",
-                }
-            ),
+            message=json.dumps(payload),
             data={"childId": handle.child_id},
         )
 
@@ -292,6 +641,12 @@ class OrchestrationExecutor:
             return ToolResult(success=False, error="empty message")
         outcome = self._pool.send(child_id, message)
         if outcome.startswith("error:"):
+            # The pool only knows the children of this turn. A child from an
+            # earlier turn (or before a restart) has no handle here — try the
+            # durable index before telling the model the child is unknown.
+            resumed = await self._resume_from_registry(child_id, message)
+            if resumed is not None:
+                return resumed
             return ToolResult(
                 success=False,
                 error=outcome[len("error:"):],
@@ -303,8 +658,121 @@ class OrchestrationExecutor:
             data={"childId": child_id, "delivery": outcome},
         )
 
-    def _list(self, call: ToolCall) -> ToolResult:
+    async def _resume_from_registry(
+        self, child_id: str, message: str
+    ) -> ToolResult | None:
+        """Re-run a child that this pool never had, from its durable row.
+
+        Returns ``None`` when there is nothing to resume (no registry, no
+        row, a closed child, or no record to seed from) — the caller then
+        reports the pool's own error, so the model sees one consistent
+        message either way.
+
+        The rebuilt child keeps its **recorded** profile and depth: resume
+        must not gain permissions the child never had, and a depth-1 child
+        that was not allowed to spawn must not be able to after a resume.
+        """
+        if self._registry is None or self._parent_record_id is None:
+            return None
+        view = await self._registry.find_child(self._parent_record_id, child_id)
+        if view is None or view.record.status == "closed":
+            return None
+        if view.live:
+            # It is running in a pool we cannot see (another executor sharing
+            # the registry). Steering it is not ours to do; say so.
+            return ToolResult(
+                success=False,
+                error=(
+                    f"child_busy: {child_id!r} is running under another pool; "
+                    "wait for it to finish before sending"
+                ),
+                needsFollowup=True,
+            )
+        record_id = view.record.record_id
+        seed_messages = await self._resume_seed(record_id, message)
+        if seed_messages is None:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"child_not_resumable: {child_id!r} has no readable record; "
+                    "spawn a new child"
+                ),
+                needsFollowup=True,
+            )
+        loop, schemas = self._child_loop(child_id, None, depth=view.record.depth)
+        try:
+            self._pool.adopt(
+                child_id=child_id,
+                loop=loop,
+                schemas=schemas,
+                seed=seed_messages,
+                profile=view.record.profile,
+                engine=view.record.engine,
+                record_id=record_id,
+            )
+        except OrchestrationBudgetExceeded as exc:
+            return ToolResult(
+                success=False,
+                error=f"orchestration_budget_exceeded: {exc}",
+                needsFollowup=True,
+            )
+        return ToolResult(
+            success=True,
+            message=json.dumps(
+                {
+                    "childId": child_id,
+                    "delivery": "resumed",
+                    "recordId": record_id,
+                    "profile": view.record.profile,
+                    "depth": view.record.depth,
+                }
+            ),
+            data={"childId": child_id, "delivery": "resumed"},
+        )
+
+    async def _resume_seed(
+        self, record_id: str, message: str
+    ) -> list[LLMMessage] | None:
+        """The child's recorded transcript plus the new user message."""
+        if self._history_store is None:
+            return None
+        try:
+            transcript = await load_history_transcript(self._history_store, record_id)
+        except Exception as exc:  # noqa: BLE001 — a bad record is not a crash
+            logger.warning("resume seed for %s unavailable: %s", record_id, exc)
+            return None
+        if transcript is None:
+            return None
+        return [*transcript, LLMMessage.text_of("user", message)]
+
+    async def _list(self, call: ToolCall) -> ToolResult:
+        """Every child of this session, not just the ones running now.
+
+        The pool is per turn, so on its own it answers "what is running"; the
+        durable index answers "what did this session spawn". Merging both is
+        what makes the tool useful in a later turn, which is the whole point
+        of R1 — a child that finished three turns ago is still listed.
+        """
         entries = self._pool.list()
+        seen = {entry["childId"] for entry in entries}
+        if self._registry is not None and self._parent_record_id is not None:
+            for view in await self._registry.list_for_parent(self._parent_record_id):
+                if view.record.child_id in seen:
+                    continue
+                entries.append(
+                    {
+                        "childId": view.record.child_id,
+                        "status": view.status,
+                        "recordId": view.record.record_id,
+                        **(
+                            {"profile": view.record.profile}
+                            if view.record.profile
+                            else {}
+                        ),
+                        "depth": view.record.depth,
+                        **({"resumable": True} if view.resumable else {}),
+                    }
+                )
         return ToolResult(
             success=True,
             message=json.dumps({"children": entries}),
@@ -329,29 +797,72 @@ class OrchestrationExecutor:
         )
 
     async def _wait(self, call: ToolCall) -> ToolResult:
-        child_id = str(call.arguments.get("childId") or "")
+        """Wait for the first child to settle.
+
+        Three accepted shapes, because the useful question differs by context:
+
+        - ``childId`` — wait for that one (the original contract);
+        - ``childIds`` — wait for whichever of those settles first;
+        - neither — wait for any unfinished child of this pool, which is what
+          makes "spawn several, then collect" one call instead of N.
+        """
+        single = str(call.arguments.get("childId") or "").strip()
+        raw_ids = call.arguments.get("childIds")
+        if single and isinstance(raw_ids, list):
+            return ToolResult(
+                success=False,
+                error="pass either childId or childIds, not both",
+                needsFollowup=True,
+            )
+        child_ids: list[str] | None
+        if single:
+            child_ids = [single]
+        elif isinstance(raw_ids, list):
+            child_ids = [str(item) for item in raw_ids]
+        else:
+            child_ids = None
         raw_timeout = call.arguments.get("timeoutMs")
         timeout_s = (
             float(raw_timeout) / 1000.0
             if isinstance(raw_timeout, (int, float))
             else None
         )
-        outcome = await self._pool.wait(child_id, timeout_s)
+        outcome, pending, unknown = await self._pool.wait_any(child_ids, timeout_s)
         if outcome is None:
+            if unknown and not pending:
+                return ToolResult(
+                    success=False,
+                    error=f"unknown_child: {', '.join(unknown)}",
+                    needsFollowup=True,
+                )
+            # Nobody settled within the timeout: report who is still going so
+            # the model can decide to wait again rather than re-spawn.
             return ToolResult(
-                success=False,
-                error=f"unknown_child: {child_id!r}",
-                needsFollowup=True,
+                success=True,
+                message=json.dumps(
+                    {
+                        "status": "running",
+                        "pending": pending,
+                        **({"unknown": unknown} if unknown else {}),
+                    }
+                ),
+                data={"status": "running", "pending": pending},
             )
+        payload: dict[str, Any] = {
+            "childId": outcome.child_id,
+            "status": outcome.status,
+            "answer": outcome.answer,
+        }
+        if pending:
+            payload["pending"] = pending
+        if unknown:
+            payload["unknown"] = unknown
+        if self._pool.resumable(outcome.child_id):
+            payload["resumable"] = True
+            payload["hint"] = _RESUME_HINT
         return ToolResult(
             success=True,
-            message=json.dumps(
-                {
-                    "childId": outcome.child_id,
-                    "status": outcome.status,
-                    "answer": outcome.answer,
-                }
-            ),
+            message=json.dumps(payload),
             data={"childId": outcome.child_id, "status": outcome.status},
         )
 
@@ -384,16 +895,27 @@ class OrchestrationExecutor:
         return bool(inner_exempt and inner_exempt(call))
 
     def concurrency_safe(self, call: ToolCall) -> bool:
-        # Spawn consumes the bounded parallel-capacity pool, so batching two
-        # spawns makes which call succeeds scheduler-dependent. Wait/list only
-        # observe pool state and may batch.
+        """Whether this call may run alongside its siblings in one round.
+
+        ``agent_spawn`` is safe to batch even though it consumes the bounded
+        parallel pool: ``AgentPool.spawn`` is fully synchronous, so capacity is
+        checked and reserved without ever yielding to the event loop. Concurrent
+        spawns therefore reserve **in call order**, and a call beyond the cap is
+        the one that fails — deterministic, not scheduler-dependent. That is
+        what makes "emit several spawns in one message" a supported fan-out
+        rather than a race.
+
+        ``send`` / ``close`` / ``interrupt`` stay serial: they mutate an
+        existing child's lifecycle, and interleaving them with a sibling's
+        spawn would make the observed state depend on execution order.
+        """
         if call.name in {
+            self._config.spawn_tool,
             self._config.wait_tool,
             self._config.list_tool,
         }:
             return True
         if call.name in {
-            self._config.spawn_tool,
             self._config.send_tool,
             self._config.close_tool,
             self._config.interrupt_tool,

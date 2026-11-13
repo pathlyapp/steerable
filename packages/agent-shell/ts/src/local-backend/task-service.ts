@@ -27,6 +27,7 @@
 import path from 'node:path';
 
 import { llmService, getSidecarSupervisor } from '../llm/index.js';
+import { productConfigDirectConnection } from '../product-config.js';
 import { sidecarWireProvider } from '../storage/llm-settings.js';
 import type { TaskRecord } from '../storage/index.js';
 import type { ToolRouter } from '../tool-router.js';
@@ -34,6 +35,7 @@ import type { SidecarChatStreamRequest } from '../sidecar/index.js';
 import {
   buildWorldState,
   streamCoreLoopTurn,
+  toTurnTool,
 } from './coreloop-stream.js';
 import { builtinSubagentParam } from './subagent-profiles.js';
 import { buildExecSandbox } from '../sidecar/exec-sandbox.js';
@@ -48,6 +50,7 @@ import {
   syncTimelineTools,
   type PersistedTurnBlock,
 } from './turn-timeline.js';
+import { presentToolCall } from '../tool-presentation.js';
 
 /** 任务表的最小异步读写面（生产注入 scoped store；测试注入内存实现）。 */
 export interface TaskStore {
@@ -75,7 +78,9 @@ export interface TaskServiceDeps {
   toolRouter: ToolRouter;
   worktreeService: WorktreeService;
   /** chatId → 绑定项目（无项目对话返回 null）。与 router.resolveChatProject 同源。 */
-  resolveChatProject: (chatId: string) => Promise<{ name: string; folderPath: string } | null>;
+  resolveChatProject: (
+    chatId: string,
+  ) => Promise<{ name: string; folderPath: string; sourceFolders?: string[] } | null>;
   /**
    * 无项目对话的可写根（Documents/<应用>/conversations/<chatId>）。
    * 测试可不传，围栏回落为仅 scratch。
@@ -127,6 +132,9 @@ interface RunningTask {
   promise: Promise<void>;
   /** sidecar 流建立后由 onStreamId 回填，task_send 用它 steer。 */
   streamId: string | null;
+  /** job_kill 已发出。终态回写必须保持 failed，不能被正常完成覆盖。 */
+  killed?: boolean;
+  killReason?: string;
   /** 已产出的推理时间线，过程栏的 live 数据源。 */
   timeline: PersistedTurnBlock[];
   /** 工具调用行（按 call id 就地更新），syncTimelineTools 的输入。 */
@@ -407,7 +415,11 @@ export class TaskService {
       (this.deps.resolveChatWorkspaceRoot
         ? await this.deps.resolveChatWorkspaceRoot(chatId)
         : null);
-    const execSandbox = buildExecSandbox(fenceRoot ? [fenceRoot] : []);
+    const writableRoots = [
+      ...(fenceRoot ? [fenceRoot] : []),
+      ...(project?.sourceFolders ?? []),
+    ];
+    const execSandbox = buildExecSandbox(writableRoots);
     const approval: SidecarChatStreamRequest['approval'] = resolveTurnApproval();
 
     // depth-1：任务回合没有 task_run（不能再派生任务），其余工具面与
@@ -415,11 +427,7 @@ export class TaskService {
     const tools = this.deps.toolRouter
       .listModelSchemas()
       .filter((schema) => schema.name !== 'task_run')
-      .map((schema) => ({
-        name: schema.name,
-        description: schema.description,
-        inputSchema: schema.inputSchema,
-      }));
+      .map((schema) => toTurnTool(schema));
 
     let answer = '';
     let status: TaskRecord['status'] = 'completed';
@@ -444,6 +452,9 @@ export class TaskService {
         baseUrl: settings.baseUrl,
         apiKey: settings.apiKey,
         temperature: settings.temperature,
+        // 直连是产品级开关：后台任务的模型请求与前台回合同源，不能一个跳过
+        // 代理、一个还在代理上。
+        ...(productConfigDirectConnection() ? { directConnection: true } : {}),
         // 项目围栏按父 chat 解析；worktree 任务再叠加 workspaceRoot 收窄。
         toolContext: {
           mode: 'agent',
@@ -463,7 +474,9 @@ export class TaskService {
           },
         }),
         execSandbox,
-        approval,
+        approval: approval
+          ? { ...approval, writableRoots, ...(fenceRoot ? { pathBase: fenceRoot } : {}) }
+          : undefined,
         // 与主对话同一套内置画像（explore/research/coder）——任务回合的
         // 子代理编排语义不分叉。
         subagent: builtinSubagentParam(),
@@ -472,6 +485,7 @@ export class TaskService {
         askUser: false,
         onStreamId: (streamId) => {
           entry.streamId = streamId;
+          if (entry.killed) void supervisor.cancelChat(streamId);
         },
         onText: (delta) => {
           answer += delta;
@@ -487,6 +501,7 @@ export class TaskService {
             id: call.id,
             tool: call.tool,
             arguments: call.arguments,
+            view: presentToolCall(call.tool, call.arguments),
             threw: false,
           });
           syncTimelineTools(entry.timeline, entry.actions);
@@ -500,11 +515,13 @@ export class TaskService {
             id: action.id,
             tool: action.tool,
             arguments: action.arguments,
+            view: presentToolCall(action.tool, action.arguments, action.result),
             result: action.result,
             success: action.success,
             error: action.error,
             durationMs: action.durationMs,
             ...(action.sandbox ? { sandbox: action.sandbox } : {}),
+            ...(action.approval ? { approval: action.approval } : {}),
             threw: false,
           };
           if (idx >= 0) entry.actions[idx] = row;
@@ -525,6 +542,10 @@ export class TaskService {
       if (typeof failureTraceId === 'string' && failureTraceId) {
         traceId = failureTraceId;
       }
+    }
+    if (entry.killed) {
+      status = 'failed';
+      error = entry.killReason || 'killed by job_kill';
     }
 
     await this.store.updateTask(taskId, {
@@ -559,6 +580,38 @@ export class TaskService {
       total: tasks.length,
       tasks: tasks.map((t) => this.toModelView(t)),
     };
+  }
+
+  /**
+   * job_kill：结束 running 或 blocked 任务。running 先打标记再取消流，
+   * 终态回写看到标记后保持 failed，避免流的正常完成把杀死盖掉。
+   */
+  async kill(chatId: string, taskId: string, reason?: string): Promise<Record<string, unknown>> {
+    const task = await this.store.getTask(taskId);
+    if (!task || task.chatId !== chatId) {
+      return { success: false, error: `任务不存在：${taskId}` };
+    }
+    if (task.status === 'completed' || task.status === 'failed') {
+      return { success: false, error: `任务已终态（${task.status}），不能再结束。` };
+    }
+    const note = reason?.trim() || 'killed by job_kill';
+    const entry = this.running.get(taskId);
+    if (entry) {
+      entry.killed = true;
+      entry.killReason = note;
+    }
+    if (!entry || task.status === 'blocked') {
+      await this.store.updateTask(taskId, { status: 'failed', error: note });
+      this.deps.broadcast?.('task-updated', { chatId, taskId });
+      if (task.status === 'blocked') await this.maybeUnblock(chatId);
+      return { success: true, job_id: taskId, status: 'failed', killed: true };
+    }
+    const getSupervisor = this.deps.getSupervisor ?? getSidecarSupervisor;
+    const supervisor = getSupervisor();
+    if (entry.streamId && supervisor) {
+      await supervisor.cancelChat(entry.streamId);
+    }
+    return { success: true, job_id: taskId, status: 'failed', killed: true };
   }
 
   /** task_result 工具：取终态任务的完整结果。 */

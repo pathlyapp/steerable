@@ -229,6 +229,9 @@ rl.on('line', (line) => {
     case 'trace.export':
       answer(id, { status: 'exported', traceId: params.traceId, privacyMode: 'off' });
       return;
+    case 'metrics.export':
+      answer(id, { status: 'exported', metrics: Array.isArray(params.samples) ? params.samples.length : 0 });
+      return;
     case 'config.get':
       answer(id, { model: 'fake' });
       return;

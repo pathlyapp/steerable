@@ -8,14 +8,17 @@ context:
 retry:
   - impl: informed_backtrack
   - impl: simple
-    params: {max_attempts: 3}
+    params:
+      max_attempts: 3
+      transport_max_attempts: 5
+      transport_base_delay_ms: 1000
+      transport_max_delay_ms: 8000
+      transport_deadline_ms: 60000
 validator: "null"
 tools: full
 memory: stateless
 orchestration: subagent
-# Same pins as default.harness.yaml — arms must differ in exactly the
-# orchestration dimension, not in an implicit fallback.
+# Same loop section as default.harness.yaml — arms must differ in exactly
+# the orchestration dimension, not in an implicit fallback.
 loop:
-  max_rounds: 80
-  max_tool_errors: 16
   tool_dedup: false

@@ -371,3 +371,74 @@ describe('mergeTurnSubagentParam', () => {
     expect(param.maxParallel).toBe(5);
   });
 });
+
+describe('BUILTIN_SUBAGENT_PROFILES / 只读域', () => {
+  it('探索画像能搜和读目标，碰不到写、命令和结束任务', () => {
+    const tools = BUILTIN_SUBAGENT_PROFILES.explore.toolFilter ?? [];
+    expect(tools).toEqual(expect.arrayContaining(['grep', 'glob', 'get_goal', 'view_image']));
+    for (const name of ['pwsh', 'local_exec_shell', 'create_goal', 'update_goal', 'job_kill', 'local_write_file']) {
+      expect(tools).not.toContain(name);
+    }
+  });
+
+  it('调研画像在探索域上只多一个写文件', () => {
+    const explore = BUILTIN_SUBAGENT_PROFILES.explore.toolFilter ?? [];
+    expect(BUILTIN_SUBAGENT_PROFILES.research.toolFilter).toEqual([...explore, 'local_write_file']);
+  });
+});
+
+describe('BUILTIN_SUBAGENT_PROFILES / 角色模型与推理强度 (R6)', () => {
+  it('探索与调研跑低推理强度', () => {
+    // 在代码里找东西、交叉核对来源都是机械读，深度思考留给消费结论的那一层。
+    expect(BUILTIN_SUBAGENT_PROFILES.explore.reasoningEffort).toBe('low');
+    expect(BUILTIN_SUBAGENT_PROFILES.research.reasoningEffort).toBe('low');
+  });
+
+  it('实现画像不钉推理强度', () => {
+    // coder 做的是要动脑的活，降档是错的默认值。
+    expect(BUILTIN_SUBAGENT_PROFILES.coder.reasoningEffort).toBeUndefined();
+  });
+
+  it('内置画像都不钉模型，跟随父级', () => {
+    // 钉模型等于替用户选账单；只有用户明确配置的智能体才该这么做。
+    for (const profile of Object.values(BUILTIN_SUBAGENT_PROFILES)) {
+      expect(profile.model).toBeUndefined();
+    }
+  });
+});
+
+describe('buildMentionSubagentProfiles / 角色模型与推理强度 (R6)', () => {
+  it('智能体配了模型与强度时带进画像', async () => {
+    const profiles = await buildMentionSubagentProfiles(
+      [makeAgent({ model: 'glm-5.3-flash', reasoningEffort: 'high' })],
+      PARENT_TOOLS,
+    );
+    expect(profiles.researcher.model).toBe('glm-5.3-flash');
+    expect(profiles.researcher.reasoningEffort).toBe('high');
+  });
+
+  it('没配时两项都不出现，画像与改前逐字段一致', async () => {
+    // 关键契约：不配置的智能体不能让 sidecar 重建 provider。
+    const profiles = await buildMentionSubagentProfiles([makeAgent()], PARENT_TOOLS);
+    expect('model' in profiles.researcher).toBe(false);
+    expect('reasoningEffort' in profiles.researcher).toBe(false);
+  });
+
+  it('只钉强度时模型仍跟随父级', async () => {
+    const profiles = await buildMentionSubagentProfiles(
+      [makeAgent({ reasoningEffort: 'low' })],
+      PARENT_TOOLS,
+    );
+    expect(profiles.researcher.reasoningEffort).toBe('low');
+    expect('model' in profiles.researcher).toBe(false);
+  });
+
+  it('空串按未配置处理', async () => {
+    const profiles = await buildMentionSubagentProfiles(
+      [makeAgent({ model: '', reasoningEffort: '' })],
+      PARENT_TOOLS,
+    );
+    expect('model' in profiles.researcher).toBe(false);
+    expect('reasoningEffort' in profiles.researcher).toBe(false);
+  });
+});
