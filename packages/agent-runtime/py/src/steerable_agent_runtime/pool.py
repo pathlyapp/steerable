@@ -161,6 +161,10 @@ class _ChildHandle:
         #: Terminal flag set by close()/shutdown(): a closed child rejects
         #: sends even after its run has finished.
         self.closed = False
+        #: Set by ``shutdown`` only — the turn ended, not the child. Its row
+        #: then settles as ``cancelled`` (resumable) rather than ``closed``:
+        #: "the parent stopped waiting" is not "the user gave up on it".
+        self.pool_gone = False
         #: Model-visible record snapshot at the end of the last cleanly
         #: finished run (cooperative cancel included — the loop guarantees
         #: no dangling tool_calls). ``None`` before the first clean finish;
@@ -859,10 +863,21 @@ class AgentPool:
         if self._registry is None or self._parent_record_id is None:
             return
         record_id = default_record_id(self._parent_record_id, handle.child_id)
+        # A closed child's row says `closed`, whatever the run it was in the
+        # middle of reports. Cancelling to close produces `cancelled` from the
+        # loop, and writing that would leave the row resumable again — the
+        # in-memory flag dies with the pool, the row does not.
+        #
+        # ``shutdown`` also marks handles closed, but that is the turn
+        # ending rather than the user giving up: those rows settle as
+        # ``cancelled`` (resumable) and `pool_gone` is what tells them apart.
+        final_status = (
+            "closed" if handle.closed and not handle.pool_gone else registry_status(status)
+        )
         try:
             wrote = await self._registry.finished(
                 record_id,
-                status=registry_status(status),
+                status=final_status,
                 usage=usage,
                 usage_known=handle.usage_known,
             )
@@ -1132,6 +1147,13 @@ class AgentPool:
         # so a peer's message reports an unknown member instead of resuming an
         # agent the owner already gave up on.
         self._leave_tree(child_id)
+        # The same promise has to reach the durable row, not just this
+        # process. `send` after close is refused by `_resume_from_registry`
+        # only because that row says `closed`; leaving it at its last run's
+        # status let a closed child be resumed by a later turn (or by another
+        # executor reading the same registry) — the in-memory flag dies with
+        # the pool, the row does not.
+        await self._mark_closed(handle)
         if handle.outcome is not None:
             return True
         self._cancel_handle(handle)
@@ -1142,6 +1164,28 @@ class AgentPool:
             if not handle.task.done():
                 handle.task.cancel()
         return True
+
+    async def _mark_closed(self, handle: _ChildHandle) -> None:
+        """Write ``closed`` onto the child's row; best-effort like settling.
+
+        A pool without a registry (tests, hosts without storage) keeps its
+        previous behaviour, and a storage failure must not turn a close into
+        an error — the in-process refusal still holds for this turn.
+        """
+        if self._registry is None or self._parent_record_id is None:
+            return
+        record_id = default_record_id(self._parent_record_id, handle.child_id)
+        try:
+            wrote = await self._registry.finished(
+                record_id,
+                status="closed",
+                usage=handle.usage,
+                usage_known=handle.usage_known,
+            )
+            if wrote:
+                self._registry.mark_settled(record_id)
+        except Exception as exc:  # noqa: BLE001 — bookkeeping never fails a run
+            logger.warning("child %s registry close failed: %s", handle.child_id, exc)
 
     def _cancel_handle(self, handle: _ChildHandle) -> None:
         """Ask one child to stop, whichever engine it runs on.
@@ -1158,12 +1202,16 @@ class AgentPool:
     async def shutdown(self) -> None:
         """Cooperatively cancel every live child; hard-cancel stragglers.
 
-        Terminal for the whole pool: every child is marked closed, so no
-        sends or resumes are accepted afterwards.
+        Terminal for the whole **pool**, not for its children: a child that
+        was still running when the turn ended stays resumable, so its row is
+        ``cancelled`` (the run was cut short), not ``closed`` (the user gave
+        up on it). ``close`` is the one that writes ``closed``, because that
+        is the only path where "never again" was actually asked for.
         """
         live = [h for h in self._children.values() if h.outcome is None]
         for handle in self._children.values():
             handle.closed = True
+            handle.pool_gone = True
             self._leave_tree(handle.child_id)
         for handle in live:
             self._cancel_handle(handle)
