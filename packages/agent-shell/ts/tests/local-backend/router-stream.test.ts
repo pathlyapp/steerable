@@ -1928,6 +1928,80 @@ describe('回合产物文件列表', () => {
     }
   });
 
+  // -------------------------------------------------------------------------
+  // R6 回合账单（turn_usage）
+  // -------------------------------------------------------------------------
+
+  it('回合账单经 turn_usage 事件下发（先于 message_id）并落 metadata', async () => {
+    const { dir, chat, toolRouter } = await seedProjectChat();
+    try {
+      installStream(
+        (opts) => {
+          opts.onText('做完了');
+        },
+        {
+          status: 'completed',
+          usage: {
+            promptTokens: 4000,
+            completionTokens: 1000,
+            totalTokens: 5000,
+            cachedPromptTokens: 1200,
+            childPromptTokens: 2400,
+            childCompletionTokens: 600,
+            childTotalTokens: 3000,
+            unknownUsageChildren: 1,
+          },
+        },
+      );
+      const cap = makeEmitCapture();
+      await makeRouter({ toolRouter }).handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '派活' } },
+        cap.emit,
+      );
+
+      const usageEvents = cap.byType('turn_usage');
+      expect(usageEvents).toHaveLength(1);
+      expect((usageEvents[0].data as { usage: { totalTokens: number } }).usage.totalTokens).toBe(5000);
+
+      // 顺序约定与 turn_files 一致：先于 message_id，前端按 message_id 归档。
+      const types = cap
+        .events()
+        .map((c) => (typeof c.data === 'object' && c.data !== null ? (c.data as { type?: string }).type : null));
+      expect(types.indexOf('turn_usage')).toBeLessThan(types.indexOf('message_id'));
+
+      // 落库，刷新后水合到同一条消息上。
+      const assistant = (await h.store.listMessages(chat.id, 10))[0];
+      const metadata = JSON.parse(assistant.messageMetadata!);
+      expect(metadata.usage.totalTokens).toBe(5000);
+      expect(metadata.usage.childTotalTokens).toBe(3000);
+      // 外部引擎子代理报不出 token，这个计数是「合计只是下限」的唯一依据。
+      expect(metadata.usage.unknownUsageChildren).toBe(1);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('回合没有账单时不发 turn_usage，metadata 不带 usage', async () => {
+    const { dir, chat, toolRouter } = await seedProjectChat();
+    try {
+      installStream((opts) => {
+        opts.onText('没有用量的路径');
+      });
+      const cap = makeEmitCapture();
+      await makeRouter({ toolRouter }).handleStream(
+        { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: '跑一下' } },
+        cap.emit,
+      );
+
+      expect(cap.byType('turn_usage')).toHaveLength(0);
+      const assistant = (await h.store.listMessages(chat.id, 10))[0];
+      const metadata = JSON.parse(assistant.messageMetadata!);
+      expect(metadata.usage).toBeUndefined();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('未绑定项目的会话没有扫描根，不产事件', async () => {
     const chat = await seedChat();
     installStream((opts) => opts.onText('纯聊天'));

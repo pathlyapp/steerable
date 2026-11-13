@@ -21,6 +21,7 @@ import {
   streamCoreLoopTurn,
   toTurnTool,
   type CoreLoopToolAction,
+  type CoreLoopTurnOutcome,
   type SkillTurnContext,
   type StreamCoreLoopTurnOptions,
   type TurnFailureInfo,
@@ -2739,6 +2740,9 @@ export class LocalBackendRouter {
    * - 同步真实 messageId：`data: {"type":"message_id","messageId":"..."}`
    * - 工具执行结果（无需用户确认）：`data: {"type":"executed_actions","actions":[...]}`
    * - 回合产物文件列表（仅非空时发，在 message_id 之前）：`data: {"type":"turn_files","files":[...]}`
+   * - 回合账单（仅有时发，在 message_id 之前）：`data: {"type":"turn_usage","usage":{...}}`
+   *   与 `turn_files` 同批归档：前端按 message_id 把它挂到落库消息上，刷新后
+   *   从 `messageMetadata.usage` 水合。整轮总计与子代理分项只在这一次出现。
    * - 错误：保留 `event:error` + `data: {"message":"..."}`（前端会忽略，但日志/未来 UI 用）
    * - 结束：标准 SSE `[DONE]` 串。
    */
@@ -4397,6 +4401,13 @@ export class LocalBackendRouter {
     // `turn_active` marker survives — that marker is exactly what
     // `detectInterruptedTurn` reads to offer "continue" on the next open.
     let sidecarLost = false;
+    // R6: the turn's bill, lifted out of `driveWithAutoContinue` so the
+    // assistant row and the `turn_usage` event can carry it. It holds the
+    // LAST pass's figures: the turn total already lives in `usage_events`
+    // (the router writes one row per pass) and this is the per-turn view the
+    // message shows — a resumed pass re-reads what the previous one left, so
+    // summing passes here would double-count.
+    let turnUsage: CoreLoopTurnOutcome['usage'];
     // Every pass records its own sidecar trace; all of them are persisted
     // against the one assistant message this turn produces.
     const passTraceIds: string[] = [];
@@ -4707,9 +4718,10 @@ export class LocalBackendRouter {
             turnPasses += 1;
             // W6-9 用量归因:落一条 chat 用量事件(含成本估算,无单价模型 costUsd=null)。
             // 每趟各落一条——续跑的花费是真实发生的，不该被合并掉。
-            // R5:子代理的花费进同一条记录（父级 + children[]），而不是散成
-            // 多条——一次回合的成本归因必须能一眼加总。外部引擎子代理不报
-            // token，此时 usage_note='partial'，不把缺失当零。
+            // R5: 子代理的花费进同一条记录。注意 `usage.totalTokens` 与
+            // `childTotalTokens` 是**两份并列**的账单（父级 / 子代理），不是
+            // 「总计与其中一部分」，所以相加才是整轮成本。外部引擎子代理报
+            // 不出 token，此时 usage_note='partial'，不把缺失当零。
             if (outcome.usage) {
               try {
                 await this.store.recordUsageEvent({
@@ -4745,6 +4757,7 @@ export class LocalBackendRouter {
       outcomeTraceId = finalOutcome.traceId;
       autoContinuations = finalContinuations;
       sidecarLost = finalOutcome.sidecarLost === true;
+      turnUsage = finalOutcome.usage;
       // 干净失败的趟（sidecar 正常收流但 status=failed，如 LLM 401/超时）
       // 不走下面的 catch——这里补发 error 事件，否则前端只渲染一条空消息，
       // 用户完全看不到失败原因。
@@ -4892,6 +4905,11 @@ export class LocalBackendRouter {
             ...(durationMs != null ? { durationMs } : {}),
             ...(autoContinuations > 0 ? { autoContinuations } : {}),
             ...(turnFiles.length > 0 ? { turnFiles } : {}),
+            // R6: the turn's bill, kept on the row so a replayed message shows
+            // the same figures the live turn did — the child rows only carry
+            // their own slice, and the per-turn total is not derivable from
+            // them (the parent's own spend is not in any child).
+            ...(turnUsage ? { usage: turnUsage } : {}),
             ...(failureInfo ? { failure: failureInfo } : {}),
           })
         );
@@ -5009,6 +5027,14 @@ export class LocalBackendRouter {
     // 归档到落库消息上，顺序保证产物列表随同一批次归档。
     if (turnFiles.length > 0) {
       emit(this.sseData({ type: 'turn_files', files: turnFiles }));
+    }
+    // R6: the turn's bill, emitted just before `message_id` so it archives
+    // with the rest of the turn's queues. This is the only place the parent's
+    // own spend and the children's share appear together — the child rows
+    // carry only their own slice, so a host that wants "what did this turn
+    // cost, and how much of it was sub-agents" cannot add them up itself.
+    if (turnUsage) {
+      emit(this.sseData({ type: 'turn_usage', usage: turnUsage }));
     }
     if (assistant) {
       emit(this.sseData({ type: 'message_id', messageId: assistant.id }));

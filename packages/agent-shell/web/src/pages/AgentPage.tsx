@@ -41,6 +41,7 @@ import {
   type LlmSpeedSnapshot,
 } from "@/components/chat/process-status";
 import { parseTurnFiles, type TurnFile } from "@/components/chat/turn-files";
+import { parseTurnUsage, type TurnUsage } from "@/components/chat/turn-usage";
 import { readPersistedDurationMs } from "@/components/chat/elapsed";
 import {
   extractLatestSuggestedReplies,
@@ -209,6 +210,27 @@ function extractPersistedTurnFiles(
   return seeded;
 }
 
+/** R6: 每回合的账单，从助手消息元数据水合（与 turnFiles 同法）。 */
+function extractPersistedTurnUsage(
+  messages: ChatMessageWithMetadata[] | undefined,
+): Record<string, TurnUsage> {
+  const seeded: Record<string, TurnUsage> = {};
+  if (!messages || messages.length === 0) return seeded;
+  for (const message of messages) {
+    if (message.role !== "assistant" || !message.messageMetadata) continue;
+    try {
+      const metadata = JSON.parse(message.messageMetadata) as {
+        usage?: unknown;
+      };
+      const usage = parseTurnUsage(metadata.usage);
+      if (usage) seeded[message.id] = usage;
+    } catch {
+      // Ignore malformed legacy metadata.
+    }
+  }
+  return seeded;
+}
+
 /**
  * 把注册表里的子代理并进重启后的面板（R7-2）。
  *
@@ -312,6 +334,9 @@ function AgentChatLoader({
   const [initialTurnFiles, setInitialTurnFiles] = useState<
     Record<string, TurnFile[]>
   >({});
+  const [initialTurnUsage, setInitialTurnUsage] = useState<
+    Record<string, TurnUsage>
+  >({});
   const [initialOrchestrationChildren, setInitialOrchestrationChildren] =
     useState<Record<string, ChildInfo[]>>({});
   const [initialSuggestedReplies, setInitialSuggestedReplies] =
@@ -350,6 +375,7 @@ function AgentChatLoader({
         setInitialTimelines(extractPersistedTimelines(response.messages));
         setInitialDurations(extractPersistedDurations(response.messages));
         setInitialTurnFiles(extractPersistedTurnFiles(response.messages));
+        setInitialTurnUsage(extractPersistedTurnUsage(response.messages));
         // R7-2：落库事件只覆盖「回合跑到了收尾」的情形。进程被杀时最后一条
         // assistant 消息可能没落库，那些子代理只存在于注册表里——不合并的话
         // 用户重开后看到的比实际派出去的少。
@@ -387,6 +413,7 @@ function AgentChatLoader({
         setInitialTimelines({});
         setInitialDurations({});
         setInitialTurnFiles({});
+        setInitialTurnUsage({});
         setInitialOrchestrationChildren({});
         setInitialSuggestedReplies(null);
         setInitialInterrupted(false);
@@ -414,6 +441,7 @@ function AgentChatLoader({
       initialTimelines={initialTimelines}
       initialDurations={initialDurations}
       initialTurnFiles={initialTurnFiles}
+      initialTurnUsage={initialTurnUsage}
       initialOrchestrationChildren={initialOrchestrationChildren}
       initialSuggestedReplies={initialSuggestedReplies}
       initialInterrupted={initialInterrupted}
@@ -431,6 +459,7 @@ interface AgentChatViewProps {
   initialTimelines: Record<string, TurnBlock[]>;
   initialDurations: Record<string, number>;
   initialTurnFiles: Record<string, TurnFile[]>;
+  initialTurnUsage: Record<string, TurnUsage>;
   initialOrchestrationChildren: Record<string, ChildInfo[]>;
   initialSuggestedReplies: SuggestedRepliesState | null;
   /** W7-1: 打开会话时上一轮处于中断态（崩溃/强杀，无完成记录）。 */
@@ -448,6 +477,7 @@ function AgentChatView({
   initialTimelines,
   initialDurations,
   initialTurnFiles,
+  initialTurnUsage,
   initialOrchestrationChildren,
   initialSuggestedReplies,
   initialInterrupted,
@@ -571,6 +601,14 @@ function AgentChatView({
   // 归档后占位 id 消息仍在屏上的这段时间，都靠它渲染尾部消息的文件列表。
   const [currentTurnFiles, setCurrentTurnFiles] = useState<TurnFile[]>([]);
   const pendingTurnFilesRef = useRef<TurnFile[]>([]);
+  // R6 同款：turn_usage 也赶在 message_id 之前到，随同一批队列归档。
+  const [turnUsageByMessageId, setTurnUsageByMessageId] = useState<
+    Record<string, TurnUsage>
+  >(initialTurnUsage);
+  const [currentTurnUsage, setCurrentTurnUsage] = useState<TurnUsage | undefined>(
+    undefined,
+  );
+  const pendingTurnUsageRef = useRef<TurnUsage | undefined>(undefined);
   const turnStartedAtRef = useRef<number | null>(null);
   const [currentTurnStartedAtMs, setCurrentTurnStartedAtMs] = useState<
     number | undefined
@@ -679,6 +717,16 @@ function AgentChatView({
       }
       return;
     }
+    if (ev.event === "turn_usage") {
+      // R6：同 turn_files，收尾时发一次，message_id 到达时归档到落库 id。
+      // 解析失败不打断回合——账单缺一块比丢一整个回合轻。
+      const usage = parseTurnUsage(ev.payload?.usage);
+      if (usage) {
+        pendingTurnUsageRef.current = usage;
+        setCurrentTurnUsage(usage);
+      }
+      return;
+    }
     if (ev.event === "round_end") {
       // chat-transport surfaces `completion executing` as round_end. Bumping
       // the counter here is safe even if the round emits no tools — the
@@ -761,6 +809,14 @@ function AgentChatView({
         }));
       }
       pendingTurnFilesRef.current = [];
+      const queuedTurnUsage = pendingTurnUsageRef.current;
+      if (queuedTurnUsage) {
+        setTurnUsageByMessageId((prev) => ({
+          ...prev,
+          [messageId]: queuedTurnUsage,
+        }));
+      }
+      pendingTurnUsageRef.current = undefined;
       setTailAssistantDbId(messageId);
     }
     // AI 标题更新走的是后台 IPC 广播（chat-title-updated）而不是 SSE——
@@ -992,6 +1048,8 @@ function AgentChatView({
       pendingChildSpawnsRef.current = new Map();
       pendingTurnFilesRef.current = [];
       setCurrentTurnFiles([]);
+      pendingTurnUsageRef.current = undefined;
+      setCurrentTurnUsage(undefined);
       setCurrentRound(1);
       setRetryState(null);
       const started = Date.now();
@@ -1165,6 +1223,8 @@ function AgentChatView({
     setCurrentTurnChildren([]);
     pendingTurnFilesRef.current = [];
     setCurrentTurnFiles([]);
+    pendingTurnUsageRef.current = undefined;
+    setCurrentTurnUsage(undefined);
     setCurrentRound(1);
     setRetryState(null);
     const started = Date.now();
@@ -1484,6 +1544,8 @@ function AgentChatView({
         llmSpeedByMessageId={llmSpeedByMessageId}
         turnFilesByMessageId={turnFilesByMessageId}
         currentTurnFiles={currentTurnFiles}
+        turnUsageByMessageId={turnUsageByMessageId}
+        currentTurnUsage={currentTurnUsage}
         currentTurnChildren={effectiveCurrentTurnChildren}
         orchestrationChildrenByMessageId={orchestrationChildrenByMessageId}
         currentRound={currentRound}

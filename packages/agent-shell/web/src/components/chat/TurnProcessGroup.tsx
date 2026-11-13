@@ -10,6 +10,8 @@ import { ToolsFlow } from './ExecutedActionsCard';
 import type { InspectTaskInput } from './executed-actions-model';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import { OrchestrationChildrenCard } from './OrchestrationChildrenCard';
+import { TurnUsageLine } from './TurnUsageLine';
+import type { TurnUsage } from './turn-usage';
 import {
   estimateReasoningDurationMs,
   processStatusLabel,
@@ -266,6 +268,7 @@ function ProcessBlocks({
   thinkingElapsedByIndex,
   onContinueChild,
   onStopChild,
+  turnUsage,
 }: {
   blocks: TurnBlock[];
   isStreaming: boolean;
@@ -279,6 +282,8 @@ function ProcessBlocks({
   thinkingElapsedByIndex?: Array<number | undefined>;
   onContinueChild?: (childId: string, recordId: string) => void;
   onStopChild?: (childId: string) => void;
+  /** R6：本回合账单，画在子代理看板下方。 */
+  turnUsage?: TurnUsage;
 }) {
   return (
     <div className="space-y-1.5">
@@ -302,6 +307,8 @@ function ProcessBlocks({
         onContinue={onContinueChild}
         onStop={onStopChild}
       />
+      {/* R6 回合账单：紧随看板，读的是「父级 + 子代理」的整份数字。 */}
+      <TurnUsageLine usage={turnUsage} />
     </div>
   );
 }
@@ -316,6 +323,7 @@ export function TurnProcessGroup({
   orchestrationChildren,
   onContinueChild,
   onStopChild,
+  turnUsage,
   emptyFallback,
   streamingHint,
   startedAtMs,
@@ -337,6 +345,8 @@ export function TurnProcessGroup({
   onContinueChild?: (childId: string, recordId: string) => void;
   /** 「停止」一个正在跑的子代理（R7）。 */
   onStopChild?: (childId: string) => void;
+  /** R6：本回合账单（父级 + 子代理合计），画在子代理看板下方。 */
+  turnUsage?: TurnUsage;
   emptyFallback: ReactNode;
   /** Shown while streaming after a tools row and before the summary lands. */
   streamingHint?: ReactNode;
@@ -472,6 +482,7 @@ export function TurnProcessGroup({
           thinkingElapsedByIndex={thinkingElapsedByIndex}
           onContinueChild={onContinueChild}
           onStopChild={onStopChild}
+          turnUsage={turnUsage}
         />
       )}
       {showStreamingHint ? streamingHint : null}
