@@ -353,16 +353,26 @@ function AgentChatLoader({
         // R7-2：落库事件只覆盖「回合跑到了收尾」的情形。进程被杀时最后一条
         // assistant 消息可能没落库，那些子代理只存在于注册表里——不合并的话
         // 用户重开后看到的比实际派出去的少。
+        //
+        // 这一步必须**不阻塞**其余水合：注册表要跨进程问 sidecar，冷启动时
+        // 它常返回 503（还没起）或慢到数秒。把首屏必需的状态（尤其
+        // `initialInterrupted`——它决定「继续上次回复」卡片出不出现）排在它
+        // 后面，用户就会看到一段空会话，CI 上则直接超时。
         const persistedChildren = extractPersistedOrchestrationChildren(
           response.messages,
         );
-        setInitialOrchestrationChildren(
-          await mergeRegistryChildren(
-            chatId,
-            persistedChildren,
-            ordered.map((message) => message.id),
-          ),
-        );        setInitialSuggestedReplies(
+        setInitialOrchestrationChildren(persistedChildren);
+        const messageIds = ordered.map((message) => message.id);
+        void mergeRegistryChildren(chatId, persistedChildren, messageIds)
+          .then((merged) => {
+            // 挂载已卸载或切了会话就不再回填，避免把旧会话的子代理写进新会话。
+            if (cancelled) return;
+            setInitialOrchestrationChildren(merged);
+          })
+          .catch(() => {
+            // 合并是增强项：拿不到注册表时保留事件流能重建的那些。
+          });
+        setInitialSuggestedReplies(
           extractLatestSuggestedReplies(
             ordered as ChatMessageWithMetadata[],
           ),
