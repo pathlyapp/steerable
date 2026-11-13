@@ -153,6 +153,15 @@ export interface TurnFailureInfo {
 export interface CoreLoopTurnOutcome {
   status: string;
   reason?: string;
+  /**
+   * The sidecar process disappeared before the turn reached a terminal
+   * notification (crash, SIGKILL, host teardown that skipped the shutdown
+   * RPC). Distinct from `cancelled` — which is the user pressing Stop and the
+   * sidecar *answering* — because only this case leaves the durable record
+   * mid-turn. The router uses it to keep `turn_active` and to withhold the
+   * assistant row, so a reopened chat still offers "continue".
+   */
+  sidecarLost?: boolean;
   /** Sidecar trace id for this turn — the router persists it into
    *  harness_traces so the CoreLoop path leaves the same audit trail as the
    *  TS loop (and dogfood traces can be replayed/diffed). */
@@ -557,6 +566,20 @@ export async function streamCoreLoopTurn(
     let cancelling = false;
     let abortGraceTimer: ReturnType<typeof setTimeout> | null = null;
 
+    /**
+     * The sidecar died before answering. Resolve rather than reject: the turn
+     * has a real outcome (it never finished), and the router must record it as
+     * interrupted — a rejected promise takes the `failed` path, which persists
+     * an assistant row and clears `turn_active`, making the crash look like a
+     * settled turn and hiding "continue" from the user.
+     */
+    const onSidecarLost = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve({ status: 'interrupted', reason: 'sidecar-lost', sidecarLost: true });
+    };
+
     const onAbort = () => {
       if (settled || cancelling) return;
       cancelling = true;
@@ -575,8 +598,13 @@ export async function streamCoreLoopTurn(
       }, CANCEL_GRACE_MS);
     };
     signal?.addEventListener('abort', onAbort);
+    // A sidecar that dies mid-turn never answers with `stream.done`, so
+    // without this the promise floats forever and the router cannot tell a
+    // crash from a turn still running.
+    supervisor.on('exit', onSidecarLost);
     const cleanup = () => {
       signal?.removeEventListener('abort', onAbort);
+      supervisor.off('exit', onSidecarLost);
       if (abortGraceTimer) clearTimeout(abortGraceTimer);
       activeCoreLoopStreams.delete(options.chatId);
     };

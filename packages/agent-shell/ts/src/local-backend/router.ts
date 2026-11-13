@@ -4391,6 +4391,12 @@ export class LocalBackendRouter {
     // `completionReason` but no per-request detail.
     let failureInfo: TurnFailureInfo | undefined;
     let outcomeTraceId: string | undefined;
+    // The sidecar vanished mid-turn (crash / SIGKILL / teardown that skipped
+    // the shutdown RPC). Such a turn has no terminal state to persist: the
+    // record stops mid-flight, so the assistant row is withheld and the
+    // `turn_active` marker survives — that marker is exactly what
+    // `detectInterruptedTurn` reads to offer "continue" on the next open.
+    let sidecarLost = false;
     // Every pass records its own sidecar trace; all of them are persisted
     // against the one assistant message this turn produces.
     const passTraceIds: string[] = [];
@@ -4738,6 +4744,7 @@ export class LocalBackendRouter {
       completionReason = finalOutcome.reason ?? '';
       outcomeTraceId = finalOutcome.traceId;
       autoContinuations = finalContinuations;
+      sidecarLost = finalOutcome.sidecarLost === true;
       // 干净失败的趟（sidecar 正常收流但 status=failed，如 LLM 401/超时）
       // 不走下面的 catch——这里补发 error 事件，否则前端只渲染一条空消息，
       // 用户完全看不到失败原因。
@@ -4780,7 +4787,9 @@ export class LocalBackendRouter {
         completionTokens: 0,
         totalTokens: 0,
         outcome:
-          completionStatus === 'failed'
+          // An interrupted turn (sidecar lost) never finished either: counting
+          // it as `completed` would make crash reports look like successes.
+          completionStatus === 'failed' || completionStatus === 'interrupted'
             ? 'failed'
             : completionStatus === 'cancelled'
               ? 'cancelled'
@@ -4818,7 +4827,7 @@ export class LocalBackendRouter {
             samples: [
               {
                 outcome:
-                  completionStatus === 'failed'
+                  completionStatus === 'failed' || completionStatus === 'interrupted'
                     ? 'failed'
                     : completionStatus === 'cancelled'
                       ? 'cancelled'
@@ -4858,44 +4867,57 @@ export class LocalBackendRouter {
       console.warn('[local-backend] collect turn files failed', turnFilesErr);
     }
     freezeTimelineReasoning(timeline);
-    const assistant = await this.store.addMessage(
-      chatId,
-      'assistant',
-      assistantText,
-      JSON.stringify({
-        completionStatus,
-        completionReason,
-        executedActions,
-        timeline,
-        mode: chatMode,
-        coreloop: true,
-        traceId: outcomeTraceId,
-        ...(parentAgentId ? { agentId: parentAgentId } : {}),
-        ...(children.length > 0 ? { orchestrationChildEvents: children } : {}),
-        ...(durationMs != null ? { durationMs } : {}),
-        ...(autoContinuations > 0 ? { autoContinuations } : {}),
-        ...(turnFiles.length > 0 ? { turnFiles } : {}),
-        ...(failureInfo ? { failure: failureInfo } : {}),
-      })
-    );
-    try {
-      await recordInsightTurn(this.store, {
-        chatId,
-        mode: chatMode,
-        modelId: overrideModel || settings.model,
-        completionStatus,
-        durationMs,
-        toolNames: executedActions,
-        userText: firstUserMessageForTitle,
-        assistantText,
-      });
-    } catch (insightErr) {
-      console.warn('[insights] turn record failed', insightErr);
+    // A crash has no reply to persist. Writing an empty assistant row here
+    // would (a) show the user a blank message, and (b) make
+    // `detectInterruptedTurn` see a trailing assistant and conclude the turn
+    // settled — the crash would then look like a normal stopped turn and
+    // "continue last reply" would never be offered. The record stays on the
+    // user turn, which is what the resume path replays.
+    const assistant = sidecarLost
+      ? null
+      : await this.store.addMessage(
+          chatId,
+          'assistant',
+          assistantText,
+          JSON.stringify({
+            completionStatus,
+            completionReason,
+            executedActions,
+            timeline,
+            mode: chatMode,
+            coreloop: true,
+            traceId: outcomeTraceId,
+            ...(parentAgentId ? { agentId: parentAgentId } : {}),
+            ...(children.length > 0 ? { orchestrationChildEvents: children } : {}),
+            ...(durationMs != null ? { durationMs } : {}),
+            ...(autoContinuations > 0 ? { autoContinuations } : {}),
+            ...(turnFiles.length > 0 ? { turnFiles } : {}),
+            ...(failureInfo ? { failure: failureInfo } : {}),
+          })
+        );
+    if (!sidecarLost) {
+      try {
+        await recordInsightTurn(this.store, {
+          chatId,
+          mode: chatMode,
+          modelId: overrideModel || settings.model,
+          completionStatus,
+          durationMs,
+          toolNames: executedActions,
+          userText: firstUserMessageForTitle,
+          assistantText,
+        });
+      } catch (insightErr) {
+        console.warn('[insights] turn record failed', insightErr);
+      }
     }
     // W7-1: 回复落库后才清标记（顺序不能反——先清后写的话，两者之间崩溃
     // 会丢回复且无任何续跑入口；这个顺序的最坏情况是残留标记被检测器的
     // 「末尾已是 assistant」规则判定为已完结）。
-    await this.store.clearTurnActive(chatId);
+    //
+    // 崩溃时**不清**：标记就是「这一轮没跑完」的唯一证据，清掉就再也
+    // 找不回那个子代理/那条回复可续跑的事实。
+    if (!sidecarLost) await this.store.clearTurnActive(chatId);
     // 回合落库即结束——移除实时快照，后续 GET /live-stream 返回 active=false。
     removeLiveStream(chatId);
     // Persist the sidecar-recorded traces into harness_traces so the CoreLoop
@@ -4934,7 +4956,9 @@ export class LocalBackendRouter {
         await this.store.saveTrace({
           id: traceId,
           chatId,
-          messageId: assistant.id,
+          // No assistant row on a crashed turn, so the trace hangs off the
+          // chat alone — still fetchable by `listTracesByChat`.
+          messageId: assistant?.id ?? null,
           startedAtMs: durationMs != null ? Date.now() - durationMs : Date.now(),
           durationMs,
           status: passStatus,
@@ -4986,16 +5010,20 @@ export class LocalBackendRouter {
     if (turnFiles.length > 0) {
       emit(this.sseData({ type: 'turn_files', files: turnFiles }));
     }
-    emit(this.sseData({ type: 'message_id', messageId: assistant.id }));
+    if (assistant) {
+      emit(this.sseData({ type: 'message_id', messageId: assistant.id }));
+    }
     emit('data: [DONE]\n\n');
     this.runTitleGenInBackground(chatId, shouldGenerateTitle, firstUserMessageForTitle);
-    this.runSuggestedRepliesInBackground({
-      chatId,
-      messageId: assistant.id,
-      userText: firstUserMessageForTitle,
-      assistantText,
-      completionStatus,
-    });
+    if (assistant) {
+      this.runSuggestedRepliesInBackground({
+        chatId,
+        messageId: assistant.id,
+        userText: firstUserMessageForTitle,
+        assistantText,
+        completionStatus,
+      });
+    }
     return {
       status: 200,
       turn: {

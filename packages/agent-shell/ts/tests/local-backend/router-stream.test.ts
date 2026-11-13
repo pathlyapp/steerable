@@ -2019,3 +2019,59 @@ describe('产品宿主工具族钳死围栏与审批', () => {
     expect(seen[0].execSandbox.enabled).toBe(true);
   });
 });
+
+describe('W7-1 crash: a lost sidecar leaves the turn resumable', () => {
+  it('写不出 assistant、也不清 turn_active 标记', async () => {
+    // The crash signature IS the surviving marker: `detectInterruptedTurn`
+    // reads it to offer "continue last reply". Persisting an empty assistant
+    // row here would both show a blank message and make the detector see a
+    // trailing assistant — the crash would be indistinguishable from a
+    // settled turn, and the resume offer would never appear.
+    installStream(() => {}, { status: 'interrupted', reason: 'sidecar-lost', sidecarLost: true });
+    const chat = await seedChat();
+    const cap = makeEmitCapture();
+
+    await makeRouter().handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/send`,
+        body: { message: '半路崩溃' },
+      },
+      cap.emit,
+    );
+
+    // The marker survives.
+    expect(await h.store.getTurnActive(chat.id)).not.toBeNull();
+    // Only the user message was persisted — no empty assistant placeholder.
+    const messages = await h.store.listMessages(chat.id, 10);
+    expect(messages.map((m) => m.role)).toEqual(['user']);
+    // The next open reports an interrupted turn with a resumable record.
+    const response = await makeRouter().handle({
+      method: 'GET',
+      path: `/api/v2/chats/${chat.id}/messages`,
+    });
+    expect((response?.data as { interrupted?: boolean }).interrupted).toBe(true);
+    // No `message_id` event: there is no persisted message to advertise.
+    expect(cap.byType('message_id')).toEqual([]);
+  });
+
+  it('用户取消仍然写 assistant 并清标记', async () => {
+    // The contrast that makes the two states distinguishable. A cancel is the
+    // sidecar answering with `cancelled`; that turn DID settle.
+    installStream(() => {}, { status: 'cancelled', reason: 'aborted_by_user' });
+    const chat = await seedChat();
+
+    await makeRouter().handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/send`,
+        body: { message: '停下' },
+      },
+      makeEmitCapture().emit,
+    );
+
+    expect(await h.store.getTurnActive(chat.id)).toBeNull();
+    const messages = await h.store.listMessages(chat.id, 10);
+    expect(messages.map((m) => m.role)).toEqual(['assistant', 'user']);
+  });
+});
