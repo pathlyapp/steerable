@@ -433,6 +433,38 @@ are on, delegation and the six-tool family share ONE pool — one
 `maxParallel` budget and one lineage space, and delegate children appear
 in `agent_list`.
 
+With the family on, the turn also gets a **spawn tree** and a **shared task
+board**, both created per turn and discarded with it. `orchestration.team:
+false` turns them off (default on): the tree adds peer addressing, the board
+adds four tools, and a host may not want to pay that prompt cost.
+
+The tree makes every agent in the job addressable, not just its own children:
+`agent_send` accepts any live lineage id — `0` is the agent that started the
+turn, `0.2` a sibling, `0.2.1` a child — so a worker hands a finding to
+another worker instead of routing everything through the parent. Authorization
+is membership: an id resolves exactly while its owner keeps it registered, so
+`agent_close` makes the address stop resolving rather than resuming an agent
+the owner gave up on. Delivery goes through the owner (only the owning pool
+holds the loop it must steer or resume). The root takes a message as a steer,
+so a child's report reaches the parent's model at its next round boundary.
+`agent_list` returns `members` alongside `children`: the live addresses with
+their depth and profile, plus `self`, which is how a worker learns an id it
+was never told. Messaging is not a depth permission — a `maxDepth: 1` child
+gets `agent_send` and `agent_list` (and `delegate_subagent` children get the
+same two), because the alternative is a leaf whose only upward channel is the
+completion notice, which carries no reply path.
+
+The board moves the plan out of any one context: `team_task_create` (title,
+optional detail and `dependsOn`), `team_task_claim` (an id, or the first
+ready item), `team_task_complete` (optional note), and `team_task_list`.
+Ownership and dependencies are the board's own facts: a claim binds one
+lineage id and fails if the task is taken or blocked by an unfinished
+dependency; completing unblocks its dependents; any depth may claim. The
+board never blocks a run — it is a record the agents consult, so a worker that
+never touches it behaves exactly as before. The board is in-process only: a
+spawn tree does not outlive its root turn, and the durable registry answers
+the different question of what survives.
+
 Per-turn MCP servers mount via `mcp` in `params` (CoreLoop, sidecar-local
 path only). Entries use `transport: "stdio"` with `command`, `args`, and
 `env`, or `transport: "streamable-http"` with `url`, `headers`,

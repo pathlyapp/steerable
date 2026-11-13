@@ -78,9 +78,11 @@ from steerable_agent_runtime import (
     AcpEngineSpec,
     AcpPermissionPolicy,
     AcpToolBridge,
+    AgentTree,
     OrchestrationConfig,
     OrchestrationExecutor,
     SessionBudgetExceeded,
+    TeamTaskBoard,
     TreeBudget,
     PluginLoadError,
     PluginStateError,
@@ -124,6 +126,7 @@ from steerable_agent_runtime import (
     skill_to_dict,
     skill_tool_descriptor,
     subagent_tool_descriptor,
+    team_tool_descriptors,
     mcp_invoker,
     register_mcp_catalog,
 )
@@ -2518,6 +2521,15 @@ class Sidecar:
         # and delegate children appear in agent_list.
         orchestration_param = params.get("orchestration")
         orchestration: OrchestrationExecutor | None = None
+        # R8: one tree and one board per turn. The tree is what makes every
+        # agent in the job addressable — a worker messaging a sibling, a child
+        # reporting to the root — and the board is the plan they share. Both
+        # live exactly as long as the turn: a spawn tree does not outlive its
+        # root run, and the durable registry answers the different question of
+        # what survives. The root registers once its loop exists (below), since
+        # a message to it is delivered by steering that loop.
+        team_tree: AgentTree | None = None
+        team_board: TeamTaskBoard | None = None
         if (
             isinstance(orchestration_param, dict)
             and orchestration_param
@@ -2552,6 +2564,13 @@ class Sidecar:
                     else None
                 ),
             )
+            # R8: a peer tree and a shared board come with the family unless
+            # the host turns them off. Both are additive — an agent that never
+            # messages or claims behaves exactly as before — so they default
+            # on rather than requiring a second opt-in.
+            if orchestration_param.get("team", True):
+                team_tree = AgentTree()
+                team_board = TeamTaskBoard()
             # The parent loop is created after this executor (the loop needs
             # the executor), so a fork reads the transcript through a holder.
             orchestration = OrchestrationExecutor(
@@ -2577,6 +2596,8 @@ class Sidecar:
                 parent_route=parent_route,
                 provider_factory=_orchestration_provider_factory,
                 budget=tree_budget,
+                tree=team_tree,
+                team_board=team_board,
             )
             if subagent_executor is not None:
                 subagent_executor.attach_pool(orchestration.pool)
@@ -2585,6 +2606,11 @@ class Sidecar:
                 *(tools or []),
                 *orchestration_tool_descriptors(orch_config),
             ]
+            if team_board is not None:
+                # The root writes the plan, so it always has the board tools;
+                # children get them from their own executor (which is why the
+                # descriptors are appended here once, not per child).
+                tools = [*(tools or []), *team_tool_descriptors(orch_config)]
         # Router-answered tools (run_code, ask_user): registered on the
         # sidecar's router but unknown to the host — under toolsViaHost the
         # inner executor forwards every call to the host, so they must be
@@ -2690,7 +2716,15 @@ class Sidecar:
         # holder's declaration above).
         if orchestration is not None:
             parent_loop_holder.append(loop)
-            # Expose the pool to the panel's live controls (interrupt a running
+            if team_tree is not None:
+                # The root is a member too: a child reporting a finding, or a
+                # worker asking whoever wrote the plan, needs an address that
+                # reaches this turn's parent loop. Steering is the delivery —
+                # it lands at the next round boundary as a user message, the
+                # same channel a host steer uses.
+                team_tree.register_root(
+                    lambda message, target=loop: _deliver_to_loop(target, message)
+                )            # Expose the pool to the panel's live controls (interrupt a running
             # child). Keyed by chat: one turn at a time per chat, so a later
             # turn simply replaces it.
             if params.get("chatId"):
@@ -3921,6 +3955,20 @@ def _tree_report_of(budget: TreeBudget) -> dict[str, Any]:
     """
     report = budget.report()
     return {"limit": report.limit, "spent": report.spent, "byAgent": dict(report.by_agent)}
+
+
+async def _deliver_to_loop(loop: CoreLoop, message: str) -> str:
+    """Deliver a peer message to the turn's own parent loop.
+
+    Steering is the only channel the root has: it is a running run, so the
+    message becomes a user turn at the next round boundary — the same path a
+    host-initiated steer takes, which is what makes a child's report visible
+    to the model rather than to some side table. The verdict vocabulary
+    matches ``AgentPool.send`` (``steered`` / ``resumed``) so a sender reads
+    one set of answers whether the target is a child or the root.
+    """
+    loop.steer(message)
+    return "steered"
 
 
 def _tree_budget_from(params: dict[str, Any]) -> TreeBudget:

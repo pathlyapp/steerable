@@ -69,6 +69,7 @@ from .history import completed_turn_prefix
 from .llm import LLMMessage, LLMProvider
 from .loop import CoreLoop, LoopConfig, LoopContext, LoopHooks, ToolExecutor
 from .engines import AcpEngineSpec, AcpPermissionPolicy, AcpToolBridge
+from .peer import PeerToolsExecutor, peer_schemas
 from .pool import (
     AgentPool,
     LoopFactory,
@@ -441,8 +442,7 @@ class SubagentExecutor:
         #: which row is waiting on the user.
         self._event_sink = event_sink
         #: Where an external child's file and terminal requests land. ``None``
-        #: means this host grants none (a bridge with no capabilities refuses
-        #: everything), which is the safe default for a spawned process.
+        #: means this host grants none (a bridge with no capabilities refuses        #: everything), which is the safe default for a spawned process.
         self._acp_tool_bridge = acp_tool_bridge
         #: The parent's model-visible transcript, read at delegation time.
         #: ``None`` means this host cannot fork, and the tool schema omits the
@@ -655,6 +655,30 @@ class SubagentExecutor:
                     and (tool_filter is None or _schema_name(schema) in tool_filter)
                 ]
             schemas.append(parent_input_tool_descriptor())
+            base: ToolExecutor = _ParentInputExecutor(
+                self._child_executor(config),
+                lambda payload: self._parent_input_requests.__setitem__(
+                    child_id, payload
+                ),
+            )
+            # A delegated child is a member of the turn's job: it registers in
+            # the same tree the orchestration children do (the pool's
+            # ``_join_tree`` does that), so it can hand a finding to a sibling
+            # or answer the parent instead of routing everything back through
+            # the tool result. Read from the pool rather than a constructor
+            # argument because ``attach_pool`` adopts the shared pool after
+            # construction — the tree is whatever that pool has.
+            tree = self._pool.tree
+            if tree is not None:
+                # Same names as the orchestration family: a delegated child
+                # and an orchestration child are one kind of peer.
+                peer_config = OrchestrationConfig(
+                    max_parallel=self._config.max_parallel
+                )
+                base = PeerToolsExecutor(
+                    base, tree, peer_config, lineage=child_id
+                )
+                schemas = [*schemas, *peer_schemas(peer_config)]
             # A child writes its own durable record when the host gave us a
             # store and a prefix, so the delegation's process can be read
             # back afterwards (`<parent record>:child:<lineage id>`). The
@@ -668,12 +692,7 @@ class SubagentExecutor:
             return (
                 CoreLoop(
                     provider,
-                    _ParentInputExecutor(
-                        self._child_executor(config),
-                        lambda payload: self._parent_input_requests.__setitem__(
-                            child_id, payload
-                        ),
-                    ),
+                    base,
                     LoopConfig(
                         max_rounds=config.max_rounds,
                         max_tool_errors=config.max_tool_errors,
