@@ -18,6 +18,7 @@ import type { InspectTaskInput } from './executed-actions-model';
 import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { TurnBlock } from './turn-timeline';
 import type { TurnFile } from './turn-files';
+import type { TurnUsage } from './turn-usage';
 import type { RetryState } from './RetryStatus';
 import type { TurnFailureCardProps } from './TurnFailureCard';
 import type { LlmSpeedSnapshot } from './process-status';
@@ -117,6 +118,10 @@ export interface LocalChatPanelProps {
   turnFilesByMessageId?: Record<string, TurnFile[]>;
   /** 当轮产物文件（流尾声到达、尚未归档到落库 id 的尾部消息用）。 */
   currentTurnFiles?: TurnFile[];
+  /** R6 回合账单（按落库消息 id 键控），转发给 MessageList。 */
+  turnUsageByMessageId?: Record<string, TurnUsage>;
+  /** 当轮账单：与 currentTurnFiles 同款尾部回退。 */
+  currentTurnUsage?: TurnUsage;
   /** P3.1: in-flight child agents + per-message reconciliation map. */
   currentTurnChildren?: ChildInfo[];
   orchestrationChildrenByMessageId?: Record<string, ChildInfo[]>;
@@ -206,6 +211,8 @@ export function LocalChatPanel({
   llmSpeedByMessageId,
   turnFilesByMessageId,
   currentTurnFiles,
+  turnUsageByMessageId,
+  currentTurnUsage,
   currentTurnChildren,
   orchestrationChildrenByMessageId,
   currentRound,
@@ -526,6 +533,8 @@ export function LocalChatPanel({
                 llmSpeedByMessageId={llmSpeedByMessageId}
                 turnFilesByMessageId={turnFilesByMessageId}
                 currentTurnFiles={currentTurnFiles}
+                turnUsageByMessageId={turnUsageByMessageId}
+                currentTurnUsage={currentTurnUsage}
                 currentTurnChildren={currentTurnChildren}
                 orchestrationChildrenByMessageId={orchestrationChildrenByMessageId}
                 currentRound={currentRound}

@@ -29,6 +29,7 @@ import type { TurnBlock } from './turn-timeline';
 import { TurnProcessGroup } from './TurnProcessGroup';
 import { TurnFilesCard } from './TurnFilesCard';
 import type { TurnFile } from './turn-files';
+import type { TurnUsage } from './turn-usage';
 import { stripNextStepsTags } from './next-steps-tags';
 import {
   formatTokenSpeed,
@@ -151,6 +152,13 @@ interface AssistantMessageProps {
    * 气泡之下，点击用系统默认应用打开。空/undefined = 不渲染。
    */
   turnFiles?: TurnFile[];
+  /**
+   * R6：本回合的账单（local-backend 把 sidecar 的 `stream.done.usage` 经
+   * `turn_usage` SSE + messageMetadata.usage 落库）。面板据此显示「这一轮
+   * 花了多少、其中子代理占多少」；父级自己的花费不在任何子代理行里，
+   * 所以这份数据没有替代品。
+   */
+  turnUsage?: TurnUsage;
   /**
    * 分享当前对话（截图复制到剪贴板）。只传给最近一条助手消息，画在时间戳
    * 行上，跟复制 / 重新生成同一排。
@@ -458,6 +466,7 @@ export function AssistantMessage({
   durationMs,
   llmSpeed,
   turnFiles,
+  turnUsage,
   onShare,
   onInspectTask,
   onContinueChild,
@@ -555,6 +564,7 @@ export function AssistantMessage({
             chatId={chatId}
             onInspectTask={onInspectTask}
             orchestrationChildren={orchestrationChildren}
+            turnUsage={turnUsage}
             onContinueChild={onContinueChild}
             onStopChild={onStopChild}
             emptyFallback={

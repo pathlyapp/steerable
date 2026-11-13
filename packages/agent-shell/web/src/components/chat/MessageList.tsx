@@ -22,6 +22,7 @@ import type { ChildInfo } from './OrchestrationChildrenCard';
 import type { ChatMode } from './ChatInput';
 import type { TurnBlock } from './turn-timeline';
 import { followedPreviewPath, type TurnFile } from './turn-files';
+import type { TurnUsage } from './turn-usage';
 import { publishConversationPreview } from '@/layouts/conversation-preview';
 import { inferDurationMs, readPersistedDurationMs } from './elapsed';
 import type { LlmSpeedSnapshot } from './process-status';
@@ -139,6 +140,13 @@ interface MessageListProps {
    */
   currentTurnFiles?: TurnFile[];
   /**
+   * R6: 每回合的账单，按落库消息 id 键控（与水合/归档同 turnFiles 一路）。
+   * 这是唯一同时含父级与子代理的两段数字的地方——面板行内只有子代理那一份。
+   */
+  turnUsageByMessageId?: Record<string, TurnUsage>;
+  /** 当轮账单：与 currentTurnFiles 同款尾部回退。 */
+  currentTurnUsage?: TurnUsage;
+  /**
    * Tool calls accumulated for the in-flight assistant message that the
    * backend hasn't assigned a DB id to yet. Rendered under the latest
    * assistant message while `isStreaming === true`.
@@ -219,6 +227,8 @@ export function MessageList({
   llmSpeedByMessageId,
   turnFilesByMessageId,
   currentTurnFiles,
+  turnUsageByMessageId,
+  currentTurnUsage,
   currentTurnChildren,
   orchestrationChildrenByMessageId,
   currentRound,
@@ -513,6 +523,13 @@ export function MessageList({
                   const turnFiles = persistedTurnFiles
                     ?? (isTurnFilesTail ? currentTurnFiles : undefined);
 
+                  // R6: 同 turnFiles 的尾部回退。区别是它没有「非空才算」
+                  // 的条件——一份全零的账单仍然说明这一轮跑过。
+                  const persistedTurnUsage = turnUsageByMessageId?.[message.id];
+                  const isTurnUsageTail = isLast && currentTurnUsage !== undefined;
+                  const turnUsage =
+                    persistedTurnUsage ?? (isTurnUsageTail ? currentTurnUsage : undefined);
+
                   const metadataJson =
                     typeof message.messageMetadata === 'string'
                       ? message.messageMetadata
@@ -567,6 +584,7 @@ export function MessageList({
                         durationMs={durationMs}
                         llmSpeed={llmSpeed}
                         turnFiles={turnFiles}
+                        turnUsage={turnUsage}
                         onShare={message.id === lastAssistantId ? onShare : undefined}
                         onInspectTask={onInspectTask}
                         onContinueChild={onContinueChild}
