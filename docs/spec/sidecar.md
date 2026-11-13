@@ -350,11 +350,16 @@ mark the turn's total as partial rather than presenting a smaller number
 as complete. A turn that delegated nothing emits the historical payload
 unchanged.
 
-`stream.done.treeUsage` reports the whole turn tree against the request's
-`budgetTokens`: `{limit, spent, byAgent}` where `byAgent` is keyed by the
-caller's agent labels (`"parent"`, `"0.1"`). It is absent when the request
-carried no `budgetTokens` — "no limit" stays distinguishable from "spent
-nothing".
+`stream.done.treeUsage` reports what the whole turn tree spent:
+`{spent, byAgent}` where `byAgent` is keyed by the caller's agent labels
+(`"parent"`, `"0.1"`). It is always present on a turn, because the number is
+for display: there is no limit in it and none is enforced. A turn that runs
+long had more work, not a failure, and stopping it partway through would
+throw away what the user already paid for.
+
+`budgetTokens` still bounds the parent run's own loop (see the loop limits
+above), which is a per-run wall rather than a tree-wide gate. The two are
+separate: the tree counter never compares its total against anything.
 
 Sub-agent delegation is ON BY DEFAULT: the sidecar advertises
 `delegate_subagent` and answers it with a bounded child CoreLoop running

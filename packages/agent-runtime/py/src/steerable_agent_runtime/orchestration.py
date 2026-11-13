@@ -40,7 +40,7 @@ from typing import Any
 
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
-from .budget import TreeBudget
+from .spend import TreeSpend
 from .hooks import ChainHooks, CompletionAction, CompletionDraft, NoopHooks
 from .history import completed_turn_prefix
 from .llm import LLMMessage, LLMProvider
@@ -533,7 +533,7 @@ class OrchestrationExecutor:
         history_store: Any | None = None,
         parent_record_id: str | None = None,
         parent_projection: Callable[[], list[LLMMessage]] | None = None,
-        budget: TreeBudget | None = None,
+        spend: TreeSpend | None = None,
         parent_route: Callable[[], tuple[str | None, str | None]] | None = None,
         provider_factory: Callable[[str | None, str | None], LLMProvider] | None = None,
         tree: AgentTree | None = None,
@@ -592,7 +592,7 @@ class OrchestrationExecutor:
             else None
         )
         #: The tree's shared token limit; ``None`` keeps per-run accounting.
-        self._budget = budget
+        self._spend = spend
         self._depth = _depth
         self._lineage = _lineage
         self._pool = AgentPool(
@@ -603,7 +603,7 @@ class OrchestrationExecutor:
             event_sink=event_sink,
             registry=registry,
             parent_record_id=parent_record_id,
-            budget=budget,
+            spend=spend,
             # Needed to write a fork seed's provenance into the child's record.
             history_store=history_store,
             tree=tree,
@@ -681,7 +681,7 @@ class OrchestrationExecutor:
                 parent_projection=lambda: (
                     own_loop[0].history.projection if own_loop else []
                 ),
-                budget=self._budget,
+                spend=self._spend,
                 # Same tree and board: a grandchild is as much a member of the
                 # job as its parent, and the plan it reads must be the one the
                 # root wrote.

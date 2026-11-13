@@ -50,9 +50,14 @@ Every change below is additive except where noted.
 - **`stream.done` gains fields, changes none.** `usage` grows
   `childPromptTokens` / `childCompletionTokens` / `childTotalTokens`,
   `children[]` (per-child split) and `unknownUsageChildren` (children whose
-  engine reports no tokens at all). `treeUsage: {limit, spent, byAgent}` is
-  present only when the request carried `budgetTokens`.
-- **`budgetTokens` now bounds the whole turn tree**, not each loop.
+  engine reports no tokens at all). `treeUsage: {spent, byAgent}` carries the
+  whole turn tree's bill, always present — it is a display figure and compares
+  against nothing.
+- **`budgetTokens` no longer bounds the turn tree.** It keeps its older job of
+  capping the parent run's own loop. The tree-wide limit was removed: it stopped
+  tasks partway through and left children at `budget_exhausted` waiting for a
+  human to resume, which costs more than the tokens it saves. The spend figure
+  above is what a host shows instead.
 - **`orchestration` accepts an object**: `{enabled, maxDepth, maxParallel,
   childMaxRounds, childMaxToolErrors, forkTurns}`. A bare boolean still means
   `1 / 4`, so an older client keeps working.

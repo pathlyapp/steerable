@@ -83,7 +83,7 @@ from .branch import (
     lineage,
     resolve_fork_seq,
 )
-from .budget import SessionBudgetExceeded, TreeBudget, TreeBudgetReport
+from .spend import TreeSpend, TreeSpendReport
 from .tree import AgentTree, TreeMember
 from .team_board import TaskItem, TeamTaskBoard
 from .cache_control import (
@@ -383,9 +383,8 @@ __all__ = [
     "ChildRegistry",
     "ChildNoticeHooks",
     "CHILD_NOTICE_KIND",
-    "SessionBudgetExceeded",
-    "TreeBudget",
-    "TreeBudgetReport",
+    "TreeSpend",
+    "TreeSpendReport",
     "render_child_notice",
     "ChildStatusView",
     "SpawnedChild",

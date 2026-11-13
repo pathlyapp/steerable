@@ -579,12 +579,12 @@ async def test_done_reports_unknown_children_even_when_none_billed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_done_carries_the_tree_budget_report_when_one_exists() -> None:
-    """`treeUsage` is the whole tree's spend; absent means "no limit asked for"."""
-    from steerable_agent_runtime import TreeBudget
+async def test_done_carries_the_tree_spend_report() -> None:
+    """`treeUsage` is the whole tree's spend, attributed per agent; no limit."""
+    from steerable_agent_runtime import TreeSpend
 
-    budget = TreeBudget(limit=5000)
-    budget.charge(LLMUsage(prompt_tokens=700, completion_tokens=0, total_tokens=700), agent="0.1")
+    spend = TreeSpend()
+    spend.record(LLMUsage(prompt_tokens=700, completion_tokens=0, total_tokens=700), agent="0.1")
     transport = _RecordingTransport()
 
     await Sidecar._emit_loop_event(
@@ -594,13 +594,12 @@ async def test_done_carries_the_tree_budget_report_when_one_exists() -> None:
         "trace-1",
         model="fake",
         tree_report=lambda: {
-            "limit": budget.report().limit,
-            "spent": budget.report().spent,
-            "byAgent": budget.report().by_agent,
+            "spent": spend.report().spent,
+            "byAgent": spend.report().by_agent,
         },
     )
     tree = transport.events[0][1]["treeUsage"]
-    assert tree["limit"] == 5000
+    assert "limit" not in tree
     assert tree["spent"] == 700
     assert tree["byAgent"] == {"0.1": 700}
 

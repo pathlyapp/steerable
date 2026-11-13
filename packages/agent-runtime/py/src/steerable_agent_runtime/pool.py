@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from itertools import count
 from typing import Any
 
-from .budget import SessionBudgetExceeded, TreeBudget, TreeBudgetReport
+from .spend import TreeSpend
 from .engines import (
     AcpEngineSpec,
     AcpOutcome,
@@ -248,7 +248,7 @@ class AgentPool:
         event_sink: Callable[[str, dict[str, Any]], None] | None = None,
         registry: ChildRegistry | None = None,
         parent_record_id: str | None = None,
-        budget: TreeBudget | None = None,
+        spend: TreeSpend | None = None,
         history_store: Any | None = None,
         tree: AgentTree | None = None,
     ) -> None:
@@ -281,10 +281,10 @@ class AgentPool:
         #: (``<parent>:child:<lineage>``). Absent for a parent that never had
         #: one (a bare test loop), in which case children go unregistered.
         self._parent_record_id = parent_record_id
-        #: One token limit for the whole tree. ``None`` means each run keeps
-        #: its own accounting, which is the pre-delegation behaviour — a pool
-        #: without a shared budget cannot charge siblings against each other.
-        self._budget = budget
+        #: Per-agent accumulation for the turn's usage report. ``None`` keeps
+        #: the pool's own accounting off, which is what a bare pool (tests,
+        #: hosts without a tree) gets — nothing is charged, nothing is capped.
+        self._spend = spend
         #: The record channel. Needed only to write a fork seed's provenance
         #: into the child's own record; ``None`` keeps the legacy behaviour
         #: (the seed is just the child's opening messages).
@@ -371,14 +371,6 @@ class AgentPool:
                 f"parallel cap {self._config.max_parallel} reached "
                 f"({len(live)} children running); wait for one to finish "
                 "or close one before spawning again"
-            )
-        # A tree that already spent its budget must not start new work: the
-        # child would run until its own wall and then be refused anyway, which
-        # costs tokens for nothing.
-        if self._budget is not None and self._budget.exhausted:
-            raise OrchestrationBudgetExceeded(
-                f"the turn tree has spent {self._budget.report().spent} of its "
-                f"{self._budget.limit} tokens; no further children can start"
             )
         self._seq += 1
         child_id = f"{self._lineage}.{self._seq}"
@@ -745,16 +737,11 @@ class AgentPool:
         handle.outcome = ChildOutcome(handle.child_id, status, answer)
         usage = handle.loop.last_run_usage
         handle.usage = usage
-        # Charge the tree before announcing: a child that pushed the tree over
-        # its limit must be reported as having done so, not settled quietly
-        # and letting the parent discover it on the next spawn.
-        budget_exceeded: str | None = None
-        if self._budget is not None:
-            try:
-                self._budget.charge(usage, agent=handle.child_id)
-            except SessionBudgetExceeded as exc:
-                budget_exceeded = str(exc)
-                logger.warning("child %s crossed the tree budget: %s", handle.child_id, exc)
+        # Record the spend for attribution. Unbounded by design: a turn that
+        # runs long is a turn that had more work, not a failure, and stopping
+        # it mid-task costs the work already done. The host shows the number.
+        if self._spend is not None:
+            self._spend.record(usage, agent=handle.child_id)
         kind = "child_completed" if status == "completed" else "child_failed"
         self._emit(
             kind,
@@ -766,7 +753,6 @@ class AgentPool:
                 # read, and a parent computing turn cost needs it before the
                 # stream closes.
                 **({"usage": _usage_payload(usage)} if usage is not None else {}),
-                **({"budgetExceeded": budget_exceeded} if budget_exceeded else {}),
             },
         )
         await self._settle_child(handle, status=status, usage=usage)
@@ -886,14 +872,14 @@ class AgentPool:
         except Exception as exc:  # noqa: BLE001 — bookkeeping never fails a run
             logger.warning("child %s registry settle failed: %s", handle.child_id, exc)
 
-    def budget_report(self) -> TreeBudgetReport | None:
-        """The tree budget's snapshot, or ``None`` when this pool has none.
+    def spend_report(self) -> TreeSpendReport | None:
+        """The tree's per-agent spend, or ``None`` when this pool has none.
 
         Exposed so a host can report the turn's real cost (parent plus every
-        child) without walking the registry, and can tell "no limit" from
-        "zero spent".
+        child) without walking the registry. There is no limit to compare
+        against: the number is for display.
         """
-        return self._budget.report() if self._budget is not None else None
+        return self._spend.report() if self._spend is not None else None
 
     def children_usage(self) -> tuple[list[dict[str, Any]], int]:
         """Per-child bills for this turn's usage record, and the unknown count.

@@ -37,14 +37,18 @@ release. Nothing in the single-agent path changed.
   `CREATE TABLE IF NOT EXISTS`, so an existing database upgrades in place on
   first open — no migration function, no data rewrite. A database written by a
   newer build still refuses to open.
-- **`budgetTokens` now bounds the whole turn tree.** It used to limit each
-  loop separately; a parent plus three children could each spend the full
-  allowance. Every agent in the tree now debits one counter, and the first to
-  cross it fails there. A host that relied on per-child allowances gets a
-  tighter (correct) limit.
-- **New `TreeBudget` / `SessionBudgetExceeded`** in `steerable_agent_runtime`.
-  `AgentPool(budget=...)` shares one counter across the pool; the parent loop's
-  usage is charged to the same counter by the host.
+- **`budgetTokens` no longer bounds the turn tree.** It still caps the parent
+  run's own loop (unchanged from before the tree layer), but there is no longer
+  a shared tree limit: `TreeBudget` and `SessionBudgetExceeded` are gone,
+  replaced by `TreeSpend`, which only records.
+  - Why removed: a tree limit stopped a task partway through, leaving children
+    at `budget_exhausted` and needing a human to click resume. A turn that runs
+    long had more work, not a failure. Cost control belongs before a turn
+    starts (or on a period budget), not inside one already half done.
+  - What replaced it: `TreeSpend` — `record(usage, agent=...)` plus
+    `report() -> {spent, by_agent}` — so a host can still show what a turn cost
+    and which agent spent it. `AgentPool(spend=...)` shares one counter across
+    the pool; the parent's usage is recorded into the same counter by the host.
 - **`provider_factory` for sub-agent profiles now takes `(model, effort)`**
   instead of `(model)`. `None` for either knob means "inherit the parent's",
   never "clear it". A profile pinning neither does not rebuild the provider at

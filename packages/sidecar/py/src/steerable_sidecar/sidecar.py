@@ -81,9 +81,8 @@ from steerable_agent_runtime import (
     AgentTree,
     OrchestrationConfig,
     OrchestrationExecutor,
-    SessionBudgetExceeded,
     TeamTaskBoard,
-    TreeBudget,
+    TreeSpend,
     PluginLoadError,
     PluginStateError,
     PolicyDeniedError,
@@ -2235,14 +2234,11 @@ class Sidecar:
         # agent.child notification stream, and a concurrent profile's
         # same-round delegations execute in parallel under the pool budget.
         loop_config = _build_loop_config(params)
-        # The tree budget is a second scope over the same number: `loop_config`
-        # budgets the parent run, this one budgets the parent plus every child
-        # it spawns. Both are created from `budgetTokens` so a host that asked
-        # for a limit gets one that the whole tree shares. Absent it, neither
-        # exists and behaviour is exactly as before.
-        tree_budget = (
-            _tree_budget_from(params) if params.get("budgetTokens") is not None else None
-        )
+        # Spend accounting for the whole turn tree: the parent plus every child
+        # it spawns. Always on, because the host shows it (R6's per-turn bill);
+        # it caps nothing. The per-run token wall, if the caller asked for one,
+        # is inside `loop_config` and stays a separate concern.
+        tree_spend = _tree_spend()
         # The parent loop is created after both executors (the loop needs the
         # executors, and a fork needs the loop's transcript). Both multi-agent
         # surfaces read the transcript through this holder, filled in once the
@@ -2595,7 +2591,7 @@ class Sidecar:
                 parent_projection=parent_projection,
                 parent_route=parent_route,
                 provider_factory=_orchestration_provider_factory,
-                budget=tree_budget,
+                spend=tree_spend,
                 tree=team_tree,
                 team_board=team_board,
             )
@@ -2778,20 +2774,16 @@ class Sidecar:
                             pending_content.clear()
                 if (
                     not parent_charged
-                    and tree_budget is not None
                     and event.kind == "completion"
                     and event.data.get("status") != "executing"
                 ):
-                    # Charge the parent **before** the terminal event goes
-                    # out: `stream.done` reports the tree's spend, and the
-                    # parent is the largest part of it. Charging afterwards
+                    # Record the parent's spend **before** the terminal event
+                    # goes out: `stream.done` reports the tree's total, and the
+                    # parent is the largest part of it. Recording afterwards
                     # (in `finally`) reported a tree that had spent nothing
                     # while the child's numbers were already in.
                     parent_charged = True
-                    try:
-                        tree_budget.charge(loop.last_run_usage, agent="parent")
-                    except SessionBudgetExceeded as exc:
-                        logger.warning("parent crossed the tree budget: %s", exc)
+                    tree_spend.record(loop.last_run_usage, agent="parent")
                 await self._emit_loop_event(
                     transport,
                     stream_id,
@@ -2799,11 +2791,7 @@ class Sidecar:
                     recorder.trace_id,
                     model=params.get("model"),
                     hooks=hooks,
-                    tree_report=(
-                        (lambda: _tree_report_of(tree_budget))
-                        if tree_budget is not None
-                        else None
-                    ),
+                    tree_report=(lambda: _tree_report_of(tree_spend)),
                     child_usage=(
                         orchestration.pool.children_usage
                         if orchestration is not None
@@ -2839,15 +2827,12 @@ class Sidecar:
             )
         finally:
             # Backstop for the paths that never reach a terminal completion
-            # (cancel, exception): the tree limit covers the parent too, and
-            # after this point the pool is gone and nobody can charge it. The
-            # normal path already charged at the terminal event, so this does
-            # not double-count.
-            if tree_budget is not None and not parent_charged:
-                try:
-                    tree_budget.charge(loop.last_run_usage, agent="parent")
-                except SessionBudgetExceeded as exc:
-                    logger.warning("parent crossed the tree budget: %s", exc)
+            # (cancel, exception): the report covers the parent too, and after
+            # this point the pool is gone and nobody can record it. The normal
+            # path already recorded at the terminal event, so this does not
+            # double-count.
+            if not parent_charged:
+                tree_spend.record(loop.last_run_usage, agent="parent")
             reset_turn_chat_id(chat_token)
             self._coreloops.pop(stream_id, None)
             self._exec_controls.pop(stream_id, None)
@@ -3946,15 +3931,16 @@ def _acp_permission_from_profile(
     return AcpPermissionPolicy(default=default, by_kind=by_kind)  # type: ignore[arg-type]
 
 
-def _tree_report_of(budget: TreeBudget) -> dict[str, Any]:
+def _tree_report_of(spend: TreeSpend) -> dict[str, Any]:
     """The whole tree's spend as the wire object ``stream.done`` carries.
 
     ``byAgent`` keys are the caller's agent labels (``"parent"``, ``"0.1"``),
     which is what lets a host attribute a turn's bill without reading the
-    registry for every child.
+    registry for every child. There is no ``limit``: the number is reported
+    for display, not enforced against.
     """
-    report = budget.report()
-    return {"limit": report.limit, "spent": report.spent, "byAgent": dict(report.by_agent)}
+    report = spend.report()
+    return {"spent": report.spent, "byAgent": dict(report.by_agent)}
 
 
 async def _deliver_to_loop(loop: CoreLoop, message: str) -> str:
@@ -3971,29 +3957,14 @@ async def _deliver_to_loop(loop: CoreLoop, message: str) -> str:
     return "steered"
 
 
-def _tree_budget_from(params: dict[str, Any]) -> TreeBudget:
-    """Build the turn tree's shared token limit from the request.
+def _tree_spend() -> TreeSpend:
+    """One accounting object for the turn tree's spend.
 
-    Same ``budgetTokens`` the parent run uses, because a host that asks for a
-    limit means the turn — not "each loop separately". A value that is not a
-    positive integer is a request error, not a silent zero budget.
+    Always present, because the number is for display: a host showing "this
+    turn cost N tokens, of which the children spent M" needs the counter to
+    exist on every delegating turn, not only on turns that asked for a limit.
     """
-    raw = params.get("budgetTokens")
-    try:
-        limit = int(raw)
-    except (TypeError, ValueError) as exc:
-        raise JsonRpcError(
-            "budgetTokens must be a positive integer",
-            code=-32602,
-            kind="invalid_params",
-        ) from exc
-    if limit <= 0:
-        raise JsonRpcError(
-            "budgetTokens must be a positive integer",
-            code=-32602,
-            kind="invalid_params",
-        )
-    return TreeBudget(limit=limit)
+    return TreeSpend()
 
 
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:
