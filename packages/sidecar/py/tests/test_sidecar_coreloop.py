@@ -88,7 +88,11 @@ class _CapturingTransport:
 
 
 def _make_sidecar(provider: _ScriptedProvider, **kwargs) -> Sidecar:
-    sidecar = Sidecar(llm_provider_factory=lambda _params: provider, **kwargs)
+    sidecar = Sidecar(
+        llm_provider_factory=kwargs.pop("llm_provider_factory", None)
+        or (lambda _params: provider),
+        **kwargs,
+    )
     sidecar._transport = _CapturingTransport()  # type: ignore[attr-defined]
     return sidecar
 
@@ -438,6 +442,167 @@ async def test_stream_error_omits_detail_the_engine_did_not_send() -> None:
     assert "proxy" not in payload
     assert "attempts" not in payload
     assert payload["errorKind"] == "unknown"
+
+
+class _DoneEvent:
+    """A terminal completion, the only event that carries a usage roll-up."""
+
+    kind = "completion"
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        self.data = data
+
+
+class _RecordingTransport:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict]] = []
+
+    async def emit_notification(self, method: str, payload: dict) -> None:
+        self.events.append((method, payload))
+
+
+_DONE_BASE = {
+    "status": "completed",
+    "reason": "stop",
+    "usage": {
+        "promptTokens": 1000,
+        "completionTokens": 100,
+        "totalTokens": 1100,
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_done_folds_the_children_share_into_usage() -> None:
+    """A host reading the turn's cost must not have to walk the registry (R5)."""
+    transport = _RecordingTransport()
+
+    await Sidecar._emit_loop_event(
+        transport,
+        "stream-1",
+        _DoneEvent(dict(_DONE_BASE)),
+        "trace-1",
+        model="fake",
+        child_usage=lambda: (
+            [
+                {
+                    "childId": "0.1",
+                    "promptTokens": 500,
+                    "completionTokens": 50,
+                    "totalTokens": 550,
+                },
+                {
+                    "childId": "0.2",
+                    "promptTokens": 300,
+                    "completionTokens": 30,
+                    "totalTokens": 330,
+                },
+            ],
+            0,
+        ),
+    )
+
+    usage = transport.events[0][1]["usage"]
+    # The parent's own numbers stay exactly as the loop reported them.
+    assert usage["promptTokens"] == 1000
+    assert usage["totalTokens"] == 1100
+    # And the children's share arrives as its own, additive set of fields.
+    assert usage["childPromptTokens"] == 800
+    assert usage["childCompletionTokens"] == 80
+    assert usage["childTotalTokens"] == 880
+    assert [child["childId"] for child in usage["children"]] == ["0.1", "0.2"]
+
+
+@pytest.mark.asyncio
+async def test_done_marks_a_partial_bill_when_a_child_reported_nothing() -> None:
+    """Missing spend is named, not silently added as zero."""
+    transport = _RecordingTransport()
+
+    await Sidecar._emit_loop_event(
+        transport,
+        "stream-1",
+        _DoneEvent(dict(_DONE_BASE)),
+        "trace-1",
+        model="fake",
+        child_usage=lambda: (
+            [
+                {
+                    "childId": "0.1",
+                    "promptTokens": 500,
+                    "completionTokens": 50,
+                    "totalTokens": 550,
+                }
+            ],
+            1,
+        ),
+    )
+
+    usage = transport.events[0][1]["usage"]
+    assert usage["unknownUsageChildren"] == 1
+    assert usage["childTotalTokens"] == 550
+
+
+@pytest.mark.asyncio
+async def test_done_keeps_usage_unchanged_without_a_child_split() -> None:
+    """A turn that delegated nothing gets the historical payload, byte for byte."""
+    transport = _RecordingTransport()
+
+    await Sidecar._emit_loop_event(
+        transport,
+        "stream-1",
+        _DoneEvent(dict(_DONE_BASE)),
+        "trace-1",
+        model="fake",
+    )
+
+    usage = transport.events[0][1]["usage"]
+    assert set(usage) == {"promptTokens", "completionTokens", "totalTokens"}
+
+
+@pytest.mark.asyncio
+async def test_done_reports_unknown_children_even_when_none_billed() -> None:
+    """One external child and no local ones: the total is partial, not zero."""
+    transport = _RecordingTransport()
+
+    await Sidecar._emit_loop_event(
+        transport,
+        "stream-1",
+        _DoneEvent(dict(_DONE_BASE)),
+        "trace-1",
+        model="fake",
+        child_usage=lambda: ([], 2),
+    )
+
+    usage = transport.events[0][1]["usage"]
+    assert usage["unknownUsageChildren"] == 2
+    assert "children" not in usage
+
+
+@pytest.mark.asyncio
+async def test_done_carries_the_tree_budget_report_when_one_exists() -> None:
+    """`treeUsage` is the whole tree's spend; absent means "no limit asked for"."""
+    from steerable_agent_runtime import TreeBudget
+
+    budget = TreeBudget(limit=5000)
+    budget.charge(LLMUsage(prompt_tokens=700, completion_tokens=0, total_tokens=700), agent="0.1")
+    transport = _RecordingTransport()
+
+    await Sidecar._emit_loop_event(
+        transport,
+        "stream-1",
+        _DoneEvent(dict(_DONE_BASE)),
+        "trace-1",
+        model="fake",
+        tree_report=lambda: {
+            "limit": budget.report().limit,
+            "spent": budget.report().spent,
+            "byAgent": budget.report().by_agent,
+        },
+    )
+    tree = transport.events[0][1]["treeUsage"]
+    assert tree["limit"] == 5000
+    assert tree["spent"] == 700
+    assert tree["byAgent"] == {"0.1": 700}
 
 
 @pytest.mark.asyncio
@@ -1391,6 +1556,57 @@ async def test_subagent_on_by_default() -> None:
     assert any(t["function"]["name"] == "delegate_subagent" for t in first_tools)
 
 
+@pytest.mark.asyncio
+async def test_profile_reasoning_effort_rebuilds_the_child_provider() -> None:
+    """`profiles[].reasoningEffort` reaches the host's provider factory (R6).
+
+    Asserted through the factory the sidecar itself built, because that is the
+    only place the override is observable: `default_llm_provider_factory`
+    validates the level there, so a profile pinning an unsupportable one fails
+    at spawn instead of being silently dropped from the wire body.
+    """
+    seen: list[dict[str, Any]] = []
+
+    scripted = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="d1",
+                    name="delegate_subagent",
+                    arguments={"task": "look it up", "subagent_type": "terse"},
+                )
+            ),
+            _text_round("parent final"),
+        ]
+    )
+
+    def factory(params: dict[str, Any]) -> Any:
+        seen.append(dict(params))
+        # The parent is the first call (it carries the request's own effort);
+        # every later call is a child rebuilt at the profile's level.
+        return scripted if len(seen) == 1 else _ScriptedProvider([_text_round("ok")])
+
+    sidecar = _make_sidecar(scripted, llm_provider_factory=factory)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "parent-model",
+            "baseUrl": "http://127.0.0.1:1/v1",
+            "messages": [{"role": "user", "content": "delegate"}],
+            "useCoreLoop": True,
+            "reasoningEffort": "high",
+            "subagent": {
+                "profiles": {"terse": {"reasoningEffort": "low"}},
+            },
+        },
+    )
+
+    # The child's factory call carries the profile's level, not the parent's.
+    assert seen[-1]["model"] == "parent-model"
+    assert seen[-1]["reasoningEffort"] == "low"
+    assert seen[-1]["baseUrl"] == "http://127.0.0.1:1/v1"
 @pytest.mark.asyncio
 async def test_subagent_disabled_with_explicit_false() -> None:
     """``params.subagent: false`` turns the default delegation seam off."""

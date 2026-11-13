@@ -26,6 +26,8 @@ export const SIDECAR_METHODS = [
   'agent.chat.fork',
   'agent.chat.compact',
   'agent.session.tree',
+  'agent.children.list',
+  'agent.children.interrupt',
   'tool.list',
   'tool.invoke',
   'workspace.apply_edits',

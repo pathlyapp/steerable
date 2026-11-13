@@ -51,6 +51,11 @@ export interface OrchestrationChildNode {
   error?: string;
   spawnActionIndex?: number;
   waitActionIndex?: number;
+  /**
+   * Loop nesting depth from the child's lineage (`0.1.2` is 2). Absent when
+   * the only source was a tool result, which does not carry it.
+   */
+  depth?: number;
 }
 
 export interface OrchestrationFlowData {
@@ -189,6 +194,7 @@ export function extractOrchestrationFlow(
         task: c.task || '',
         status: toNodeStatus(c.status),
         recordId: c.recordId,
+        ...(c.depth !== undefined ? { depth: c.depth } : {}),
         steers: [],
       });
     }
@@ -366,6 +372,43 @@ function actionsFromTimeline(blocks?: ReadonlyArray<{ type: string; actions?: un
     }
   }
   return actions;
+}
+
+/**
+ * Group nodes into layers by depth, for a flow that shows the tree shape.
+ *
+ * Depth is a permission ("who may spawn whom"), so the layout has to make it
+ * visible: siblings on one row, grandchildren one layer down. A node whose
+ * depth is unknown is derived from its lineage id (`0.1.2` → 2), which is the
+ * one place that number exists when only a tool result was seen.
+ *
+ * @param nodes The flow's child nodes.
+ * @returns Layers ordered by depth, each ordered as the input was.
+ */
+export function layerByDepth(
+  nodes: readonly OrchestrationChildNode[],
+): OrchestrationChildNode[][] {
+  const byDepth = new Map<number, OrchestrationChildNode[]>();
+  for (const node of nodes) {
+    const depth = node.depth ?? depthFromLineage(node.childId);
+    const layer = byDepth.get(depth);
+    if (layer) layer.push(node);
+    else byDepth.set(depth, [node]);
+  }
+  return [...byDepth.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, layer]) => layer);
+}
+
+/**
+ * Nesting depth from a lineage id: `0.1` is a child, `0.1.2` a grandchild.
+ *
+ * @param childId The lineage id (`0`, `0.3`, `0.3.1`).
+ * @returns Depth, or 1 when the id is not lineage-shaped.
+ */
+export function depthFromLineage(childId: string): number {
+  const segments = childId.split('.').filter((part) => part.trim() !== '');
+  return Math.max(1, segments.length - 1);
 }
 
 /**

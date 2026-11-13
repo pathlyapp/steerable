@@ -163,6 +163,13 @@ export interface LocalChatPanelProps {
   onInspectTask?: (task: InspectTaskInput) => void;
   /** 终态卡「忽略」（本次挂载内隐藏，不落库）。 */
   onDismissFinishedTask?: (taskId: string) => void;
+  /** R7：子代理面板的「继续」。 */
+  onContinueChild?: (childId: string, recordId: string) => void;
+  /** R7：子代理面板的「停止」。 */
+  onStopChild?: (childId: string) => void;
+  /** R7：子代理操作失败的原因（已关闭、不在运行等）。 */
+  childActionError?: string | null;
+  onDismissChildActionError?: () => void;
   /** 分享当前对话（截图）。落到最近一条助手消息的时间戳行。 */
   onShare?: () => Promise<boolean>;
   /**
@@ -223,6 +230,10 @@ export function LocalChatPanel({
   finishedTasks,
   onInspectTask,
   onDismissFinishedTask,
+  onContinueChild,
+  onStopChild,
+  childActionError,
+  onDismissChildActionError,
   onShare,
   suggestedReplies,
   onSelectSuggestion,
@@ -437,6 +448,7 @@ export function LocalChatPanel({
         currentAgent={currentAgent}
         agents={agents}
         chats={chats}
+        orchestrationChildren={currentTurnChildren}
         selectedAgentId={selectedAgentId}
         onSelectAgent={onSelectAgent}
         onOpenSettings={onOpenSettings}
@@ -528,6 +540,10 @@ export function LocalChatPanel({
                 finishedTasks={finishedTasks}
                 onInspectTask={onInspectTask}
                 onDismissFinishedTask={onDismissFinishedTask}
+                onContinueChild={onContinueChild}
+                onStopChild={onStopChild}
+                childActionError={childActionError}
+                onDismissChildActionError={onDismissChildActionError}
                 onShare={onShare}
                 suggestedReplies={suggestedReplies}
                 onSelectSuggestion={onSelectSuggestion}

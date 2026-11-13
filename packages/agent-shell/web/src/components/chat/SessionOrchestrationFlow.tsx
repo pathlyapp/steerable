@@ -15,6 +15,8 @@ import {
   LuX,
 } from 'react-icons/lu';
 import {
+  depthFromLineage,
+  layerByDepth,
   type OrchestrationChildNode,
   type OrchestrationFlowData,
   type OrchestrationNodeStatus,
@@ -305,12 +307,114 @@ export function SessionOrchestrationFlow({
     return () => document.removeEventListener('pointerdown', handlePointerDown);
   }, [expanded, isAllCompleted]);
 
-  const gridColsClass =
-    nodes.length === 2
-      ? 'grid-cols-2'
-      : nodes.length === 3
-        ? 'grid-cols-3'
-        : 'grid-cols-1 sm:grid-cols-2';
+  // Layered by depth: "who may spawn whom" is a permission, so the shape of
+  // the tree has to be visible instead of one flat row of branches.
+  const layers = layerByDepth(nodes);
+
+  const renderNode = (node: OrchestrationChildNode, index: number) => {
+    const done = node.status === 'completed';
+    const active = node.status === 'running' || node.status === 'pending';
+    const stopped = node.status === 'cancelled' || node.status === 'interrupted';
+    const canInspect = Boolean(chatId && onInspectTask && node.recordId);
+    return (
+      <div
+        key={node.childId || `node-${index}`}
+        className="flex flex-col justify-between rounded-agent-md border border-agent-border/80 bg-agent-muted/20 p-2.5 text-xs shadow-2xs transition-all hover:border-agent-border hover:bg-agent-muted/30"
+      >
+                      <div>
+                        {/* 节点顶栏：Todo 式勾选/圆点 + 分支编号 + 状态 */}
+                        <div className="flex items-center justify-between gap-1 border-b border-agent-border/40 pb-1.5">
+                          <div className="flex items-center gap-1 min-w-0 flex-1">
+                            <FlowNodeStatusIcon status={node.status} />
+                            <span className="font-semibold text-agent-foreground text-[11px] truncate whitespace-nowrap">
+                              {t('Branch #{index}', { index: index + 1 })}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span
+                              className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.2 text-[10px] font-medium leading-tight ${
+                                done
+                                  ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                                  : active
+                                    ? 'border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300'
+                                    : stopped
+                                      ? 'border-agent-border bg-agent-muted text-agent-foreground'
+                                      : 'border-agent-border bg-agent-muted text-agent-muted-foreground'
+                              }`}
+                            >
+                              {statusBadgeText(node.status)}
+                            </span>
+                            {canInspect && chatId ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onInspectTask?.({
+                                    id: node.childId,
+                                    chatId,
+                                    recordId: node.recordId,
+                                    live: node.status === 'running',
+                                    title: node.task || t('Subagent run'),
+                                  })
+                                }
+                                className="inline-flex shrink-0 whitespace-nowrap items-center gap-0.5 rounded px-1 text-[10px] text-agent-muted-foreground hover:bg-agent-muted hover:text-agent-foreground"
+                                title={t('View process')}
+                              >
+                                <LuExternalLink className="h-2.5 w-2.5 shrink-0" />
+                                <span>{t('Process')}</span>
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        {/* 任务内容 (Todo 项文本) */}
+                        <div className="mt-1.5 leading-relaxed">
+                          <p
+                            className={`line-clamp-3 text-[11px] ${
+                              done
+                                ? 'text-agent-foreground/90 font-medium'
+                                : active
+                                  ? 'text-agent-foreground font-semibold'
+                                  : 'text-agent-muted-foreground'
+                            }`}
+                            title={node.task}
+                          >
+                            {node.task || t('Subtask ({id})', { id: node.childId })}
+                          </p>
+                        </div>
+
+                        {/* 追加指令 (Steer) */}
+                        {node.steers.length > 0 ? (
+                          <div className="mt-1.5 space-y-0.5 rounded border border-amber-800/20 bg-amber-100 px-1.5 py-1 text-[10px] text-amber-950">
+                            {node.steers.map((s, sIdx) => (
+                              <div key={sIdx} className="flex items-start gap-1">
+                                <LuMessageSquare className="mt-0.5 h-2.5 w-2.5 shrink-0 text-amber-900" />
+                                <span className="truncate">{s.message}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {/* 底部产出结果 (Answer 绿色结果徽章) */}
+                      {node.answer ? (
+                        <div className="mt-2 rounded bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 text-[11px]">
+                          <div className="flex items-center gap-1 font-semibold text-emerald-800 dark:text-emerald-200 text-[10px]">
+                            <LuCheck className="h-3 w-3" />
+                            <span>{t('Conclusion:')}</span>
+                            <span className="font-mono text-emerald-950 dark:text-emerald-50 truncate">
+                              {node.answer}
+                            </span>
+                          </div>
+                        </div>
+                      ) : node.error ? (
+                        <div className="mt-2 rounded bg-agent-destructive/10 px-1.5 py-1 text-[10px] text-agent-destructive truncate">
+                          {t('Failed: {error}', { error: node.error })}
+                        </div>
+                      ) : null}
+                      </div>
+                    );
+  };
 
   return (
     <div
@@ -433,113 +537,35 @@ export function SessionOrchestrationFlow({
               {/* 2. 向下的分叉流线 (带箭头指向每个并行分支) */}
               <ForkConnector count={nodes.length} />
 
-              {/* 3. 并行子任务节点网格 (类似 Todo 的紧凑卡片) */}
-              <div className={`grid w-full gap-2.5 ${gridColsClass}`}>
-                {nodes.map((node, index) => {
-                  const done = node.status === 'completed';
-                  const active = node.status === 'running' || node.status === 'pending';
-                  const stopped = node.status === 'cancelled' || node.status === 'interrupted';
-                  const canInspect = Boolean(chatId && onInspectTask && node.recordId);
-
-                  return (
-                    <div
-                      key={node.childId || `node-${index}`}
-                      className="flex flex-col justify-between rounded-agent-md border border-agent-border/80 bg-agent-muted/20 p-2.5 text-xs shadow-2xs transition-all hover:border-agent-border hover:bg-agent-muted/30"
-                    >
-                      <div>
-                        {/* 节点顶栏：Todo 式勾选/圆点 + 分支编号 + 状态 */}
-                        <div className="flex items-center justify-between gap-1 border-b border-agent-border/40 pb-1.5">
-                          <div className="flex items-center gap-1 min-w-0 flex-1">
-                            <FlowNodeStatusIcon status={node.status} />
-                            <span className="font-semibold text-agent-foreground text-[11px] truncate whitespace-nowrap">
-                              {t('Branch #{index}', { index: index + 1 })}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-1 shrink-0">
-                            <span
-                              className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.2 text-[10px] font-medium leading-tight ${
-                                done
-                                  ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                                  : active
-                                    ? 'border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300'
-                                    : stopped
-                                      ? 'border-agent-border bg-agent-muted text-agent-foreground'
-                                      : 'border-agent-border bg-agent-muted text-agent-muted-foreground'
-                              }`}
-                            >
-                              {statusBadgeText(node.status)}
-                            </span>
-                            {canInspect && chatId ? (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onInspectTask?.({
-                                    id: node.childId,
-                                    chatId,
-                                    recordId: node.recordId,
-                                    live: node.status === 'running',
-                                    title: node.task || t('Subagent run'),
-                                  })
-                                }
-                                className="inline-flex shrink-0 whitespace-nowrap items-center gap-0.5 rounded px-1 text-[10px] text-agent-muted-foreground hover:bg-agent-muted hover:text-agent-foreground"
-                                title={t('View process')}
-                              >
-                                <LuExternalLink className="h-2.5 w-2.5 shrink-0" />
-                                <span>{t('Process')}</span>
-                              </button>
-                            ) : null}
-                          </div>
-                        </div>
-
-                        {/* 任务内容 (Todo 项文本) */}
-                        <div className="mt-1.5 leading-relaxed">
-                          <p
-                            className={`line-clamp-3 text-[11px] ${
-                              done
-                                ? 'text-agent-foreground/90 font-medium'
-                                : active
-                                  ? 'text-agent-foreground font-semibold'
-                                  : 'text-agent-muted-foreground'
-                            }`}
-                            title={node.task}
-                          >
-                            {node.task || t('Subtask ({id})', { id: node.childId })}
-                          </p>
-                        </div>
-
-                        {/* 追加指令 (Steer) */}
-                        {node.steers.length > 0 ? (
-                          <div className="mt-1.5 space-y-0.5 rounded border border-amber-800/20 bg-amber-100 px-1.5 py-1 text-[10px] text-amber-950">
-                            {node.steers.map((s, sIdx) => (
-                              <div key={sIdx} className="flex items-start gap-1">
-                                <LuMessageSquare className="mt-0.5 h-2.5 w-2.5 shrink-0 text-amber-900" />
-                                <span className="truncate">{s.message}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : null}
+              {/* 3. 并行子任务节点网格 (按深度分层；单层时不画层级标签) */}
+              <div className="w-full space-y-2">
+                {layers.map((layer, layerIndex) => (
+                  <div key={`layer-${layerIndex}`} className="space-y-1.5">
+                    {layers.length > 1 ? (
+                      // 只有多层时才标层级：单层加个「深度 1」只是噪音。
+                      <div className="flex items-center gap-1.5 text-[10px] font-medium text-agent-muted-foreground">
+                        <span className="h-px flex-1 bg-agent-border/60" />
+                        <span>
+                          {t('Depth {n}', {
+                            n: layer[0]?.depth ?? depthFromLineage(layer[0]?.childId ?? '0.1'),
+                          })}
+                        </span>
+                        <span className="h-px flex-1 bg-agent-border/60" />
                       </div>
-
-                      {/* 底部产出结果 (Answer 绿色结果徽章) */}
-                      {node.answer ? (
-                        <div className="mt-2 rounded bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 text-[11px]">
-                          <div className="flex items-center gap-1 font-semibold text-emerald-800 dark:text-emerald-200 text-[10px]">
-                            <LuCheck className="h-3 w-3" />
-                            <span>{t('Conclusion:')}</span>
-                            <span className="font-mono text-emerald-950 dark:text-emerald-50 truncate">
-                              {node.answer}
-                            </span>
-                          </div>
-                        </div>
-                      ) : node.error ? (
-                        <div className="mt-2 rounded bg-agent-destructive/10 px-1.5 py-1 text-[10px] text-agent-destructive truncate">
-                          {t('Failed: {error}', { error: node.error })}
-                        </div>
-                      ) : null}
+                    ) : null}
+                    <div
+                      className={`grid w-full gap-2.5 ${
+                        layer.length === 1
+                          ? 'grid-cols-1'
+                          : layer.length === 2
+                            ? 'grid-cols-2'
+                            : 'grid-cols-2 sm:grid-cols-3'
+                      }`}
+                    >
+                      {layer.map((node, index) => renderNode(node, index))}
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
 
               {/* 4. 向下的汇聚流线 (两路分支引出，汇入 Join 节点) */}

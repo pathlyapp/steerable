@@ -539,6 +539,13 @@ export interface AskUserQuestionMenuProps {
   onSubmit: (answers: Record<string, AnswerValue>) => void;
   onAutoContinue?: () => void;
   bottomHint?: string;
+  /**
+   * R7-3: the sub-agent this question came from, when it came from one.
+   * Rendered above the intro so the user knows which of several running
+   * agents is blocked — the answer goes to that child, not to the parent's
+   * own reasoning.
+   */
+  source?: { childId: string; profile?: string };
 }
 
 export function AskUserQuestionMenu({
@@ -547,6 +554,7 @@ export function AskUserQuestionMenu({
   onSubmit,
   onAutoContinue,
   bottomHint,
+  source,
 }: AskUserQuestionMenuProps) {
   const normalized = useMemo(() => normalizeQuestions(questions), [questions]);
   const [step, setStep] = useState(0);
@@ -585,6 +593,20 @@ export function AskUserQuestionMenu({
     <div className="overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas text-xs text-agent-foreground shadow-xl">
       <div className="flex items-start justify-between gap-2 border-b border-agent-border px-3 py-2">
         <div className="min-w-0 flex-1">
+          {source ? (
+            // 来源行：几个子代理同时在跑时，用户要知道这份提问是谁的。
+            <p
+              className="mb-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300"
+              data-testid="ask-user-source"
+            >
+              {source.profile
+                ? t('From sub-agent {id} ({profile})', {
+                    id: source.childId,
+                    profile: source.profile,
+                  })
+                : t('From sub-agent {id}', { id: source.childId })}
+            </p>
+          ) : null}
           <p className="text-xs font-medium text-agent-foreground">
             {intro || t('Your input is needed')}
           </p>

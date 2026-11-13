@@ -39,6 +39,37 @@ export interface SessionMessages {
   messages: { seq: number; role: string; content: string }[];
 }
 
+/**
+ * One child agent as the durable index reports it.
+ *
+ * `status` is composed, never stored raw: a terminal row reports its own
+ * status, a non-terminal row with a live handle reports `running`, and one
+ * with no handle reports `interrupted` (the spawning turn ended or the
+ * process died — `resumable` says whether a send can continue it).
+ */
+export interface ChildAgentStatus {
+  recordId: string;
+  parentRecordId: string;
+  childId: string;
+  depth: number;
+  profile: string | null;
+  engine: string;
+  status: string;
+  resumable: boolean;
+  live: boolean;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  usageKnown: boolean;
+  createdAt: string;
+  updatedAt: string;
+  answerPreview?: string;
+}
+
+export interface ChildrenList {
+  parentRecordId: string | null;
+  children: ChildAgentStatus[];
+}
+
 export interface ToolDescriptor {
   name: string;
   description?: string;
@@ -518,6 +549,37 @@ export class AgentRuntime {
    */
   sessionMessages(recordId: string): Promise<SessionMessages> {
     return this.process.request('agent.session.messages', { recordId });
+  }
+
+  /**
+   * Every child agent recorded for one parent session — the durable answer
+   * to "what did this session spawn", which the live pool cannot give once
+   * the spawning turn ended.
+   */
+  childrenList(params: {
+    parentRecordId?: string;
+    prefix?: string;
+    includeFinished?: boolean;
+    answerPreviewChars?: number;
+  } = {}): Promise<ChildrenList> {
+    return this.process.request('agent.children.list', params);
+  }
+
+  /**
+   * Cooperatively interrupt one running child of a chat's live turn.
+   *
+   * The panel's stop control, not a model-driven tool call: it must not wait
+   * for a turn of its own. `interrupted: false` means the child is not running
+   * in this process (already settled, or a restarted sidecar).
+   *
+   * @param chatId The chat whose turn owns the child.
+   * @param childId The child's lineage id (`0.2`).
+   */
+  childrenInterrupt(chatId: string, childId: string): Promise<{
+    interrupted: boolean;
+    reason?: string;
+  }> {
+    return this.process.request('agent.children.interrupt', { chatId, childId });
   }
 
   // ---- chat ------------------------------------------------------------

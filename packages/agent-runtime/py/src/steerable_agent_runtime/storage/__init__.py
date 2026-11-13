@@ -14,6 +14,8 @@ from steerable_agent_protocol.generated import (
     TraceSpan,
 )
 
+from ..child_record import ChildRecord
+
 
 @runtime_checkable
 class StorageAdapter(Protocol):
@@ -111,6 +113,56 @@ class StorageAdapter(Protocol):
         newest-first (bounded by ``until_seq``), which with ``limit`` is
         the O(tail) resume scan: page backwards until the newest
         ``compaction.boundary`` entry, then project forward.
+        """
+        ...
+
+    # -- Child-agent index ------------------------------------------------
+    #
+    # The durable answer to "whose child is this, how deep, what state".
+    # Rows carry no task text and no answer: those live in the child's own
+    # ``history`` record, so each fact has one authoritative copy.
+
+    async def upsert_child(self, record: ChildRecord) -> None:
+        """Write one child record whole, replacing any row with its
+        ``record_id``. Called at spawn; idempotent on retry."""
+        ...
+
+    async def finish_child(
+        self,
+        record_id: str,
+        *,
+        status: str,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        usage_known: bool = True,
+        resumable: bool = False,
+        updated_at: str,
+    ) -> bool:
+        """Record a child's terminal status and usage.
+
+        Returns ``False`` when no row exists for ``record_id`` — the child was
+        spawned without a registry, so there is nothing to finish.
+        """
+        ...
+
+    async def get_child(self, record_id: str) -> ChildRecord | None:
+        """One child record, or ``None``."""
+        ...
+
+    async def list_children(
+        self, parent_record_id: str, *, include_finished: bool = True
+    ) -> list[ChildRecord]:
+        """Direct children of one parent, oldest first."""
+        ...
+
+    async def list_all_children(
+        self, *, prefix: str | None = None
+    ) -> list[ChildRecord]:
+        """Every child record, optionally filtered by a ``parent_record_id``
+        prefix. Oldest first.
+
+        Enumerating all children is how a host answers "what did this session
+        spawn" after a restart, when no live pool exists.
         """
         ...
 

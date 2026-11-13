@@ -9,6 +9,7 @@ import { Markdown } from './Markdown';
 import { ToolsFlow } from './ExecutedActionsCard';
 import type { InspectTaskInput } from './executed-actions-model';
 import type { ChildInfo } from './OrchestrationChildrenCard';
+import { OrchestrationChildrenCard } from './OrchestrationChildrenCard';
 import {
   estimateReasoningDurationMs,
   processStatusLabel,
@@ -263,6 +264,8 @@ function ProcessBlocks({
   thinkingDisplay,
   keepFinishedThinkingOpen,
   thinkingElapsedByIndex,
+  onContinueChild,
+  onStopChild,
 }: {
   blocks: TurnBlock[];
   isStreaming: boolean;
@@ -274,6 +277,8 @@ function ProcessBlocks({
   thinkingDisplay: ThinkingDisplayMode;
   keepFinishedThinkingOpen: boolean;
   thinkingElapsedByIndex?: Array<number | undefined>;
+  onContinueChild?: (childId: string, recordId: string) => void;
+  onStopChild?: (childId: string) => void;
 }) {
   return (
     <div className="space-y-1.5">
@@ -289,6 +294,14 @@ function ProcessBlocks({
         keepFinishedThinkingOpen={keepFinishedThinkingOpen}
         thinkingElapsedByIndex={thinkingElapsedByIndex}
       />
+      {/* R7 子代理看板：挂在过程块之后、正文之前。≥2 个子代理才渲染，
+          单次委派已在工具行里有同一条进度。 */}
+      <OrchestrationChildrenCard
+        children={orchestrationChildren ?? []}
+        agents={agents}
+        onContinue={onContinueChild}
+        onStop={onStopChild}
+      />
     </div>
   );
 }
@@ -301,6 +314,8 @@ export function TurnProcessGroup({
   chatId,
   onInspectTask,
   orchestrationChildren,
+  onContinueChild,
+  onStopChild,
   emptyFallback,
   streamingHint,
   startedAtMs,
@@ -318,6 +333,10 @@ export function TurnProcessGroup({
   onInspectTask?: (task: InspectTaskInput) => void;
   /** 本回合子代理：委派行据此跳转到子代理过程。 */
   orchestrationChildren?: ChildInfo[];
+  /** 「继续」一个已可续的子代理（R7）。 */
+  onContinueChild?: (childId: string, recordId: string) => void;
+  /** 「停止」一个正在跑的子代理（R7）。 */
+  onStopChild?: (childId: string) => void;
   emptyFallback: ReactNode;
   /** Shown while streaming after a tools row and before the summary lands. */
   streamingHint?: ReactNode;
@@ -451,6 +470,8 @@ export function TurnProcessGroup({
           thinkingDisplay={thinkingDisplay}
           keepFinishedThinkingOpen={!collapseWhenFinished}
           thinkingElapsedByIndex={thinkingElapsedByIndex}
+          onContinueChild={onContinueChild}
+          onStopChild={onStopChild}
         />
       )}
       {showStreamingHint ? streamingHint : null}

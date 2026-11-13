@@ -6,6 +6,14 @@ export interface CommandIO {
   help: boolean;
   json: boolean;
   format?: string;
+  /** `children --session`: which session's children to read. */
+  session?: string;
+  /** `children answer --child`: the child's lineage id (e.g. `0.2`). */
+  child?: string;
+  /** `children list --active`: only children that can still run. */
+  active?: boolean;
+  /** `children answer --wait`: block until the child reaches a terminal state. */
+  wait?: boolean;
 }
 
 type OpenClient = (body: (client: AgentClient) => Promise<number>) => Promise<number>;
@@ -23,6 +31,159 @@ const CONFIG_KEYS = [
 ] as const;
 
 const NUMBER_KEYS = new Set<string>(['temperature', 'maxTotalTokens', 'execTimeoutSeconds']);
+
+export async function childrenCommand(
+  io: CommandIO,
+  stdout: NodeJS.WritableStream,
+  stderr: NodeJS.WritableStream,
+  open: OpenClient,
+  help: string,
+): Promise<number> {
+  const sub = io.positionals[1];
+  if (io.help && !sub) {
+    stdout.write(`${help}\n`);
+    return 0;
+  }
+  if (sub === 'list') return open((client) => listChildren(client, io, stdout, stderr));
+  if (sub === 'answer') {
+    if (!io.child) {
+      stderr.write(`missing --child\n${help}\n`);
+      return 2;
+    }
+    return open((client) => answerChild(client, io, stdout, stderr));
+  }
+  stderr.write(`${sub ? `unknown children command: ${sub}\n` : ''}${help}\n`);
+  return 2;
+}
+
+/** One child as `GET /api/v2/children` reports it. */
+interface ChildAgentRow {
+  recordId: string;
+  childId: string;
+  depth: number;
+  profile: string | null;
+  engine: string;
+  status: string;
+  resumable: boolean;
+  live: boolean;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  usageKnown: boolean;
+  createdAt: string;
+  answerPreview?: string;
+}
+
+async function fetchChildren(
+  client: AgentClient,
+  io: CommandIO,
+  stderr: NodeJS.WritableStream,
+): Promise<ChildAgentRow[] | null> {
+  const params = new URLSearchParams();
+  if (io.session) params.set('session', io.session);
+  if (io.active) params.set('active', '1');
+  // The list view shows a one-line answer so a user can tell two children
+  // apart without opening each process log.
+  params.set('previewChars', '80');
+  const query = params.toString();
+  const listed = await client.request(
+    'GET',
+    `/api/v2/children${query ? `?${query}` : ''}`,
+    undefined,
+  );
+  if (listed.status !== 200) {
+    fail(stderr, 'children list', listed.status);
+    return null;
+  }
+  const rows = (listed.data as { children?: ChildAgentRow[] }).children ?? [];
+  return rows;
+}
+
+/**
+ * `children list`: what this session spawned, and what state each is in.
+ *
+ * Reads the durable index rather than the live pool, so it keeps answering
+ * after a restart — an unfinished child shows as `interrupted` and stays
+ * resumable instead of vanishing with the turn that created it.
+ */
+async function listChildren(
+  client: AgentClient,
+  io: CommandIO,
+  stdout: NodeJS.WritableStream,
+  stderr: NodeJS.WritableStream,
+): Promise<number> {
+  const rows = await fetchChildren(client, io, stderr);
+  if (!rows) return 1;
+  if (io.json) {
+    stdout.write(`${JSON.stringify(rows)}\n`);
+    return 0;
+  }
+  if (rows.length === 0) {
+    stdout.write(`${io.session ?? 'this session'} has no sub-agents\n`);
+    return 0;
+  }
+  const header = ['ID', 'PROFILE', 'DEPTH', 'STATUS', 'TOKENS'];
+  const body = rows.map((row) => [
+    row.childId,
+    row.profile ?? '-',
+    String(row.depth),
+    row.resumable ? `${row.status} (resumable)` : row.status,
+    row.usageKnown ? String((row.promptTokens ?? 0) + (row.completionTokens ?? 0)) : '-',
+  ]);
+  const widths = header.map((cell, index) =>
+    Math.max(cell.length, ...body.map((line) => line[index]!.length)),
+  );
+  const format = (line: string[]) =>
+    line.map((cell, index) => cell.padEnd(widths[index]!)).join('  ').trimEnd();
+  stdout.write(`${format(header)}\n`);
+  for (const line of body) stdout.write(`${format(line)}\n`);
+  return 0;
+}
+
+/**
+ * `children answer`: one child's final text.
+ *
+ * With `--wait`, polls until the child leaves a running state; without it, a
+ * child that has not finished yet exits 6, matching every other "target busy"
+ * path in this CLI rather than blocking a script by surprise.
+ */
+async function answerChild(
+  client: AgentClient,
+  io: CommandIO,
+  stdout: NodeJS.WritableStream,
+  stderr: NodeJS.WritableStream,
+): Promise<number> {
+  const deadline = Date.now() + 10 * 60_000;
+  for (;;) {
+    const rows = await fetchChildren(client, io, stderr);
+    if (!rows) return 1;
+    const row = rows.find((candidate) => candidate.childId === io.child);
+    if (!row) {
+      stderr.write(`no child ${io.child} in this session\n`);
+      return 2;
+    }
+    const running = row.live || row.status === 'running';
+    if (!running) {
+      if (io.json) {
+        stdout.write(`${JSON.stringify(row)}\n`);
+      } else {
+        stdout.write(`${row.childId} · ${row.profile ?? '-'} · ${row.status}\n\n`);
+        stdout.write(`${row.answerPreview ?? '(no answer recorded)'}\n`);
+      }
+      return 0;
+    }
+    if (!io.wait) {
+      stderr.write(
+        `${io.child} is still running. Use --wait to block, or children list for progress.\n`,
+      );
+      return 6;
+    }
+    if (Date.now() > deadline) {
+      stderr.write(`${io.child} did not finish within 10 minutes\n`);
+      return 1;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+}
 
 export async function chatCommand(
   io: CommandIO,

@@ -30,8 +30,10 @@ import type { ExecutedAction } from "@/components/chat/ExecutedActionsCard";
 import { inspectTaskTitle, type InspectTaskInput } from "@/components/chat/executed-actions-model";
 import type { ChildInfo } from "@/components/chat/OrchestrationChildrenCard";
 import {
+  applyChildEvent,
   extractPersistedOrchestrationChildren,
   foldOrchestrationChildEvents,
+  mergeSessionChildren,
 } from "@/components/chat/orchestration-children-model";
 import { parseTurnBlocks, type TurnBlock } from "@/components/chat/turn-timeline";
 import {
@@ -65,7 +67,7 @@ import {
   setPendingFirstMessage,
   takePendingFirstMessage,
 } from "@/lib/pending-first-message";
-import { isOrchestrationSettingEnabled } from "@/lib/orchestration-settings";
+import { readOrchestrationSetting } from "@/lib/orchestration-settings";
 import { pickDefaultAgentId } from "@/brand";
 import { t } from "@/i18n";
 import {
@@ -124,7 +126,9 @@ function applyComposerTurnSettings<T extends { metadata?: Record<string, unknown
   else delete metadata.mode;
   if (settings.modelOverride) metadata.model = settings.modelOverride;
   if (settings.effortOverride) metadata.reasoningEffort = settings.effortOverride;
-  metadata.orchestration = isOrchestrationSettingEnabled();
+  // R7：对象形式带深度与并发。布尔形式仍被宿主的 `resolveTurnOrchestration`
+  // 接受（旧客户端），但用户调过的上限只有对象形式能到 sidecar。
+  metadata.orchestration = readOrchestrationSetting();
   return { ...input, metadata };
 }
 
@@ -206,6 +210,37 @@ function extractPersistedTurnFiles(
 }
 
 /**
+ * 把注册表里的子代理并进重启后的面板（R7-2）。
+ *
+ * 与面板同一份数据源：注册行回答「这个会话派过谁」，落库事件回答「它们怎么
+ * 结束的」。注册表不可用（sidecar 未起、旧版本没有这条 RPC）时原样返回——
+ * 面板退化成本次挂载能看到的那些，比整块消失好。
+ *
+ * @param chatId 会话 id（也是父记录 id 的缺省值）。
+ * @param persisted 落库事件水合出的「消息 id → 子代理」。
+ * @param orderedIds 会话消息按时间顺序的 id。
+ */
+async function mergeRegistryChildren(
+  chatId: string,
+  persisted: Record<string, ChildInfo[]>,
+  orderedIds: readonly string[],
+): Promise<Record<string, ChildInfo[]>> {
+  if (!hasHostBridge()) return persisted;
+  try {
+    const response = await getHostBridge()!.localBackend.request<{
+      children?: Array<Record<string, unknown>>;
+    }>({
+      method: "GET",
+      path: `/api/v2/children?session=${encodeURIComponent(chatId)}`,
+    });
+    return mergeSessionChildren(persisted, orderedIds, response.children ?? []);
+  } catch {
+    // 索引读不到不该让会话打不开：面板退化成事件流能重建的那些。
+    return persisted;
+  }
+}
+
+/**
  * Routing layer for `/agent/:chatId`.
  *
  * Component split (three layers, intentional):
@@ -280,8 +315,7 @@ function AgentChatLoader({
   const [initialOrchestrationChildren, setInitialOrchestrationChildren] =
     useState<Record<string, ChildInfo[]>>({});
   const [initialSuggestedReplies, setInitialSuggestedReplies] =
-    useState<SuggestedRepliesState | null>(null);
-  // W7-1: 后端在 messages 响应里下发 interrupted（上一轮崩溃/强杀中断）。
+    useState<SuggestedRepliesState | null>(null);  // W7-1: 后端在 messages 响应里下发 interrupted（上一轮崩溃/强杀中断）。
   const [initialInterrupted, setInitialInterrupted] = useState(false);
   // 运行中回合的实时快照：切走再切回时用它在历史消息之上叠出「正在运行」
   // 的助手气泡 + 部分工具卡片 / 时间线。
@@ -316,10 +350,19 @@ function AgentChatLoader({
         setInitialTimelines(extractPersistedTimelines(response.messages));
         setInitialDurations(extractPersistedDurations(response.messages));
         setInitialTurnFiles(extractPersistedTurnFiles(response.messages));
-        setInitialOrchestrationChildren(
-          extractPersistedOrchestrationChildren(response.messages),
+        // R7-2：落库事件只覆盖「回合跑到了收尾」的情形。进程被杀时最后一条
+        // assistant 消息可能没落库，那些子代理只存在于注册表里——不合并的话
+        // 用户重开后看到的比实际派出去的少。
+        const persistedChildren = extractPersistedOrchestrationChildren(
+          response.messages,
         );
-        setInitialSuggestedReplies(
+        setInitialOrchestrationChildren(
+          await mergeRegistryChildren(
+            chatId,
+            persistedChildren,
+            ordered.map((message) => message.id),
+          ),
+        );        setInitialSuggestedReplies(
           extractLatestSuggestedReplies(
             ordered as ChatMessageWithMetadata[],
           ),
@@ -536,6 +579,9 @@ function AgentChatView({
   const [orchestrationChildrenByMessageId, setOrchestrationChildrenByMessageId] =
     useState<Record<string, ChildInfo[]>>(initialOrchestrationChildren);
   const pendingChildrenRef = useRef<ChildInfo[]>([]);
+  // Spawn clocks for the live turn, so the elapsed column has a start time
+  // even before the child's terminal event arrives.
+  const pendingChildSpawnsRef = useRef<Map<string, number>>(new Map());
   // Round counter for the in-flight turn. Bumped on every `round_end` event
   // emitted by chat-transport (was previously suppressed). Driving this state
   // lets `StreamingStatus` render "Round 2 · 继续推理..." between LLM bursts —
@@ -652,41 +698,13 @@ function AgentChatView({
       const childId = ev.payload?.childId as string | undefined;
       const kind = ev.payload?.kind as string | undefined;
       if (!childId || !kind) return;
-      const update = (list: ChildInfo[]): ChildInfo[] => {
-        const idx = list.findIndex((c) => c.childId === childId);
-        if (kind === "child_spawned") {
-          if (idx >= 0) return list;
-          return [
-            ...list,
-            {
-              childId,
-              task: ev.payload?.task as string | undefined,
-              depth: ev.payload?.depth as number | undefined,
-              profile: ev.payload?.profile as string | undefined,
-              // 子代理自己的 durable record：委派行靠它跳转右侧过程栏。
-              recordId: ev.payload?.recordId as string | undefined,
-              status: "running",
-            },
-          ];
-        }
-        if (idx < 0) return list;
-        const status =
-          kind === "child_completed"
-            ? "completed"
-            : kind === "child_failed"
-              ? "failed"
-              : kind === "child_cancelled"
-                ? "cancelled"
-                : kind === "child_interrupted"
-                  ? "interrupted"
-                  : kind === "child_resumed"
-                    ? "running"
-                    : list[idx].status;
-        const next = [...list];
-        next[idx] = { ...list[idx], status };
-        return next;
-      };
-      pendingChildrenRef.current = update(pendingChildrenRef.current);
+      // One fold for both paths: the live list and the replayed one must not
+      // disagree about what an event means (status, usage, elapsed).
+      pendingChildrenRef.current = applyChildEvent(
+        pendingChildrenRef.current,
+        ev.payload as Record<string, unknown>,
+        pendingChildSpawnsRef.current,
+      );
       setCurrentTurnChildren(pendingChildrenRef.current);
       return;
     }
@@ -961,6 +979,7 @@ function AgentChatView({
       setCurrentTurnTimeline([]);
       pendingChildrenRef.current = [];
       setCurrentTurnChildren([]);
+      pendingChildSpawnsRef.current = new Map();
       pendingTurnFilesRef.current = [];
       setCurrentTurnFiles([]);
       setCurrentRound(1);
@@ -986,7 +1005,7 @@ function AgentChatView({
         ...(modelOverride ? { model: modelOverride } : {}),
         ...(effortOverride ? { reasoningEffort: effortOverride } : {}),
         ...(execPolicy === "full" ? { execPolicy: "full" } : {}),
-        orchestration: isOrchestrationSettingEnabled(),
+        orchestration: readOrchestrationSetting(),
       };
       return sendUserMessage({
         ...input,
@@ -1001,6 +1020,61 @@ function AgentChatView({
       void handleSubmit({ content: text });
     },
     [handleSubmit],
+  );
+
+  // R7-3「继续」：续跑必须由父代理发起（agent_send 带着父会话的上下文与
+  // 预算），所以这里不是直接起一个游离的子代理，而是发一条让父代理续跑的
+  // 用户消息。先问宿主确认可续——已关闭的子代理会让那一轮白跑。
+  const [childActionError, setChildActionError] = useState<string | null>(null);
+  const handleContinueChild = useCallback(
+    async (childId: string, recordId: string) => {
+      if (!hasHostBridge()) return;
+      let hint = childId;
+      try {
+        const res = await getHostBridge()!.localBackend.request<{
+          message?: string;
+        }>({
+          method: "POST",
+          path: `/api/v2/children/${encodeURIComponent(recordId)}/resume?session=${encodeURIComponent(
+            chatId,
+          )}&child=${encodeURIComponent(childId)}`,
+          body: {},
+        });
+        if (res?.message) hint = res.message;
+      } catch (err) {
+        // 409/404 的含义是「这个子代理不能再跑」：把原因说出来，别静默。
+        setChildActionError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+      void handleSubmit({
+        content: t(
+          'Continue sub-agent {child} by calling agent_send with childId "{child}" and this message: {message}',
+          { child: childId, message: hint },
+        ),
+      });
+    },
+    [chatId, handleSubmit],
+  );
+
+  // R7-3「停止」：协作取消，不需要回合。子代理保留上下文，之后仍可继续。
+  const handleStopChild = useCallback(
+    async (childId: string) => {
+      if (!hasHostBridge()) return;
+      try {
+        await getHostBridge()!.localBackend.request({
+          method: "POST",
+          path: `/api/v2/children/${encodeURIComponent(
+            `${chatId}:child:${childId}`,
+          )}/stop?session=${encodeURIComponent(chatId)}&child=${encodeURIComponent(
+            childId,
+          )}`,
+          body: {},
+        });
+      } catch (err) {
+        setChildActionError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [chatId],
   );
 
   // 远端回合结束时，优先发送用户在等待期间排队的内容。第一条启动新回合，
@@ -1411,6 +1485,10 @@ function AgentChatView({
         finishedTasks={finishedTasks}
         onInspectTask={handleInspectTask}
         onDismissFinishedTask={dismissFinished}
+        onContinueChild={handleContinueChild}
+        onStopChild={handleStopChild}
+        childActionError={childActionError}
+        onDismissChildActionError={() => setChildActionError(null)}
         onShare={hasHostBridge() ? handleShare : undefined}
         suggestedReplies={visibleSuggestedReplies}
         onSelectSuggestion={handleSelectSuggestion}

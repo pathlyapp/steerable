@@ -54,6 +54,7 @@ import {
 } from '@/lib/slash-sources';
 import { useAskUserPrompt } from './AskUserPromptProvider';
 import { AskUserQuestionMenu } from './AskUserQuestionMenu';
+import { childAwaitingInput, type ChildInfo } from './orchestration-children-model';
 import { useApprovalPrompt } from './ApprovalPromptProvider';
 import { ApprovalPromptMenu } from './ApprovalModal';
 import { ExecPolicyPicker } from './ExecPolicyPicker';
@@ -117,6 +118,12 @@ export interface ChatInputProps {
   onChange: (next: string) => void;
   onSubmit: () => void | Promise<void>;
   onCancel?: () => void;
+  /**
+   * R7-3: this turn's sub-agents. Only used to say which child a structured
+   * question came from, so the answer's owner is visible while several agents
+   * are running.
+   */
+  orchestrationChildren?: ChildInfo[];
   /**
    * 轮中插队（streaming 期间 ⌘/Ctrl+Enter）：优先把文本注入运行中的回合；注入
    * 失败由 hook 兜底——回合仍在跑则排入 W6-2 follow-up 队列（'queued'，
@@ -821,6 +828,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       currentAgent,
       agents = [],
       chats = [],
+      orchestrationChildren = [],
       selectedAgentId,
       onSelectAgent,
       onOpenSettings: _onOpenSettings,
@@ -841,6 +849,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     ref,
   ) {
     const askUserPrompt = useAskUserPrompt(chatId);
+    // R7-3: which child is waiting on the user. The card says so, so the
+    // answer is not attributed to the parent's own reasoning.
+    const askUserSource = childAwaitingInput(orchestrationChildren);
     const approvalPrompt = useApprovalPrompt(chatId);
     const editorRef = useRef<HTMLDivElement>(null);
     const agentMenuRef = useRef<HTMLDivElement>(null);
@@ -1811,6 +1822,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             questions={request.questions}
             onSubmit={askUserPrompt.answer}
             onAutoContinue={() => askUserPrompt.answer({})}
+            source={
+              askUserSource
+                ? {
+                    childId: askUserSource.childId,
+                    ...(askUserSource.profile
+                      ? { profile: askUserSource.profile }
+                      : {}),
+                  }
+                : undefined
+            }
             bottomHint={
               askUserPrompt.pendingCount > 0
                 ? t('{count} more question groups to answer', {

@@ -20,6 +20,7 @@ export type {
   SidecarChatStreamHandlers,
   SidecarChatStreamRequest,
   SidecarChildEvent,
+  SidecarChildUsage,
   SidecarHealthSnapshot,
   SidecarMethodOptions,
   SidecarRawChunk,

@@ -38,6 +38,8 @@ interface UsageSummaryWire {
     totalTokens: number;
     cachedPromptTokens: number;
     costUsd: number;
+    /** R5: rows that are only a partial bill (external-engine children). */
+    partialTurns: number;
   };
 }
 
@@ -185,6 +187,16 @@ export function UsagePanel() {
                 'Cost is estimated from the framework price table and converted to RMB at about 1 USD = 7.2 CNY. Only models with a price are counted; "—" means the model has no price (local or unknown). Cache hits are the tokens served from the prompt cache.',
               )}
             </p>
+            {summary.totals.partialTurns > 0 && (
+              // 外部引擎子代理不报 token，那几轮存下的数字只是下限。
+              // 不加这句，偏小的合计会被读成完整账单。
+              <p className="text-[10px] text-agent-muted-foreground">
+                {t(
+                  '{turns} turns exclude sub-agents whose engine reports no tokens; their share is not counted.',
+                  { turns: summary.totals.partialTurns },
+                )}
+              </p>
+            )}
           </>
         )}
       </div>

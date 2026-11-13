@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
+  depthFromLineage,
   extractOrchestrationFlow,
   isOrchestrationTool,
+  layerByDepth,
   resolveLatestSessionOrchestrationFlow,
 } from './orchestration-flow-model';
 
@@ -225,5 +227,43 @@ describe('orchestration-flow-model', () => {
     expect(flow?.nodes[0].status).toBe('cancelled');
     expect(flow?.hasActive).toBe(false);
     expect(flow?.summaryCopy).not.toContain('Running together');
+  });
+});
+
+describe('layerByDepth (R7)', () => {
+  it('按深度分层：兄弟同层，孙代理下一层', () => {
+    const layers = layerByDepth([
+      { childId: '0.1', task: 'a', status: 'completed', steers: [], depth: 1 },
+      { childId: '0.2', task: 'b', status: 'completed', steers: [], depth: 1 },
+      { childId: '0.1.1', task: 'c', status: 'completed', steers: [], depth: 2 },
+    ]);
+    expect(layers.map((layer) => layer.map((node) => node.childId))).toEqual([
+      ['0.1', '0.2'],
+      ['0.1.1'],
+    ]);
+  });
+
+  it('没有 depth 时从血统 id 推出来', () => {
+    // 只见过工具结果的节点没有 depth，血统 id 是那个数字唯一的来源。
+    expect(depthFromLineage('0.3')).toBe(1);
+    expect(depthFromLineage('0.3.1')).toBe(2);
+    expect(depthFromLineage('0.3.1.4')).toBe(3);
+  });
+
+  it('血缘 id 不成形时按深度 1 处理，不产生空层', () => {
+    const layers = layerByDepth([
+      { childId: 'spawn-0', task: 'a', status: 'running', steers: [] },
+    ]);
+    expect(depthFromLineage('spawn-0')).toBe(1);
+    expect(layers).toHaveLength(1);
+    expect(layers[0]).toHaveLength(1);
+  });
+
+  it('层内保持输入顺序', () => {
+    const layers = layerByDepth([
+      { childId: '0.2', task: 'second', status: 'running', steers: [], depth: 1 },
+      { childId: '0.1', task: 'first', status: 'running', steers: [], depth: 1 },
+    ]);
+    expect(layers[0].map((node) => node.childId)).toEqual(['0.2', '0.1']);
   });
 });

@@ -198,6 +198,36 @@ export interface SidecarSessionMessages {
 }
 
 /**
+ * `agent.children.list` result: the durable child-agent index for one parent
+ * session. `status` is composed, never stored raw — a terminal row reports
+ * its own status, a non-terminal row with a live handle reports `running`,
+ * and one with no handle reports `interrupted` (`resumable` says whether a
+ * send can continue it).
+ */
+export interface SidecarChildAgent {
+  recordId: string;
+  parentRecordId: string;
+  childId: string;
+  depth: number;
+  profile: string | null;
+  engine: string;
+  status: string;
+  resumable: boolean;
+  live: boolean;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  usageKnown: boolean;
+  createdAt: string;
+  updatedAt: string;
+  answerPreview?: string;
+}
+
+export interface SidecarChildrenList {
+  parentRecordId: string | null;
+  children: SidecarChildAgent[];
+}
+
+/**
  * W6-1: `workspace.apply_edits` result — the pure structured-edit algorithm
  * run in the sidecar on host-supplied content. The host owns all file I/O.
  */
@@ -372,6 +402,12 @@ export interface SidecarChatStreamRequest {
     profiles?: Record<string, {
       toolFilter?: string[];
       model?: string;
+      /**
+       * R6: reasoning effort for this profile's children. Omitted follows
+       * the parent's request; an unsupportable level fails at provider
+       * construction rather than being silently dropped.
+       */
+      reasoningEffort?: string;
       maxRounds?: number;
       maxToolErrors?: number;
       concurrent?: boolean;
@@ -562,6 +598,12 @@ export interface SidecarStreamDone {
    * W6-9: the run's accumulated billable usage (summed over every provider
    * request this turn), plus `costUsd` when the model is priced. Absent on
    * paths that don't report usage.
+   *
+   * R5: when the turn delegated, the same object also carries the children's
+   * share — `child*` totals and a per-child `children` split, so a host can
+   * show the turn's real cost without walking the registry. Children whose
+   * engine reports no tokens at all (an external ACP agent) are counted in
+   * `unknownUsageChildren` rather than folded in as zeros.
    */
   usage?: {
     promptTokens: number;
@@ -569,7 +611,27 @@ export interface SidecarStreamDone {
     totalTokens: number;
     cachedPromptTokens?: number;
     costUsd?: number;
+    childPromptTokens?: number;
+    childCompletionTokens?: number;
+    childTotalTokens?: number;
+    children?: SidecarChildUsage[];
+    unknownUsageChildren?: number;
   };
+  /**
+   * R5: the whole turn tree's spend against `budgetTokens`. Absent when the
+   * host asked for no tree limit — "no limit" must stay distinguishable from
+   * "spent nothing".
+   */
+  treeUsage?: { limit: number; spent: number; byAgent: Record<string, number> };
+}
+
+/** One child's bill inside `stream.done`'s `usage.children`. */
+export interface SidecarChildUsage {
+  childId: string;
+  profile?: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
 }
 
 export interface SidecarStreamError {
@@ -619,6 +681,18 @@ export interface SidecarChildEvent {
    * back to render the delegation's reasoning + tool calls.
    */
   recordId?: string;
+  /**
+   * R5: this child's bill, on the terminal event. Absent means it has not
+   * settled yet; a settled external-engine child carries no `usage` at all,
+   * and the row says "not counted" rather than "0 tok".
+   */
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  /**
+   * R7-3: the child's intro when it is blocked on the user
+   * (`child_needs_input`). The panel marks the row and the question card
+   * names the child it came from.
+   */
+  intro?: string;
 }
 
 export interface SidecarChatStreamHandlers {

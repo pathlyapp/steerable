@@ -111,6 +111,17 @@ export interface ChatAgentRecord {
    */
   allowExternalSkills: boolean;
   /**
+   * 委派给这个智能体时用的模型。`null` 跟随父级——一个没表达的偏好不该
+   * 悄悄换成另一个模型。非空时经 sidecar 的 provider factory 重建 provider，
+   * 宿主服务不了的名字在建 provider 时失败即拒绝。
+   */
+  model: string | null;
+  /**
+   * 委派给这个智能体时的推理强度。`null` 跟随父级；不支持该档位时同样
+   * 失败即拒绝，错误点名画像、模型与取值。
+   */
+  reasoningEffort: string | null;
+  /**
    * true = 无视技能的触发条件全量加载（内置「智能助手」的行为）。
    * 与 `allowExternalSkills: false` 同时设置时白名单仍然优先。
    */
@@ -544,6 +555,14 @@ export class SqliteScopedStore implements ScopedStore {
     // 是否发生过重试，以及是否改走过直连。
     this.ensureColumn('usage_events', 'retried', 'INTEGER NOT NULL DEFAULT 0');
     this.ensureColumn('usage_events', 'used_direct', 'INTEGER NOT NULL DEFAULT 0');
+    // R5 子代理用量：partial 表示这一行不含全部花费（外部引擎子代理不报
+    // token）。NULL 表示数字就是全部账单——「缺一块」和「完整」必须能区分。
+    this.ensureColumn('usage_events', 'usage_note', 'TEXT');
+
+    // R6 角色级模型：委派画像可以钉模型与推理强度。NULL = 跟随父级，
+    // 所以旧行（与未配置的智能体）行为与改前一致。
+    this.ensureColumn('chat_agents', 'model', 'TEXT');
+    this.ensureColumn('chat_agents', 'reasoning_effort', 'TEXT');
 
     // 智能体技能面（增量迁移）：load_all_skills = 无视触发条件全量加载。
     // 此前这个行为是 router 里 `chatAgentId === 'all-round-assistant'` 的
@@ -1300,8 +1319,9 @@ export class SqliteScopedStore implements ScopedStore {
         tenant_id, user_id,
         id, slug, name, icon, color, description, role_prompt, forbidden_prompt,
         skill_ids, tool_policy, allow_external_skills, load_all_skills,
+        model, reasoning_effort,
         is_builtin, is_archived, sort_order, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       this.scope.tenantId,
       this.scope.userId,
@@ -1317,6 +1337,8 @@ export class SqliteScopedStore implements ScopedStore {
       JSON.stringify(input.toolPolicy ?? { mode: 'all', tools: [] }),
       input.allowExternalSkills ? 1 : 0,
       input.loadAllSkills ? 1 : 0,
+      input.model ?? null,
+      input.reasoningEffort ?? null,
       input.isBuiltin ? 1 : 0,
       input.isArchived ? 1 : 0,
       input.sortOrder ?? 0,
@@ -1346,6 +1368,7 @@ export class SqliteScopedStore implements ScopedStore {
       UPDATE chat_agents
       SET slug = ?, name = ?, icon = ?, color = ?, description = ?, role_prompt = ?, forbidden_prompt = ?,
           skill_ids = ?, tool_policy = ?, allow_external_skills = ?, load_all_skills = ?,
+          model = ?, reasoning_effort = ?,
           is_builtin = ?, is_archived = ?, sort_order = ?, updated_at = ?
       WHERE tenant_id = ? AND user_id = ? AND id = ?
     `).run(
@@ -1360,6 +1383,8 @@ export class SqliteScopedStore implements ScopedStore {
       JSON.stringify(merged.toolPolicy),
       merged.allowExternalSkills ? 1 : 0,
       merged.loadAllSkills ? 1 : 0,
+      merged.model ?? null,
+      merged.reasoningEffort ?? null,
       merged.isBuiltin ? 1 : 0,
       merged.isArchived ? 1 : 0,
       merged.sortOrder,
@@ -1606,11 +1631,17 @@ export class SqliteScopedStore implements ScopedStore {
     retried?: boolean;
     /** Whether any request went direct instead of through the proxy. */
     usedDirect?: boolean;
+    /**
+     * `'partial'` when the totals exclude spend the host knows happened: a
+     * child agent on an external engine reports no tokens. Storing the note
+     * keeps a smaller number from reading as a complete bill.
+     */
+    usageNote?: 'partial' | null;
   }): Promise<void> {
     this.db.prepare(`
       INSERT INTO usage_events
-        (tenant_id, user_id, id, chat_id, kind, provider, model, prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens, cost_usd, created_at, outcome, failure_kind, attempts, retried, used_direct)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (tenant_id, user_id, id, chat_id, kind, provider, model, prompt_tokens, completion_tokens, total_tokens, cached_prompt_tokens, cost_usd, created_at, outcome, failure_kind, attempts, retried, used_direct, usage_note)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       this.scope.tenantId,
       this.scope.userId,
@@ -1629,7 +1660,8 @@ export class SqliteScopedStore implements ScopedStore {
       input.failureKind ?? null,
       input.attempts ?? null,
       input.retried ? 1 : 0,
-      input.usedDirect ? 1 : 0
+      input.usedDirect ? 1 : 0,
+      input.usageNote ?? null
     );
   }
 
@@ -1712,6 +1744,7 @@ export class SqliteScopedStore implements ScopedStore {
         SUM(completion_tokens) AS completion_tokens,
         SUM(total_tokens) AS total_tokens,
         SUM(cached_prompt_tokens) AS cached_prompt_tokens,
+        SUM(CASE WHEN usage_note = 'partial' THEN 1 ELSE 0 END) AS partial_turns,
         SUM(cost_usd) AS cost_usd
       FROM usage_events
       WHERE tenant_id = ? AND user_id = ? AND created_at >= ?
@@ -2036,6 +2069,8 @@ export class SqliteScopedStore implements ScopedStore {
       toolPolicy: this.safeJson(row.tool_policy, { mode: 'all', tools: [] }),
       allowExternalSkills: Number(row.allow_external_skills ?? 0) === 1,
       loadAllSkills: Number(row.load_all_skills ?? 0) === 1,
+      model: row.model ? String(row.model) : null,
+      reasoningEffort: row.reasoning_effort ? String(row.reasoning_effort) : null,
       isBuiltin: Number(row.is_builtin ?? 0) === 1,
       isArchived: Number(row.is_archived ?? 0) === 1,
       sortOrder: Number(row.sort_order ?? 0),

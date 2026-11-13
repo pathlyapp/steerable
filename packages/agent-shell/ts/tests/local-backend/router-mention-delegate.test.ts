@@ -466,19 +466,25 @@ describe('handleStream / @提及委派', () => {
     const assistant = (await h.store.listMessages(chat.id, 10)).find(
       (m) => m.role === 'assistant',
     );
-    expect(parseMeta(assistant?.messageMetadata).orchestrationChildEvents).toEqual([
-      {
+    // `atMs` rides along so the replay can rebuild the elapsed column; the
+    // lifecycle fields are asserted by shape, not by that timestamp.
+    expect(
+      parseMeta(assistant?.messageMetadata).orchestrationChildEvents,
+    ).toEqual([
+      expect.objectContaining({
         kind: 'child_spawned',
         childId: '0.1',
         task: '调研 PDF 方案',
         depth: 1,
         profile: 'researcher',
-      },
-      {
+        atMs: expect.any(Number),
+      }),
+      expect.objectContaining({
         kind: 'child_completed',
         childId: '0.1',
         status: 'completed',
-      },
+        atMs: expect.any(Number),
+      }),
     ]);
   });
 });

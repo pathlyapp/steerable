@@ -89,6 +89,10 @@ export function AgentsSettingsPanel({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [rolePrompt, setRolePrompt] = useState('');
+  // R6: the model and reasoning effort this role delegates with. Blank means
+  // "follow the conversation", which is what an unconfigured agent must do.
+  const [model, setModel] = useState('');
+  const [reasoningEffort, setReasoningEffort] = useState('');
   const [color, setColor] = useState(DEFAULT_COLOR);
   const [capability, setCapability] = useState<AgentCapabilityDraft>(
     DEFAULT_CAPABILITY_DRAFT,
@@ -123,6 +127,8 @@ export function AgentsSettingsPanel({
     setName('');
     setDescription('');
     setRolePrompt('');
+    setModel('');
+    setReasoningEffort('');
     setColor(nextColor(agents));
     setCapability(DEFAULT_CAPABILITY_DRAFT);
   };
@@ -138,6 +144,8 @@ export function AgentsSettingsPanel({
     setName(agent.name);
     setDescription(agent.description ?? '');
     setRolePrompt(agent.rolePrompt ?? '');
+    setModel(agent.model ?? '');
+    setReasoningEffort(agent.reasoningEffort ?? '');
     setColor(agent.color || DEFAULT_COLOR);
     setCapability({
       skillIds: agent.skillIds ?? [],
@@ -164,6 +172,10 @@ export function AgentsSettingsPanel({
         allowExternalSkills: capability.allowExternalSkills,
         loadAllSkills: capability.loadAllSkills,
         toolPolicy: capability.toolPolicy,
+        // Blank clears the pin: null means "follow the conversation", not
+        // "keep the old value".
+        model: model.trim() || null,
+        reasoningEffort: reasoningEffort.trim() || null,
       };
       if (editingId) {
         await updateChatAgent(editingId, body);
@@ -261,6 +273,39 @@ export function AgentsSettingsPanel({
             data-testid="agent-form-role"
           />
           <AgentCapabilityFields value={capability} onChange={setCapability} />
+          <div className="flex gap-2">
+            <label className="flex-1">
+              <span className="mb-1.5 block text-[10px] font-medium text-agent-muted-foreground">
+                {t('Model')}
+              </span>
+              <input
+                type="text"
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                placeholder={t('Follows the conversation')}
+                className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+                data-testid="agent-form-model"
+              />
+            </label>
+            <label className="flex-1">
+              <span className="mb-1.5 block text-[10px] font-medium text-agent-muted-foreground">
+                {t('Reasoning effort')}
+              </span>
+              <input
+                type="text"
+                value={reasoningEffort}
+                onChange={(event) => setReasoningEffort(event.target.value)}
+                placeholder={t('Follows the conversation')}
+                className="h-8 w-full rounded-agent-md border border-agent-border bg-agent-canvas px-3 text-xs text-agent-foreground focus:outline-none focus:ring-2 focus:ring-agent-foreground/30"
+                data-testid="agent-form-effort"
+              />
+            </label>
+          </div>
+          <p className="text-[10px] text-agent-muted-foreground">
+            {t(
+              'Used when the main agent delegates to this one. Leave either blank to follow the conversation. A model this endpoint cannot serve fails the delegation instead of silently running the parent model.',
+            )}
+          </p>
           <div className="flex justify-end gap-2">
             <button
               type="button"

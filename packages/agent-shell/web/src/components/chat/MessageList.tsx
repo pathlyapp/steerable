@@ -186,6 +186,12 @@ interface MessageListProps {
   onInspectTask?: (task: InspectTaskInput) => void;
   /** 点「忽略」：隐藏这条终态通知（本次挂载内，不落库）。 */
   onDismissFinishedTask?: (taskId: string) => void;
+  /** R7：子代理面板的「继续」与「停止」。 */
+  onContinueChild?: (childId: string, recordId: string) => void;
+  onStopChild?: (childId: string) => void;
+  /** R7：子代理操作失败的原因（已关闭、不在运行等）。 */
+  childActionError?: string | null;
+  onDismissChildActionError?: () => void;
   /** 分享当前对话（截图）。只画在最近一条助手消息的时间戳行上。 */
   onShare?: () => Promise<boolean>;
   /**
@@ -226,6 +232,10 @@ export function MessageList({
   finishedTasks,
   onInspectTask,
   onDismissFinishedTask,
+  onContinueChild,
+  onStopChild,
+  childActionError,
+  onDismissChildActionError,
   onShare,
   suggestedReplies,
   onSelectSuggestion,
@@ -559,6 +569,8 @@ export function MessageList({
                         turnFiles={turnFiles}
                         onShare={message.id === lastAssistantId ? onShare : undefined}
                         onInspectTask={onInspectTask}
+                        onContinueChild={onContinueChild}
+                        onStopChild={onStopChild}
                       />
                       {!isStreaming &&
                       message.id === lastAssistantId &&
@@ -593,6 +605,28 @@ export function MessageList({
                 onInspect={onInspectTask}
                 onDismiss={onDismissFinishedTask}
               />
+            ) : null}
+            {/* R7：子代理操作失败（已关闭、不在运行）。与中断卡同列在尾部，
+                它回答的是「我点了继续，为什么没动」。 */}
+            {childActionError ? (
+              <div
+                className="mx-auto w-full max-w-3xl"
+                data-testid="child-action-error"
+              >
+                <div className="flex items-start justify-between gap-2 rounded-agent-md border border-agent-destructive/20 bg-agent-destructive/10 px-2.5 py-1.5 text-[11px] text-agent-destructive">
+                  <span className="min-w-0 break-words">{childActionError}</span>
+                  {onDismissChildActionError ? (
+                    <button
+                      type="button"
+                      onClick={onDismissChildActionError}
+                      className="shrink-0 rounded px-1 text-agent-destructive/70 hover:bg-agent-destructive/10 hover:text-agent-destructive"
+                      aria-label={t('Dismiss')}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              </div>
             ) : null}
           </div>
         )}

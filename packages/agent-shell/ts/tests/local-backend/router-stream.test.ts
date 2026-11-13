@@ -362,18 +362,22 @@ describe('流式回合 SSE 序列', () => {
     );
     const assistant = (await h.store.listMessages(chat.id, 10))[0];
     const metadata = JSON.parse(assistant.messageMetadata!);
+    // `atMs` rides along so the replay can rebuild the elapsed column; the
+    // lifecycle fields are asserted by shape, not by that timestamp.
     expect(metadata.orchestrationChildEvents).toEqual([
-      {
+      expect.objectContaining({
         kind: 'child_spawned',
         childId: '0.1',
         task: '调研 PDF 方案',
         profile: 'researcher',
-      },
-      {
+        atMs: expect.any(Number),
+      }),
+      expect.objectContaining({
         kind: 'child_completed',
         childId: '0.1',
         status: 'completed',
-      },
+        atMs: expect.any(Number),
+      }),
     ]);
   });
 

@@ -64,7 +64,7 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 
 ## Method catalog (v0.8.x)
 
-36 request methods. The list is frozen in `runtime-contract.json`, and a test
+38 request methods. The list is frozen in `runtime-contract.json`, and a test
 fails when a registered method drifts from it; the table below mirrors the
 contract.
 
@@ -95,6 +95,8 @@ contract.
 | `config.set`            | request   | `null`                                 |
 | `models.list`           | request   | `{models, catalogStatus, fetchedAt?, current?, error?}` (live `GET /models` discovery against the configured gateway) |
 | `agent.session.messages`| request   | projected transcript of a history record |
+| `agent.children.list`   | request   | `{parentRecordId, children}` — every child agent recorded for a parent session, with a composed `status` (`running` from a live handle, `interrupted` when none and the row never settled) and `resumable`. The durable answer to "what did this session spawn", which the per-turn pool cannot give after the turn ends. Params: `{parentRecordId? | recordId?, prefix?, includeFinished?, answerPreviewChars?}` |
+| `agent.children.interrupt` | request | `{interrupted, reason?}` — cooperatively interrupt one running child of a chat's live turn (the desktop panel's stop control, not a model tool call). Params: `{chatId, childId}`. `interrupted: false` means the child is not running in this process, which is the honest answer for a row that settled between render and click |
 | `catalog.describe`      | request   | `{providers}` (bundled serving-provider catalog: default URLs, wire kinds, chat-capable model ids) |
 | `presets.describe`      | request   | `{presets}` (per-vendor sampling-optima table for host settings UIs) |
 | `presets.resolve`       | request   | `{preset}` the auto-matched preset for a `(baseUrl, model)` pair, or `null` |
@@ -116,9 +118,9 @@ Notifications emitted by the sidecar:
 | `lifecycle.ready`    | After boot, before accepting requests          | `{version, protocolVersion, pid, listenInfo}`           |
 | `lifecycle.shutdown` | Just before the process exits                  | `{reason}` (`"normal" \| "eof"`)                        |
 | `stream.chunk`       | LLM token / tool-call / usage during a stream  | `{streamId, delta?, toolCall?, usage?, finishReason?, rawChunk?}` |
-| `stream.done`        | Stream terminated cleanly                      | `{streamId, ok, cancelled?}`                            |
+| `stream.done`        | Stream terminated cleanly                      | `{streamId, ok, cancelled?, status?, reason?, traceId?, usage?, treeUsage?}` |
 | `stream.error`       | Stream failed (provider error, etc.)           | `{streamId, kind, message, traceId?, errorKind?, proxy?, attempts?, statusCode?}` |
-| `agent.child`        | Child-agent lifecycle (spawned/completed/failed/cancelled) — from the orchestration pool and from `delegate_subagent` delegations | `{streamId, kind, childId, depth?, status?, profile?}` |
+| `agent.child`        | Child-agent lifecycle (spawned/completed/failed/cancelled/needs_input) — from the orchestration pool and from `delegate_subagent` delegations | `{streamId, kind, childId, depth?, status?, profile?, recordId?, usage?, intro?}` (`intro` on `child_needs_input`: the child's own words for what it is waiting on) |
 
 `stream.error.kind` stays the exception class (`"LoopError"` for a failed
 turn) for hosts written against older sidecars. The provider classification
@@ -336,13 +338,31 @@ terminal `stream.done` carries `status: "cancelled"` with
 `cancelled: true`. A 5s watchdog hard-cancels the task only if the
 wind-down wedges.
 
+`stream.done.usage` covers the whole turn when the turn delegated. The
+parent's own keys stay exactly as the loop reported them; a delegating
+turn additionally carries the children's share as separate, additive
+keys — `childPromptTokens` / `childCompletionTokens` /
+`childTotalTokens`, and `children: [{childId, profile?, promptTokens,
+completionTokens, totalTokens}]` for the per-agent split. A child whose
+engine reports no token bill at all (an external ACP agent) is counted in
+`unknownUsageChildren` instead of being folded in as zero, so a host can
+mark the turn's total as partial rather than presenting a smaller number
+as complete. A turn that delegated nothing emits the historical payload
+unchanged.
+
+`stream.done.treeUsage` reports the whole turn tree against the request's
+`budgetTokens`: `{limit, spent, byAgent}` where `byAgent` is keyed by the
+caller's agent labels (`"parent"`, `"0.1"`). It is absent when the request
+carried no `budgetTokens` — "no limit" stays distinguishable from "spent
+nothing".
+
 Sub-agent delegation is ON BY DEFAULT: the sidecar advertises
 `delegate_subagent` and answers it with a bounded child CoreLoop running
 on the agent pool — the model's single multi-agent surface. Pass
 `subagent: false` to turn it off, or a dict to configure it:
 `{toolFilter?: string[], maxParallel?: int, profiles?: {name:
-{toolFilter?, model?, maxRounds?, concurrent?, description?,
-systemPrompt?}}}`.
+{toolFilter?, model?, reasoningEffort?, maxRounds?, concurrent?,
+description?, systemPrompt?, forkContext?, engine?}}}`.
 `toolFilter` narrows every child's tool domain (filtered-out calls fail
 closed with `tool_not_delegated`); `profiles` adds named profiles the
 schema advertises as a `subagent_type` enum — with each profile's
@@ -350,8 +370,9 @@ schema advertises as a `subagent_type` enum — with each profile's
 profile by what it is for (CC Agent-tool parity), and a profile's
 `systemPrompt` seeded as the child loop's first message (CC
 `.claude/agents` body parity). Unknown names fail closed
-listing the registered ones; a profile's `model` resolves through the
-host's provider factory or fails closed. A `concurrent: true` profile
+listing the registered ones; a profile's `model` and `reasoningEffort`
+resolve through the host's provider factory or fail closed (an
+unspecified knob inherits the parent's). A `concurrent: true` profile
 lets same-round delegations execute in parallel under the pool's
 `maxParallel` budget — the overflow delegation fails closed with
 `orchestration_budget_exceeded`. Children advertise the host tool surface
@@ -360,11 +381,39 @@ profile. Delegate children emit `agent.child` lifecycle notifications
 like orchestration children; the `child_spawned` payload adds `profile`
 (the resolved profile name, `general-purpose` when untyped).
 
+A profile may run its children on an **external agent process** instead of
+a local loop: `engine: {kind: "acp", command, args?, env?, cwd?,
+timeoutSeconds?, permission?}`. Only `acp` is supported — any other kind
+fails at load (`unsupported_engine`) rather than silently running locally,
+because the user asked for a different agent to do the work. The peer is
+spawned over the Agent Client Protocol, driven with one prompt, and its
+streamed updates arrive as `child_progress` events (`child_message` /
+`child_reasoning` / `child_tool` / `child_tool_done` / `child_permission`).
+Its outcome is the answer plus the prompt's stop reason; only `end_turn`
+counts as finished, and any other reason is reported as a failed child so
+a truncated answer is never presented as a conclusion.
+
+`permission` is a fixed, engine-level policy: `"allow"` / `"reject"` (the
+default), or `{default?, byKind?}` refining per ACP tool kind (`read`,
+`edit`, `execute`, …). It is deliberately *not* the parent's approval
+executor: an ACP permission request carries the peer's own tool title and
+option labels, which are prose we did not write and cannot validate, so
+the only input is the protocol's closed `kind` enum. Diagnostics record
+`toolKind`, `decision` and `matchedBy` and nothing else. The peer's
+`fs/*` and `terminal/*` requests are routed through the parent's tool
+domain, so the project fence and egress allow-list apply to it exactly as
+to a local child — permission says whether the call may happen, the fence
+says how far it may reach. An external child reports **no token bill**:
+its `usage` is unknown (counted in `unknownUsageChildren`), never zero,
+and it does not debit the tree budget.
+
 Multi-agent orchestration (the explicit six-tool family) is opt-in via
-`orchestration: {enabled: true, maxDepth?, maxParallel?, childMaxRounds?, childMaxToolErrors?}` in `params` (child limits default to the parent loop's): the parent model drives
+`orchestration: {enabled: true, maxDepth?, maxParallel?, childMaxRounds?, childMaxToolErrors?, forkTurns?}` in `params` (child limits default to the parent loop's): the parent model drives
 parallel child CoreLoops through six tools — `agent_spawn` (returns a
 lineage id like `0.2`, optional `toolFilter` narrows the child's tool
-domain), `agent_send` (steers a running child; resumes a finished or
+domain; `context: "fork"` seeds it with the parent's answered prefix,
+optionally on another `model` / `reasoningEffort`, which reports
+`cacheNote: "cold"`), `agent_send` (steers a running child; resumes a finished or
 interrupted one as a follow-up turn seeded from its preserved record),
 `agent_wait` (`timeoutMs`; a live child at timeout returns `status:
 "running"`; a child stopped at its budget gets one no-tools answer round

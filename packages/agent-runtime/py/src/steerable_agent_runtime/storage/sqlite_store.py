@@ -41,11 +41,26 @@ from steerable_agent_protocol.generated import (
     TraceSpan,
 )
 
+from ..child_record import (
+    TERMINAL_CHILD_STATUSES,
+    ChildRecord,
+    record_from_columns,
+    record_to_values,
+)
 from ..errors import StorageError, StorageUpgradeBlockedError, StoreAlreadyOwnedError
 from .write_lease import WriteLease, acquire_shared_lease, acquire_write_lease
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _BUSY_TIMEOUT_MS = 5000
+
+#: The terminal status set, as a SQL ``IN`` list. Kept next to the schema so a
+#: status added to ``child_record.TERMINAL_CHILD_STATUSES`` without this list
+#: fails ``test_child_record_statuses_match_sql`` instead of silently making
+#: ``include_finished=False`` return finished rows.
+_TERMINAL_CHILD_STATUS_SQL = (
+    " (" + ", ".join(f"'{s}'" for s in sorted(TERMINAL_CHILD_STATUSES)) + ")"
+)
+
 # A second process can observe version 0 while the first still holds the
 # exclusive lease to create the schema. The hold is the migration itself,
 # not a live sidecar, so wait out that window before refusing.
@@ -109,6 +124,30 @@ CREATE TABLE IF NOT EXISTS history (
     data      TEXT NOT NULL,
     PRIMARY KEY (record_id, seq)
 );
+
+-- Child-agent index (schema v2). Only the edge and the state: whose child
+-- this is, how deep, what profile and engine build it, and where it ended.
+-- Task text and answers live in the child's own ``history`` record, so each
+-- has one authoritative copy; ``profile`` and ``depth`` are duplicated here
+-- because resume must rebuild the child's tool domain and nesting from what
+-- it was created with, never from current settings.
+CREATE TABLE IF NOT EXISTS children (
+    record_id         TEXT PRIMARY KEY,
+    parent_record_id  TEXT NOT NULL,
+    child_id          TEXT NOT NULL,
+    depth             INTEGER NOT NULL,
+    profile           TEXT,
+    engine            TEXT NOT NULL,
+    status            TEXT NOT NULL,
+    resumable         INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens     INTEGER,
+    completion_tokens INTEGER,
+    usage_known       INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_children_parent ON children(parent_record_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_children_child ON children(parent_record_id, child_id);
 """
 
 
@@ -495,3 +534,80 @@ class SqliteStorage:
         async with self._lock:
             rows = self._db.execute(sql, params).fetchall()
         return [r["record_id"] for r in rows]
+
+    # ------------------------------------------------------------------
+    # Child-agent index
+    # ------------------------------------------------------------------
+
+    async def upsert_child(self, record: ChildRecord) -> None:
+        async with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO children ("
+                " record_id, parent_record_id, child_id, depth, profile,"
+                " engine, status, resumable, prompt_tokens, completion_tokens,"
+                " usage_known, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                record_to_values(record),
+            )
+            self._db.commit()
+
+    async def finish_child(
+        self,
+        record_id: str,
+        *,
+        status: str,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        usage_known: bool = True,
+        resumable: bool = False,
+        updated_at: str,
+    ) -> bool:
+        async with self._lock:
+            cursor = self._db.execute(
+                "UPDATE children SET"
+                " status = ?, resumable = ?, prompt_tokens = ?,"
+                " completion_tokens = ?, usage_known = ?, updated_at = ?"
+                " WHERE record_id = ?",
+                (
+                    status,
+                    int(resumable),
+                    prompt_tokens,
+                    completion_tokens,
+                    int(usage_known),
+                    updated_at,
+                    record_id,
+                ),
+            )
+            self._db.commit()
+        return cursor.rowcount > 0
+
+    async def get_child(self, record_id: str) -> ChildRecord | None:
+        async with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM children WHERE record_id = ?", (record_id,)
+            ).fetchone()
+        return record_from_columns(dict(row)) if row else None
+
+    async def list_children(
+        self, parent_record_id: str, *, include_finished: bool = True
+    ) -> list[ChildRecord]:
+        sql = "SELECT * FROM children WHERE parent_record_id = ?"
+        if not include_finished:
+            sql += " AND status NOT IN" + _TERMINAL_CHILD_STATUS_SQL
+        sql += " ORDER BY created_at, rowid"
+        async with self._lock:
+            rows = self._db.execute(sql, (parent_record_id,)).fetchall()
+        return [record_from_columns(dict(r)) for r in rows]
+
+    async def list_all_children(
+        self, *, prefix: str | None = None
+    ) -> list[ChildRecord]:
+        sql = "SELECT * FROM children"
+        params: list[Any] = []
+        if prefix is not None:
+            sql += " WHERE parent_record_id LIKE ?"
+            params.append(f"{prefix}%")
+        sql += " ORDER BY created_at, rowid"
+        async with self._lock:
+            rows = self._db.execute(sql, params).fetchall()
+        return [record_from_columns(dict(r)) for r in rows]

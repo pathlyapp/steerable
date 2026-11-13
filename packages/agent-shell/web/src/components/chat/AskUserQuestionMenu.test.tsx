@@ -189,3 +189,39 @@ describe('AskUserQuestionMenu · 归一化韧性', () => {
     expect(screen.getByDisplayValue('自定义甲')).toBeTruthy();
   });
 });
+
+describe('AskUserQuestionMenu · 来源标注 (R7-3)', () => {
+  it('子代理发起的提问在标题下点名来源', () => {
+    // 几个子代理同时跑时，用户要知道这份提问是谁的。
+    render(
+      <AskUserQuestionMenu
+        intro="用哪个测试命令？"
+        questions={TWO_SELECTS}
+        onSubmit={vi.fn()}
+        source={{ childId: '0.3', profile: 'coder' }}
+      />,
+    );
+    const source = screen.getByTestId('ask-user-source');
+    expect(source.textContent).toContain('0.3');
+    expect(source.textContent).toContain('coder');
+  });
+
+  it('没有画像时只显示血统 id', () => {
+    render(
+      <AskUserQuestionMenu
+        intro="用哪个？"
+        questions={TWO_SELECTS}
+        onSubmit={vi.fn()}
+        source={{ childId: '0.1' }}
+      />,
+    );
+    expect(screen.getByTestId('ask-user-source').textContent).toContain('0.1');
+  });
+
+  it('父代理自己提问时不显示来源行', () => {
+    render(
+      <AskUserQuestionMenu intro="请选择" questions={TWO_SELECTS} onSubmit={vi.fn()} />,
+    );
+    expect(screen.queryByTestId('ask-user-source')).toBeNull();
+  });
+});

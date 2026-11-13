@@ -157,6 +157,9 @@ interface AssistantMessageProps {
    */
   onShare?: () => Promise<boolean>;
   onInspectTask?: (task: InspectTaskInput) => void;
+  /** R7：子代理面板的「继续」/「停止」。 */
+  onContinueChild?: (childId: string, recordId: string) => void;
+  onStopChild?: (childId: string) => void;
 }
 
 function agentInitial(name: string): string {
@@ -457,6 +460,8 @@ export function AssistantMessage({
   turnFiles,
   onShare,
   onInspectTask,
+  onContinueChild,
+  onStopChild,
 }: AssistantMessageProps) {
   const content = message.content || '';
   const failure = readTurnFailure(message, content);
@@ -550,6 +555,8 @@ export function AssistantMessage({
             chatId={chatId}
             onInspectTask={onInspectTask}
             orchestrationChildren={orchestrationChildren}
+            onContinueChild={onContinueChild}
+            onStopChild={onStopChild}
             emptyFallback={
               failure ? (
                 wrapContinued(

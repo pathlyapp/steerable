@@ -29,6 +29,7 @@ Usage:
   <product> login | logout
   <product> web [--port <n>]
   <product> chat list | show <id> | rm <id> | export <id> [--format md|json]
+  <product> children list [--session <id>] [--active] | answer --child <id> [--wait]
   <product> skills list
   <product> mcp list | add <name> -- <cmd...> | rm <name>
   <product> config get <key> | set <key> <value>
@@ -67,6 +68,26 @@ example DEEPSEEK_API_KEY. --verbose prints stacks and the log path.
 ${EXAMPLES}
 
 ${exitCodeHelp()}
+`.trim();
+}
+
+export function childrenHelp(): string {
+  return `
+Usage:
+  <product> children list [--session <id>] [--json] [--active] [--data-dir <dir>]
+  <product> children answer --session <id> --child <id> [--wait] [--json]
+
+Children are the sub-agents a session spawned. They outlive the turn that
+created them, so this keeps working after a restart — a child that never
+finished is reported as interrupted and can be resumed by its parent.
+
+--active lists only children that are not in a terminal state.
+--session defaults to the most recent session in the data directory.
+
+Examples:
+  <product> children list
+  <product> children list --session 8c1e4f2a --active
+  <product> children answer --session 8c1e4f2a --child 0.2
 `.trim();
 }
 

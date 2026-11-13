@@ -133,6 +133,8 @@
     "agent.session.fork",
     "agent.session.branches",
     "agent.session.tree",
-    "agent.session.messages"
+    "agent.session.messages",
+    "agent.children.list",
+    "agent.children.interrupt"
   ]
 }

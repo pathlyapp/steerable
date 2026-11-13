@@ -151,4 +151,54 @@ describe('resolveTurnOrchestration', () => {
     });
     delete process.env.STEERABLE_ORCHESTRATION;
   });
+
+  it('对象形式带上用户调的深度与并发 (R7)', () => {
+    // 界面上的数字必须真的到达 sidecar，否则它们只是装饰。
+    expect(
+      resolveTurnOrchestration({
+        metadata: { orchestration: { enabled: true, maxDepth: 2, maxParallel: 6 } },
+      }),
+    ).toEqual({ enabled: true, maxDepth: 2, maxParallel: 6 });
+  });
+
+  it('布尔形式仍然只给 1 / 4（旧客户端）', () => {
+    expect(resolveTurnOrchestration({ metadata: { orchestration: true } })).toEqual({
+      enabled: true,
+      maxDepth: 1,
+      maxParallel: 4,
+    });
+    expect(resolveTurnOrchestration({ metadata: { orchestration: false } })).toBeUndefined();
+  });
+
+  it('对象里 enabled:false 等于关闭', () => {
+    expect(
+      resolveTurnOrchestration({ metadata: { orchestration: { enabled: false } } }),
+    ).toBeUndefined();
+  });
+
+  it('超出界面范围的值被夹紧，不让界面藏起更大的权限', () => {
+    expect(
+      resolveTurnOrchestration({
+        metadata: { orchestration: { enabled: true, maxDepth: 9, maxParallel: 99 } },
+      }),
+    ).toEqual({ enabled: true, maxDepth: 3, maxParallel: 8 });
+    expect(
+      resolveTurnOrchestration({
+        metadata: { orchestration: { enabled: true, maxDepth: 0, maxParallel: 0 } },
+      }),
+    ).toEqual({ enabled: true, maxDepth: 1, maxParallel: 1 });
+  });
+
+  it('对象里缺字段时回落到缺省值', () => {
+    expect(
+      resolveTurnOrchestration({ metadata: { orchestration: { enabled: true } } }),
+    ).toEqual({ enabled: true, maxDepth: 1, maxParallel: 4 });
+  });
+
+  it('回合请求体优先于产品配置', () => {
+    setProductConfig({ orchestration: true });
+    expect(
+      resolveTurnOrchestration({ orchestration: { enabled: true, maxParallel: 2 } }),
+    ).toEqual({ enabled: true, maxDepth: 1, maxParallel: 2 });
+  });
 });

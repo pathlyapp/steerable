@@ -26,9 +26,9 @@ import {
   type ProjectSpec,
 } from './project-binding.js';
 import { readFileSync } from 'node:fs';
-import { chatCommand, configCommand, mcpCommand, skillsCommand, type CommandIO } from './commands.js';
+import { chatCommand, childrenCommand, configCommand, mcpCommand, skillsCommand, type CommandIO } from './commands.js';
 import { EXIT_CONFIG, EXIT_INTERRUPTED, EXIT_OK, EXIT_TURN_FAILED, EXIT_USAGE } from './exit-codes.js';
-import { chatHelp, configHelp, doctorHelp, loginHelp, logoutHelp, mcpHelp, renderCommandName, rootHelp, runHelp, skillsHelp, tuiHelp, webHelp } from './help.js';
+import { chatHelp, childrenHelp, configHelp, doctorHelp, loginHelp, logoutHelp, mcpHelp, renderCommandName, rootHelp, runHelp, skillsHelp, tuiHelp, webHelp } from './help.js';
 import { preflightApiKey } from './credentials.js';
 import { loginCommand, logoutCommand, preflightFixes } from './login.js';
 import { webCommand } from './web.js';
@@ -102,6 +102,10 @@ async function runCli(options: CliOptions): Promise<number> {
         verbose: { type: 'boolean', default: false },
         port: { type: 'string' },
         once: { type: 'boolean', default: false },
+        session: { type: 'string' },
+        child: { type: 'string' },
+        active: { type: 'boolean', default: false },
+        wait: { type: 'boolean', default: false },
       },
     });
   } catch (error) {
@@ -124,6 +128,7 @@ async function runCli(options: CliOptions): Promise<number> {
   if (!command) return tuiCommand(parsed, options, stdout, stderr);
   if (command === 'run') return runCommand(parsed, options, stdout, stderr);
   if (command === 'chat') return dispatch(parsed, options, stdout, stderr, present(options, chatHelp()), chatCommand);
+  if (command === 'children') return dispatch(parsed, options, stdout, stderr, present(options, childrenHelp()), childrenCommand);
   if (command === 'skills') return dispatch(parsed, options, stdout, stderr, present(options, skillsHelp()), skillsCommand);
   if (command === 'mcp') return dispatch(parsed, options, stdout, stderr, present(options, mcpHelp()), mcpCommand);
   if (command === 'config') return dispatch(parsed, options, stdout, stderr, present(options, configHelp()), configCommand);
@@ -266,6 +271,10 @@ function commandIO(parsed: ReturnType<typeof parseArgs>): CommandIO {
     help: parsed.values.help === true,
     json: parsed.values.json === true,
     ...(typeof parsed.values.format === 'string' ? { format: parsed.values.format } : {}),
+    ...(typeof parsed.values.session === 'string' ? { session: parsed.values.session } : {}),
+    ...(typeof parsed.values.child === 'string' ? { child: parsed.values.child } : {}),
+    active: parsed.values.active === true,
+    wait: parsed.values.wait === true,
   };
 }
 

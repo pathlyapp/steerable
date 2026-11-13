@@ -83,6 +83,7 @@ from .branch import (
     lineage,
     resolve_fork_seq,
 )
+from .budget import SessionBudgetExceeded, TreeBudget, TreeBudgetReport
 from .cache_control import (
     CacheControlProvider,
     CacheDriftMonitor,
@@ -91,6 +92,22 @@ from .cache_control import (
     system_blocks_with_cache,
 )
 from .calibration import CalibratingProvider, ModelCalibration, UsageCalibration
+from .child_record import (
+    INTERRUPTED_CHILD_STATUS,
+    RESUMABLE_CHILD_STATUSES,
+    TERMINAL_CHILD_STATUSES,
+    ChildRecord,
+)
+from .child_notice import CHILD_NOTICE_KIND, ChildNoticeHooks, render_child_notice
+from .engines import (
+    AcpEngineSpec,
+    AcpOutcome,
+    AcpPermissionPolicy,
+    AcpToolBridge,
+    AcpUnavailable,
+    PermissionDiagnostic,
+    run_acp_child,
+)
 from .compaction_policy import (
     CompactionPolicy,
     is_large_window,
@@ -121,6 +138,7 @@ from .history import (
     RecordEntry,
     RecordFormatError,
     SystemPromptFragment,
+    completed_turn_prefix,
     entry_from_dict,
     render_fragment_capped,
     entry_to_dict,
@@ -209,6 +227,13 @@ from .pricing import (
     register_model_price,
 )
 from .pseudo import extract_inline_tool_calls
+from .registry import (
+    ChildRegistry,
+    ChildStatusView,
+    SpawnedChild,
+    default_record_id,
+    registry_status,
+)
 from .recording import (
     DEFAULT_MAX_ITEM_TOKENS,
     InMemoryRequestSink,
@@ -292,6 +317,13 @@ from .world_state import (
 )
 
 __all__ = [
+    "AcpEngineSpec",
+    "AcpOutcome",
+    "AcpPermissionPolicy",
+    "AcpToolBridge",
+    "AcpUnavailable",
+    "PermissionDiagnostic",
+    "run_acp_child",
     "DEFAULT_MAX_ITEM_TOKENS",
     "DEFAULT_MAX_SERVER_TOOLS",
     "DEFAULT_SHELL_TOOLS",
@@ -338,6 +370,21 @@ __all__ = [
     "CacheControlProvider",
     "CacheDriftMonitor",
     "CacheRetention",
+    "ChildRecord",
+    "ChildRegistry",
+    "ChildNoticeHooks",
+    "CHILD_NOTICE_KIND",
+    "SessionBudgetExceeded",
+    "TreeBudget",
+    "TreeBudgetReport",
+    "render_child_notice",
+    "ChildStatusView",
+    "SpawnedChild",
+    "default_record_id",
+    "registry_status",
+    "INTERRUPTED_CHILD_STATUS",
+    "RESUMABLE_CHILD_STATUSES",
+    "TERMINAL_CHILD_STATUSES",
     "CalibratingProvider",
     "ChainHooks",
     "ChildOutcome",
@@ -354,6 +401,7 @@ __all__ = [
     "ContentPart",
     "ContextFragment",
     "ContextManager",
+    "completed_turn_prefix",
     "CoreLoop",
     "DecisionNote",
     "ExecutionBudget",

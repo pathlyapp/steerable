@@ -36,6 +36,7 @@ except Exception as exc:  # pragma: no cover - optional dep
         "`pip install steerable-agent-runtime[sqlalchemy]`."
     ) from exc
 
+from ..child_record import TERMINAL_CHILD_STATUSES, ChildRecord
 from ..errors import StorageError
 
 metadata = MetaData()
@@ -156,6 +157,26 @@ history_table = Table(
     UniqueConstraint("recordId", "seq", name="steerable_history_entry_seq_uniq"),
 )
 
+# Schema v2: the child-agent index. Only the edge and the state — task text
+# and answers live in the child's own history record.
+children_table = Table(
+    "steerable_child",
+    metadata,
+    Column("recordId", String(191), primary_key=True),
+    Column("parentRecordId", String(191), nullable=False, index=True),
+    Column("childId", String(191), nullable=False),
+    Column("depth", Integer, nullable=False),
+    Column("profile", String(191), nullable=True),
+    Column("engine", String(32), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("resumable", Boolean, nullable=False, default=False),
+    Column("promptTokens", Integer, nullable=True),
+    Column("completionTokens", Integer, nullable=True),
+    Column("usageKnown", Boolean, nullable=False, default=True),
+    Column("createdAt", DateTime, nullable=False),
+    Column("updatedAt", DateTime, nullable=False),
+)
+
 
 def _model_to_row(model: Any, table: Table) -> dict[str, Any]:
     """Dump only the columns the table persists, coercing value types.
@@ -191,6 +212,62 @@ def _row_to_model(table: Table, row: dict[str, Any]) -> dict[str, Any]:
         else:
             out[key] = value
     return out
+
+
+def _child_to_row(record: ChildRecord) -> dict[str, Any]:
+    """``ChildRecord`` → the ``children_table`` column values.
+
+    Timestamps cross from ISO strings to the table's ``DateTime`` columns,
+    the same bridge ``_model_to_row`` makes for protocol models.
+    """
+    return {
+        "recordId": record.record_id,
+        "parentRecordId": record.parent_record_id,
+        "childId": record.child_id,
+        "depth": record.depth,
+        "profile": record.profile,
+        "engine": record.engine,
+        "status": record.status,
+        "resumable": record.resumable,
+        "promptTokens": record.prompt_tokens,
+        "completionTokens": record.completion_tokens,
+        "usageKnown": record.usage_known,
+        "createdAt": _as_datetime(record.created_at),
+        "updatedAt": _as_datetime(record.updated_at),
+    }
+
+
+def _child_from_row(row: dict[str, Any]) -> ChildRecord:
+    """Inverse of ``_child_to_row``."""
+    return ChildRecord(
+        record_id=row["recordId"],
+        parent_record_id=row["parentRecordId"],
+        child_id=row["childId"],
+        depth=int(row["depth"]),
+        profile=row["profile"],
+        engine=row["engine"],
+        status=row["status"],
+        resumable=bool(row["resumable"]),
+        prompt_tokens=row["promptTokens"],
+        completion_tokens=row["completionTokens"],
+        usage_known=bool(row["usageKnown"]),
+        created_at=_as_iso(row["createdAt"]),
+        updated_at=_as_iso(row["updatedAt"]),
+    )
+
+
+def _as_datetime(value: str | datetime) -> datetime:
+    """ISO string or ``datetime`` → ``datetime`` (idempotent)."""
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _as_iso(value: str | datetime) -> str:
+    """``datetime`` or ISO string → ISO string (idempotent)."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
 
 
 class SqlAlchemyStorage:
@@ -410,6 +487,82 @@ class SqlAlchemyStorage:
                 select(history_table.c.recordId).where(*clauses).distinct()
             )
             return sorted(row[0] for row in result.all())
+
+    # ------------------------------------------------------------------
+    # Child-agent index (schema v2)
+    # ------------------------------------------------------------------
+
+    async def upsert_child(self, record: ChildRecord) -> None:
+        await self._upsert(
+            children_table,
+            "recordId",
+            record.record_id,
+            _child_to_row(record),
+        )
+
+    async def finish_child(
+        self,
+        record_id: str,
+        *,
+        status: str,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        usage_known: bool = True,
+        resumable: bool = False,
+        updated_at: str,
+    ) -> bool:
+        existing = await self._get_one(
+            children_table, children_table.c.recordId == record_id
+        )
+        if existing is None:
+            return False
+        async with self._sessionmaker() as session:
+            await session.execute(
+                children_table.update()
+                .where(children_table.c.recordId == record_id)
+                .values(
+                    status=status,
+                    resumable=resumable,
+                    promptTokens=prompt_tokens,
+                    completionTokens=completion_tokens,
+                    usageKnown=usage_known,
+                    updatedAt=datetime.fromisoformat(updated_at.replace("Z", "+00:00")),
+                )
+            )
+            await session.commit()
+        return True
+
+    async def get_child(self, record_id: str) -> ChildRecord | None:
+        row = await self._get_one(
+            children_table, children_table.c.recordId == record_id
+        )
+        return _child_from_row(row) if row else None
+
+    async def list_children(
+        self, parent_record_id: str, *, include_finished: bool = True
+    ) -> list[ChildRecord]:
+        clauses = [children_table.c.parentRecordId == parent_record_id]
+        if not include_finished:
+            clauses.append(children_table.c.status.not_in(TERMINAL_CHILD_STATUSES))
+        rows = await self._select_many(
+            children_table,
+            clauses=clauses,
+            order_by=[children_table.c.createdAt.asc()],
+        )
+        return [_child_from_row(row) for row in rows]
+
+    async def list_all_children(
+        self, *, prefix: str | None = None
+    ) -> list[ChildRecord]:
+        clauses = []
+        if prefix is not None:
+            clauses.append(children_table.c.parentRecordId.startswith(prefix))
+        rows = await self._select_many(
+            children_table,
+            clauses=clauses,
+            order_by=[children_table.c.createdAt.asc()],
+        )
+        return [_child_from_row(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Internal helpers

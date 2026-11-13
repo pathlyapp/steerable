@@ -45,6 +45,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -73,8 +74,14 @@ from steerable_agent_runtime import (
     LoopHooks,
     McpClient,
     McpError,
+    ChildNoticeHooks,
+    AcpEngineSpec,
+    AcpPermissionPolicy,
+    AcpToolBridge,
     OrchestrationConfig,
     OrchestrationExecutor,
+    SessionBudgetExceeded,
+    TreeBudget,
     PluginLoadError,
     PluginStateError,
     PolicyDeniedError,
@@ -248,7 +255,17 @@ class Sidecar:
         # request params, returns a LoopHooks (e.g. ChainHooks of retry +
         # compaction + spill). Defaults to RetryHooks alone.
         self._loop_hooks_factory = loop_hooks_factory
+        #: One child index per sidecar, over the same storage the records use.
+        #: Per-process (not per-stream) so a child spawned in one turn is
+        #: visible to the next turn's pool and to ``agent_list``.
+        from steerable_agent_runtime.registry import ChildRegistry
+
+        self._children_registry = ChildRegistry(self.storage)
         self._streams: dict[str, asyncio.Task[Any]] = {}
+        #: Live orchestration pools by chat id. The panel's 「停止」 needs to
+        #: reach a child that is running right now, and the per-turn executor
+        #: that owns the pool is otherwise only reachable through its stream.
+        self._pools: dict[str, Any] = {}
         #: Active CoreLoop instances by stream id — the steer RPC targets
         #: these to inject user messages into a running turn.
         self._coreloops: dict[str, CoreLoop] = {}
@@ -331,6 +348,8 @@ class Sidecar:
         register("agent.session.branches", self._handle_session_branches)
         register("agent.session.tree", self._handle_session_tree)
         register("agent.session.messages", self._handle_session_messages)
+        register("agent.children.list", self._handle_children_list)
+        register("agent.children.interrupt", self._handle_children_interrupt)
 
     # ------------------------------------------------------------------
     # Entrypoint
@@ -1641,6 +1660,105 @@ class Sidecar:
             )
         return {"recordId": str(record_id), "messages": messages}
 
+    async def _handle_children_interrupt(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Cooperatively interrupt one running child of a chat's live turn.
+
+        The panel's 「停止」 target. Not an `agent_interrupt` tool call: the
+        model is not the one asking, and routing it through a turn would make
+        the user wait for their own click. Returns `{interrupted: false}` when
+        the child is not running here, which is honest — the panel then just
+        refreshes its rows.
+        """
+        params = params or {}
+        chat_id = str(params.get("chatId") or "").strip()
+        child_id = str(params.get("childId") or "").strip()
+        if not chat_id or not child_id:
+            raise JsonRpcError(
+                "chatId and childId are required",
+                code=-32602,
+                kind="invalid_params",
+            )
+        pool = self._pools.get(chat_id)
+        if pool is None:
+            return {"interrupted": False, "reason": "no live turn for this chat"}
+        interrupted = bool(pool.interrupt(child_id))
+        return {
+            "interrupted": interrupted,
+            **({"reason": "not running"} if not interrupted else {}),
+        }
+
+    async def _handle_children_list(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Every child agent this sidecar has recorded for one parent.
+
+        ``{"parentRecordId", "children": [ChildStatusView.to_wire(), ...]}``
+        — the durable answer to "what did this session spawn", which the pool
+        cannot give once the turn that spawned them has ended.
+
+        ``includeFinished: false`` (default true) narrows to children that can
+        still run, which is what a "resume these" panel wants. A missing
+        ``parentRecordId`` lists the whole store under ``prefix`` (or
+        everything), for a host that wants a global view.
+        """
+        params = params or {}
+        include_finished = params.get("includeFinished", True) is not False
+        parent = params.get("parentRecordId") or params.get("recordId")
+        preview_chars = params.get("answerPreviewChars")
+        preview_len = int(preview_chars) if isinstance(preview_chars, int) else 0
+        prefix = params.get("prefix")
+
+        if parent:
+            views = await self._children_registry.list_for_parent(
+                str(parent), include_finished=include_finished
+            )
+        else:
+            views = await self._children_registry.list_all(
+                prefix=str(prefix) if prefix else None
+            )
+            if not include_finished:
+                views = [view for view in views if not view.record.terminal]
+
+        children: list[dict[str, Any]] = []
+        for view in views:
+            preview = None
+            if preview_len > 0:
+                preview = await self._child_answer_preview(
+                    view.record.record_id, preview_len
+                )
+            children.append(view.to_wire(answer_preview=preview))
+        return {
+            "parentRecordId": str(parent) if parent else None,
+            "children": children,
+        }
+
+    async def _child_answer_preview(
+        self, record_id: str, limit: int
+    ) -> str | None:
+        """The child's last assistant text, truncated.
+
+        Read from the child's own record rather than stored on the index row,
+        so the transcript keeps one authoritative copy (see ``child_record``).
+        """
+        from steerable_agent_runtime.resume import load_history_items
+
+        try:
+            items = await load_history_items(self.storage, record_id)
+        except Exception:  # noqa: BLE001 — a preview is never worth a failure
+            return None
+        if not items:
+            return None
+        for item in reversed(items):
+            if item.message.role != "assistant":
+                continue
+            text = item.message.content_text.strip()
+            if not text:
+                continue
+            return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+        return None
+
     async def _handle_chat_steer(self, params: dict[str, Any] | None) -> dict[str, Any]:
         """Inject a user message into a running CoreLoop turn.
 
@@ -2114,6 +2232,48 @@ class Sidecar:
         # agent.child notification stream, and a concurrent profile's
         # same-round delegations execute in parallel under the pool budget.
         loop_config = _build_loop_config(params)
+        # The tree budget is a second scope over the same number: `loop_config`
+        # budgets the parent run, this one budgets the parent plus every child
+        # it spawns. Both are created from `budgetTokens` so a host that asked
+        # for a limit gets one that the whole tree shares. Absent it, neither
+        # exists and behaviour is exactly as before.
+        tree_budget = (
+            _tree_budget_from(params) if params.get("budgetTokens") is not None else None
+        )
+        # The parent loop is created after both executors (the loop needs the
+        # executors, and a fork needs the loop's transcript). Both multi-agent
+        # surfaces read the transcript through this holder, filled in once the
+        # loop exists, so `fresh`/`fork` mean the same thing on either tool.
+        parent_loop_holder: list[CoreLoop] = []
+        parent_projection = lambda: (  # noqa: E731 — one expression, used twice
+            parent_loop_holder[0].history.projection if parent_loop_holder else []
+        )
+        # The parent's model route, for a cross-model fork to compare against.
+        # Same holder reasoning as the projection: the loop exists later.
+        parent_route = lambda: (  # noqa: E731 — one expression
+            (
+                str(getattr(parent_loop_holder[0]._provider, "model", "") or "") or None,
+                str(params.get("reasoningEffort") or "") or None,
+            )
+            if parent_loop_holder
+            else (None, None)
+        )
+
+        def _orchestration_provider_factory(
+            model: str | None, reasoning_effort: str | None
+        ) -> LLMProvider:
+            """Rebuild the provider at another route for a cross-model fork.
+
+            Same rule as the delegation profiles: `None` inherits, so a value
+            the caller did not ask for is not blanked. Validation happens in
+            the host factory, which fails a model or effort it cannot serve.
+            """
+            overridden = {**params}
+            if model is not None:
+                overridden["model"] = model
+            if reasoning_effort is not None:
+                overridden["reasoningEffort"] = reasoning_effort
+            return self._llm_provider_factory(overridden)
         subagent_param = params.get("subagent", True)
         subagent_executor: SubagentExecutor | None = None
         if subagent_param:
@@ -2123,8 +2283,7 @@ class Sidecar:
                 if isinstance(subagent_opts.get("toolFilter"), list)
                 else None
             )
-            # Named profiles (CC ``subagent_type`` parity): the host passes
-            # ``{"profiles": {"researcher": {"toolFilter": [...], "model":
+            # Named profiles (CC ``subagent_type`` parity): the host passes            # ``{"profiles": {"researcher": {"toolFilter": [...], "model":
             # "...", "maxRounds": N, "concurrent": bool}}}`` and the tool
             # schema advertises the names as a ``subagent_type`` enum. An
             # unknown name fails closed listing the registered ones.
@@ -2137,6 +2296,9 @@ class Sidecar:
                 registry = SubagentRegistry()
                 for name, profile_opts in profiles.items():
                     p = profile_opts if isinstance(profile_opts, dict) else {}
+                    engine_spec, engine_permission = _acp_engine_from_profile(
+                        str(name), p.get("engine")
+                    )
                     p_filter = (
                         frozenset(str(t) for t in p.get("toolFilter"))
                         if isinstance(p.get("toolFilter"), list)
@@ -2157,7 +2319,13 @@ class Sidecar:
                             model=(
                                 str(p["model"]) if p.get("model") is not None else None
                             ),
+                            reasoning_effort=(
+                                str(p["reasoningEffort"])
+                                if p.get("reasoningEffort") is not None
+                                else None
+                            ),
                             concurrent=bool(p.get("concurrent", False)),
+                            fork_context=bool(p.get("forkContext", False)),
                             system_prompt=(
                                 str(p["systemPrompt"])
                                 if p.get("systemPrompt") is not None
@@ -2168,15 +2336,33 @@ class Sidecar:
                                 if p.get("description") is not None
                                 else SubagentConfig().description
                             ),
+                            acp_engine=engine_spec,
+                            acp_permission=engine_permission,
+                            # The bridge is supplied once on the executor
+                            # (below): every external child's file and command
+                            # requests must pass the same fence the parent's
+                            # own tools do.
+                            acp_tool_bridge=None,
                         ),
                     )
 
             # Per-profile models resolve through a provider factory that
             # re-enters the host's own factory with the model overridden —
             # a profile naming a model the host cannot serve fails closed
-            # rather than silently running the parent's model.
-            def _subagent_provider_factory(model: str) -> LLMProvider:
-                overridden = {**params, "model": model}
+            # rather than silently running the parent's model. Reasoning
+            # effort travels the same way: a profile pinning it rebuilds the
+            # provider at that level, and an unsupportable level fails at
+            # construction (the factory validates strict).
+            def _subagent_provider_factory(
+                model: str | None, reasoning_effort: str | None
+            ) -> LLMProvider:
+                overridden = {**params}
+                # `None` means "inherit the parent" for that knob, so the
+                # parent's own value must survive rather than be blanked.
+                if model is not None:
+                    overridden["model"] = model
+                if reasoning_effort is not None:
+                    overridden["reasoningEffort"] = reasoning_effort
                 return self._llm_provider_factory(overridden)
 
             subagent_executor = SubagentExecutor(
@@ -2211,11 +2397,18 @@ class Sidecar:
                 event_sink=lambda kind, data: self._emit_child_event(
                     transport, stream_id, kind, data
                 ),
+                parent_projection=parent_projection,
+                # External-engine children reach files and commands through
+                # this bridge, which re-enters the same executor the parent
+                # uses — so the project fence and egress allow-list apply to
+                # them identically. Built once per turn; a bridge that cannot
+                # reach a capability refuses that request.
+                acp_tool_bridge=_acp_bridge_for(executor),
             )
             executor = subagent_executor
             tools = [
                 *(tools or []),
-                subagent_tool_descriptor(registry=registry),
+                subagent_tool_descriptor(registry=registry, fork_available=True),
             ]
             # requiredProfiles: the host named these sub-agents for the turn
             # (desktop ``@`` mentions), so finishing without delegating to
@@ -2353,7 +2546,14 @@ class Sidecar:
                         "childMaxToolErrors", loop_config.max_tool_errors
                     )
                 ),
+                fork_turns=(
+                    int(orchestration_param["forkTurns"])
+                    if isinstance(orchestration_param.get("forkTurns"), int)
+                    else None
+                ),
             )
+            # The parent loop is created after this executor (the loop needs
+            # the executor), so a fork reads the transcript through a holder.
             orchestration = OrchestrationExecutor(
                 executor,
                 provider,
@@ -2362,6 +2562,21 @@ class Sidecar:
                 event_sink=lambda kind, data: self._emit_child_event(
                     transport, stream_id, kind, data
                 ),
+                # The durable child index: rows are what let a later turn
+                # (or a restarted process) list and resume this turn's
+                # children, and they only work if the pool writes them.
+                registry=self._children_registry,
+                # Children get their own record under the parent's, so the
+                # orchestration family matches delegate_subagent: both write
+                # a readable process log for every child.
+                history_store=self.storage,
+                parent_record_id=(
+                    params.get("recordId") or params.get("chatId") or None
+                ),
+                parent_projection=parent_projection,
+                parent_route=parent_route,
+                provider_factory=_orchestration_provider_factory,
+                budget=tree_budget,
             )
             if subagent_executor is not None:
                 subagent_executor.attach_pool(orchestration.pool)
@@ -2455,6 +2670,11 @@ class Sidecar:
         # toolCallDelta arrives whole — no incremental argument fragments.)
         if params.get("streamRawChunks"):
             hooks = ChainHooks(hooks, RawChunkBridgeHooks(transport, stream_id))
+        if orchestration is not None:
+            # Tell the parent when a child settles instead of making it poll
+            # `agent_wait`. Appended last so a notice still lands even when an
+            # earlier hook rewrites the transcript this step.
+            hooks = ChainHooks(hooks, ChildNoticeHooks(orchestration.pool))
         loop = CoreLoop(
             provider,
             executor,
@@ -2466,6 +2686,15 @@ class Sidecar:
             history_store=self.storage,
             record_id=params.get("recordId") or params.get("chatId"),
         )
+        # Hand the loop to the orchestration executor's fork path (see the
+        # holder's declaration above).
+        if orchestration is not None:
+            parent_loop_holder.append(loop)
+            # Expose the pool to the panel's live controls (interrupt a running
+            # child). Keyed by chat: one turn at a time per chat, so a later
+            # turn simply replaces it.
+            if params.get("chatId"):
+                self._pools[str(params["chatId"])] = orchestration.pool
         # Persist the run as it streams so the host can inspect it afterwards
         # via trace.fetch (and so a future resume projection has the events).
         recorder = TraceRecorder(self.storage, chat_id=params.get("chatId"))
@@ -2473,6 +2702,12 @@ class Sidecar:
         self._exec_controls[stream_id] = exec_control
         final_content_only = params.get("contentMode") == "final"
         pending_content: list[str] = []
+        #: Whether the parent's own spend has been charged to the tree. The
+        #: terminal completion carries the run's accumulated usage, and it is
+        #: emitted *before* the turn's `finally`, so charging there is what
+        #: makes `treeUsage` include the parent rather than reporting zero;
+        #: `finally` then only covers runs that produced no completion.
+        parent_charged = False
         from .egress_ask import bind_turn_chat_id, reset_turn_chat_id
 
         raw_chat_id = params.get("chatId")
@@ -2507,6 +2742,22 @@ class Sidecar:
                                 },
                             )
                             pending_content.clear()
+                if (
+                    not parent_charged
+                    and tree_budget is not None
+                    and event.kind == "completion"
+                    and event.data.get("status") != "executing"
+                ):
+                    # Charge the parent **before** the terminal event goes
+                    # out: `stream.done` reports the tree's spend, and the
+                    # parent is the largest part of it. Charging afterwards
+                    # (in `finally`) reported a tree that had spent nothing
+                    # while the child's numbers were already in.
+                    parent_charged = True
+                    try:
+                        tree_budget.charge(loop.last_run_usage, agent="parent")
+                    except SessionBudgetExceeded as exc:
+                        logger.warning("parent crossed the tree budget: %s", exc)
                 await self._emit_loop_event(
                     transport,
                     stream_id,
@@ -2514,6 +2765,20 @@ class Sidecar:
                     recorder.trace_id,
                     model=params.get("model"),
                     hooks=hooks,
+                    tree_report=(
+                        (lambda: _tree_report_of(tree_budget))
+                        if tree_budget is not None
+                        else None
+                    ),
+                    child_usage=(
+                        orchestration.pool.children_usage
+                        if orchestration is not None
+                        else (
+                            subagent_executor.pool.children_usage
+                            if subagent_executor is not None
+                            else None
+                        )
+                    ),
                 )
         except asyncio.CancelledError:
             await transport.emit_notification(
@@ -2539,6 +2804,16 @@ class Sidecar:
                 },
             )
         finally:
+            # Backstop for the paths that never reach a terminal completion
+            # (cancel, exception): the tree limit covers the parent too, and
+            # after this point the pool is gone and nobody can charge it. The
+            # normal path already charged at the terminal event, so this does
+            # not double-count.
+            if tree_budget is not None and not parent_charged:
+                try:
+                    tree_budget.charge(loop.last_run_usage, agent="parent")
+                except SessionBudgetExceeded as exc:
+                    logger.warning("parent crossed the tree budget: %s", exc)
             reset_turn_chat_id(chat_token)
             self._coreloops.pop(stream_id, None)
             self._exec_controls.pop(stream_id, None)
@@ -2555,6 +2830,11 @@ class Sidecar:
             elif subagent_executor is not None:
                 # Delegation-only turn: wind down the delegate pool.
                 await subagent_executor.shutdown()
+            if orchestration is not None and params.get("chatId"):
+                # Only drop the index entry if it is still this turn's pool:
+                # a later turn may already have replaced it.
+                if self._pools.get(str(params["chatId"])) is orchestration.pool:
+                    self._pools.pop(str(params["chatId"]), None)
             await recorder.finalize()
             self._streams.pop(stream_id, None)
 
@@ -2593,6 +2873,8 @@ class Sidecar:
         trace_id: str | None = None,
         model: str | None = None,
         hooks: Any | None = None,
+        tree_report: Callable[[], Any] | None = None,
+        child_usage: Callable[[], tuple[list[dict[str, Any]], int]] | None = None,
     ) -> None:
         kind = event.kind
         data = event.data
@@ -2764,6 +3046,40 @@ class Sidecar:
                 )
                 if cost is not None:
                     done["usage"] = {**usage, "costUsd": cost}
+            if child_usage is not None:
+                # The parent's own bill is `usage` above; these are the
+                # children's, split per childId so a host can show the turn's
+                # real cost without walking the registry. `unknown` counts
+                # children whose engine reports no tokens at all — adding
+                # zeros silently would present a partial total as complete.
+                entries, unknown = child_usage()
+                if entries:
+                    totals = {
+                        key: sum(int(entry[key]) for entry in entries)
+                        for key in ("promptTokens", "completionTokens", "totalTokens")
+                    }
+                    done["usage"] = {
+                        **(done.get("usage") or {}),
+                        "childPromptTokens": totals["promptTokens"],
+                        "childCompletionTokens": totals["completionTokens"],
+                        "childTotalTokens": totals["totalTokens"],
+                        "children": entries,
+                        **({"unknownUsageChildren": unknown} if unknown else {}),
+                    }
+                elif unknown:
+                    done["usage"] = {
+                        **(done.get("usage") or {}),
+                        "unknownUsageChildren": unknown,
+                    }
+            if tree_report is not None:
+                tree = tree_report()
+                if tree is not None:
+                    # The parent's own bill is the `usage` above; this adds
+                    # what its children spent and the per-child split, so a
+                    # host can show the turn's real cost without re-reading
+                    # the registry for every child. `_tree_report_of` already
+                    # produced the wire shape, so this is a pass-through.
+                    done["treeUsage"] = tree
             await transport.emit_notification("stream.done", done)
 
     # ------------------------------------------------------------------
@@ -3407,6 +3723,229 @@ def _spill_directory() -> str:
         # ~/.steerable——宿主沙箱策略始终放行的根。
         base = os.path.join(Path.home(), ".steerable")
     return os.path.join(base, "steerable-spill")
+
+
+def _acp_bridge_for(executor: Any) -> AcpToolBridge:
+    """A file/terminal bridge that runs ACP requests through the parent's tools.
+
+    Two decisions here:
+
+    - **Same domain, same fence.** The bridge calls the parent's executor, so
+      an external agent's write hits the project fence and its command hits the
+      egress allow-list exactly as the parent's own would. A second,
+      independent path would be a second confinement story to keep correct.
+    - **Approval stays with the policy.** The bridge does not ask the user: the
+      engine's ``AcpPermissionPolicy`` already decided whether the call may
+      happen. Fence *after* approval is what makes "allowed but still confined"
+      a meaningful pair.
+
+    Args:
+        executor: The parent's tool executor (already wrapped by approval,
+            sandbox and filtering in the caller).
+
+    Returns:
+        A bridge wired to ``local_read_file`` / ``local_write_file`` /
+        ``local_exec_shell`` when the parent has them, and refusing otherwise.
+    """
+
+    async def invoke(name: str, arguments: dict[str, Any]) -> Any:
+        from steerable_agent_protocol.generated import ToolCall
+        from steerable_agent_runtime.loop import LoopContext
+
+        result = await executor.execute(
+            ToolCall(id=f"acp-{name}", name=name, arguments=arguments),
+            LoopContext(),
+        )
+        if not getattr(result, "success", False):
+            raise AcpUnavailable(
+                f"{name} was refused: {getattr(result, 'error', None) or 'no reason reported'}"
+            )
+        return result
+
+    async def read_text_file(
+        path: str, line: int | None, limit: int | None
+    ) -> str:
+        result = await invoke(
+            "local_read_file",
+            {
+                "path": path,
+                **({"offset": line} if isinstance(line, int) else {}),
+                **({"limit": limit} if isinstance(limit, int) else {}),
+            },
+        )
+        return str(getattr(result, "message", "") or "")
+
+    async def write_text_file(path: str, content: str) -> None:
+        await invoke("local_write_file", {"path": path, "content": content})
+
+    async def create_terminal(
+        command: str, args: list[str], env: Mapping[str, str] | None
+    ) -> Any:
+        argv = " ".join([command, *args]).strip()
+        result = await invoke("local_exec_shell", {"command": argv})
+        return {
+            "terminalId": f"acp-{abs(hash(argv)) % 100000}",
+            "output": str(getattr(result, "message", "") or ""),
+        }
+
+    return AcpToolBridge(
+        read_text_file=read_text_file,
+        write_text_file=write_text_file,
+        create_terminal=create_terminal,
+    )
+
+
+def _acp_engine_from_profile(
+    name: str, raw: Any
+) -> tuple[AcpEngineSpec | None, AcpPermissionPolicy | None]:
+    """One profile's `engine` block → the spec and policy that drive it.
+
+    Only `kind: "acp"` is supported. Anything else fails closed at load: a
+    profile naming an engine this build cannot run must not silently execute
+    locally, because the user asked for a *different* agent to do the work.
+
+    Args:
+        name: The profile name, for the error message.
+        raw: The profile's `engine` value (`None` = local loop).
+
+    Returns:
+        The engine spec and its permission policy, or `(None, None)` for a
+        local profile.
+
+    Raises:
+        JsonRpcError: on an unsupported kind or a missing command.
+    """
+    if raw is None:
+        return None, None
+    if not isinstance(raw, dict):
+        raise JsonRpcError(
+            f"profile {name!r}: engine must be an object",
+            code=-32602,
+            kind="invalid_params",
+        )
+    kind = raw.get("kind")
+    if kind != "acp":
+        raise JsonRpcError(
+            f"unsupported_engine: only \"acp\" is supported; got {kind!r} "
+            f"(profile {name!r})",
+            code=-32602,
+            kind="unsupported_engine",
+        )
+    command = str(raw.get("command") or "").strip()
+    if not command:
+        raise JsonRpcError(
+            f"profile {name!r}: engine.command is required for an acp engine",
+            code=-32602,
+            kind="invalid_params",
+        )
+    args = raw.get("args")
+    env = raw.get("env")
+    timeout = raw.get("timeoutSeconds")
+    spec = AcpEngineSpec(
+        command=command,
+        args=tuple(str(a) for a in args) if isinstance(args, list) else (),
+        env=(
+            {str(k): str(v) for k, v in env.items()}
+            if isinstance(env, dict)
+            else {}
+        ),
+        cwd=str(raw["cwd"]) if raw.get("cwd") else None,
+        timeout_s=float(timeout) if isinstance(timeout, (int, float)) else 1800.0,
+    )
+    return spec, _acp_permission_from_profile(name, raw.get("permission"))
+
+
+def _acp_permission_from_profile(
+    name: str, raw: Any
+) -> AcpPermissionPolicy:
+    """One profile's `engine.permission` → the fixed policy for that engine.
+
+    Accepts a bare string (`"allow"` / `"reject"`) or an object
+    `{default?, byKind?}`. Unknown decisions fail closed at load rather than
+    becoming an accidental grant.
+
+    Args:
+        name: The profile name, for the error message.
+        raw: The `permission` value (`None` = the policy default, reject).
+
+    Returns:
+        A permission policy over the ACP tool kinds.
+    """
+    if raw is None:
+        return AcpPermissionPolicy()
+    decisions = ("allow", "reject")
+    if isinstance(raw, str):
+        if raw not in decisions:
+            raise JsonRpcError(
+                f"profile {name!r}: engine.permission must be \"allow\" or "
+                f"\"reject\"; got {raw!r}",
+                code=-32602,
+                kind="invalid_params",
+            )
+        return AcpPermissionPolicy(default=raw)  # type: ignore[arg-type]
+    if not isinstance(raw, dict):
+        raise JsonRpcError(
+            f"profile {name!r}: engine.permission must be a string or an object",
+            code=-32602,
+            kind="invalid_params",
+        )
+    default = raw.get("default", "reject")
+    if default not in decisions:
+        raise JsonRpcError(
+            f"profile {name!r}: engine.permission.default must be \"allow\" or "
+            f"\"reject\"; got {default!r}",
+            code=-32602,
+            kind="invalid_params",
+        )
+    by_kind_raw = raw.get("byKind")
+    by_kind: dict[str, str] = {}
+    if isinstance(by_kind_raw, dict):
+        for kind, decision in by_kind_raw.items():
+            if decision not in decisions:
+                raise JsonRpcError(
+                    f"profile {name!r}: engine.permission.byKind[{kind!r}] must "
+                    f"be \"allow\" or \"reject\"; got {decision!r}",
+                    code=-32602,
+                    kind="invalid_params",
+                )
+            by_kind[str(kind)] = decision
+    return AcpPermissionPolicy(default=default, by_kind=by_kind)  # type: ignore[arg-type]
+
+
+def _tree_report_of(budget: TreeBudget) -> dict[str, Any]:
+    """The whole tree's spend as the wire object ``stream.done`` carries.
+
+    ``byAgent`` keys are the caller's agent labels (``"parent"``, ``"0.1"``),
+    which is what lets a host attribute a turn's bill without reading the
+    registry for every child.
+    """
+    report = budget.report()
+    return {"limit": report.limit, "spent": report.spent, "byAgent": dict(report.by_agent)}
+
+
+def _tree_budget_from(params: dict[str, Any]) -> TreeBudget:
+    """Build the turn tree's shared token limit from the request.
+
+    Same ``budgetTokens`` the parent run uses, because a host that asks for a
+    limit means the turn — not "each loop separately". A value that is not a
+    positive integer is a request error, not a silent zero budget.
+    """
+    raw = params.get("budgetTokens")
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise JsonRpcError(
+            "budgetTokens must be a positive integer",
+            code=-32602,
+            kind="invalid_params",
+        ) from exc
+    if limit <= 0:
+        raise JsonRpcError(
+            "budgetTokens must be a positive integer",
+            code=-32602,
+            kind="invalid_params",
+        )
+    return TreeBudget(limit=limit)
 
 
 def _build_loop_config(params: dict[str, Any]) -> LoopConfig:

@@ -45,6 +45,7 @@ import type {
   SidecarSessionForkResult,
   SidecarSessionMessages,
   SidecarSessionTree,
+  SidecarChildrenList,
   SidecarSkillModule,
   SidecarStartOptions,
   SidecarChildEvent,
@@ -437,6 +438,53 @@ export class SidecarSupervisor extends EventEmitter {
       return await this.call<SidecarSessionMessages>(
         'agent.session.messages',
         { recordId },
+        { timeoutMs: 15_000 },
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Every child agent recorded for one parent session.
+   *
+   * Soft-fail null keeps the caller honest: an empty list would be
+   * indistinguishable from "this session spawned nothing", and the two mean
+   * very different things to a "resume your children" panel.
+   */
+  async childrenList(params: {
+    parentRecordId?: string;
+    prefix?: string;
+    includeFinished?: boolean;
+    answerPreviewChars?: number;
+  }): Promise<SidecarChildrenList | null> {
+    try {
+      return await this.call<SidecarChildrenList>('agent.children.list', params, {
+        timeoutMs: 15_000,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Cooperatively interrupt one running child of a chat's live turn.
+   *
+   * Soft-fails `null` (the caller treats it as "nothing to stop"): the panel
+   * pressed stop on a row that may have settled a moment ago, which is not an
+   * error worth showing.
+   *
+   * @param chatId The chat whose turn owns the child.
+   * @param childId The child's lineage id.
+   */
+  async childrenInterrupt(
+    chatId: string,
+    childId: string,
+  ): Promise<{ interrupted: boolean; reason?: string } | null> {
+    try {
+      return await this.call<{ interrupted: boolean; reason?: string }>(
+        'agent.children.interrupt',
+        { chatId, childId },
         { timeoutMs: 15_000 },
       );
     } catch {

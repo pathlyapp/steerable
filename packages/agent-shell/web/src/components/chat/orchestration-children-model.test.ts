@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  childAwaitingInput,
   childrenToCardModel,
   extractPersistedOrchestrationChildren,
   findAgentForProfile,
+  isChildResumable,
+  markChildHandedOver,
   matchChildForDelegation,
   foldOrchestrationChildEvents,
+  mergeSessionChildren,
   shouldShowOrchestrationBoard,
   type ChildInfo,
 } from './orchestration-children-model';
@@ -278,5 +282,141 @@ describe('foldOrchestrationChildEvents / 切回重建子代理列表', () => {
       42,
     ] as unknown as Parameters<typeof foldOrchestrationChildEvents>[0]);
     expect(list).toEqual([]);
+  });
+});
+
+describe('mergeSessionChildren / 重启后并入注册表 (R7-2)', () => {
+  const row = (over: Record<string, unknown> = {}) => ({
+    recordId: 'chat-1:child:0.3',
+    parentRecordId: 'chat-1',
+    childId: '0.3',
+    depth: 1,
+    profile: 'coder',
+    engine: 'coreloop',
+    status: 'interrupted',
+    resumable: true,
+    live: false,
+    promptTokens: 1800,
+    completionTokens: 210,
+    usageKnown: true,
+    ...over,
+  });
+
+  it('把只在注册表里的子代理挂到最后一条有面板的消息上', () => {
+    // 进程被杀时最后一条 assistant 消息可能没落库，那个子代理只在索引里。
+    const merged = mergeSessionChildren(
+      { 'asst-1': [{ childId: '0.1', status: 'completed' }] },
+      ['user-1', 'asst-1'],
+      [row()],
+    );
+    expect(merged['asst-1'].map((child) => child.childId)).toEqual(['0.1', '0.3']);
+    // 注册行的合成状态就是面板要的：未终结 + 无活句柄 = 已中断。
+    expect(merged['asst-1'][1].status).toBe('interrupted');
+    expect(isChildResumable(merged['asst-1'][1])).toBe(true);
+  });
+
+  it('已在事件流里的子代理不重复添加', () => {
+    const merged = mergeSessionChildren(
+      { 'asst-1': [{ childId: '0.3', status: 'completed' }] },
+      ['asst-1'],
+      [row({ status: 'completed' })],
+    );
+    // 事件流比注册行更新（它知道完成态），不能被旧的索引行覆盖。
+    expect(merged['asst-1']).toHaveLength(1);
+    expect(merged['asst-1'][0].status).toBe('completed');
+  });
+
+  it('注册行带来深度、画像、recordId 与用量', () => {
+    const merged = mergeSessionChildren(
+      { 'asst-1': [] },
+      ['asst-1'],
+      [row()],
+    );
+    const child = merged['asst-1'][0];
+    expect(child).toMatchObject({
+      childId: '0.3',
+      depth: 1,
+      profile: 'coder',
+      recordId: 'chat-1:child:0.3',
+      usage: { promptTokens: 1800, completionTokens: 210, totalTokens: 2010 },
+    });
+  });
+
+  it('usageKnown:false 的外部引擎子代理不带用量', () => {
+    // 「跑过但没人计过 token」与「花了 0」是两件事。
+    const merged = mergeSessionChildren(
+      { 'asst-1': [] },
+      ['asst-1'],
+      [row({ usageKnown: false, promptTokens: null, completionTokens: null })],
+    );
+    expect(merged['asst-1'][0].usage).toBeUndefined();
+  });
+
+  it('没有可挂载的消息时原样返回', () => {
+    const persisted = { 'asst-1': [{ childId: '0.1', status: 'completed' as const }] };
+    expect(mergeSessionChildren(persisted, [], [row()])).toBe(persisted);
+  });
+
+  it('索引为空时返回同一对象，不制造多余渲染', () => {
+    const persisted = { 'asst-1': [{ childId: '0.1', status: 'completed' as const }] };
+    expect(mergeSessionChildren(persisted, ['asst-1'], [])).toBe(persisted);
+  });
+});
+
+describe('needs_input 的来源与转交 (R7-3)', () => {
+  it('child_needs_input 把行标成等待回答，且不给「继续」', () => {
+    const list = foldOrchestrationChildEvents([
+      { kind: 'child_spawned', childId: '0.3', task: '问用户', depth: 1, profile: 'coder' },
+      { kind: 'child_needs_input', childId: '0.3', intro: '用哪个测试命令？' },
+    ]);
+    expect(list[0].status).toBe('needs_input');
+    expect(list[0].needsInput?.intro).toBe('用哪个测试命令？');
+    // 等待回答的子代理不能「继续」——那只会把同一个问题再问一遍。
+    expect(isChildResumable(list[0])).toBe(false);
+  });
+
+  it('childAwaitingInput 找出唯一在等用户的那一行', () => {
+    const children: ChildInfo[] = [
+      { childId: '0.1', status: 'completed' },
+      {
+        childId: '0.3',
+        status: 'needs_input',
+        profile: 'coder',
+        needsInput: { intro: '用哪个测试命令？' },
+      },
+    ];
+    expect(childAwaitingInput(children)?.childId).toBe('0.3');
+    expect(childAwaitingInput([{ childId: '0.1', status: 'completed' }])).toBeNull();
+  });
+
+  it('markChildHandedOver 把旧行收成「已转交」，并清掉等待态', () => {
+    // 用户答了、父代理重新派发：旧行不该还写着「等待你的回答」。
+    const list: ChildInfo[] = [
+      {
+        childId: '0.3',
+        status: 'needs_input',
+        profile: 'coder',
+        needsInput: { intro: '用哪个测试命令？' },
+      },
+    ];
+    const next = markChildHandedOver(list, '0.3');
+    expect(next[0].status).toBe('completed');
+    expect(next[0].handedOver).toBe(true);
+    expect(next[0].needsInput).toBeUndefined();
+    // 已转交也不再可续：活已经在新的子代理里。
+    expect(isChildResumable(next[0])).toBe(true);
+  });
+
+  it('markChildHandedOver 忽略没在等的行与不存在的 id', () => {
+    const done: ChildInfo[] = [{ childId: '0.1', status: 'completed' }];
+    expect(markChildHandedOver(done, '0.1')).toBe(done);
+    expect(markChildHandedOver(done, '9.9')).toBe(done);
+  });
+
+  it('needs_input 折叠成卡片状态 ask_user_paused', () => {
+    const { taskStatuses } = childrenToCardModel([
+      { childId: '0.3', status: 'needs_input', needsInput: { intro: 'q' } },
+    ]);
+    expect(taskStatuses['0.3']).toBe('ask_user_paused');
   });
 });

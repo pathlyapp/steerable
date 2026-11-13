@@ -71,6 +71,12 @@ export interface ScopedStore {
     attempts?: number | null;
     retried?: boolean;
     usedDirect?: boolean;
+    /**
+     * R5: `'partial'` when part of the turn's spend is missing from these
+     * totals — an external-engine child reports no tokens at all. Absent
+     * means the numbers are the whole bill.
+     */
+    usageNote?: 'partial' | null;
   }): Promise<void>;
   getUsageSummary(sinceDays?: number): Promise<UsageSummary>;
   getReliabilitySummary(sinceDays?: number): Promise<ReliabilitySummary>;

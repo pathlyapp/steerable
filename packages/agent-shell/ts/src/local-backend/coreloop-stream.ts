@@ -15,7 +15,9 @@
 import type {
   SidecarChatStreamRequest,
   SidecarChildEvent,
+  SidecarChildUsage,
   SidecarRawChunk,
+  SidecarStreamDone,
   SidecarSupervisor,
 } from '../sidecar/index.js';
 import type { LlmMessage } from '../llm/types.js';
@@ -162,7 +164,22 @@ export interface CoreLoopTurnOutcome {
     totalTokens: number;
     cachedPromptTokens?: number;
     costUsd?: number;
+    /**
+     * R5: the children's share of this turn, split per childId, and how many
+     * children reported nothing at all (external engines). Present only when
+     * the turn delegated.
+     */
+    childPromptTokens?: number;
+    childCompletionTokens?: number;
+    childTotalTokens?: number;
+    children?: SidecarChildUsage[];
+    unknownUsageChildren?: number;
   };
+  /**
+   * R5: the whole tree's spend against the turn's token limit. Absent when
+   * the host asked for no limit.
+   */
+  treeUsage?: SidecarStreamDone['treeUsage'];
 }
 
 /**
@@ -623,6 +640,7 @@ export async function streamCoreLoopTurn(
             reason: done.reason ?? (done.cancelled ? 'aborted_by_user' : undefined),
             traceId: done.traceId,
             usage: done.usage,
+            treeUsage: done.treeUsage,
           });
         },
         onChildEvent: (event) => {

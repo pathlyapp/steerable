@@ -1117,6 +1117,117 @@ export class LocalBackendRouter {
       };
     }
 
+    // 子代理停止：面板的「停止」。与「继续」不同，它不需要一个回合——协作取消
+    // 发生在正在跑的那次运行里，等回合只会让用户等自己的点击。
+    const childStopMatch = pathname.match(/^\/api\/v2\/children\/([^/]+)\/stop$/);
+    if (childStopMatch && method === 'POST') {
+      const chatId = url.searchParams.get('session')?.trim();
+      const childId = url.searchParams.get('child')?.trim();
+      if (!chatId || !childId) {
+        return {
+          status: 400,
+          data: { detail: 'session and child query parameters are required' },
+        };
+      }
+      const supervisor = getSidecarSupervisor();
+      if (!supervisor) {
+        return { status: 503, data: { detail: 'sidecar unavailable' } };
+      }
+      const result = await supervisor.childrenInterrupt(chatId, childId);
+      if (!result) {
+        return { status: 502, data: { detail: 'children interrupt failed' } };
+      }
+      return { status: 200, data: result };
+    }
+
+    // 子代理续跑：把一个已中断 / 撞墙 / 已完成但可续的子代理放回池里接着跑。
+    // 续跑必须经过一次真实回合——子代理要继承父回合的预算、审批与工具面，
+    // 所以这里只落一条用户消息并转发给 stream 路由，由父代理的 `agent_send`
+    // 触发重建（见 sidecar 的 `agent_send` 续跑分支）。直接起一个游离的子代理
+    // 会脱离父回合的预算与围栏。
+    const childResumeMatch = pathname.match(/^\/api\/v2\/children\/([^/]+)\/resume$/);
+    if (childResumeMatch && method === 'POST') {
+      const parentRecordId = url.searchParams.get('session')?.trim();
+      const childId = url.searchParams.get('child')?.trim();
+      if (!parentRecordId || !childId) {
+        return {
+          status: 400,
+          data: { detail: 'session and child query parameters are required' },
+        };
+      }
+      const supervisor = getSidecarSupervisor();
+      if (!supervisor) {
+        return { status: 503, data: { detail: 'sidecar unavailable' } };
+      }
+      // Ask the index first: a closed or unknown child must not start a turn
+      // that then fails with a confusing tool error.
+      const listed = await supervisor.childrenList({
+        parentRecordId,
+        includeFinished: true,
+      });
+      if (!listed) {
+        return { status: 502, data: { detail: 'children list failed' } };
+      }
+      const child = listed.children.find((row) => row.childId === childId);
+      if (!child) {
+        return {
+          status: 404,
+          data: { detail: `no child ${childId} for session ${parentRecordId}` },
+        };
+      }
+      if (!child.resumable) {
+        return {
+          status: 409,
+          data: {
+            detail: child.status === 'closed'
+              ? `child ${childId} is closed; have the parent spawn a new one`
+              : `child ${childId} is ${child.status}; wait for it to settle`,
+          },
+        };
+      }
+      const payload = this.toRecord(request.body);
+      const message =
+        typeof payload.message === 'string' && payload.message.trim()
+          ? payload.message.trim()
+          : 'Continue the original task.';
+      return {
+        status: 200,
+        data: {
+          recordId: child.recordId,
+          childId: child.childId,
+          profile: child.profile,
+          depth: child.depth,
+          message,
+          // The host turns this into the parent turn's tool call; it carries
+          // what that turn needs, not a second execution path.
+          instruction: `Call agent_send with childId "${childId}" and this message: ${message}`,
+        },
+      };
+    }
+
+    // 子代理索引：这个会话派过哪些子代理、现在什么状态。
+    // 池只活一个回合，所以「上次派的还在不在」只能问 sidecar 的持久索引。
+    if (method === 'GET' && pathname === '/api/v2/children') {
+      const supervisor = getSidecarSupervisor();
+      if (!supervisor) {
+        return { status: 503, data: { detail: 'sidecar unavailable' } };
+      }
+      const parentRecordId = url.searchParams.get('session')?.trim();
+      const includeFinished = url.searchParams.get('active') !== '1';
+      const previewChars = Number(url.searchParams.get('previewChars') ?? '0');
+      const listed = await supervisor.childrenList({
+        ...(parentRecordId ? { parentRecordId } : {}),
+        includeFinished,
+        ...(Number.isFinite(previewChars) && previewChars > 0
+          ? { answerPreviewChars: Math.trunc(previewChars) }
+          : {}),
+      });
+      if (!listed) {
+        return { status: 502, data: { detail: 'children list failed' } };
+      }
+      return { status: 200, data: listed };
+    }
+
     // 4.6c Task×Worktree：合并到主仓 / 丢弃。两个操作都是幂等目标态
     // （worktreeState 非 pending 时 TaskService 抛错 → 409）。
     const taskActionMatch = pathname.match(/^\/api\/v2\/tasks\/([^/]+)\/(merge|discard)$/);
@@ -1446,6 +1557,14 @@ export class LocalBackendRouter {
         allowExternalSkills:
           typeof payload.allowExternalSkills === 'boolean' ? payload.allowExternalSkills : true,
         loadAllSkills: Boolean(payload.loadAllSkills),
+        // R6: a role may pin the model and effort it delegates with. Absent
+        // (or null) means "follow the parent", so an unconfigured agent
+        // behaves exactly as before.
+        model: typeof payload.model === 'string' && payload.model.trim() ? payload.model.trim() : null,
+        reasoningEffort:
+          typeof payload.reasoningEffort === 'string' && payload.reasoningEffort.trim()
+            ? payload.reasoningEffort.trim()
+            : null,
         isBuiltin: false,
         isArchived: false,
         sortOrder: typeof payload.sortOrder === 'number' ? payload.sortOrder : 0,
@@ -1928,6 +2047,20 @@ export class LocalBackendRouter {
             typeof payload.allowExternalSkills === 'boolean' ? payload.allowExternalSkills : undefined,
           loadAllSkills:
             typeof payload.loadAllSkills === 'boolean' ? payload.loadAllSkills : undefined,
+          // A PATCH that omits the field keeps the stored value; only an
+          // explicit string (or explicit null) changes it.
+          model:
+            typeof payload.model === 'string'
+              ? payload.model.trim() || null
+              : payload.model === null
+                ? null
+                : undefined,
+          reasoningEffort:
+            typeof payload.reasoningEffort === 'string'
+              ? payload.reasoningEffort.trim() || null
+              : payload.reasoningEffort === null
+                ? null
+                : undefined,
           isArchived: typeof payload.isArchived === 'boolean' ? payload.isArchived : undefined,
           sortOrder: typeof payload.sortOrder === 'number' ? payload.sortOrder : undefined,
         });
@@ -4521,6 +4654,10 @@ export class LocalBackendRouter {
           const lifecycle: Record<string, unknown> = {
             kind: event.kind,
             childId: event.childId,
+            // Wall-clock for the elapsed column: the renderer has no other
+            // way to know when a child started once the turn is replayed
+            // from persisted events.
+            atMs: Date.now(),
             ...(event.task !== undefined ? { task: event.task } : {}),
             ...(event.depth !== undefined ? { depth: event.depth } : {}),
             ...(event.status !== undefined ? { status: event.status } : {}),
@@ -4528,6 +4665,11 @@ export class LocalBackendRouter {
             ...(event.profile !== undefined ? { profile: event.profile } : {}),
             // 子代理自己的 durable record：右侧过程面板据此回看它的推理与工具。
             ...(event.recordId !== undefined ? { recordId: event.recordId } : {}),
+            // R5：子代理的账单。行内的 token 与「不计」都只读这一份，
+            // 面板不再回头查注册表。
+            ...(event.usage !== undefined ? { usage: event.usage } : {}),
+            // R7-3：子代理在等用户回答。面板据此标「等待你的回答」。
+            ...(event.intro !== undefined ? { intro: event.intro } : {}),
           };
           children.push(lifecycle);
           emit(this.sseData({ type: 'orchestration_child', ...lifecycle }));
@@ -4559,6 +4701,9 @@ export class LocalBackendRouter {
             turnPasses += 1;
             // W6-9 用量归因:落一条 chat 用量事件(含成本估算,无单价模型 costUsd=null)。
             // 每趟各落一条——续跑的花费是真实发生的，不该被合并掉。
+            // R5:子代理的花费进同一条记录（父级 + children[]），而不是散成
+            // 多条——一次回合的成本归因必须能一眼加总。外部引擎子代理不报
+            // token，此时 usage_note='partial'，不把缺失当零。
             if (outcome.usage) {
               try {
                 await this.store.recordUsageEvent({
@@ -4566,11 +4711,13 @@ export class LocalBackendRouter {
                   kind: 'chat',
                   provider: settings.provider,
                   model: overrideModel || settings.model,
-                  promptTokens: outcome.usage.promptTokens,
-                  completionTokens: outcome.usage.completionTokens,
-                  totalTokens: outcome.usage.totalTokens,
+                  promptTokens: outcome.usage.promptTokens + (outcome.usage.childPromptTokens ?? 0),
+                  completionTokens:
+                    outcome.usage.completionTokens + (outcome.usage.childCompletionTokens ?? 0),
+                  totalTokens: outcome.usage.totalTokens + (outcome.usage.childTotalTokens ?? 0),
                   cachedPromptTokens: outcome.usage.cachedPromptTokens,
                   costUsd: outcome.usage.costUsd ?? null,
+                  usageNote: (outcome.usage.unknownUsageChildren ?? 0) > 0 ? 'partial' : null,
                 });
               } catch (usageErr) {
                 console.warn('[local-backend] record usage event failed', usageErr);

@@ -52,6 +52,7 @@ Design:
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -64,8 +65,10 @@ from .ask_user import (
     normalize_ask_user_questions,
 )
 from .errors import ToolDispatchError
-from .llm import LLMProvider
+from .history import completed_turn_prefix
+from .llm import LLMMessage, LLMProvider
 from .loop import CoreLoop, LoopConfig, LoopContext, LoopHooks, ToolExecutor
+from .engines import AcpEngineSpec, AcpPermissionPolicy, AcpToolBridge
 from .pool import (
     AgentPool,
     LoopFactory,
@@ -78,6 +81,7 @@ from .pool import (
 #: profile" wording.
 DEFAULT_PROFILE_LABEL = "general-purpose"
 
+logger = logging.getLogger(__name__)
 #: Child-only coordination tool. A child reports missing user-owned input to
 #: its parent instead of opening an interactive question card itself.
 PARENT_INPUT_TOOL_NAME = "request_parent_input"
@@ -134,12 +138,30 @@ class SubagentConfig:
     allow_tools: bool = True
     tool_filter: frozenset[str] | None = None
     model: str | None = None
+    #: Reasoning effort for this profile's children (CC Agent-tool parity with
+    #: the chat picker's per-request knob). ``None`` inherits the parent's
+    #: request, which is what an unpinned profile must do: a role that did not
+    #: ask for a level should reason exactly like the agent that spawned it.
+    #: Honoring it needs the host's ``provider_factory``, same as ``model``.
+    reasoning_effort: str | None = None
     concurrent: bool = False
     max_parallel: int = 4
     #: Profile system prompt (CC ``.claude/agents`` body parity): seeded as
     #: the child loop's first message, ahead of the task. ``None`` runs the
     #: child with no system prompt at all — the legacy behavior.
     system_prompt: str | None = None
+    #: Seed this profile's children with the parent's answered transcript
+    #: instead of a bare task. A profile is the right place for this default
+    #: because "this kind of work continues the conversation" is a property of
+    #: the role (a reviewer verifying findings), not of one call. The tool's
+    #: ``context`` argument overrides it per call.
+    fork_context: bool = False
+    #: Run this profile's children on an external agent process instead of a
+    #: local loop. ``None`` keeps the local engine. The spec carries the
+    #: command; the policy and bridge say what that process may reach.
+    acp_engine: AcpEngineSpec | None = None
+    acp_permission: AcpPermissionPolicy | None = None
+    acp_tool_bridge: AcpToolBridge | None = None
     description: str = (
         "Delegate a self-contained subtask to a sub-agent with its own "
         "reasoning loop. Good for parallelizable or context-heavy subtasks; "
@@ -179,12 +201,17 @@ def subagent_tool_descriptor(
     config: SubagentConfig | None = None,
     *,
     registry: SubagentRegistry | None = None,
+    fork_available: bool = False,
 ) -> dict[str, Any]:
     """OpenAI tool schema to append to the parent loop's tools list.
 
     With a ``registry``, the schema gains a ``subagent_type`` enum of the
     registered profile names (CC ``subagent_type`` parity); without one the
     tool takes only ``task`` and runs the default profile.
+
+    ``fork_available`` advertises the ``context`` parameter; the caller sets
+    it only when the executor was given the parent transcript, so the schema
+    never offers a mode that would fail.
     """
     config = config or SubagentConfig()
     properties: dict[str, Any] = {
@@ -192,11 +219,25 @@ def subagent_tool_descriptor(
             "type": "string",
             "description": (
                 "Complete, self-contained instructions for the "
-                "sub-agent — it sees none of this conversation."
+                "sub-agent — it sees none of this conversation unless "
+                "context is \"fork\"."
             ),
         },
     }
     description = config.description
+    # Advertise `context` only when a fork is actually reachable: the executor
+    # cannot seed a child without the parent transcript, and offering a
+    # parameter that always fails is worse than omitting it.
+    if fork_available:
+        properties["context"] = {
+            "type": "string",
+            "enum": ["fresh", "fork"],
+            "description": (
+                "\"fresh\" (default) starts the child with only the task. "
+                "\"fork\" seeds it with this conversation's completed turns so "
+                "it can continue an investigation without being retold."
+            ),
+        }
     if registry is not None and registry.names():
         properties["subagent_type"] = {
             "type": "string",
@@ -381,6 +422,9 @@ class SubagentExecutor:
         pool: AgentPool | None = None,
         history_store: Any = None,
         record_id_prefix: str | None = None,
+        child_registry: Any = None,
+        parent_projection: Callable[[], list[LLMMessage]] | None = None,
+        acp_tool_bridge: AcpToolBridge | None = None,
     ) -> None:
         self._inner = inner
         self._provider = provider
@@ -391,12 +435,31 @@ class SubagentExecutor:
         self._parent_tools = list(tools or [])
         self._history_store = history_store
         self._record_id_prefix = record_id_prefix
+        #: Kept for the needs-input notice: the pool owns the sink that lands
+        #: `child_spawned`/`child_completed`, and a child asking its parent for
+        #: input has to surface on that same channel or the panel cannot say
+        #: which row is waiting on the user.
+        self._event_sink = event_sink
+        #: Where an external child's file and terminal requests land. ``None``
+        #: means this host grants none (a bridge with no capabilities refuses
+        #: everything), which is the safe default for a spawned process.
+        self._acp_tool_bridge = acp_tool_bridge
+        #: The parent's model-visible transcript, read at delegation time.
+        #: ``None`` means this host cannot fork, and the tool schema omits the
+        #: parameter rather than offering one that always fails.
+        self._parent_projection = parent_projection
         self._parent_input_requests: dict[str, dict[str, Any]] = {}
+        #: Delegation-only hosts (orchestration off) never attach a pool that
+        #: already knows about the index, so the executor's own pool needs it
+        #: too — otherwise a delegated child leaves no durable row and cannot
+        #: be listed or resumed after the turn.
         self._pool = pool or AgentPool(
             config=OrchestrationConfig(max_parallel=self._config.max_parallel),
             depth=0,
             lineage="0",
             event_sink=event_sink,
+            registry=child_registry,
+            parent_record_id=record_id_prefix,
         )
 
     def attach_pool(self, pool: AgentPool) -> None:
@@ -408,6 +471,12 @@ class SubagentExecutor:
         children then appear in ``agent_list`` too).
         """
         self._pool = pool
+
+    @property
+    def pool(self) -> AgentPool:
+        """This executor's child pool — exposed so a host can report the
+        children's usage alongside the turn's own bill."""
+        return self._pool
 
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         if call.name != self._config.tool_name:
@@ -435,12 +504,47 @@ class SubagentExecutor:
                     needsFollowup=True,
                 )
             config = profile
+        raw_context = str(call.arguments.get("context") or "").strip().lower()
+        if raw_context and raw_context not in ("fresh", "fork"):
+            return ToolResult(
+                success=False,
+                error=f'unknown context {raw_context!r}; expected "fresh" or "fork"',
+                needsFollowup=True,
+            )
+        # The call's explicit choice wins; otherwise the profile decides. A
+        # profile declares `fork_context` because "this role continues the
+        # conversation" is a property of the role, not of one call.
+        want_fork = (raw_context == "fork") if raw_context else config.fork_context
+        seed: list[LLMMessage] | None = None
+        if want_fork:
+            if self._parent_projection is None:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        'context="fork" needs the parent transcript, which this '
+                        "host did not wire; use \"fresh\""
+                    ),
+                    needsFollowup=True,
+                )
+            fork_seed = completed_turn_prefix(self._parent_projection())
+            # The profile's own system prompt replaces the parent's, so two
+            # instructions never compete for the child's role definition.
+            seed = [m for m in fork_seed if m.role != "system"] or None
         if config.model is not None and self._provider_factory is None:
             return ToolResult(
                 success=False,
                 error=(
                     f"sub-agent profile requests model {config.model!r} "
                     "but this host has no provider factory"
+                ),
+            )
+        if config.reasoning_effort is not None and self._provider_factory is None:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"sub-agent profile requests reasoning effort "
+                    f"{config.reasoning_effort!r} but this host has no "
+                    "provider factory"
                 ),
             )
         try:
@@ -450,6 +554,24 @@ class SubagentExecutor:
                 loop_factory=self._loop_factory_for(config),
                 event_extra={"profile": type_name or DEFAULT_PROFILE_LABEL},
                 system_prompt=config.system_prompt,
+                # The durable index records the resolved profile so a resumed
+                # child is rebuilt with the domain it was created under. The
+                # label matches what ``child_spawned`` reports, so the event
+                # stream and the index never disagree about which profile ran.
+                profile=type_name or DEFAULT_PROFILE_LABEL,
+                seed=seed,
+                **(
+                    {
+                        "engine": "acp",
+                        "acp_engine": config.acp_engine,
+                        # A profile may pin its own policy; otherwise the
+                        # engine runs under the reject-by-default one.
+                        "acp_permission": config.acp_permission,
+                        "acp_tool_bridge": self._acp_tool_bridge,
+                    }
+                    if config.acp_engine is not None
+                    else {}
+                ),
             )
         except OrchestrationBudgetExceeded as exc:
             return ToolResult(
@@ -459,6 +581,10 @@ class SubagentExecutor:
             )
         parent_input = self._parent_input_requests.pop(outcome.child_id, None)
         if parent_input is not None:
+            # R7-3: the panel marks the row 「等待你的回答」, and the question
+            # card names the child it came from. Both read this event; neither
+            # has to correlate a delegation result with a question card.
+            self._emit_child_needs_input(outcome.child_id, parent_input)
             return ToolResult(
                 success=True,
                 message=json.dumps(parent_input, ensure_ascii=False),
@@ -480,6 +606,29 @@ class SubagentExecutor:
             message=outcome.answer or "(sub-agent returned no text)",
         )
 
+    def _emit_child_needs_input(
+        self, child_id: str, request: dict[str, Any]
+    ) -> None:
+        """Announce that a child is blocked on the user.
+
+        Carries the child's intro so the question card can say which agent is
+        asking, without the host having to join a tool result against a card
+        by position. Best-effort: a host without a sink still gets the
+        `needs_input` tool result, which is the functional path.
+        """
+        if self._event_sink is None:
+            return
+        try:
+            self._event_sink(
+                "child_needs_input",
+                {
+                    "childId": child_id,
+                    "intro": str(request.get("intro") or ""),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — an event never fails a run
+            logger.warning("child needs-input event failed: %s", exc)
+
     def _loop_factory_for(self, config: SubagentConfig) -> LoopFactory:
         """Per-spawn child builder resolving the profile's provider, tool
         domain, and round bound (profiles differ per call, so the pool's
@@ -489,10 +638,12 @@ class SubagentExecutor:
             child_id: str, tool_filter: frozenset[str] | None
         ) -> tuple[CoreLoop, list[dict[str, Any]] | None]:
             provider = self._provider
-            if config.model is not None:
-                # execute() fails closed before the spawn when a
-                # model-bearing profile has no provider factory.
-                provider = self._provider_factory(config.model)
+            if config.model is not None or config.reasoning_effort is not None:
+                # execute() fails closed before the spawn when a pinned
+                # profile has no provider factory, so both are reachable here.
+                provider = self._provider_factory(
+                    config.model, config.reasoning_effort
+                )
             schemas: list[dict[str, Any]] = []
             if config.allow_tools:
                 schemas = [

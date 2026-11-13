@@ -57,6 +57,13 @@ export interface LocalChatAgent {
   allowExternalSkills?: boolean;
   /** true = 无视触发条件加载全部技能（内置「智能助手」如此）。 */
   loadAllSkills?: boolean;
+  /**
+   * 委派给这个智能体时用的模型。null/缺省 = 跟随父级；配了则由 sidecar
+   * 重建 provider，宿主服务不了的名字在建 provider 时失败即拒绝。
+   */
+  model?: string | null;
+  /** 委派时的推理强度。null/缺省 = 跟随父级。 */
+  reasoningEffort?: string | null;
   isBuiltin: boolean;
   isArchived?: boolean;
   /**
