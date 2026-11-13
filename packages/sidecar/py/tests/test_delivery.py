@@ -11,6 +11,7 @@ from steerable_agent_runtime.hooks import CompletionDraft
 from steerable_agent_runtime.llm import LLMMessage
 from steerable_agent_runtime.loop import LoopContext
 
+from steerable_sidecar import delivery
 from steerable_sidecar.delivery import (
     DeliveryGatedExecutor,
     DeliveryHooks,
@@ -2804,6 +2805,31 @@ async def test_named_entrypoint_recreates_output_existing_before_hook(
 
     assert action.kind == "accept"
     assert output.read_bytes() == b"fresh"
+
+
+def test_syntax_check_ignores_a_script_named_after_a_stdlib_module(
+    tmp_path: Path,
+) -> None:
+    """``inspect.py`` is valid source even though it shadows the stdlib module.
+
+    A subprocess checker inherits the script's directory as ``sys.path[0]``,
+    so its own interpreter imports the candidate as ``inspect`` and dies
+    before it ever reads the file — which made a deliverable workspace look
+    unsyntactic on CI while passing locally.
+    """
+    script = tmp_path / "inspect.py"
+    script.write_text("print('fine')\n", encoding="utf-8")
+
+    assert delivery._syntax_check_python(script) == ""
+
+
+def test_syntax_check_reports_the_reason_a_file_does_not_parse(
+    tmp_path: Path,
+) -> None:
+    script = tmp_path / "broken.py"
+    script.write_text("def f(:\n", encoding="utf-8")
+
+    assert delivery._syntax_check_python(script)
 
 
 @pytest.mark.asyncio
