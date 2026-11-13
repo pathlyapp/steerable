@@ -781,6 +781,39 @@ describe('AgentPage 中断恢复卡（W7-1）', () => {
     );
     expect(streamMock).not.toHaveBeenCalled();
   });
+
+  it('子代理索引迟迟不回也不耽误恢复卡出现', async () => {
+    // 注册表是跨进程查询，冷启动时 sidecar 常返回 503 或慢到几秒。它只是
+    // 「面板还能列出多少子代理」的增强项；首屏必需的恢复卡排在它后面等，
+    // 用户就会看到一段空会话（CI 上直接 20s 超时）。
+    bridgeRequest.mockImplementation((input: { method: string; path: string }) => {
+      if (input.path.includes('/children')) {
+        return new Promise(() => {
+          // 永不 settle：模拟 sidecar 还没起来。
+        });
+      }
+      if (input.path.includes('/messages')) {
+        return Promise.resolve({
+          messages: [
+            {
+              id: 'm1',
+              chatId: 'chat-1',
+              role: 'user',
+              content: '之前的问题',
+              createdAt: '2026-09-01T08:00:00.000Z',
+            },
+          ],
+          interrupted: true,
+        });
+      }
+      return defaultBridgeRequest(input);
+    });
+    renderPage('/agent/chat-1', makeCtx());
+
+    expect(
+      await screen.findByRole('button', { name: 'Continue last reply' }),
+    ).toBeTruthy();
+  });
 });
 
 describe('AgentPage plan 模式操作条', () => {
