@@ -2279,19 +2279,25 @@ def _run_cmd(
 
 
 def _syntax_check_python(path: Path) -> str:
-    python = shutil.which("python3") or shutil.which("python")
-    if python is None:
-        return ""
-    code, output = _run_cmd(
-        [python, "-m", "py_compile", str(path)],
-        cwd=str(path.parent),
-        timeout=_SYNTAX_TIMEOUT_SEC,
-    )
-    if code == 0:
-        return ""
-    if code is None:
-        return f"py_compile timed out after {_SYNTAX_TIMEOUT_SEC}s"
-    return output or f"py_compile exited {code}"
+    """Compile a named ``.py`` in-process; empty means it parses.
+
+    In-process rather than ``python -m py_compile`` because the subprocess
+    inherits the script's directory as ``sys.path[0]``: a workspace file named
+    after a stdlib module (``inspect.py`` is an obvious one) shadowed it and
+    made the checker fail on a file that is perfectly valid. ``compile()``
+    neither reads that directory nor writes ``__pycache__`` into a workspace
+    we do not own.
+    """
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"{path} could not be read as source: {exc}"
+    try:
+        compile(source, str(path), "exec", dont_inherit=True)
+    except SyntaxError as exc:
+        location = f" (line {exc.lineno})" if exc.lineno else ""
+        return f"{exc.msg}{location}"
+    return ""
 
 
 def _syntax_check_js(path: Path) -> str:
