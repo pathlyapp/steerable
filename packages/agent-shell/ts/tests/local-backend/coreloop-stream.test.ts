@@ -15,9 +15,24 @@ type Emitted = { method: 'chunk' | 'done' | 'error' | 'child'; payload: unknown 
 function makeSupervisor(script: Emitted[]): {
   supervisor: SidecarSupervisor;
   sent: SidecarChatStreamRequest[];
+  /** Fire the supervisor's `exit` event the way a dying sidecar does. */
+  emitExit: () => void;
 } {
   const sent: SidecarChatStreamRequest[] = [];
+  // Minimal EventEmitter: `streamCoreLoopTurn` subscribes to `exit` so a
+  // sidecar that dies without answering still settles the turn.
+  const listeners = new Map<string, Set<() => void>>();
   const supervisor = {
+    on: (event: string, fn: () => void) => {
+      const set = listeners.get(event) ?? new Set();
+      set.add(fn);
+      listeners.set(event, set);
+      return supervisor;
+    },
+    off: (event: string, fn: () => void) => {
+      listeners.get(event)?.delete(fn);
+      return supervisor;
+    },
     streamChat: vi.fn(
       async (request: SidecarChatStreamRequest, handlers: SidecarChatStreamHandlers) => {
         sent.push(request);
@@ -32,7 +47,10 @@ function makeSupervisor(script: Emitted[]): {
     ),
     cancelChat: vi.fn(async () => {}),
   } as unknown as SidecarSupervisor;
-  return { supervisor, sent };
+  const emitExit = () => {
+    for (const fn of [...(listeners.get('exit') ?? [])]) fn();
+  };
+  return { supervisor, sent, emitExit };
 }
 
 const BASE_OPTIONS = {
@@ -820,5 +838,48 @@ describe('streamCoreLoopTurn / delegate-on-pool subagent wiring', () => {
       { kind: 'child_spawned', childId: '0.1', profile: 'researcher' },
       { kind: 'child_completed', childId: '0.1', profile: undefined },
     ]);
+  });
+
+  it('settles as interrupted when the sidecar dies mid-turn', async () => {
+    // A crashed sidecar never sends `stream.done`. Without a subscription on
+    // the supervisor's exit the promise floats forever, and the router never
+    // reaches its terminal bookkeeping — the turn looks like it is still
+    // running for the rest of the process's life.
+    const { supervisor, emitExit } = makeSupervisor([
+      { method: 'chunk', payload: { streamId: 'stream-1', delta: 'partial' } },
+    ]);
+    const chunks: string[] = [];
+
+    const turn = streamCoreLoopTurn({
+      ...BASE_OPTIONS,
+      supervisor,
+      onText: (d) => chunks.push(d),
+    });
+    // Let `streamChat` resolve and register the exit listener, then die.
+    await new Promise((r) => setTimeout(r, 0));
+    emitExit();
+
+    const outcome = await turn;
+    expect(outcome.status).toBe('interrupted');
+    expect(outcome.sidecarLost).toBe(true);
+    // The partial text the user saw is still reported, so a caller can choose
+    // to keep it; the router drops the assistant row on this path.
+    expect(chunks).toEqual(['partial']);
+  });
+
+  it('a normal done is not reported as a crash', async () => {
+    const { supervisor } = makeSupervisor([
+      { method: 'chunk', payload: { streamId: 'stream-1', delta: 'hi' } },
+      { method: 'done', payload: { streamId: 'stream-1', ok: true, status: 'completed' } },
+    ]);
+
+    const outcome = await streamCoreLoopTurn({
+      ...BASE_OPTIONS,
+      supervisor,
+      onText: () => {},
+    });
+
+    expect(outcome.status).toBe('completed');
+    expect(outcome.sidecarLost).toBeUndefined();
   });
 });
