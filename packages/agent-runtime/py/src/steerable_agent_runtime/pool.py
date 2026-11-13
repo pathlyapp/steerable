@@ -54,6 +54,7 @@ from .history import HistorySeed, entry_to_dict
 from .llm import LLMMessage, LLMUsage
 from .loop import CoreLoop
 from .registry import ChildRegistry, SpawnedChild, default_record_id, registry_status
+from .tree import AgentTree, TreeMember
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,12 @@ class OrchestrationConfig:
     close_tool: str = "agent_close"
     list_tool: str = "agent_list"
     interrupt_tool: str = "agent_interrupt"
+    #: R8 shared task board. Advertised only when a board is wired; the names
+    #: are configurable so a host can avoid colliding with its own tools.
+    task_create_tool: str = "team_task_create"
+    task_claim_tool: str = "team_task_claim"
+    task_complete_tool: str = "team_task_complete"
+    task_list_tool: str = "team_task_list"
 
     @property
     def tool_names(self) -> frozenset[str]:
@@ -112,6 +119,19 @@ class OrchestrationConfig:
                 self.close_tool,
                 self.list_tool,
                 self.interrupt_tool,
+            }
+        )
+
+    @property
+    def team_tool_names(self) -> frozenset[str]:
+        """The four board tools — separate so a nested child narrows its
+        orchestration family without losing the shared plan."""
+        return frozenset(
+            {
+                self.task_create_tool,
+                self.task_claim_tool,
+                self.task_complete_tool,
+                self.task_list_tool,
             }
         )
 
@@ -226,6 +246,7 @@ class AgentPool:
         parent_record_id: str | None = None,
         budget: TreeBudget | None = None,
         history_store: Any | None = None,
+        tree: AgentTree | None = None,
     ) -> None:
         self._config = config
         self._depth = depth
@@ -264,6 +285,22 @@ class AgentPool:
         #: into the child's own record; ``None`` keeps the legacy behaviour
         #: (the seed is just the child's opening messages).
         self._history_store = history_store
+        #: Tree-wide addressing, shared by every pool in one spawn tree. Each
+        #: pool registers the children it owns, so a peer message reaches an
+        #: agent through the owner that can actually steer or resume it.
+        #: ``None`` keeps the pre-R8 behaviour: only this pool's own children
+        #: are addressable.
+        self._tree = tree
+
+    @property
+    def tree(self) -> AgentTree | None:
+        """The tree this pool's children register into, or ``None``.
+
+        Exposed so another surface that shares this pool (the delegation seam)
+        can give its own children the same peer-addressing tools: membership
+        is a property of the tree, not of which executor built the child.
+        """
+        return self._tree
 
     def _emit(self, kind: str, data: dict[str, Any]) -> None:
         if self._event_sink is not None:
@@ -378,6 +415,7 @@ class AgentPool:
         if system_prompt:
             child_seed.insert(0, LLMMessage.text_of("system", system_prompt))
         handle.task = asyncio.ensure_future(self._run_child(handle, child_seed))
+        self._join_tree(child_id, profile=profile)
         loop_record_id = loop.record_id if loop is not None else None
         self._emit(
             "child_spawned",
@@ -448,6 +486,7 @@ class AgentPool:
         )
         self._watch_child(handle, loop)
         handle.task = asyncio.ensure_future(self._run_child(handle, list(seed)))
+        self._join_tree(child_id, profile=profile)
         self._emit(
             "child_resumed",
             {
@@ -459,8 +498,7 @@ class AgentPool:
         )
         return handle
 
-    def _write_seed_entry(
-        self,
+    def _write_seed_entry(        self,
         loop: CoreLoop,
         seed: list[LLMMessage],
         provenance: SeedProvenance,
@@ -492,6 +530,57 @@ class AgentPool:
             )
         except Exception as exc:  # noqa: BLE001 — bookkeeping never fails a spawn
             logger.warning("fork seed provenance write failed: %s", exc)
+
+    def _join_tree(self, child_id: str, *, profile: str | None) -> None:
+        """Make this child addressable by peers while it exists.
+
+        The pool owns the loop, so it is also the thing that can deliver a
+        message to it — registering here is what lets a sibling reach this
+        child without knowing which executor built it.
+        """
+        if self._tree is None:
+            return
+        self._tree.register(
+            TreeMember(
+                lineage=child_id,
+                depth=self._depth + 1,
+                parent=self._lineage or None,
+                profile=profile,
+            ),
+            lambda message, cid=child_id: self._deliver_to_peer(cid, message),
+        )
+
+    def _leave_tree(self, child_id: str) -> None:
+        """Stop resolving this child's address (closed or wound down)."""
+        if self._tree is not None:
+            self._tree.unregister(child_id)
+
+    async def _deliver_to_peer(self, child_id: str, message: str) -> str:
+        """Deliver a peer's message to one child, asynchronously.
+
+        ``AgentPool.send`` is synchronous because a tool call runs inside the
+        loop and must answer in one step; a peer message instead arrives from
+        another agent's tool call, and resuming that child means awaiting its
+        new run's first step. So this routes through the same vocabulary
+        ``send`` returns (``steered`` / ``resumed`` / ``error:*``) while
+        allowing the resume to await.
+        """
+        verdict = self.send(child_id, message)
+        if verdict != "resumed":
+            return verdict
+        handle = self._children.get(child_id)
+        if handle is None or handle.task is None:
+            return "resumed"
+        # The resumed child is running; wait for it to settle so the sender
+        # learns the outcome rather than a bare "accepted". Shielded: a
+        # timeout on the sender's side must not cancel the work.
+        try:
+            await asyncio.shield(handle.task)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — the child's own outcome carries it
+            pass
+        return verdict
 
     def _register_child(
         self,
@@ -1039,6 +1128,10 @@ class AgentPool:
         if handle is None:
             return False
         handle.closed = True
+        # Closing is the caller's "never again": the address stops resolving
+        # so a peer's message reports an unknown member instead of resuming an
+        # agent the owner already gave up on.
+        self._leave_tree(child_id)
         if handle.outcome is not None:
             return True
         self._cancel_handle(handle)
@@ -1071,6 +1164,7 @@ class AgentPool:
         live = [h for h in self._children.values() if h.outcome is None]
         for handle in self._children.values():
             handle.closed = True
+            self._leave_tree(handle.child_id)
         for handle in live:
             self._cancel_handle(handle)
         for handle in live:

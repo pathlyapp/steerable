@@ -66,6 +66,30 @@ Every change below is additive except where noted.
   the child re-reads the parent prefix on a different route. Changing the route
   without a fork fails closed.
 
+## Upgrading from 0.10
+
+Peer messaging and a shared task board ride the orchestration opt-in. Nothing
+changes for a host that does not enable it.
+
+- **`orchestration.team` (default `true`)** — with `enabled: true`, the turn
+  also creates a spawn tree and a shared task board, and advertises four board
+  tools (`team_task_create`, `team_task_claim`, `team_task_complete`,
+  `team_task_list`) to every agent in the job. `team: false` keeps the six-tool
+  family without them, for a host that does not want the extra tools in the
+  prompt.
+- **`agent_send` reaches the whole job.** Any live lineage id is addressable —
+  `0` (the turn's root), a sibling, a child — not just this executor's own
+  children. A message to the root steers the parent loop, so a worker's report
+  arrives as a user turn. `agent_list` now also returns `members` (live
+  addresses with depth and profile) and `self`.
+- **Depth no longer gates messaging.** A child at the depth wall, and a
+  `delegate_subagent` child, are advertised `agent_send` + `agent_list` and
+  nothing else from the family. A host that counts child tools sees two more.
+- **The tree and board are per turn.** They do not outlive the root run;
+  `agent.children.list` remains the durable record. A message to an id that
+  belonged to an earlier turn is not resumable through the tree — that is what
+  `agent_send`'s registry path handles.
+
 ## Embedding
 
 ```python

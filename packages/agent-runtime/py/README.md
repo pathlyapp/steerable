@@ -61,6 +61,37 @@ release. Nothing in the single-agent path changed.
 - **`SubagentExecutor.attach_pool()` / `.pool`** expose the shared pool so a
   host can report children's usage alongside the turn's own bill.
 
+## Upgrading from 0.10
+
+Peer messaging and a shared task board (R8). Additive on the tool surface:
+the same six orchestration tools exist, `agent_send` gained reach, and four
+board tools appear when the family is on.
+
+- **`agent_send` is tree-wide.** It used to reach only an executor's own
+  children. It now accepts any live lineage id in the turn's spawn tree — the
+  root (`0`), a sibling, a child — authorized by membership, not by a
+  permission table. Delivery still goes through the owning pool, so the
+  verdict vocabulary (`steered` / `resumed` / `error:*`) is unchanged. A
+  message to the root steers the parent loop and lands as a user turn at its
+  next round boundary.
+- **Leaf agents get `agent_send` and `agent_list`.** A child that may not
+  spawn (depth wall) or that came from `delegate_subagent` is still a member
+  of the job, so it is advertised those two tools with no `agent_spawn`. A
+  host that counts tools per child will see two more.
+- **`agent_list` gained `members` and `self`** next to `children` — the live
+  addresses `agent_send` accepts. `children` keeps its meaning and shape.
+- **New: `AgentTree` / `TreeMember` / `TeamTaskBoard` / `TaskItem`,**
+  `OrchestrationExecutor(tree=..., team_board=...)`, and
+  `AgentPool.tree`. Passing neither keeps the previous behaviour exactly
+  (single-pool reach, no board tools). `PeerToolsExecutor` is the layer that
+  gives a leaf the two messaging tools.
+- **New board tools, advertised with the family:** `team_task_create`,
+  `team_task_claim`, `team_task_complete`, `team_task_list`. They are
+  in-process and per turn — the board does not outlive its root turn, and the
+  durable child index remains the record of what survived.
+- **`subagent` children now register in the same tree,** so a delegated child
+  and an `agent_spawn` child can message each other. `AgentPool.tree` exposes
+  it; `attach_pool` is what makes a delegation part of the turn's job.
 Selectively install just the bits you need:
 
 ```bash

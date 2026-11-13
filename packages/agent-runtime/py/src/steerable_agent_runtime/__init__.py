@@ -84,6 +84,8 @@ from .branch import (
     resolve_fork_seq,
 )
 from .budget import SessionBudgetExceeded, TreeBudget, TreeBudgetReport
+from .tree import AgentTree, TreeMember
+from .team_board import TaskItem, TeamTaskBoard
 from .cache_control import (
     CacheControlProvider,
     CacheDriftMonitor,
@@ -209,7 +211,10 @@ from .orchestration import (
     OrchestrationBudgetExceeded,
     OrchestrationConfig,
     OrchestrationExecutor,
+    PeerToolsExecutor,
     orchestration_tool_descriptors,
+    send_tool_descriptor,
+    team_tool_descriptors,
 )
 from .otel import (
     PrivacyMode,
@@ -322,7 +327,11 @@ __all__ = [
     "AcpPermissionPolicy",
     "AcpToolBridge",
     "AcpUnavailable",
+    "AgentTree",
     "PermissionDiagnostic",
+    "TaskItem",
+    "TeamTaskBoard",
+    "TreeMember",
     "run_acp_child",
     "DEFAULT_MAX_ITEM_TOKENS",
     "DEFAULT_MAX_SERVER_TOOLS",
@@ -541,6 +550,9 @@ __all__ = [
     "message_from_dict",
     "message_to_dict",
     "orchestration_tool_descriptors",
+    "PeerToolsExecutor",
+    "send_tool_descriptor",
+    "team_tool_descriptors",
     "parse_grounding_verdict",
     "parse_mcp_name",
     "parse_turn_route",

@@ -2239,6 +2239,70 @@ async def test_orchestration_off_without_enabled_flag() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_turn_advertises_the_shared_board() -> None:
+    """R8: an orchestrated turn also gets the four board tools.
+
+    The board is additive — an agent that never claims a task behaves as
+    before — so it rides the same opt-in as the family rather than needing a
+    second flag.
+    """
+    provider = _ScriptedProvider([_text_round("plain")])
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+            "orchestration": {"enabled": True, "maxDepth": 1, "maxParallel": 2},
+        },
+    )
+
+    first_tools = provider.stream_kwargs[0].get("tools") or []
+    names = {t["function"]["name"] for t in first_tools}
+    assert {
+        "team_task_create",
+        "team_task_claim",
+        "team_task_complete",
+        "team_task_list",
+    } <= names
+
+
+@pytest.mark.asyncio
+async def test_the_team_surface_can_be_turned_off() -> None:
+    """A host that wants the family without the board says ``team: false``.
+
+    Kept as a switch because the board adds four tools to every agent in the
+    job, which is a prompt cost a host may not want to pay.
+    """
+    provider = _ScriptedProvider([_text_round("plain")])
+    sidecar = _make_sidecar(provider)
+
+    await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "fake",
+            "messages": [{"role": "user", "content": "hi"}],
+            "useCoreLoop": True,
+            "orchestration": {
+                "enabled": True,
+                "maxDepth": 1,
+                "maxParallel": 2,
+                "team": False,
+            },
+        },
+    )
+
+    first_tools = provider.stream_kwargs[0].get("tools") or []
+    names = {t["function"]["name"] for t in first_tools}
+    assert "agent_spawn" in names
+    assert not any(name.startswith("team_task_") for name in names)
+
+
+@pytest.mark.asyncio
 async def test_delegate_emits_agent_child_events_over_rpc() -> None:
     """The default delegation seam runs its child on the AgentPool: the
     lifecycle lands as agent.child notifications carrying the profile
