@@ -10,7 +10,19 @@ name: Sidecar build
 # run.
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag to build from, e.g. v0.12.2."
+        required: false
+        type: string
   workflow_call:
+    inputs:
+      # Tag to build. A caller must pass it: a reusable workflow otherwise
+      # checks out the default branch, so a release would bundle code that is
+      # not the tag it publishes.
+      ref:
+        type: string
+        required: true
   push:
     tags: ["sidecar-v*"]
 
@@ -50,6 +62,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-python@v6
         with:

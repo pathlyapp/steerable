@@ -21,6 +21,14 @@ on:
   push:
     branches: [main, develop, 'release/**']
   workflow_call:
+    inputs:
+      # Tag to verify. A caller must pass it: a reusable workflow otherwise
+      # checks out the default branch, which verifies a different commit than
+      # the one being released.
+      ref:
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
 
 jobs:
@@ -33,6 +41,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v5
         with:
@@ -55,6 +65,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v5
         with:

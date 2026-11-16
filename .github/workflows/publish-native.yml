@@ -7,6 +7,14 @@ name: Verify native CoreLoop wheels
 
 on:
   workflow_call:
+    inputs:
+      # Tag to verify. A caller must pass it: a reusable workflow otherwise
+      # checks out the default branch, which verifies a different commit than
+      # the one being released.
+      ref:
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
 
 concurrency:
@@ -23,6 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"

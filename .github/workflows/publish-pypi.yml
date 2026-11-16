@@ -23,12 +23,29 @@ on:
         type: boolean
         required: false
         default: false
+      # Tag to publish. A caller must pass it: a reusable workflow otherwise
+      # checks out the default branch, which uploads whatever versions that
+      # branch happens to carry instead of the tag being released.
+      ref:
+        type: string
+        required: true
+      expected_version:
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Skip the actual upload step (still builds + diffs PyPI)."
         type: boolean
         default: false
+      ref:
+        description: "Tag to publish from, e.g. v0.12.2."
+        required: true
+        type: string
+      expected_version:
+        description: "Version the tag must report, e.g. 0.12.2."
+        required: true
+        type: string
 
 concurrency:
   group: publish-pypi-${{ github.ref }}
@@ -47,6 +64,18 @@ jobs:
     environment: pypi
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Refuse to publish a version other than the released tag
+        env:
+          EXPECTED: ${{ inputs.expected_version }}
+        run: |
+          set -euo pipefail
+          # A checkout that silently followed the default branch would upload a
+          # stale version; fail before any registry write instead.
+          python3 scripts/check_lockstep_versions.py --expected "$EXPECTED"
+
       - uses: astral-sh/setup-uv@v6
 
       - name: Install + build wheels for the pure-Python packages

@@ -258,18 +258,30 @@ without a registry.
 ### Re-running a publish after a partial failure
 
 The publish workflows skip packages already on the registry, so the
-canonical recovery is just to re-trigger the chain:
+canonical recovery is just to re-trigger the chain from the tag:
 
 ```bash
 # Re-run release.yml for a specific version (re-validates lockstep,
 # re-creates the GH Release if missing, re-chains publish-{npm,pypi}.yml).
-gh workflow run release.yml --ref main -f version=X.Y.Z
+# `--ref vX.Y.Z` matters: reusable workflows declared with `./...` resolve
+# from the dispatching ref, so this runs the workflow, and the sources, of
+# the tag being released.
+gh workflow run release.yml --ref vX.Y.Z -f version=X.Y.Z
 
-# Or re-trigger a single publish workflow directly:
-gh workflow run publish-npm.yml --ref vX.Y.Z
-gh workflow run publish-pypi.yml --ref vX.Y.Z
-gh workflow run publish-native.yml --ref vX.Y.Z
+# Or re-trigger a single publish workflow directly. Every publish entry
+# point requires the tag it publishes and the version that tag must report;
+# the version gate refuses a checkout that followed a different branch.
+gh workflow run publish-npm.yml --ref vX.Y.Z \
+  -f ref=vX.Y.Z -f expected_version=X.Y.Z
+gh workflow run publish-pypi.yml --ref vX.Y.Z \
+  -f ref=vX.Y.Z -f expected_version=X.Y.Z
+gh workflow run publish-native.yml --ref vX.Y.Z -f ref=vX.Y.Z
 ```
+
+A release never publishes whatever the default branch carries. Each publish
+job checks out `inputs.ref` and, for npm and PyPI, asserts the tree reports
+`inputs.expected_version` before any registry write, so a mis-wired ref fails
+the run instead of shipping the wrong version.
 
 ### Manual publish (escape hatch)
 

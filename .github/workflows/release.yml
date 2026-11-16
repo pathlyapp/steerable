@@ -61,6 +61,22 @@ jobs:
           # operator named, so the version-validation step compares
           # against the source tree at that tag (not the default branch).
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/v{0}', inputs.version) || github.ref }}
+          fetch-depth: 0
+
+      - name: Require the tag to be on main
+        shell: bash
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Releases must be cut from main. A tag on a feature or develop
+          # branch would publish code that main never contained.
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$TAG^{commit}" FETCH_HEAD; then
+            echo "::error::Tag $TAG is not an ancestor of main; release from main only."
+            exit 1
+          fi
+          echo "Tag $TAG is on main."
 
       - id: version
         name: Resolve version from tag or input
@@ -117,6 +133,8 @@ jobs:
   quickstart:
     needs: validate
     uses: ./.github/workflows/quickstart.yml
+    with:
+      ref: refs/tags/v${{ needs.validate.outputs.version }}
 
   # The signed sidecar bundles, one per published target. `publish-npm` turns
   # them into `@steerable/runtime-<target>`, and the CLI's install depends on
@@ -125,12 +143,19 @@ jobs:
   sidecar-bundles:
     needs: validate
     uses: ./.github/workflows/sidecar-build.yml
+    with:
+      ref: refs/tags/v${{ needs.validate.outputs.version }}
     permissions:
       contents: read
 
   publish-npm:
     needs: [validate, quickstart, sidecar-bundles]
     uses: ./.github/workflows/publish-npm.yml
+    # Every reusable workflow checks out what it is told: without these, a
+    # release published the default branch's versions instead of the tag's.
+    with:
+      ref: refs/tags/v${{ needs.validate.outputs.version }}
+      expected_version: ${{ needs.validate.outputs.version }}
     secrets: inherit
     permissions:
       contents: read
@@ -141,6 +166,8 @@ jobs:
   publish-native:
     needs: validate
     uses: ./.github/workflows/publish-native.yml
+    with:
+      ref: refs/tags/v${{ needs.validate.outputs.version }}
     secrets: inherit
     permissions:
       contents: read
@@ -149,6 +176,9 @@ jobs:
   publish-pypi:
     needs: [validate, publish-native]
     uses: ./.github/workflows/publish-pypi.yml
+    with:
+      ref: refs/tags/v${{ needs.validate.outputs.version }}
+      expected_version: ${{ needs.validate.outputs.version }}
     secrets: inherit
     permissions:
       contents: read

@@ -1,5 +1,13 @@
 name: Release Tag
 
+# Merging a `release/X.Y.Z` PR tags that merge commit and starts the release.
+#
+# The tag is created here rather than by the operator because a tag pushed by
+# `GITHUB_TOKEN` does not trigger `release.yml` (recursive-workflow
+# protection). This workflow pushes the tag and dispatches the release itself,
+# with the tag as the ref, so the run uses the workflow definition and the
+# sources of the commit being released.
+
 on:
   pull_request:
     types: [closed]
@@ -14,31 +22,52 @@ jobs:
     if: github.repository == 'pathlyapp/steerable' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout main
-        uses: actions/checkout@v5
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Extract version and push tag
+      - name: Extract version
+        id: version
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
-          VERSION="${{ github.event.pull_request.head.ref }}"
-          VERSION="${VERSION#release/}"
+          VERSION="${HEAD_REF#release/}"
           if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?(\+[A-Za-z0-9.-]+)?$'; then
-            echo "::error::Head ref '${{ github.event.pull_request.head.ref }}' is not release/X.Y.Z"
+            echo "::error::Head ref '$HEAD_REF' is not release/X.Y.Z"
             exit 1
           fi
-          TAG="v$VERSION"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      # Tag the merge commit, not whatever `main` points at now: another merge
+      # may have landed between this PR closing and this job running.
+      - name: Checkout the merge commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Push the tag
+        shell: bash
+        env:
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
             echo "::notice title=skip::Tag $TAG already exists."
             exit 0
           fi
-          git tag "$TAG"
+          git tag "$TAG" "$SHA"
           git push origin "$TAG"
-          # A tag pushed by GITHUB_TOKEN does not trigger the tag-driven
-          # Release workflow (recursive-workflow protection), so dispatch it.
-          gh workflow run release.yml -f version="$VERSION"
+
+      - name: Dispatch the release from the tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          # `--ref "$TAG"` runs the workflow file that shipped with the tag,
+          # so a later edit on the default branch cannot change how an
+          # already-tagged version is released.
+          gh workflow run release.yml --ref "$TAG" -f version="$VERSION"

@@ -15,6 +15,15 @@ on:
         type: boolean
         required: false
         default: false
+      # Tag to publish. A caller must pass it: a reusable workflow otherwise
+      # checks out the default branch, which publishes whatever versions that
+      # branch happens to carry instead of the tag being released.
+      ref:
+        type: string
+        required: true
+      expected_version:
+        type: string
+        required: true
   # Manual override for re-running after a transient publish failure
   # (e.g. npm registry 5xx). Re-running is safe because of the
   # registry-skip logic below.
@@ -24,6 +33,14 @@ on:
         description: "Skip the actual `npm publish` step (still builds + diffs registry)."
         type: boolean
         default: false
+      ref:
+        description: "Tag to publish from, e.g. v0.12.2."
+        required: true
+        type: string
+      expected_version:
+        description: "Version the tag must report, e.g. 0.12.2."
+        required: true
+        type: string
 
 # Allow only one publish run per ref at a time so two near-simultaneous merges
 # can't race each other into a half-published state.
@@ -44,6 +61,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Refuse to publish a version other than the released tag
+        env:
+          EXPECTED: ${{ inputs.expected_version }}
+        run: |
+          set -euo pipefail
+          # A checkout that silently followed the default branch would publish
+          # a stale version; fail before any registry write instead.
+          python3 scripts/check_lockstep_versions.py --expected "$EXPECTED"
 
       - uses: pnpm/action-setup@v5
 
