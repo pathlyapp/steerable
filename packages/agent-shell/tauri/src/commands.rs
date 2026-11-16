@@ -109,14 +109,22 @@ pub async fn host_save_text_file(
     })
 }
 
+/// Rich pasteboard read for the composer.
+///
+/// Runs on the async thread pool, not the main thread: a screenshot read used
+/// to take about a second there and swallow the next Cmd+V.
 #[tauri::command]
-pub fn host_read_clipboard() -> ClipboardContents {
-    clipboard::read_clipboard()
+pub async fn host_read_clipboard() -> Result<ClipboardContents, String> {
+    tauri::async_runtime::spawn_blocking(clipboard::read_clipboard)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn host_read_clipboard_text() -> String {
-    clipboard::read_clipboard_text()
+pub async fn host_read_clipboard_text() -> String {
+    tauri::async_runtime::spawn_blocking(clipboard::read_clipboard_text)
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]

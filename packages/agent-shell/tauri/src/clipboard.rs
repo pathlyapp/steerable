@@ -82,15 +82,54 @@ pub fn read_clipboard_text() -> String {
 }
 
 fn clipboard_image() -> Option<ClipboardFile> {
-    let mut clipboard = arboard::Clipboard::new().ok()?;
-    let image = clipboard.get_image().ok()?;
-    let png = png_from_rgba(image.width, image.height, image.bytes.as_ref())?;
+    clipboard_image_from(pasteboard_png(), encoded_png)
+}
+
+/// Builds the pasted image from the pasteboard PNG when there is one, and only
+/// falls back to decoding when the pasteboard holds another format.
+fn clipboard_image_from(
+    pasteboard_png: Option<Vec<u8>>,
+    encoded: impl FnOnce() -> Option<Vec<u8>>,
+) -> Option<ClipboardFile> {
+    let png = pasteboard_png.or_else(encoded)?;
     Some(ClipboardFile {
         name: "image.png".to_string(),
         path: None,
         data_base64: Some(STANDARD.encode(png)),
         mime: Some("image/png".to_string()),
     })
+}
+
+/// Pasteboard images that are already PNG.
+///
+/// Screenshot tools publish `public.png`, so the bytes are copied as they are.
+/// Decoding to RGBA and re-encoding cost ~1s per 2560x1440 screenshot, which
+/// ran inside the Cmd+V menu callback and dropped the next paste.
+#[cfg(target_os = "macos")]
+fn pasteboard_png() -> Option<Vec<u8>> {
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::ns_string;
+
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let data = pasteboard.dataForType(ns_string!("public.png"))?;
+    let bytes = data.to_vec();
+    if bytes.is_empty() || bytes.len() > MAX_CLIPBOARD_IMAGE_BYTES {
+        return None;
+    }
+    Some(bytes)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pasteboard_png() -> Option<Vec<u8>> {
+    None
+}
+
+/// Formats that need decoding first. Only reached when the pasteboard holds
+/// no PNG, for example a TIFF-only image copy from an older application.
+fn encoded_png() -> Option<Vec<u8>> {
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let image = clipboard.get_image().ok()?;
+    png_from_rgba(image.width, image.height, image.bytes.as_ref())
 }
 
 pub fn png_from_rgba(width: usize, height: usize, bytes: &[u8]) -> Option<Vec<u8>> {
@@ -202,5 +241,39 @@ mod tests {
         assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
         assert!(png_from_rgba(2, 2, &[0, 0, 0, 0]).is_none());
         assert!(png_from_rgba(usize::MAX, usize::MAX, &[]).is_none());
+    }
+
+    /// A pasteboard PNG is passed through, so a screenshot never pays for a
+    /// decode plus re-encode inside the Cmd+V callback.
+    #[test]
+    fn a_pasteboard_png_skips_the_decode_and_re_encode() {
+        let calls = std::cell::Cell::new(0);
+        let file = clipboard_image_from(Some(vec![0x89, b'P', b'N', b'G']), || {
+            calls.set(calls.get() + 1);
+            None
+        })
+        .expect("a PNG pasteboard yields one file");
+        assert_eq!(calls.get(), 0);
+        assert_eq!(file.mime.as_deref(), Some("image/png"));
+        assert_eq!(
+            STANDARD
+                .decode(file.data_base64.expect("bytes are attached"))
+                .expect("base64 decodes"),
+            vec![0x89, b'P', b'N', b'G']
+        );
+    }
+
+    /// A TIFF-only copy still reaches the composer through the decoder.
+    #[test]
+    fn an_image_without_a_pasteboard_png_is_encoded() {
+        let file = clipboard_image_from(None, || Some(vec![0x89, b'P', b'N', b'G']))
+            .expect("the encoded image yields one file");
+        assert_eq!(file.mime.as_deref(), Some("image/png"));
+    }
+
+    /// Nothing on the pasteboard yields no file rather than an empty one.
+    #[test]
+    fn an_empty_pasteboard_yields_no_image() {
+        assert!(clipboard_image_from(None, || None).is_none());
     }
 }

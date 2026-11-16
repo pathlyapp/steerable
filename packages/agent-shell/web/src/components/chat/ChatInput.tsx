@@ -868,6 +868,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     // While focused, a matching value must not rewrite contenteditable DOM —
     // that clobber is what turns the first Pinyin letter into ASCII.
     const lastPushedValueRef = useRef(value);
+    /**
+     * The newest draft this composer has accepted. Edits composed from it stay
+     * correct when two land in the same React commit, before `value` updates.
+     */
+    const latestValueRef = useRef(value);
     // Chromium can fire `input` for the first Pinyin letter *before*
     // `compositionstart`. A pending sync is tagged with this generation so
     // compositionstart can cancel it. Use a macrotask (not a microtask):
@@ -1168,6 +1173,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       const pendingCaretOffset = pendingCaretOffsetRef.current;
       const parentChangedValue = value !== lastPushedValueRef.current;
 
+      // A change from the parent (a send clearing the draft, a restored draft)
+      // replaces whatever edit was composed locally.
+      if (parentChangedValue) latestValueRef.current = value;
+
       if (focused && !parentChangedValue && pendingCaretOffset === null) {
         updateEditorHeight(editor);
         return;
@@ -1359,21 +1368,50 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       actualOnFilesChange(actualFiles.filter((_, idx) => idx !== indexToRemove));
     };
 
+    /**
+     * Compose against the latest draft, not the props snapshot.
+     *
+     * Two pastes in one React commit both read the same `value`, so the second
+     * one rebuilt the pre-first-paste text and collapsed to a no-op: six rapid
+     * Cmd+V inserted four copies. `latestValueRef` tracks every accepted edit.
+     */
+    const applyEdit = (edit: (current: string) => { next: string; caret: number }) => {
+      const { next, caret } = edit(latestValueRef.current);
+      latestValueRef.current = next;
+      pendingCaretOffsetRef.current = caret;
+      onChange(next);
+      syncMentionQuery(next, caret);
+    };
+
+    /**
+     * Caret to edit at. The DOM still holds the previous draft until React
+     * renders the last edit, so its selection describes text this composer no
+     * longer considers current; `pendingCaretOffsetRef` carries that edit's
+     * caret instead.
+     */
+    const editCaret = (editor: HTMLDivElement): { start: number; end: number } => {
+      if (getEditableText(editor) === latestValueRef.current) {
+        return getSelectionOffsets(editor);
+      }
+      const caret = pendingCaretOffsetRef.current ?? latestValueRef.current.length;
+      return { start: caret, end: caret };
+    };
+
     const replaceSelection = (insertText: string) => {
       const editor = editorRef.current;
       if (!editor) return;
-      const { start, end } = getSelectionOffsets(editor);
-      const nextValue = `${value.slice(0, start)}${insertText}${value.slice(end)}`;
-      pendingCaretOffsetRef.current = start + insertText.length;
-      onChange(nextValue);
-      syncMentionQuery(nextValue, pendingCaretOffsetRef.current);
+      const { start, end } = editCaret(editor);
+      applyEdit((current) => ({
+        next: `${current.slice(0, start)}${insertText}${current.slice(end)}`,
+        caret: start + insertText.length,
+      }));
     };
 
     const replaceRange = (start: number, end: number, insertText: string) => {
-      const nextValue = `${value.slice(0, start)}${insertText}${value.slice(end)}`;
-      pendingCaretOffsetRef.current = start + insertText.length;
-      onChange(nextValue);
-      syncMentionQuery(nextValue, pendingCaretOffsetRef.current);
+      applyEdit((current) => ({
+        next: `${current.slice(0, start)}${insertText}${current.slice(end)}`,
+        caret: start + insertText.length,
+      }));
     };
 
     const removeMentionToken = (start: number, end: number, ref?: MentionReference) => {
@@ -1442,6 +1480,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       const { end } = getSelectionOffsets(editor);
       const nextValue = getEditableText(editor);
       lastPushedValueRef.current = nextValue;
+      latestValueRef.current = nextValue;
       // The browser already rendered this text. Rewrite the DOM only when a
       // typed token must become a mention chip; any other rewrite detaches the
       // input method from the text node.

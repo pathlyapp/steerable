@@ -140,7 +140,13 @@ fn install_menu(app: &tauri::App, data_dir_name: &str) -> tauri::Result<()> {
         "view-zoom-out" => zoom::zoom_out(app),
         "view-zoom-reset" => zoom::zoom_reset(app),
         "edit-paste" => {
-            let _ = app.emit("menu:paste", clipboard::read_clipboard());
+            // The pasteboard read must not run on the main thread: encoding a
+            // screenshot takes about a second and any Cmd+V pressed in that
+            // window is lost.
+            let paste_app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let _ = paste_app.emit("menu:paste", clipboard::read_clipboard());
+            });
         }
         "app-quit" => app.exit(0),
         _ => {}

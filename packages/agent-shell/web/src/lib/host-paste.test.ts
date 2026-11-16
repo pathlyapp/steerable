@@ -105,4 +105,185 @@ describe('requestHostPaste', () => {
       releaseComposerPasteTarget(composer);
     }
   });
+
+  /**
+   * Two Cmd+V in a row must both land. A slow read (a screenshot used to take
+   * a second) dropped the second keystroke with no signal.
+   */
+  it('keeps a paste that arrives while another read is in flight', async () => {
+    const pendingReads: Array<(text: string) => void> = [];
+    const readClipboardText = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          pendingReads.push(resolve);
+        }),
+    );
+    vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
+      readClipboardText,
+    } as Partial<hostBridge.HostBridge> as hostBridge.HostBridge);
+    const composer = editable();
+    const pasted: string[] = [];
+    composer.addEventListener('hostpaste', (event) => {
+      pasted.push((event as CustomEvent<string>).detail);
+    });
+    composer.focus();
+
+    requestHostPaste(composer);
+    requestHostPaste(composer);
+    requestHostPaste(composer);
+
+    await vi.waitFor(() => {
+      expect(pendingReads).toHaveLength(1);
+    });
+    pendingReads[0]?.('一');
+    await vi.waitFor(() => {
+      expect(pendingReads).toHaveLength(2);
+    });
+    pendingReads[1]?.('二');
+    await vi.waitFor(() => {
+      expect(pendingReads).toHaveLength(3);
+    });
+    pendingReads[2]?.('三');
+
+    await vi.waitFor(() => {
+      expect(pasted).toEqual(['一', '二', '三']);
+    });
+  });
+
+  /**
+   * Sending the first message remounts the composer. A paste aimed at the
+   * field that is being replaced had no receiver and was dropped.
+   */
+  it('holds content for the composer that replaces a sent field', async () => {
+    const readClipboardText = vi.fn().mockResolvedValue('发送后粘贴');
+    vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
+      readClipboardText,
+    } as Partial<hostBridge.HostBridge> as hostBridge.HostBridge);
+    const sent = editable();
+    sent.remove();
+
+    requestHostPaste(sent);
+    await vi.waitFor(() => {
+      expect(readClipboardText).toHaveBeenCalledOnce();
+    });
+
+    const composer = editable();
+    const pasted: string[] = [];
+    composer.addEventListener('hostpaste', (event) => {
+      pasted.push((event as CustomEvent<string>).detail);
+    });
+    setComposerPasteTarget(composer);
+
+    expect(pasted).toEqual(['发送后粘贴']);
+    releaseComposerPasteTarget(composer);
+  });
+
+  /** A paste aimed at a field that unmounted must not land elsewhere. */
+  it('does not paste into a different field when the target unmounted', async () => {
+    const readClipboardText = vi.fn().mockResolvedValue('目标已卸载');
+    vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
+      readClipboardText,
+    } as Partial<hostBridge.HostBridge> as hostBridge.HostBridge);
+    const sent = editable();
+    sent.remove();
+
+    requestHostPaste(sent);
+    await vi.waitFor(() => {
+      expect(readClipboardText).toHaveBeenCalledOnce();
+    });
+
+    const composer = editable();
+    const pasted: string[] = [];
+    composer.addEventListener('hostpaste', (event) => {
+      pasted.push((event as CustomEvent<string>).detail);
+    });
+    setComposerPasteTarget(composer);
+
+    expect(pasted).toEqual(['目标已卸载']);
+    releaseComposerPasteTarget(composer);
+  });
+
+  /** A held paste must not resurface in a conversation opened much later. */
+  it('drops held content once its window has passed', async () => {
+    const readClipboardText = vi.fn().mockResolvedValue('过期内容');
+    vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
+      readClipboardText,
+    } as Partial<hostBridge.HostBridge> as hostBridge.HostBridge);
+    const sent = editable();
+    sent.remove();
+
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(1_000);
+    requestHostPaste(sent);
+    await vi.waitFor(() => {
+      expect(readClipboardText).toHaveBeenCalledOnce();
+    });
+
+    now.mockReturnValue(1_000 + 60_000);
+    const composer = editable();
+    const pasted: string[] = [];
+    composer.addEventListener('hostpaste', (event) => {
+      pasted.push((event as CustomEvent<string>).detail);
+    });
+    setComposerPasteTarget(composer);
+
+    expect(pasted).toEqual([]);
+    releaseComposerPasteTarget(composer);
+    now.mockRestore();
+  });
+
+  /**
+   * The remembered field must not outlive the user's visit to it. A paste
+   * after clicking elsewhere went to the field they had already left.
+   */
+  it('forgets a field once focus moves to another control', async () => {
+    const readClipboardText = vi.fn().mockResolvedValue('旧字段');
+    vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
+      readClipboardText,
+    } as Partial<hostBridge.HostBridge> as hostBridge.HostBridge);
+    installHostPaste();
+    const abandoned = editable();
+    const pastedIntoAbandoned: string[] = [];
+    abandoned.addEventListener('hostpaste', (event) => {
+      pastedIntoAbandoned.push((event as CustomEvent<string>).detail);
+    });
+    abandoned.focus();
+
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    button.focus();
+    await vi.waitFor(() => {
+      expect(document.activeElement).toBe(button);
+    });
+    // The focusout handler decides on the next task.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    requestHostPaste();
+    await vi.waitFor(() => {
+      expect(readClipboardText).toHaveBeenCalledOnce();
+    });
+    expect(pastedIntoAbandoned).toEqual([]);
+  });
+
+  /** Opening the app menu blurs the page; the field must survive that. */
+  it('keeps the field when focus leaves the page for the menu', async () => {
+    const readClipboardText = vi.fn().mockResolvedValue('菜单粘贴');
+    vi.spyOn(hostBridge, 'getHostBridge').mockReturnValue({
+      readClipboardText,
+    } as Partial<hostBridge.HostBridge> as hostBridge.HostBridge);
+    installHostPaste();
+    const composer = editable();
+    const pasted: string[] = [];
+    composer.addEventListener('hostpaste', (event) => {
+      pasted.push((event as CustomEvent<string>).detail);
+    });
+    composer.focus();
+    composer.blur();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    requestHostPaste();
+    await vi.waitFor(() => {
+      expect(pasted).toEqual(['菜单粘贴']);
+    });
+  });
 });

@@ -824,6 +824,25 @@ describe('ChatInput 粘贴图片', () => {
     }
   });
 
+  it('两次粘贴落在同一个 React 提交里都保留内容', async () => {
+    function Harness() {
+      const [value, setValue] = useState('');
+      return <ChatInput value={value} onChange={setValue} onSubmit={vi.fn()} />;
+    }
+    render(<Harness />);
+    const editor = screen.getByTestId('chat-composer');
+    editor.focus();
+    // Two pastes before React re-renders, as rapid Cmd+V produces. Composing
+    // the second draft from the props snapshot rebuilt the empty pre-paste
+    // value, so only the last paste survived.
+    act(() => {
+      fireEvent(editor, new CustomEvent('hostpaste', { detail: '一', cancelable: true }));
+      fireEvent(editor, new CustomEvent('hostpaste', { detail: '二', cancelable: true }));
+    });
+    await flushComposerSync();
+    expect(editor.textContent).toBe('一二');
+  });
+
   it('输入过中文后再粘贴，内容立即显示', async () => {
     function Harness() {
       const [value, setValue] = useState('');

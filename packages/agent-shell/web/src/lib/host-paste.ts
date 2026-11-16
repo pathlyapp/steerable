@@ -12,10 +12,24 @@ import {
 
 export type { HostClipboardFile } from './host-bridge';
 
-let pending = false;
 let lastEditable: HTMLElement | null = null;
 let composerPasteTarget: HTMLElement | null = null;
 let installed = false;
+/**
+ * Pastes run one at a time so two reads cannot interleave, but a paste that
+ * arrives during a read is queued instead of dropped: dropping it loses the
+ * keystroke without any signal (a screenshot read used to take a second).
+ */
+let pasteQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Content whose send remounts the composer. The keystroke was aimed at the
+ * field being replaced, so it waits for the replacement instead of being
+ * dropped. It expires so a stale pasteboard never lands in a later
+ * conversation.
+ */
+let heldForComposer: { clipboard: HostClipboard; until: number } | null = null;
+const HELD_PASTE_TTL_MS = 2_000;
 
 /**
  * Remember the live chat composer. A menu paste uses it when no other field
@@ -23,6 +37,10 @@ let installed = false;
  */
 export function setComposerPasteTarget(element: HTMLElement): void {
   composerPasteTarget = element;
+  const held = heldForComposer;
+  heldForComposer = null;
+  if (held === null || Date.now() > held.until) return;
+  insertHostClipboard(held.clipboard, element);
 }
 
 /** Drop the composer target when that element unmounts. */
@@ -30,7 +48,14 @@ export function releaseComposerPasteTarget(element: HTMLElement): void {
   if (composerPasteTarget === element) composerPasteTarget = null;
 }
 
-/** Remember the field that should receive a menu paste after focus moves. */
+/**
+ * Remember the field that should receive a menu paste after focus moves.
+ *
+ * `lastEditable` exists for the menu shortcut: opening the app menu takes key
+ * focus, and the paste still belongs to the field the user was in. It is
+ * dropped once focus lands on another control in the page, so a paste after
+ * the user clicked elsewhere does not go back to a field they left.
+ */
 export function installHostPaste(): void {
   if (installed || typeof document === 'undefined') return;
   installed = true;
@@ -38,29 +63,43 @@ export function installHostPaste(): void {
     const target = event.target;
     if (isEditable(target)) lastEditable = target;
   });
+  document.addEventListener('focusout', (event) => {
+    if (event.target !== lastEditable) return;
+    // A menu opens before focus settles, so decide on the next task.
+    setTimeout(() => {
+      if (lastEditable === null) return;
+      const active = document.activeElement;
+      const movedInsidePage = active instanceof HTMLElement && active !== document.body;
+      if (movedInsidePage && !isEditable(active)) lastEditable = null;
+    }, 0);
+  });
   const bridge = getHostBridge();
   bridge?.onMenuPaste?.((clipboard) => {
     insertHostClipboard(clipboard);
   });
 }
 
-/** Read the OS pasteboard and insert it into `target` or the focused field. */
+/**
+ * Read the OS pasteboard and insert it into `target` or the focused field.
+ *
+ * Reads are serialised. A request that arrives while one is in flight is
+ * queued, not dropped; the pasteboard is read when its turn comes so it
+ * reflects what is current then.
+ */
 export function requestHostPaste(target?: HTMLElement | null): void {
   const bridge = getHostBridge();
   const readClipboard = bridge?.readClipboard;
   const readText = bridge?.readClipboardText;
-  if ((!readClipboard && !readText) || pending) return;
-  pending = true;
-  void readHostClipboard(readClipboard, readText)
-    .then((clip) => {
-      insertHostClipboard(clip, target ?? null);
-    })
-    .catch((error: unknown) => {
-      console.warn('[host-paste] clipboard read failed', error);
-    })
-    .finally(() => {
-      pending = false;
-    });
+  if (!readClipboard && !readText) return;
+  pasteQueue = pasteQueue.then(() =>
+    readHostClipboard(readClipboard, readText)
+      .then((clip) => {
+        insertHostClipboard(clip, target ?? null);
+      })
+      .catch((error: unknown) => {
+        console.warn('[host-paste] clipboard read failed', error);
+      }),
+  );
 }
 
 /**
@@ -95,8 +134,15 @@ export function hostClipboardAvailable(): boolean {
 }
 
 function insertHostClipboard(clipboard: HostClipboard, target: HTMLElement | null = null): void {
-  if (clipboard.files.length > 0) insertHostFiles(clipboard.files, target);
-  if (clipboard.text) insertHostText(clipboard.text, target);
+  if (target !== null && !target.isConnected) {
+    // Sending the first message remounts the composer mid-read.
+    heldForComposer = { clipboard, until: Date.now() + HELD_PASTE_TTL_MS };
+    return;
+  }
+  const el = target ?? focusedEditable();
+  if (el === null) return;
+  if (clipboard.files.length > 0) insertHostFiles(clipboard.files, el);
+  if (clipboard.text) insertHostText(clipboard.text, el);
 }
 
 function isEditable(target: EventTarget | null): target is HTMLElement {
@@ -124,17 +170,13 @@ function focusedEditable(): HTMLElement | null {
   return null;
 }
 
-function insertHostFiles(files: HostClipboardFile[], preferred: HTMLElement | null): void {
-  const el = preferred?.isConnected ? preferred : focusedEditable();
-  if (!el) return;
+function insertHostFiles(files: HostClipboardFile[], el: HTMLElement): void {
   if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
     el.dispatchEvent(new CustomEvent('hostpastefiles', { detail: files, cancelable: true }));
   }
 }
 
-function insertHostText(text: string, preferred: HTMLElement | null): void {
-  const el = preferred?.isConnected ? preferred : focusedEditable();
-  if (!el) return;
+function insertHostText(text: string, el: HTMLElement): void {
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
     if (el.readOnly || el.disabled) return;
     writeFormValue(el, text);
