@@ -67,6 +67,11 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      - uses: actions/setup-python@v6
+        with:
+          # check_lockstep_versions.py needs tomllib (3.11+).
+          python-version: "3.12"
+
       - name: Refuse to publish a version other than the released tag
         env:
           EXPECTED: ${{ inputs.expected_version }}
