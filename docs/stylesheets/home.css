@@ -394,7 +394,8 @@ body:has(.sf-hero) .md-button--primary:hover {
   font-size: 0.9rem;
   color: var(--md-default-fg-color--light);
   margin: 0 auto 1.15rem;
-  max-width: 39rem;
+  max-width: 46rem;
+  text-wrap: balance;
 }
 
 .sf-cta {
@@ -1248,8 +1249,9 @@ button.sf-run-copy:focus-visible {
   text-align: center;
   color: var(--md-default-fg-color--light);
   font-size: 0.85rem;
-  max-width: 40rem;
+  max-width: 44rem;
   margin: 0 auto 1rem;
+  text-wrap: balance;
 }
 
 /* ---- Quickstart tabs ----------------------------------------------------- */
