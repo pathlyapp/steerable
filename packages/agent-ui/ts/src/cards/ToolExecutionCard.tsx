@@ -38,10 +38,10 @@ function formatToolDuration(ms: number): string {
 
 const STATUS_TONE: Record<Status, string> = {
   pending: 'text-[var(--agent-muted-foreground,#6b7280)]',
-  running: 'text-amber-600',
-  succeeded: 'text-emerald-600',
-  failed: 'text-rose-600',
-  cancelled: 'text-[var(--agent-muted-foreground,#9ca3af)]',
+  running: 'text-amber-700',
+  succeeded: 'text-emerald-700',
+  failed: 'text-rose-700',
+  cancelled: 'text-[var(--agent-muted-foreground,#6b7280)]',
 };
 
 export interface ToolExecutionCardProps {
@@ -189,7 +189,7 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
           )}
           {payload.error && (
             <section>
-              <div className="mb-1 text-[10px] uppercase tracking-wider text-rose-600">错误</div>
+              <div className="mb-1 text-[10px] uppercase tracking-wider text-rose-700">错误</div>
               <pre className="whitespace-pre-wrap break-words rounded bg-rose-50/60 px-2 py-1.5 text-[11px] text-rose-700">
                 {payload.error}
               </pre>

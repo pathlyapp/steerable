@@ -142,13 +142,13 @@ export const CoverageReportCard: React.FC<CoverageReportCardProps> = ({
         </div>
 
         <div className="space-y-2 rounded-md border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-background,#fff)] p-2">
-          <div className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
             <AlertIcon size={12} />
             薄弱知识点
           </div>
           {weakPoints.length === 0 ? (
             emptyWeakPointsLabel ? (
-              <div className="inline-flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+              <div className="inline-flex items-center gap-1.5 text-xs text-green-700 dark:text-green-400">
                 <CheckIcon size={12} />
                 {emptyWeakPointsLabel}
               </div>

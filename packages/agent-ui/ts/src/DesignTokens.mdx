@@ -1,0 +1,83 @@
+import { Meta } from '@storybook/blocks';
+
+<Meta title="Design Tokens" />
+
+# Design Tokens & Tailwind Preset
+
+`@steerable/agent-ui` ships semantic CSS variables and animations via `@steerable/agent-ui/tailwind-preset` so host apps can rebrand every component without modifying JSX.
+
+## Semantic Tokens (`--agent-*`)
+
+| Token | Tailwind utility | Light default | Purpose |
+| --- | --- | --- | --- |
+| `--agent-canvas` | `bg-agent-canvas` | `0 0% 100%` | Primary surface background |
+| `--agent-foreground` | `text-agent-foreground` | `240 10% 3.9%` | Primary body copy |
+| `--agent-muted` | `bg-agent-muted` | `240 4.8% 95.9%` | Secondary cards, pills, and subtle containers |
+| `--agent-muted-foreground` | `text-agent-muted-foreground` | `240 5% 32%` | Secondary labels and timestamps (WCAG AA ≥ 4.5:1) |
+| `--agent-border` | `border-agent-border` | `240 5.9% 90%` | Card and control outlines |
+| `--agent-accent` | `bg-agent-accent` / `text-agent-accent` | `217 91% 42%` | Primary actions and active indicators |
+| `--agent-accent-foreground` | `text-agent-accent-foreground` | `0 0% 100%` | Text/icons rendered on top of `--agent-accent` |
+| `--agent-destructive` | `text-agent-destructive` | `0 75% 42%` | Errors, failed runs, and destructive actions |
+| `--agent-tool-read` | `text-agent-tool-read` | `142 71% 22%` | Read-only tool badges |
+| `--agent-tool-write` | `text-agent-tool-write` | `28 90% 28%` | Mutating tool badges |
+| `--agent-tool-destructive` | `text-agent-tool-destructive` | `0 75% 42%` | High-risk / destructive tool badges |
+| `--agent-radius` | `rounded-agent-sm` / `md` / `lg` | `0.75rem` | Base radius scaled down by `4px` and `2px` |
+
+## Animations
+
+* `animate-agent-cursor-blink` — 1s stepped cursor blink during token streaming.
+* `animate-agent-shimmer` — 2s linear shimmer for pending/loading skeletons.
+
+## Tailwind v3 Setup
+
+```ts
+// tailwind.config.ts
+import preset from '@steerable/agent-ui/tailwind-preset';
+
+export default {
+  presets: [preset],
+  content: [
+    './src/**/*.{ts,tsx}',
+    './node_modules/@steerable/agent-ui/dist/**/*.{js,mjs}',
+  ],
+};
+```
+
+Override tokens in your global stylesheet:
+
+```css
+:root {
+  --agent-accent: 152 62% 31%;
+  --agent-radius: 0.5rem;
+}
+
+.dark {
+  --agent-canvas: 240 10% 3.9%;
+  --agent-foreground: 0 0% 98%;
+}
+```
+
+## Tailwind v4 Setup (`@theme`)
+
+When using `@tailwindcss/vite` or Tailwind v4 CSS-first configuration, define `--color-agent-*`, `--radius-agent-*`, and `--animate-agent-*` directly inside `@theme` (see `packages/agent-ui/ts/.storybook/preview.css`):
+
+```css
+@import "tailwindcss";
+
+@theme {
+  --color-agent-canvas: hsl(0 0% 100%);
+  --color-agent-foreground: hsl(240 10% 3.9%);
+  --color-agent-muted: hsl(240 4.8% 95.9%);
+  --color-agent-muted-foreground: hsl(240 5% 32%);
+  --color-agent-border: hsl(240 5.9% 90%);
+  --color-agent-accent: hsl(217 91% 42%);
+  --color-agent-accent-foreground: hsl(0 0% 100%);
+  --color-agent-destructive: hsl(0 75% 42%);
+  --color-agent-tool-read: hsl(142 71% 22%);
+  --color-agent-tool-write: hsl(28 90% 28%);
+  --color-agent-tool-destructive: hsl(0 75% 42%);
+  --radius-agent-sm: calc(0.75rem - 4px);
+  --radius-agent-md: calc(0.75rem - 2px);
+  --radius-agent-lg: 0.75rem;
+}
+```

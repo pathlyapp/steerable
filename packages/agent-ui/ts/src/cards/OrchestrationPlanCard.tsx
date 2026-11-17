@@ -166,15 +166,15 @@ export const OrchestrationPlanCard: React.FC<OrchestrationPlanCardProps> = ({
         {above}
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 text-sm shadow-sm">
           <div className="flex w-full items-start gap-2 px-3 py-2 text-xs">
-            <AlertIcon size={14} className="mt-0.5 shrink-0 text-rose-500" />
+            <AlertIcon size={14} className="mt-0.5 shrink-0 text-rose-700" />
             <GitBranchIcon size={14} className="mt-0.5 shrink-0 text-[var(--agent-muted-foreground,#6b7280)]" />
             <div className="min-w-0 flex-1">
               <div className="inline-flex items-center gap-1.5 whitespace-nowrap">
                 {headerLabel ?? (
                   <span className="font-medium text-[var(--agent-foreground,#111827)]">协调员</span>
                 )}
-                <span className="text-[var(--agent-muted-foreground,#9ca3af)]">·</span>
-                <span className="text-rose-500">规划失败</span>
+                <span className="text-[var(--agent-muted-foreground,#6b7280)]">·</span>
+                <span className="text-rose-700">规划失败</span>
               </div>
               {failure && (
                 <div className="mt-1 break-words leading-relaxed text-[var(--agent-muted-foreground,#6b7280)]">
@@ -252,11 +252,11 @@ export const OrchestrationPlanCard: React.FC<OrchestrationPlanCardProps> = ({
             <span className="flex shrink-0 items-center gap-2">
               {counts.running > 0 && (
                 <span className="flex items-center gap-1">
-                  <LoaderIcon size={12} className="text-amber-500" /> {counts.running}
+                  <LoaderIcon size={12} className="text-amber-700" /> {counts.running}
                 </span>
               )}
               {counts.failed > 0 && (
-                <span className="flex items-center gap-1 text-rose-600">
+                <span className="flex items-center gap-1 text-rose-700">
                   <AlertIcon size={12} /> {counts.failed}
                 </span>
               )}

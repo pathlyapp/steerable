@@ -40,34 +40,34 @@ type Level = 'low' | 'medium' | 'high';
 const EFFORT_CONFIG: Record<Level, { label: string; text: string; bg: string }> = {
   low: {
     label: '低投入',
-    text: 'text-green-600 dark:text-green-400',
+    text: 'text-green-700 dark:text-green-400',
     bg: 'bg-green-50 dark:bg-green-950/30',
   },
   medium: {
     label: '中投入',
-    text: 'text-amber-600 dark:text-amber-400',
+    text: 'text-amber-700 dark:text-amber-400',
     bg: 'bg-amber-50 dark:bg-amber-950/30',
   },
   high: {
     label: '高投入',
-    text: 'text-red-600 dark:text-red-400',
+    text: 'text-red-700 dark:text-red-400',
     bg: 'bg-red-50 dark:bg-red-950/30',
   },
 };
 const RISK_CONFIG: Record<Level, { label: string; text: string; bg: string }> = {
   low: {
     label: '低风险',
-    text: 'text-green-600 dark:text-green-400',
+    text: 'text-green-700 dark:text-green-400',
     bg: 'bg-green-50 dark:bg-green-950/30',
   },
   medium: {
     label: '中风险',
-    text: 'text-amber-600 dark:text-amber-400',
+    text: 'text-amber-700 dark:text-amber-400',
     bg: 'bg-amber-50 dark:bg-amber-950/30',
   },
   high: {
     label: '高风险',
-    text: 'text-red-600 dark:text-red-400',
+    text: 'text-red-700 dark:text-red-400',
     bg: 'bg-red-50 dark:bg-red-950/30',
   },
 };
@@ -241,7 +241,7 @@ export const PlanSelectorCard: React.FC<PlanSelectorCardProps> = ({
                     <div className="grid grid-cols-2 gap-2">
                       {(p.pros?.length ?? 0) > 0 && (
                         <div className="space-y-1">
-                          <div className="flex items-center gap-1 text-[10px] font-medium text-green-600 dark:text-green-400">
+                          <div className="flex items-center gap-1 text-[10px] font-medium text-green-700 dark:text-green-400">
                             <ThumbsUpIcon size={11} />
                             优势
                           </div>
@@ -257,7 +257,7 @@ export const PlanSelectorCard: React.FC<PlanSelectorCardProps> = ({
                       )}
                       {(p.cons?.length ?? 0) > 0 && (
                         <div className="space-y-1">
-                          <div className="flex items-center gap-1 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                          <div className="flex items-center gap-1 text-[10px] font-medium text-amber-700 dark:text-amber-400">
                             <AlertIcon size={11} />
                             注意
                           </div>

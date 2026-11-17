@@ -223,7 +223,7 @@ export const QuizCard: React.FC<QuizCardProps> = ({
         <div className="flex items-center gap-2">
           <ClipboardIcon size={14} className="shrink-0 text-blue-500" />
           <span className="break-words font-medium">{payload.title}</span>
-          {isReadOnly && <CheckIcon size={12} className="text-emerald-600" />}
+          {isReadOnly && <CheckIcon size={12} className="text-emerald-700" />}
         </div>
         {payload.description && (
           <p className="break-words text-xs leading-relaxed text-[var(--agent-muted-foreground,#6b7280)]">
@@ -271,7 +271,7 @@ export const QuizCard: React.FC<QuizCardProps> = ({
 
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pt-1">
           {isReadOnly ? (
-            <div className="inline-flex min-w-0 items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+            <div className="inline-flex min-w-0 items-center gap-1.5 text-xs text-green-700 dark:text-green-400">
               <CheckIcon size={12} />
               <span className="truncate">{submittedMessage ?? '已提交'}</span>
             </div>
