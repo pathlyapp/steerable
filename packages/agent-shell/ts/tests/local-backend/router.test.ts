@@ -2249,7 +2249,7 @@ describe('占位与 fallback 路由', () => {
     const router = makeRouter();
     const raw = await router.handleRaw({
       method: 'GET',
-      path: '/api/v2/aroli/file-preview/raw',
+      path: '/api/v2/files/preview/raw',
       headers: { range: 'bytes=0-1' },
     });
     expect(raw).toEqual({
@@ -2264,7 +2264,7 @@ describe('占位与 fallback 路由', () => {
 
     const jsonOnly = await router.handle({
       method: 'GET',
-      path: '/api/v2/aroli/file-preview/raw',
+      path: '/api/v2/files/preview/raw',
     });
     expect(jsonOnly.status).toBe(406);
   });

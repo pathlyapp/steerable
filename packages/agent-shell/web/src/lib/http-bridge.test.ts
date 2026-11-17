@@ -350,18 +350,18 @@ describe('浏览器形态的 local.* 降级', () => {
     const controller = new AbortController();
     const bridge = createHttpBridge();
     const res = await bridge.localBackend.requestBinary!({
-      path: '/api/v2/aroli/file-preview/raw?chatId=c1',
+      path: '/api/v2/files/preview/raw?chatId=c1',
       signal: controller.signal,
     });
-    expect(fetchMock).toHaveBeenCalledWith('/api/v2/aroli/file-preview/raw?chatId=c1', {
+    expect(fetchMock).toHaveBeenCalledWith('/api/v2/files/preview/raw?chatId=c1', {
       method: 'GET',
       headers: { Authorization: 'Bearer tok-bin' },
       body: undefined,
       signal: controller.signal,
     });
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([7, 8, 9]));
-    expect(bridge.localBackend.resolveAuthorizedFetch!('/api/v2/aroli/file-preview/raw')).toEqual({
-      url: '/api/v2/aroli/file-preview/raw',
+    expect(bridge.localBackend.resolveAuthorizedFetch!('/api/v2/files/preview/raw')).toEqual({
+      url: '/api/v2/files/preview/raw',
       headers: { Authorization: 'Bearer tok-bin' },
     });
   });

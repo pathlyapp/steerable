@@ -694,7 +694,7 @@ describe('BS HTTP server', () => {
         contentType: 'application/pdf',
         fileName: '报告.pdf',
       });
-      const res = await get('/api/v2/aroli/file-preview/raw');
+      const res = await get('/api/v2/files/preview/raw');
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toBe('application/pdf');
       expect(res.headers.get('content-disposition')).toContain('inline;');
@@ -711,14 +711,14 @@ describe('BS HTTP server', () => {
         contentType: 'application/pdf',
       });
 
-      const full = await get('/api/v2/aroli/file-preview/raw');
+      const full = await get('/api/v2/files/preview/raw');
       expect(full.status).toBe(200);
       expect(full.headers.get('accept-ranges')).toBe('bytes');
       expect(full.headers.get('content-length')).toBe('16');
       expect(full.headers.get('etag')).toMatch(/^W\/"16-\d+"$/);
       expect(await full.text()).toBe('0123456789ABCDEF');
 
-      const head = await fetch(`${base}/api/v2/aroli/file-preview/raw`, {
+      const head = await fetch(`${base}/api/v2/files/preview/raw`, {
         method: 'HEAD',
         headers: AUTH,
       });
@@ -726,7 +726,7 @@ describe('BS HTTP server', () => {
       expect(head.headers.get('content-length')).toBe('16');
       expect(await head.text()).toBe('');
 
-      const partial = await fetch(`${base}/api/v2/aroli/file-preview/raw`, {
+      const partial = await fetch(`${base}/api/v2/files/preview/raw`, {
         headers: { ...AUTH, Range: 'bytes=2-6' },
       });
       expect(partial.status).toBe(206);
@@ -734,14 +734,14 @@ describe('BS HTTP server', () => {
       expect(partial.headers.get('content-length')).toBe('5');
       expect(await partial.text()).toBe('23456');
 
-      const suffix = await fetch(`${base}/api/v2/aroli/file-preview/raw`, {
+      const suffix = await fetch(`${base}/api/v2/files/preview/raw`, {
         headers: { ...AUTH, Range: 'bytes=-4' },
       });
       expect(suffix.status).toBe(206);
       expect(suffix.headers.get('content-range')).toBe('bytes 12-15/16');
       expect(await suffix.text()).toBe('CDEF');
 
-      const invalid = await fetch(`${base}/api/v2/aroli/file-preview/raw`, {
+      const invalid = await fetch(`${base}/api/v2/files/preview/raw`, {
         headers: { ...AUTH, Range: 'bytes=99-120' },
       });
       expect(invalid.status).toBe(416);
@@ -749,7 +749,7 @@ describe('BS HTTP server', () => {
     });
 
     it('未授权请求访问二进制端点仍返回 401，文件不存在返回 404', async () => {
-      const unauth = await fetch(`${base}/api/v2/aroli/file-preview/raw`);
+      const unauth = await fetch(`${base}/api/v2/files/preview/raw`);
       expect(unauth.status).toBe(401);
 
       handleRaw.mockResolvedValue({
@@ -758,7 +758,7 @@ describe('BS HTTP server', () => {
         filePath: path.join(webDistDir, 'missing.pdf'),
         contentType: 'application/pdf',
       });
-      const missing = await get('/api/v2/aroli/file-preview/raw');
+      const missing = await get('/api/v2/files/preview/raw');
       expect(missing.status).toBe(404);
     });
   });
