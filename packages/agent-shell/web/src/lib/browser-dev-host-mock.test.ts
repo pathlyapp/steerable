@@ -45,7 +45,25 @@ describe('browser-dev-host-mock', () => {
     });
     expect(chats.chats.length).toBe(4);
 
+    for (const chat of chats.chats) {
+      const history = await bridge.localBackend.request<{
+        messages: Array<{ role: string; messageMetadata?: string | null }>;
+      }>({
+        method: 'GET',
+        path: `/api/v2/chats/${chat.id}/messages?limit=200`,
+      });
+      for (const msg of history.messages) {
+        if (msg.role === 'assistant' && msg.messageMetadata) {
+          const meta = JSON.parse(msg.messageMetadata) as { timeline?: Array<{ type: string }> };
+          if (meta.timeline) {
+            expect(meta.timeline.some((b) => b.type === 'text')).toBe(true);
+          }
+        }
+      }
+    }
+
     const firstId = chats.chats[0].id;
+
     const live = await bridge.localBackend.request<{ active: boolean }>({
       method: 'GET',
       path: `/api/v2/chats/${firstId}/live-stream`,
