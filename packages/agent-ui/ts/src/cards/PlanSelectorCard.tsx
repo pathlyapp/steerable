@@ -40,34 +40,34 @@ type Level = 'low' | 'medium' | 'high';
 const EFFORT_CONFIG: Record<Level, { label: string; text: string; bg: string }> = {
   low: {
     label: '低投入',
-    text: 'text-green-600 dark:text-green-400',
+    text: 'text-green-700 dark:text-green-400',
     bg: 'bg-green-50 dark:bg-green-950/30',
   },
   medium: {
     label: '中投入',
-    text: 'text-amber-600 dark:text-amber-400',
+    text: 'text-amber-700 dark:text-amber-400',
     bg: 'bg-amber-50 dark:bg-amber-950/30',
   },
   high: {
     label: '高投入',
-    text: 'text-red-600 dark:text-red-400',
+    text: 'text-red-700 dark:text-red-400',
     bg: 'bg-red-50 dark:bg-red-950/30',
   },
 };
 const RISK_CONFIG: Record<Level, { label: string; text: string; bg: string }> = {
   low: {
     label: '低风险',
-    text: 'text-green-600 dark:text-green-400',
+    text: 'text-green-700 dark:text-green-400',
     bg: 'bg-green-50 dark:bg-green-950/30',
   },
   medium: {
     label: '中风险',
-    text: 'text-amber-600 dark:text-amber-400',
+    text: 'text-amber-700 dark:text-amber-400',
     bg: 'bg-amber-50 dark:bg-amber-950/30',
   },
   high: {
     label: '高风险',
-    text: 'text-red-600 dark:text-red-400',
+    text: 'text-red-700 dark:text-red-400',
     bg: 'bg-red-50 dark:bg-red-950/30',
   },
 };
@@ -132,14 +132,14 @@ export const PlanSelectorCard: React.FC<PlanSelectorCardProps> = ({
             <TargetIcon size={14} className="text-blue-500" />
             <span className="text-sm font-medium">候选方案</span>
             {goalLabel && (
-              <span className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+              <span className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                 · {goalLabel}
               </span>
             )}
           </div>
         )}
         {renderHeader && goalLabel && (
-          <p className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">{goalLabel}</p>
+          <p className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">{goalLabel}</p>
         )}
 
         <div className="space-y-2">
@@ -171,7 +171,7 @@ export const PlanSelectorCard: React.FC<PlanSelectorCardProps> = ({
                           </span>
                         )}
                       </div>
-                      <p className="mt-1 text-xs leading-relaxed text-[var(--agent-muted-foreground,#6b7280)]">
+                      <p className="mt-1 text-xs leading-relaxed text-[var(--agent-muted-foreground,#4b5563)]">
                         {p.summary}
                       </p>
                     </div>
@@ -179,7 +179,7 @@ export const PlanSelectorCard: React.FC<PlanSelectorCardProps> = ({
 
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     {p.metrics?.duration && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-[var(--agent-muted,#f3f4f6)] px-2 py-0.5 text-[10px] font-medium text-[var(--agent-muted-foreground,#6b7280)]">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-[var(--agent-muted,#f3f4f6)] px-2 py-0.5 text-[10px] font-medium text-[var(--agent-muted-foreground,#4b5563)]">
                         <ClockIcon size={11} />
                         {p.metrics.duration}
                       </span>
@@ -203,7 +203,7 @@ export const PlanSelectorCard: React.FC<PlanSelectorCardProps> = ({
                       <button
                         type="button"
                         onClick={() => setExpandedId(isExpanded ? null : p.id)}
-                        className="inline-flex items-center gap-1 text-[11px] text-[var(--agent-muted-foreground,#6b7280)] transition-colors duration-200 hover:text-[var(--agent-foreground,#111827)]"
+                        className="inline-flex items-center gap-1 text-[11px] text-[var(--agent-muted-foreground,#4b5563)] transition-colors duration-200 hover:text-[var(--agent-foreground,#111827)]"
                       >
                         {isExpanded ? (
                           <>
@@ -241,14 +241,14 @@ export const PlanSelectorCard: React.FC<PlanSelectorCardProps> = ({
                     <div className="grid grid-cols-2 gap-2">
                       {(p.pros?.length ?? 0) > 0 && (
                         <div className="space-y-1">
-                          <div className="flex items-center gap-1 text-[10px] font-medium text-green-600 dark:text-green-400">
+                          <div className="flex items-center gap-1 text-[10px] font-medium text-green-700 dark:text-green-400">
                             <ThumbsUpIcon size={11} />
                             优势
                           </div>
                           {p.pros!.map((pro, i) => (
                             <p
                               key={`pro-${i}`}
-                              className="pl-4 text-[11px] text-[var(--agent-muted-foreground,#6b7280)]"
+                              className="pl-4 text-[11px] text-[var(--agent-muted-foreground,#4b5563)]"
                             >
                               {pro}
                             </p>
@@ -257,14 +257,14 @@ export const PlanSelectorCard: React.FC<PlanSelectorCardProps> = ({
                       )}
                       {(p.cons?.length ?? 0) > 0 && (
                         <div className="space-y-1">
-                          <div className="flex items-center gap-1 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                          <div className="flex items-center gap-1 text-[10px] font-medium text-amber-700 dark:text-amber-400">
                             <AlertIcon size={11} />
                             注意
                           </div>
                           {p.cons!.map((con, i) => (
                             <p
                               key={`con-${i}`}
-                              className="pl-4 text-[11px] text-[var(--agent-muted-foreground,#6b7280)]"
+                              className="pl-4 text-[11px] text-[var(--agent-muted-foreground,#4b5563)]"
                             >
                               {con}
                             </p>
@@ -273,7 +273,7 @@ export const PlanSelectorCard: React.FC<PlanSelectorCardProps> = ({
                       )}
                     </div>
                     {p.bestFor && (
-                      <p className="text-[11px] italic text-[var(--agent-muted-foreground,#6b7280)]">
+                      <p className="text-[11px] italic text-[var(--agent-muted-foreground,#4b5563)]">
                         适合：{p.bestFor}
                       </p>
                     )}
@@ -285,7 +285,7 @@ export const PlanSelectorCard: React.FC<PlanSelectorCardProps> = ({
         </div>
 
         {payload.comparison && (
-          <p className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+          <p className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">
             {payload.comparison}
           </p>
         )}
@@ -294,12 +294,12 @@ export const PlanSelectorCard: React.FC<PlanSelectorCardProps> = ({
           {renderBottomHint
             ? asReactNode(renderBottomHint({ submitted: isReadOnly }))
             : !isReadOnly
-              ? <span className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+              ? <span className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                   点击选择方案
                 </span>
               : <div className="flex items-center gap-1.5">
                   <CheckIcon size={12} className="text-blue-500" />
-                  <span className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+                  <span className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                     方案已选择
                   </span>
                 </div>}

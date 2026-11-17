@@ -37,11 +37,11 @@ function formatToolDuration(ms: number): string {
 }
 
 const STATUS_TONE: Record<Status, string> = {
-  pending: 'text-[var(--agent-muted-foreground,#6b7280)]',
-  running: 'text-amber-600',
-  succeeded: 'text-emerald-600',
-  failed: 'text-rose-600',
-  cancelled: 'text-[var(--agent-muted-foreground,#9ca3af)]',
+  pending: 'text-[var(--agent-muted-foreground,#4b5563)]',
+  running: 'text-amber-700',
+  succeeded: 'text-emerald-700',
+  failed: 'text-rose-700',
+  cancelled: 'text-[var(--agent-muted-foreground,#4b5563)]',
 };
 
 export interface ToolExecutionCardProps {
@@ -122,7 +122,7 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="flex shrink-0 items-center text-[var(--agent-muted-foreground,#6b7280)]"
+            className="flex shrink-0 items-center text-[var(--agent-muted-foreground,#4b5563)]"
             aria-expanded={expanded}
             aria-label={expanded ? '收起详情' : '展开详情'}
           >
@@ -146,13 +146,13 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
         >
           <span className={`flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-2.5 ${expandable ? '' : 'pl-2.5'}`}>
             {lead ?? (
-              <ZapIcon size={12} className="shrink-0 text-[var(--agent-muted-foreground,#6b7280)]" />
+              <ZapIcon size={12} className="shrink-0 text-[var(--agent-muted-foreground,#4b5563)]" />
             )}
             <span className="shrink-0 font-medium text-[var(--agent-foreground,#111827)]">
               {title}
             </span>
             {payload.summary && (
-              <span className="min-w-0 flex-1 truncate text-[var(--agent-muted-foreground,#6b7280)]">
+              <span className="min-w-0 flex-1 truncate text-[var(--agent-muted-foreground,#4b5563)]">
                 {payload.summary}
               </span>
             )}
@@ -160,10 +160,10 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
               <StatusIcon status={status} />
               <span className={STATUS_TONE[status]}>{STATUS_LABEL[status]}</span>
               {duration && (
-                <span className="text-[var(--agent-muted-foreground,#9ca3af)]">· {duration}</span>
+                <span className="text-[var(--agent-muted-foreground,#4b5563)]">· {duration}</span>
               )}
               {note && (
-                <span className="text-[var(--agent-muted-foreground,#6b7280)]">{note}</span>
+                <span className="text-[var(--agent-muted-foreground,#4b5563)]">{note}</span>
               )}
             </span>
           </span>
@@ -173,7 +173,7 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
         <div className="space-y-1.5 border-t border-[var(--agent-border,#e5e7eb)] px-2.5 py-1.5">
           {payload.args !== undefined && (
             <section>
-              <div className="mb-1 text-[10px] uppercase tracking-wider text-[var(--agent-muted-foreground,#6b7280)]">
+              <div className="mb-1 text-[10px] uppercase tracking-wider text-[var(--agent-muted-foreground,#4b5563)]">
                 输入
               </div>
               {renderArgs ? renderArgs(payload.args) : defaultRender(payload.args)}
@@ -181,7 +181,7 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
           )}
           {payload.output !== undefined && (
             <section>
-              <div className="mb-1 text-[10px] uppercase tracking-wider text-[var(--agent-muted-foreground,#6b7280)]">
+              <div className="mb-1 text-[10px] uppercase tracking-wider text-[var(--agent-muted-foreground,#4b5563)]">
                 输出
               </div>
               {renderOutput ? renderOutput(payload.output) : defaultRender(payload.output)}
@@ -189,7 +189,7 @@ export const ToolExecutionCard: React.FC<ToolExecutionCardProps> = ({
           )}
           {payload.error && (
             <section>
-              <div className="mb-1 text-[10px] uppercase tracking-wider text-rose-600">错误</div>
+              <div className="mb-1 text-[10px] uppercase tracking-wider text-rose-700">错误</div>
               <pre className="whitespace-pre-wrap break-words rounded bg-rose-50/60 px-2 py-1.5 text-[11px] text-rose-700">
                 {payload.error}
               </pre>

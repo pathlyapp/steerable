@@ -281,7 +281,67 @@ body:has(.sf-hero) .md-button--primary:hover {
 }
 
 [data-md-color-scheme="slate"] .sf-px-clouds {
-  opacity: 0.28;
+  opacity: 0.45;
+}
+
+.sf-px-stars {
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+[data-md-color-scheme="slate"] .sf-px-stars {
+  opacity: 0.95;
+}
+
+/* Pixel Sun / Moon theme toggle floating in the hero sky */
+button.sf-celestial {
+  position: absolute;
+  top: 1.05rem;
+  right: 11.4rem;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  transition: transform 0.14s ease, filter 0.14s ease;
+}
+
+button.sf-celestial:hover {
+  transform: translateY(-2px) scale(1.08);
+  filter: drop-shadow(3px 3px 0 #1e242b);
+}
+
+button.sf-celestial:active {
+  transform: translate(1px, 1px) scale(0.98);
+}
+
+button.sf-celestial:focus-visible {
+  outline: 3px solid var(--px-blue);
+  outline-offset: 2px;
+}
+
+.sf-celestial-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sf-celestial-moon {
+  display: none;
+}
+
+[data-md-color-scheme="slate"] .sf-celestial-sun {
+  display: none;
+}
+
+[data-md-color-scheme="slate"] .sf-celestial-moon {
+  display: block;
 }
 
 .sf-px-ground {
@@ -1647,6 +1707,13 @@ a.sf-brand-item:hover span {
 
   .sf-px-clouds {
     opacity: 0.45;
+  }
+
+  button.sf-celestial {
+    top: 0.65rem;
+    right: 0.65rem;
+    width: 2.25rem;
+    height: 2.25rem;
   }
 
   .sf-hero-logo-wrap {

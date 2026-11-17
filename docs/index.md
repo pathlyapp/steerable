@@ -54,7 +54,53 @@ hide:
     <rect x="8" y="24" width="84" height="12" fill="#FFFDF7"/>
     <rect x="12" y="34" width="76" height="6" fill="#D5E3EE"/>
   </g>
+  <g class="sf-px-stars">
+    <rect x="172" y="22" width="4" height="4" fill="#FEF08A"/>
+    <rect x="248" y="54" width="3" height="3" fill="#FFFDF7"/>
+    <rect x="336" y="18" width="4" height="4" fill="#FDE047"/>
+    <rect x="614" y="20" width="4" height="4" fill="#FFFDF7"/>
+    <rect x="688" y="58" width="3" height="3" fill="#FEF08A"/>
+    <rect x="768" y="82" width="4" height="4" fill="#FFFDF7"/>
+  </g>
 </svg>
+
+<button type="button" class="sf-celestial" aria-label="Switch to dark mode" title="Switch to dark mode" aria-pressed="false">
+  <svg class="sf-celestial-svg sf-celestial-sun" viewBox="0 0 24 24" aria-hidden="true" shape-rendering="crispEdges">
+    <rect x="11" y="1" width="2" height="3" fill="#EA7A2E"/>
+    <rect x="11" y="20" width="2" height="3" fill="#EA7A2E"/>
+    <rect x="1" y="11" width="3" height="2" fill="#EA7A2E"/>
+    <rect x="20" y="11" width="3" height="2" fill="#EA7A2E"/>
+    <rect x="4" y="4" width="2" height="2" fill="#F59E0B"/>
+    <rect x="18" y="4" width="2" height="2" fill="#F59E0B"/>
+    <rect x="4" y="18" width="2" height="2" fill="#F59E0B"/>
+    <rect x="18" y="18" width="2" height="2" fill="#F59E0B"/>
+    <rect x="8" y="6" width="8" height="12" fill="#1E242B"/>
+    <rect x="6" y="8" width="12" height="8" fill="#1E242B"/>
+    <rect x="7" y="7" width="10" height="10" fill="#1E242B"/>
+    <rect x="9" y="7" width="6" height="10" fill="#F59E0B"/>
+    <rect x="7" y="9" width="10" height="6" fill="#F59E0B"/>
+    <rect x="8" y="8" width="8" height="8" fill="#FACC15"/>
+    <rect x="9" y="9" width="5" height="5" fill="#FEF08A"/>
+  </svg>
+  <svg class="sf-celestial-svg sf-celestial-moon" viewBox="0 0 24 24" aria-hidden="true" shape-rendering="crispEdges">
+    <rect x="18" y="3" width="2" height="2" fill="#FEF08A"/>
+    <rect x="19" y="8" width="1" height="1" fill="#FFFDF7"/>
+    <rect x="4" y="17" width="2" height="2" fill="#FEF08A"/>
+    <rect x="9" y="4" width="6" height="2" fill="#1E242B"/>
+    <rect x="7" y="6" width="8" height="2" fill="#1E242B"/>
+    <rect x="5" y="8" width="8" height="8" fill="#1E242B"/>
+    <rect x="7" y="16" width="8" height="2" fill="#1E242B"/>
+    <rect x="9" y="18" width="8" height="2" fill="#1E242B"/>
+    <rect x="15" y="15" width="3" height="3" fill="#1E242B"/>
+    <rect x="9" y="5" width="5" height="2" fill="#FACC15"/>
+    <rect x="7" y="7" width="5" height="3" fill="#FACC15"/>
+    <rect x="6" y="9" width="4" height="6" fill="#FDE047"/>
+    <rect x="7" y="14" width="5" height="3" fill="#FACC15"/>
+    <rect x="9" y="16" width="7" height="3" fill="#FACC15"/>
+    <rect x="14" y="15" width="3" height="2" fill="#FDE047"/>
+    <rect x="8" y="9" width="2" height="4" fill="#FEF9C3"/>
+  </svg>
+</button>
 
 <div class="sf-hero-logo-wrap">
 <img class="sf-hero-logo" src="assets/logo.png" alt="Steerable logo" />

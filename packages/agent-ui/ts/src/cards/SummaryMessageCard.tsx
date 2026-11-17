@@ -89,7 +89,7 @@ export const SummaryMessageCard: React.FC<SummaryMessageCardProps> = ({
           onClick={() => canToggle && setExpanded((v) => !v)}
           disabled={!canToggle}
           className={[
-            'group inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] leading-none text-[var(--agent-muted-foreground,#6b7280)] transition-colors',
+            'group inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] leading-none text-[var(--agent-muted-foreground,#4b5563)] transition-colors',
             canToggle
               ? 'cursor-pointer hover:bg-[var(--agent-muted,#f3f4f6)] hover:text-[var(--agent-foreground,#111827)]'
               : 'cursor-default',
@@ -108,7 +108,7 @@ export const SummaryMessageCard: React.FC<SummaryMessageCardProps> = ({
           )}
         </button>
         {body && (
-          <div className="ml-3 mt-1.5 rounded-md border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-muted,#f3f4f6)]/30 px-3 py-2 text-[12px] leading-relaxed text-[var(--agent-muted-foreground,#6b7280)]">
+          <div className="ml-3 mt-1.5 rounded-md border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-muted,#f3f4f6)]/30 px-3 py-2 text-[12px] leading-relaxed text-[var(--agent-muted-foreground,#4b5563)]">
             {body}
           </div>
         )}
@@ -127,7 +127,7 @@ export const SummaryMessageCard: React.FC<SummaryMessageCardProps> = ({
         type="button"
         onClick={() => canToggle && setExpanded((v) => !v)}
         disabled={!canToggle}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[var(--agent-muted-foreground,#6b7280)]"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[var(--agent-muted-foreground,#4b5563)]"
       >
         {isPending ? <LoaderIcon size={12} /> : <ArchiveIcon size={12} />}
         <span>{labelNode}</span>
