@@ -203,14 +203,10 @@ hide:
 </div>
 
 <nav class="sf-subnav" aria-label="On this page">
-<a href="#run">Quick run</a>
-<a href="#why">Why Steerable</a>
-<a href="#bench">Benchmarks</a>
-<a href="#inside">What's inside</a>
-<a href="#quickstart">Quickstart</a>
-<a href="#architecture">Architecture</a>
-<a href="#packages">Packages</a>
-<a href="#compare">Compare</a>
+<a href="#run">Quick start</a>
+<a href="#quickstart">Integrate</a>
+<a href="#why">Architecture</a>
+<a href="#bench">Benchmarks &amp; compare</a>
 <a href="#users">Users</a>
 </nav>
 
@@ -254,6 +250,78 @@ hide:
 <div class="sf-out">→ one install brings the runtime; login verifies the key; Node 22.19 or newer (the terminal session needs 26.4)</div>
 </div>
 </div>
+</div>
+
+<h2 class="sf-section" id="quickstart">Quickstart</h2>
+
+<p class="sf-lede" markdown>
+Embed any single layer (for the full shell see [above](#run); UI-only showcase: <code>pnpm shell:dev</code>):
+</p>
+
+<div class="sf-tabs" markdown>
+
+=== "Python agent backend"
+
+    ```bash
+    uv add steerable-agent-protocol steerable-agent-harness steerable-agent-runtime
+    ```
+
+    ```python
+    from steerable_agent_runtime import ToolRouter, tool
+    from steerable_agent_protocol import ToolCall
+
+    router = ToolRouter()
+
+    @tool(router=router, description="Read a file by path")
+    async def read_file(path: str) -> dict:
+        return {"path": path, "content": open(path).read()}
+
+    result = await router.dispatch(
+        ToolCall(id="c1", name="read_file", arguments={"path": "README.md"})
+    )
+    # result.success, result.data, result.error — all typed.
+    ```
+
+=== "React chat UI"
+
+    ```bash
+    pnpm add @steerable/agent-protocol @steerable/agent-ui
+    ```
+
+    ```tsx
+    import { ChatPanel, useChatStream } from '@steerable/agent-ui';
+
+    export function Chat() {
+      const { messages, send, isStreaming } = useChatStream({
+        endpoint: '/api/chats/123/send',
+      });
+      return <ChatPanel messages={messages} onSubmit={send} isStreaming={isStreaming} />;
+    }
+    ```
+
+=== "Desktop app + local LLM"
+
+    ```bash
+    # Bundle the sidecar binary into resources/python-runtime/<platform>/
+    pnpm add @steerable/agent-runtime
+    ```
+
+    ```ts
+    import { AgentRuntime } from '@steerable/agent-runtime';
+
+    const runtime = new AgentRuntime({ sidecarPath });
+    await runtime.start();   // spawn + lifecycle.ready handshake
+
+    const stream = await runtime.chatStream({
+      provider: 'openai_compat',
+      model: 'glm-5.3-flash',
+      baseUrl: process.env.GATEWAY_BASE_URL!,
+      apiKey: process.env.GATEWAY_API_KEY!,
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    for await (const event of stream.events) { /* typed SSEEvent stream */ }
+    ```
+
 </div>
 
 <h2 class="sf-section" id="why">Why Steerable</h2>
@@ -400,6 +468,161 @@ Seatbelt / bwrap / Windows confinement, 61-rule classifier, and egress proxy. Tr
 One Rust <code>CoreLoop</code> drives both the desktop sidecar (stdio JSON-RPC) and the FastAPI server (SSE) over <code>LoopEvent</code>.
 </p>
 </div>
+
+<h2 class="sf-section" id="architecture">Architecture</h2>
+
+<p class="sf-lede" markdown>
+Strict no-upward-imports rule — adopt any tier and inherit only what sits below it. [Architecture spec](spec/architecture.md)
+</p>
+
+<div class="sf-arch-stage" id="arch-stage" data-focus="all">
+<div class="sf-arch-head">
+<span class="sf-arch-badge">◆ FIVE TIERS · NO UPWARD IMPORTS ◆</span>
+<div class="sf-arch-controls" role="toolbar" aria-label="Select a tier to see what it inherits">
+<button type="button" class="sf-arch-btn is-active" data-tier="all" aria-pressed="true">All tiers</button>
+<button type="button" class="sf-arch-btn" data-tier="t5" aria-pressed="false">T5 Shell</button>
+<button type="button" class="sf-arch-btn" data-tier="t4" aria-pressed="false">T4 UI</button>
+<button type="button" class="sf-arch-btn" data-tier="t3s" aria-pressed="false">T3 Sidecar</button>
+<button type="button" class="sf-arch-btn" data-tier="t3r" aria-pressed="false">T3 Runtime</button>
+<button type="button" class="sf-arch-btn" data-tier="t2" aria-pressed="false">T2 Harness</button>
+<button type="button" class="sf-arch-btn" data-tier="t1" aria-pressed="false">T1 Protocol</button>
+</div>
+</div>
+
+<div class="sf-svg-scroll">
+<svg class="sf-arch-svg" viewBox="0 0 820 420" role="img" aria-label="Steerable five-tier architecture stack from Tier 5 Host Shell at top down to Tier 1 Protocol foundation at bottom." shape-rendering="crispEdges">
+  <!-- Dependency connectors (layered beneath blocks) -->
+  <g class="sf-arch-edges">
+    <!-- T5 -> T4 (left) -->
+    <line class="sf-edge" data-from="t5" data-to="t4" x1="210" y1="74" x2="210" y2="102" stroke="#1E242B" stroke-width="3" stroke-dasharray="5 4"/>
+    <rect class="sf-edge-lbl" data-from="t5" data-to="t4" x="158" y="79" width="78" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t5" data-to="t4" x="197" y="91" text-anchor="middle">renders with</text>
+
+    <!-- T5 -> T3S (center-right) -->
+    <path class="sf-edge" data-from="t5" data-to="t3s" d="M510 74 L510 88 L352 88 L352 178" fill="none" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t5" data-to="t3s" x="454" y="79" width="76" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t5" data-to="t3s" x="492" y="91" text-anchor="middle">supervises</text>
+
+    <!-- T4 -> T3S (host bridge) -->
+    <path class="sf-edge" data-from="t4" data-to="t3s" d="M276 154 L276 168 L302 168 L302 178" fill="none" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t4" data-to="t3s" x="236" y="158" width="72" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t4" data-to="t3s" x="272" y="170" text-anchor="middle">host bridge</text>
+
+    <!-- T4 -> T1 (outer left wire types) -->
+    <path class="sf-edge" data-from="t4" data-to="t1" d="M108 154 L108 344" fill="none" stroke="#7C3AED" stroke-width="3" stroke-dasharray="5 4"/>
+    <rect class="sf-edge-lbl" data-from="t4" data-to="t1" x="69" y="244" width="78" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t4" data-to="t1" x="108" y="256" text-anchor="middle">wire types</text>
+
+    <!-- T3S -> T2 -->
+    <line class="sf-edge" data-from="t3s" data-to="t2" x1="376" y1="236" x2="376" y2="266" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t3s" data-to="t2" x="346" y="242" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t3s" data-to="t2" x="376" y="254" text-anchor="middle">embeds</text>
+
+    <!-- T3R -> T2 -->
+    <line class="sf-edge" data-from="t3r" data-to="t2" x1="600" y1="236" x2="600" y2="266" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t3r" data-to="t2" x="570" y="242" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t3r" data-to="t2" x="600" y="254" text-anchor="middle">embeds</text>
+
+    <!-- T3S -> T1 (left side) -->
+    <path class="sf-edge" data-from="t3s" data-to="t1" d="M196 236 L196 344" fill="none" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t3s" data-to="t1" x="162" y="286" width="68" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t3s" data-to="t1" x="196" y="298" text-anchor="middle">validates</text>
+
+    <!-- T3R -> T1 (right side) -->
+    <path class="sf-edge" data-from="t3r" data-to="t1" d="M762 236 L762 344" fill="none" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t3r" data-to="t1" x="728" y="286" width="68" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t3r" data-to="t1" x="762" y="298" text-anchor="middle">validates</text>
+
+    <!-- T2 -> T1 -->
+    <line class="sf-edge" data-from="t2" data-to="t1" x1="488" y1="322" x2="488" y2="344" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t2" data-to="t1" x="458" y="324" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t2" data-to="t1" x="488" y="336" text-anchor="middle">imports</text>
+  </g>
+
+  <!-- Tier 5: Host Shell & CLI -->
+  <g class="sf-tier-node" data-tier="t5" tabindex="0" role="button" aria-label="Tier 5 Host Shell and CLI">
+    <rect x="44" y="18" width="736" height="56" fill="#1E242B"/>
+    <rect x="40" y="14" width="736" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="40" y="14" width="144" height="56" fill="#2563EB" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="112" y="39" text-anchor="middle">TIER 5</text>
+    <text class="sf-tier-sub" x="112" y="55" text-anchor="middle">Host Shell &amp; CLI</text>
+    <text class="sf-tier-pkg" x="198" y="38">@steerable/agent-shell · agent-shell-tauri · agent-shell-web · agent-cli · pack-sdk</text>
+    <text class="sf-tier-desc" x="198" y="56">Tauri desktop window · Node host runtime · headless HTTP server · CLI/TUI</text>
+  </g>
+
+  <!-- Tier 4: UI -->
+  <g class="sf-tier-node" data-tier="t4" tabindex="0" role="button" aria-label="Tier 4 UI">
+    <rect x="44" y="106" width="342" height="52" fill="#1E242B"/>
+    <rect x="40" y="102" width="342" height="52" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="40" y="102" width="102" height="52" fill="#7C3AED" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="91" y="125" text-anchor="middle">TIER 4</text>
+    <text class="sf-tier-sub" x="91" y="141" text-anchor="middle">React UI</text>
+    <text class="sf-tier-pkg" x="156" y="124">@steerable/agent-ui</text>
+    <text class="sf-tier-desc" x="156" y="141">7 components · 14 cards · 3 hooks</text>
+  </g>
+
+  <!-- Tier 3: Sidecar -->
+  <g class="sf-tier-node" data-tier="t3s" tabindex="0" role="button" aria-label="Tier 3 Sidecar">
+    <rect x="176" y="182" width="290" height="56" fill="#1E242B"/>
+    <rect x="172" y="178" width="290" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="172" y="178" width="84" height="56" fill="#EA7A2E" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="214" y="203" text-anchor="middle">TIER 3</text>
+    <text class="sf-tier-sub" x="214" y="219" text-anchor="middle">Sidecar</text>
+    <text class="sf-tier-pkg" x="268" y="202">steerable-sidecar</text>
+    <text class="sf-tier-desc" x="268" y="219">Portable CPython · 38 RPC methods</text>
+  </g>
+
+  <!-- Tier 3: Runtime -->
+  <g class="sf-tier-node" data-tier="t3r" tabindex="0" role="button" aria-label="Tier 3 Runtime">
+    <rect x="484" y="182" width="296" height="56" fill="#1E242B"/>
+    <rect x="480" y="178" width="296" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="480" y="178" width="88" height="56" fill="#0E7490" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="524" y="203" text-anchor="middle">TIER 3</text>
+    <text class="sf-tier-sub" x="524" y="219" text-anchor="middle">Runtime</text>
+    <text class="sf-tier-pkg" x="580" y="202">steerable-agent-runtime</text>
+    <text class="sf-tier-desc" x="580" y="219">CoreLoop · 4 providers · ToolRouter</text>
+  </g>
+
+  <!-- Tier 2: Harness -->
+  <g class="sf-tier-node" data-tier="t2" tabindex="0" role="button" aria-label="Tier 2 Harness">
+    <rect x="244" y="270" width="490" height="54" fill="#1E242B"/>
+    <rect x="240" y="266" width="490" height="54" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="240" y="266" width="100" height="54" fill="#1E8250" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="290" y="290" text-anchor="middle">TIER 2</text>
+    <text class="sf-tier-sub" x="290" y="306" text-anchor="middle">Harness</text>
+    <text class="sf-tier-pkg" x="354" y="289">steerable-agent-harness · @steerable/agent-harness</text>
+    <text class="sf-tier-desc" x="354" y="306">Pure-function policy · budget · retry · grounding · safety</text>
+  </g>
+
+  <!-- Tier 1: Protocol (Bedrock Foundation) -->
+  <g class="sf-tier-node" data-tier="t1" tabindex="0" role="button" aria-label="Tier 1 Protocol">
+    <rect x="44" y="348" width="736" height="58" fill="#1E242B"/>
+    <rect x="40" y="344" width="736" height="58" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="40" y="344" width="144" height="58" fill="#1E242B" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="112" y="370" text-anchor="middle">TIER 1</text>
+    <text class="sf-tier-sub" x="112" y="386" text-anchor="middle">Protocol</text>
+    <text class="sf-tier-pkg" x="198" y="369">@steerable/agent-protocol · steerable-agent-protocol</text>
+    <text class="sf-tier-desc" x="198" y="387">Single JSON Schema → generated TS/Zod + Pydantic wire types · lockstep X.Y.Z</text>
+  </g>
+</svg>
+</div>
+
+<p class="sf-arch-caption" id="sf-arch-caption">
+Click any tier to highlight its downward dependencies — no layer ever imports above itself.
+</p>
+</div>
+
+<h2 class="sf-section" id="packages">What's in the box</h2>
+
+| Package | Tier | What you get |
+| ------- | ---- | ------------ |
+| [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent`, `ToolCall` / `ToolResult`, `ChatMessage`, Sidecar JSON-RPC types (codegen from `spec/`) |
+| `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, command-safety patterns |
+| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop`, 4-protocol `LLMProvider`, `@tool`, `ToolRouter`, SSE/stdio transports & sidecar lifecycle |
+| [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | Portable CPython (<1s boot, signed & notarised) plus per-host CONNECT egress allow-list proxy |
+| [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | 7 core components (`ChatPanel`, `MessageList`, `ToolCallRenderer`, …) + 14 `/cards` + hooks + Tailwind preset |
+| `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri + headless host shell, shared Node HostRuntime, sidecar supervision, product-neutral renderer |
+| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | CLI & TUI (`steerable-cli login`), auto-pulling the platform runtime and sharing the host DB |
 
 <h2 class="sf-section" id="bench">Frontier results on Flash-priced models</h2>
 
@@ -584,274 +807,6 @@ Terminal-Bench 2.1 (89 tasks). <strong>79.0%</strong> is GLM-5.3-Flash @max (3-r
 <p class="sf-lede" markdown>
 GLM-5.3-Flash @high (<code>n=1</code>): **Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%.
 </p>
-
-<h2 class="sf-section" id="inside">What's inside</h2>
-
-<div class="sf-grid" markdown>
-<div class="sf-card" markdown>
-### The model-quality layer
-Recovers malformed tool calls (XML / `<function=>` / markdown), plus completion vetoes, grounding, and token calibration.
-
-<span class="sf-card-link">[Evaluation results →](evals.md)</span>
-</div>
-<div class="sf-card" markdown>
-### One wire protocol
-One JSON Schema → TS & Pydantic types. 15 lockstep packages, digest-pinned CoreLoop, and sigstore provenance.
-
-<span class="sf-card-link">[Wire spec →](spec/overview.md)</span>
-</div>
-<div class="sf-card" markdown>
-### Pure-function harness
-Policy, budget, retry, completion, and safety patterns with zero I/O coupling — drop into any backend.
-
-<span class="sf-card-link">[Safety & policy spec →](spec/safety.md)</span>
-</div>
-<div class="sf-card" markdown>
-### Pluggable runtime
-One `LLMProvider` across 4 protocols (OpenAI / Responses / Anthropic / Gemini), `@tool`, `ToolRouter`, and SSE / JSON-RPC.
-
-<span class="sf-card-link">[Runtime spec →](spec/runtime.md)</span>
-</div>
-<div class="sf-card" markdown>
-### Embeddable sidecar
-Signed portable CPython (38 RPC methods) with OS sandbox and egress proxy for Tauri or native hosts.
-
-<span class="sf-card-link">[Sidecar spec →](spec/sidecar.md)</span>
-</div>
-<div class="sf-card" markdown>
-### Headless React UI & Web Shell
-7 components, 14 rich cards, 3 hooks, and Tailwind preset powering the Web Shell (`pnpm agent-shell:web`).
-
-<span class="sf-card-link">[UI components →](ui/index.md)</span>
-</div>
-</div>
-
-<h2 class="sf-section" id="quickstart">Quickstart</h2>
-
-<p class="sf-lede" markdown>
-Embed any single layer (for the full shell see [above](#run); UI-only showcase: <code>pnpm shell:dev</code>):
-</p>
-
-<div class="sf-tabs" markdown>
-
-=== "Python agent backend"
-
-    ```bash
-    uv add steerable-agent-protocol steerable-agent-harness steerable-agent-runtime
-    ```
-
-    ```python
-    from steerable_agent_runtime import ToolRouter, tool
-    from steerable_agent_protocol import ToolCall
-
-    router = ToolRouter()
-
-    @tool(router=router, description="Read a file by path")
-    async def read_file(path: str) -> dict:
-        return {"path": path, "content": open(path).read()}
-
-    result = await router.dispatch(
-        ToolCall(id="c1", name="read_file", arguments={"path": "README.md"})
-    )
-    # result.success, result.data, result.error — all typed.
-    ```
-
-=== "React chat UI"
-
-    ```bash
-    pnpm add @steerable/agent-protocol @steerable/agent-ui
-    ```
-
-    ```tsx
-    import { ChatPanel, useChatStream } from '@steerable/agent-ui';
-
-    export function Chat() {
-      const { messages, send, isStreaming } = useChatStream({
-        endpoint: '/api/chats/123/send',
-      });
-      return <ChatPanel messages={messages} onSubmit={send} isStreaming={isStreaming} />;
-    }
-    ```
-
-=== "Desktop app + local LLM"
-
-    ```bash
-    # Bundle the sidecar binary into resources/python-runtime/<platform>/
-    pnpm add @steerable/agent-runtime
-    ```
-
-    ```ts
-    import { AgentRuntime } from '@steerable/agent-runtime';
-
-    const runtime = new AgentRuntime({ sidecarPath });
-    await runtime.start();   // spawn + lifecycle.ready handshake
-
-    const stream = await runtime.chatStream({
-      provider: 'openai_compat',
-      model: 'glm-5.3-flash',
-      baseUrl: process.env.GATEWAY_BASE_URL!,
-      apiKey: process.env.GATEWAY_API_KEY!,
-      messages: [{ role: 'user', content: 'hi' }],
-    });
-    for await (const event of stream.events) { /* typed SSEEvent stream */ }
-    ```
-
-</div>
-
-<h2 class="sf-section" id="architecture">Architecture</h2>
-
-<p class="sf-lede" markdown>
-Strict no-upward-imports rule — adopt any tier and inherit only what sits below it. [Architecture spec](spec/architecture.md)
-</p>
-
-<div class="sf-arch-stage" id="arch-stage" data-focus="all">
-<div class="sf-arch-head">
-<span class="sf-arch-badge">◆ FIVE TIERS · NO UPWARD IMPORTS ◆</span>
-<div class="sf-arch-controls" role="toolbar" aria-label="Select a tier to see what it inherits">
-<button type="button" class="sf-arch-btn is-active" data-tier="all" aria-pressed="true">All tiers</button>
-<button type="button" class="sf-arch-btn" data-tier="t5" aria-pressed="false">T5 Shell</button>
-<button type="button" class="sf-arch-btn" data-tier="t4" aria-pressed="false">T4 UI</button>
-<button type="button" class="sf-arch-btn" data-tier="t3s" aria-pressed="false">T3 Sidecar</button>
-<button type="button" class="sf-arch-btn" data-tier="t3r" aria-pressed="false">T3 Runtime</button>
-<button type="button" class="sf-arch-btn" data-tier="t2" aria-pressed="false">T2 Harness</button>
-<button type="button" class="sf-arch-btn" data-tier="t1" aria-pressed="false">T1 Protocol</button>
-</div>
-</div>
-
-<div class="sf-svg-scroll">
-<svg class="sf-arch-svg" viewBox="0 0 820 420" role="img" aria-label="Steerable five-tier architecture stack from Tier 5 Host Shell at top down to Tier 1 Protocol foundation at bottom." shape-rendering="crispEdges">
-  <!-- Dependency connectors (layered beneath blocks) -->
-  <g class="sf-arch-edges">
-    <!-- T5 -> T4 (left) -->
-    <line class="sf-edge" data-from="t5" data-to="t4" x1="210" y1="74" x2="210" y2="102" stroke="#1E242B" stroke-width="3" stroke-dasharray="5 4"/>
-    <rect class="sf-edge-lbl" data-from="t5" data-to="t4" x="158" y="79" width="78" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t5" data-to="t4" x="197" y="91" text-anchor="middle">renders with</text>
-
-    <!-- T5 -> T3S (center-right) -->
-    <path class="sf-edge" data-from="t5" data-to="t3s" d="M510 74 L510 88 L352 88 L352 178" fill="none" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t5" data-to="t3s" x="454" y="79" width="76" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t5" data-to="t3s" x="492" y="91" text-anchor="middle">supervises</text>
-
-    <!-- T4 -> T3S (host bridge) -->
-    <path class="sf-edge" data-from="t4" data-to="t3s" d="M276 154 L276 168 L302 168 L302 178" fill="none" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t4" data-to="t3s" x="236" y="158" width="72" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t4" data-to="t3s" x="272" y="170" text-anchor="middle">host bridge</text>
-
-    <!-- T4 -> T1 (outer left wire types) -->
-    <path class="sf-edge" data-from="t4" data-to="t1" d="M108 154 L108 344" fill="none" stroke="#7C3AED" stroke-width="3" stroke-dasharray="5 4"/>
-    <rect class="sf-edge-lbl" data-from="t4" data-to="t1" x="69" y="244" width="78" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t4" data-to="t1" x="108" y="256" text-anchor="middle">wire types</text>
-
-    <!-- T3S -> T2 -->
-    <line class="sf-edge" data-from="t3s" data-to="t2" x1="376" y1="236" x2="376" y2="266" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t3s" data-to="t2" x="346" y="242" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t3s" data-to="t2" x="376" y="254" text-anchor="middle">embeds</text>
-
-    <!-- T3R -> T2 -->
-    <line class="sf-edge" data-from="t3r" data-to="t2" x1="600" y1="236" x2="600" y2="266" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t3r" data-to="t2" x="570" y="242" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t3r" data-to="t2" x="600" y="254" text-anchor="middle">embeds</text>
-
-    <!-- T3S -> T1 (left side) -->
-    <path class="sf-edge" data-from="t3s" data-to="t1" d="M196 236 L196 344" fill="none" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t3s" data-to="t1" x="162" y="286" width="68" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t3s" data-to="t1" x="196" y="298" text-anchor="middle">validates</text>
-
-    <!-- T3R -> T1 (right side) -->
-    <path class="sf-edge" data-from="t3r" data-to="t1" d="M762 236 L762 344" fill="none" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t3r" data-to="t1" x="728" y="286" width="68" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t3r" data-to="t1" x="762" y="298" text-anchor="middle">validates</text>
-
-    <!-- T2 -> T1 -->
-    <line class="sf-edge" data-from="t2" data-to="t1" x1="488" y1="322" x2="488" y2="344" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t2" data-to="t1" x="458" y="324" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t2" data-to="t1" x="488" y="336" text-anchor="middle">imports</text>
-  </g>
-
-  <!-- Tier 5: Host Shell & CLI -->
-  <g class="sf-tier-node" data-tier="t5" tabindex="0" role="button" aria-label="Tier 5 Host Shell and CLI">
-    <rect x="44" y="18" width="736" height="56" fill="#1E242B"/>
-    <rect x="40" y="14" width="736" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="40" y="14" width="144" height="56" fill="#2563EB" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="112" y="39" text-anchor="middle">TIER 5</text>
-    <text class="sf-tier-sub" x="112" y="55" text-anchor="middle">Host Shell &amp; CLI</text>
-    <text class="sf-tier-pkg" x="198" y="38">@steerable/agent-shell · agent-shell-tauri · agent-shell-web · agent-cli · pack-sdk</text>
-    <text class="sf-tier-desc" x="198" y="56">Tauri desktop window · Node host runtime · headless HTTP server · CLI/TUI</text>
-  </g>
-
-  <!-- Tier 4: UI -->
-  <g class="sf-tier-node" data-tier="t4" tabindex="0" role="button" aria-label="Tier 4 UI">
-    <rect x="44" y="106" width="342" height="52" fill="#1E242B"/>
-    <rect x="40" y="102" width="342" height="52" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="40" y="102" width="102" height="52" fill="#7C3AED" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="91" y="125" text-anchor="middle">TIER 4</text>
-    <text class="sf-tier-sub" x="91" y="141" text-anchor="middle">React UI</text>
-    <text class="sf-tier-pkg" x="156" y="124">@steerable/agent-ui</text>
-    <text class="sf-tier-desc" x="156" y="141">7 components · 14 cards · 3 hooks</text>
-  </g>
-
-  <!-- Tier 3: Sidecar -->
-  <g class="sf-tier-node" data-tier="t3s" tabindex="0" role="button" aria-label="Tier 3 Sidecar">
-    <rect x="176" y="182" width="290" height="56" fill="#1E242B"/>
-    <rect x="172" y="178" width="290" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="172" y="178" width="84" height="56" fill="#EA7A2E" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="214" y="203" text-anchor="middle">TIER 3</text>
-    <text class="sf-tier-sub" x="214" y="219" text-anchor="middle">Sidecar</text>
-    <text class="sf-tier-pkg" x="268" y="202">steerable-sidecar</text>
-    <text class="sf-tier-desc" x="268" y="219">Portable CPython · 38 RPC methods</text>
-  </g>
-
-  <!-- Tier 3: Runtime -->
-  <g class="sf-tier-node" data-tier="t3r" tabindex="0" role="button" aria-label="Tier 3 Runtime">
-    <rect x="484" y="182" width="296" height="56" fill="#1E242B"/>
-    <rect x="480" y="178" width="296" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="480" y="178" width="88" height="56" fill="#0E7490" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="524" y="203" text-anchor="middle">TIER 3</text>
-    <text class="sf-tier-sub" x="524" y="219" text-anchor="middle">Runtime</text>
-    <text class="sf-tier-pkg" x="580" y="202">steerable-agent-runtime</text>
-    <text class="sf-tier-desc" x="580" y="219">CoreLoop · 4 providers · ToolRouter</text>
-  </g>
-
-  <!-- Tier 2: Harness -->
-  <g class="sf-tier-node" data-tier="t2" tabindex="0" role="button" aria-label="Tier 2 Harness">
-    <rect x="244" y="270" width="490" height="54" fill="#1E242B"/>
-    <rect x="240" y="266" width="490" height="54" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="240" y="266" width="100" height="54" fill="#1E8250" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="290" y="290" text-anchor="middle">TIER 2</text>
-    <text class="sf-tier-sub" x="290" y="306" text-anchor="middle">Harness</text>
-    <text class="sf-tier-pkg" x="354" y="289">steerable-agent-harness · @steerable/agent-harness</text>
-    <text class="sf-tier-desc" x="354" y="306">Pure-function policy · budget · retry · grounding · safety</text>
-  </g>
-
-  <!-- Tier 1: Protocol (Bedrock Foundation) -->
-  <g class="sf-tier-node" data-tier="t1" tabindex="0" role="button" aria-label="Tier 1 Protocol">
-    <rect x="44" y="348" width="736" height="58" fill="#1E242B"/>
-    <rect x="40" y="344" width="736" height="58" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="40" y="344" width="144" height="58" fill="#1E242B" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="112" y="370" text-anchor="middle">TIER 1</text>
-    <text class="sf-tier-sub" x="112" y="386" text-anchor="middle">Protocol</text>
-    <text class="sf-tier-pkg" x="198" y="369">@steerable/agent-protocol · steerable-agent-protocol</text>
-    <text class="sf-tier-desc" x="198" y="387">Single JSON Schema → generated TS/Zod + Pydantic wire types · lockstep X.Y.Z</text>
-  </g>
-</svg>
-</div>
-
-<p class="sf-arch-caption" id="sf-arch-caption">
-Click any tier to highlight its downward dependencies — no layer ever imports above itself.
-</p>
-</div>
-
-<h2 class="sf-section" id="packages">What's in the box</h2>
-
-| Package | Tier | What you get |
-| ------- | ---- | ------------ |
-| [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent`, `ToolCall` / `ToolResult`, `ChatMessage`, Sidecar JSON-RPC types (codegen from `spec/`) |
-| `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, command-safety patterns |
-| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop`, 4-protocol `LLMProvider`, `@tool`, `ToolRouter`, SSE/stdio transports & sidecar lifecycle |
-| [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | Portable CPython (<1s boot, signed & notarised) plus per-host CONNECT egress allow-list proxy |
-| [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | 7 core components (`ChatPanel`, `MessageList`, `ToolCallRenderer`, …) + 14 `/cards` + hooks + Tailwind preset |
-| `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri + headless host shell, shared Node HostRuntime, sidecar supervision, product-neutral renderer |
-| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | CLI & TUI (`steerable-cli login`), auto-pulling the platform runtime and sharing the host DB |
 
 <h2 class="sf-section" id="compare">How it compares</h2>
 

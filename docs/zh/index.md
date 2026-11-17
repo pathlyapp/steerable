@@ -174,14 +174,10 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 
 <nav class="sf-subnav" aria-label="页面导航">
 <a href="#run">一键启动</a>
-<a href="#why">核心优势</a>
-<a href="#bench">基准评测</a>
-<a href="#inside">核心能力</a>
 <a href="#quickstart">快速接入</a>
-<a href="#architecture">五层架构</a>
-<a href="#packages">包清单</a>
-<a href="#compare">框架对比</a>
-<a href="#users">用户案例</a>
+<a href="#why">机制与架构</a>
+<a href="#bench">实测与对比</a>
+<a href="#users">谁在使用</a>
 </nav>
 
 <div class="sf-run" id="run">
@@ -224,6 +220,78 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 <div class="sf-out">→ 一次安装自带运行时；login 自动校验密钥；需 Node 22.19+（终端交互界面需 26.4）</div>
 </div>
 </div>
+</div>
+
+<h2 class="sf-section" id="quickstart">快速接入</h2>
+
+<p class="sf-lede" markdown>
+按需选用任意一层嵌入项目；运行完整 Shell 见[一键启动](#run)，纯 UI 预览运行 <code>pnpm shell:dev</code>。
+</p>
+
+<div class="sf-tabs" markdown>
+
+=== "Python 智能体后端"
+
+    ```bash
+    uv add steerable-agent-protocol steerable-agent-harness steerable-agent-runtime
+    ```
+
+    ```python
+    from steerable_agent_runtime import ToolRouter, tool
+    from steerable_agent_protocol import ToolCall
+
+    router = ToolRouter()
+
+    @tool(router=router, description="按路径读取文件")
+    async def read_file(path: str) -> dict:
+        return {"path": path, "content": open(path).read()}
+
+    result = await router.dispatch(
+        ToolCall(id="c1", name="read_file", arguments={"path": "README.md"})
+    )
+    # result.success、result.data、result.error 均有完整类型约束
+    ```
+
+=== "React 对话界面"
+
+    ```bash
+    pnpm add @steerable/agent-protocol @steerable/agent-ui
+    ```
+
+    ```tsx
+    import { ChatPanel, useChatStream } from '@steerable/agent-ui';
+
+    export function Chat() {
+      const { messages, send, isStreaming } = useChatStream({
+        endpoint: '/api/chats/123/send',
+      });
+      return <ChatPanel messages={messages} onSubmit={send} isStreaming={isStreaming} />;
+    }
+    ```
+
+=== "桌面应用 + 本地 Sidecar"
+
+    ```bash
+    # 将 Sidecar 二进制放入 resources/python-runtime/<platform>/
+    pnpm add @steerable/agent-runtime
+    ```
+
+    ```ts
+    import { AgentRuntime } from '@steerable/agent-runtime';
+
+    const runtime = new AgentRuntime({ sidecarPath });
+    await runtime.start();   // 启动进程并完成 lifecycle.ready 握手
+
+    const stream = await runtime.chatStream({
+      provider: 'openai_compat',
+      model: 'glm-5.3-flash',
+      baseUrl: process.env.GATEWAY_BASE_URL!,
+      apiKey: process.env.GATEWAY_API_KEY!,
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    for await (const event of stream.events) { /* 强类型 SSEEvent 流 */ }
+    ```
+
 </div>
 
 <h2 class="sf-section" id="why">为什么选择 Steerable</h2>
@@ -356,6 +424,145 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 同一套 Rust <code>CoreLoop</code> 通过结构化 <code>LoopEvent</code>，同时驱动桌面 Sidecar 与服务端 FastAPI。
 </p>
 </div>
+
+<h2 class="sf-section" id="architecture">五层架构</h2>
+
+<p class="sf-lede" markdown>
+严格单向依赖（Tier N 绝不引入 Tier N+1），采用哪一层只继承下方依赖。[架构规范](../spec/architecture.md)
+</p>
+
+<div class="sf-arch-stage" id="arch-stage" data-focus="all">
+<div class="sf-arch-head">
+<span class="sf-arch-badge">◆ 五层架构 · 严格向下依赖 ◆</span>
+<div class="sf-arch-controls" role="toolbar" aria-label="选择层级以高亮查看依赖关系">
+<button type="button" class="sf-arch-btn is-active" data-tier="all" aria-pressed="true">全部层级</button>
+<button type="button" class="sf-arch-btn" data-tier="t5" aria-pressed="false">T5 宿主壳</button>
+<button type="button" class="sf-arch-btn" data-tier="t4" aria-pressed="false">T4 UI</button>
+<button type="button" class="sf-arch-btn" data-tier="t3s" aria-pressed="false">T3 Sidecar</button>
+<button type="button" class="sf-arch-btn" data-tier="t3r" aria-pressed="false">T3 Runtime</button>
+<button type="button" class="sf-arch-btn" data-tier="t2" aria-pressed="false">T2 Harness</button>
+<button type="button" class="sf-arch-btn" data-tier="t1" aria-pressed="false">T1 Protocol</button>
+</div>
+</div>
+
+<div class="sf-svg-scroll">
+<svg class="sf-arch-svg" viewBox="0 0 820 420" role="img" aria-label="Steerable 五层架构图，从底部的 Tier 1 协议层向上堆叠至 Tier 5 宿主壳。" shape-rendering="crispEdges">
+  <g class="sf-arch-edges">
+    <line class="sf-edge" data-from="t5" data-to="t4" x1="210" y1="74" x2="210" y2="102" stroke="#1E242B" stroke-width="3" stroke-dasharray="5 4"/>
+    <rect class="sf-edge-lbl" data-from="t5" data-to="t4" x="158" y="79" width="78" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t5" data-to="t4" x="197" y="91" text-anchor="middle">界面渲染</text>
+
+    <path class="sf-edge" data-from="t5" data-to="t3s" d="M510 74 L510 88 L352 88 L352 178" fill="none" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t5" data-to="t3s" x="454" y="79" width="76" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t5" data-to="t3s" x="492" y="91" text-anchor="middle">进程托管</text>
+
+    <path class="sf-edge" data-from="t4" data-to="t3s" d="M276 154 L276 168 L302 168 L302 178" fill="none" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t4" data-to="t3s" x="236" y="158" width="72" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t4" data-to="t3s" x="272" y="170" text-anchor="middle">宿主桥接</text>
+
+    <path class="sf-edge" data-from="t4" data-to="t1" d="M108 154 L108 344" fill="none" stroke="#7C3AED" stroke-width="3" stroke-dasharray="5 4"/>
+    <rect class="sf-edge-lbl" data-from="t4" data-to="t1" x="69" y="244" width="78" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t4" data-to="t1" x="108" y="256" text-anchor="middle">协议类型</text>
+
+    <line class="sf-edge" data-from="t3s" data-to="t2" x1="376" y1="236" x2="376" y2="266" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t3s" data-to="t2" x="346" y="242" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t3s" data-to="t2" x="376" y="254" text-anchor="middle">内嵌</text>
+
+    <line class="sf-edge" data-from="t3r" data-to="t2" x1="600" y1="236" x2="600" y2="266" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t3r" data-to="t2" x="570" y="242" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t3r" data-to="t2" x="600" y="254" text-anchor="middle">内嵌</text>
+
+    <path class="sf-edge" data-from="t3s" data-to="t1" d="M196 236 L196 344" fill="none" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t3s" data-to="t1" x="162" y="286" width="68" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t3s" data-to="t1" x="196" y="298" text-anchor="middle">校验</text>
+
+    <path class="sf-edge" data-from="t3r" data-to="t1" d="M762 236 L762 344" fill="none" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t3r" data-to="t1" x="728" y="286" width="68" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t3r" data-to="t1" x="762" y="298" text-anchor="middle">校验</text>
+
+    <line class="sf-edge" data-from="t2" data-to="t1" x1="488" y1="322" x2="488" y2="344" stroke="#1E242B" stroke-width="3"/>
+    <rect class="sf-edge-lbl" data-from="t2" data-to="t1" x="458" y="324" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
+    <text class="sf-edge-txt" data-from="t2" data-to="t1" x="488" y="336" text-anchor="middle">引入</text>
+  </g>
+
+  <g class="sf-tier-node" data-tier="t5" tabindex="0" role="button" aria-label="Tier 5 宿主壳与 CLI">
+    <rect x="44" y="18" width="736" height="56" fill="#1E242B"/>
+    <rect x="40" y="14" width="736" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="40" y="14" width="144" height="56" fill="#2563EB" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="112" y="39" text-anchor="middle">TIER 5</text>
+    <text class="sf-tier-sub" x="112" y="55" text-anchor="middle">宿主壳 &amp; CLI</text>
+    <text class="sf-tier-pkg" x="198" y="38">@steerable/agent-shell · agent-shell-tauri · agent-shell-web · agent-cli · pack-sdk</text>
+    <text class="sf-tier-desc" x="198" y="56">Tauri 桌面窗口 · Node 宿主运行时 · 无头 HTTP 服务 · CLI/TUI</text>
+  </g>
+
+  <g class="sf-tier-node" data-tier="t4" tabindex="0" role="button" aria-label="Tier 4 React UI">
+    <rect x="44" y="106" width="342" height="52" fill="#1E242B"/>
+    <rect x="40" y="102" width="342" height="52" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="40" y="102" width="102" height="52" fill="#7C3AED" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="91" y="125" text-anchor="middle">TIER 4</text>
+    <text class="sf-tier-sub" x="91" y="141" text-anchor="middle">React UI</text>
+    <text class="sf-tier-pkg" x="156" y="124">@steerable/agent-ui</text>
+    <text class="sf-tier-desc" x="156" y="141">7 个组件 · 14 张卡片 · 3 个 Hooks</text>
+  </g>
+
+  <g class="sf-tier-node" data-tier="t3s" tabindex="0" role="button" aria-label="Tier 3 Sidecar">
+    <rect x="176" y="182" width="290" height="56" fill="#1E242B"/>
+    <rect x="172" y="178" width="290" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="172" y="178" width="84" height="56" fill="#EA7A2E" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="214" y="203" text-anchor="middle">TIER 3</text>
+    <text class="sf-tier-sub" x="214" y="219" text-anchor="middle">Sidecar</text>
+    <text class="sf-tier-pkg" x="268" y="202">steerable-sidecar</text>
+    <text class="sf-tier-desc" x="268" y="219">便携式 CPython · 38 个 RPC 方法</text>
+  </g>
+
+  <g class="sf-tier-node" data-tier="t3r" tabindex="0" role="button" aria-label="Tier 3 Runtime">
+    <rect x="484" y="182" width="296" height="56" fill="#1E242B"/>
+    <rect x="480" y="178" width="296" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="480" y="178" width="88" height="56" fill="#0E7490" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="524" y="203" text-anchor="middle">TIER 3</text>
+    <text class="sf-tier-sub" x="524" y="219" text-anchor="middle">Runtime</text>
+    <text class="sf-tier-pkg" x="580" y="202">steerable-agent-runtime</text>
+    <text class="sf-tier-desc" x="580" y="219">CoreLoop · 4 种协议 · ToolRouter</text>
+  </g>
+
+  <g class="sf-tier-node" data-tier="t2" tabindex="0" role="button" aria-label="Tier 2 Harness">
+    <rect x="244" y="270" width="490" height="54" fill="#1E242B"/>
+    <rect x="240" y="266" width="490" height="54" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="240" y="266" width="100" height="54" fill="#1E8250" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="290" y="290" text-anchor="middle">TIER 2</text>
+    <text class="sf-tier-sub" x="290" y="306" text-anchor="middle">Harness</text>
+    <text class="sf-tier-pkg" x="354" y="289">steerable-agent-harness · @steerable/agent-harness</text>
+    <text class="sf-tier-desc" x="354" y="306">纯函数策略 · 预算 · 重试 · 事实核查 · 安全分类</text>
+  </g>
+
+  <g class="sf-tier-node" data-tier="t1" tabindex="0" role="button" aria-label="Tier 1 Protocol">
+    <rect x="44" y="348" width="736" height="58" fill="#1E242B"/>
+    <rect x="40" y="344" width="736" height="58" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
+    <rect x="40" y="344" width="144" height="58" fill="#1E242B" stroke="#1E242B" stroke-width="3"/>
+    <text class="sf-tier-tag" x="112" y="370" text-anchor="middle">TIER 1</text>
+    <text class="sf-tier-sub" x="112" y="386" text-anchor="middle">协议底座</text>
+    <text class="sf-tier-pkg" x="198" y="369">@steerable/agent-protocol · steerable-agent-protocol</text>
+    <text class="sf-tier-desc" x="198" y="387">单一 JSON Schema → 自动生成 TS/Zod 与 Pydantic 类型 · 锁步版本 X.Y.Z</text>
+  </g>
+</svg>
+</div>
+
+<p class="sf-arch-caption" id="sf-arch-caption">
+点击任意层级高亮向下依赖——低层永不反向引入高层。
+</p>
+</div>
+
+<h2 class="sf-section" id="packages">包含哪些包</h2>
+
+| 包名 | 层级 | 核心能力 |
+| ---- | ---- | -------- |
+| [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent`、`ToolCall` / `ToolResult`、`ChatMessage`、Sidecar JSON-RPC 类型（由 `spec/` 自动生成） |
+| `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`、`consume_budget`、`next_retry_delay_ms`、命令安全规则 |
+| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop`、4 协议 `LLMProvider`、`@tool`、`ToolRouter`、SSE/stdio 传输与 Sidecar 生命周期 |
+| [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | 可移植 CPython（<1s 启动、已签名公证）与域名白名单 CONNECT 出口代理 |
+| [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | `ChatPanel`、`MessageList`、`ToolCallRenderer` 等 7 个组件 + 14 张卡片 + Hooks + Tailwind 预设 |
+| `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri / 无头宿主壳、共享 Node HostRuntime、Sidecar 守护与渲染前端 |
+| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | 命令行与终端会话（`steerable-cli login`），自动拉取平台运行时并与桌面端共用本地数据库 |
 
 <h2 class="sf-section" id="bench">Flash 档位实测对比</h2>
 
@@ -540,258 +747,6 @@ Terminal-Bench 2.1（89 题）。<strong>79.0%</strong> 为 GLM-5.3-Flash <code>
 <p class="sf-lede" markdown>
 GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%。
 </p>
-
-<h2 class="sf-section" id="inside">核心能力一览</h2>
-
-<div class="sf-grid" markdown>
-<div class="sf-card" markdown>
-### 模型质量保障层
-恢复畸形工具调用（XML / `<function=>` / 代码块），支持完成否决、事实核查与 Token 自校准。
-
-<span class="sf-card-link">[查看评测结果 →](../evals.md)</span>
-</div>
-<div class="sf-card" markdown>
-### 统一强类型协议
-单份 JSON Schema 生成 TS 与 Pydantic 类型，15 个包共享锁步版本与 sigstore 溯源。
-
-<span class="sf-card-link">[协议规范 →](../spec/overview.md)</span>
-</div>
-<div class="sf-card" markdown>
-### 纯函数式 Harness
-策略、预算、重试、终止与命令安全均以零 I/O 纯函数实现，可嵌入任意服务。
-
-<span class="sf-card-link">[安全与策略规范 →](../spec/safety.md)</span>
-</div>
-<div class="sf-card" markdown>
-### 可插拔运行时
-统一 `LLMProvider` 覆盖 4 种大模型协议，内置 `@tool`、`ToolRouter` 与 SSE / JSON-RPC。
-
-<span class="sf-card-link">[运行时规范 →](../spec/runtime.md)</span>
-</div>
-<div class="sf-card" markdown>
-### 可嵌入桌面 Sidecar
-签名公证的可移植 CPython（38 个 RPC 方法），内置 OS 沙箱与出口域名白名单代理。
-
-<span class="sf-card-link">[Sidecar 规范 →](../spec/sidecar.md)</span>
-</div>
-<div class="sf-card" markdown>
-### 无头 React UI & Web Shell
-7 个组件 + 14 张卡片 + 3 个 Hooks + Tailwind 预设，直接驱动完整的 Web Shell。
-
-<span class="sf-card-link">[UI 组件文档 →](../ui/index.md)</span>
-</div>
-</div>
-
-<h2 class="sf-section" id="quickstart">快速接入</h2>
-
-<p class="sf-lede" markdown>
-按需选用任意一层嵌入项目；运行完整 Shell 见[一键启动](#run)，纯 UI 预览运行 <code>pnpm shell:dev</code>。
-</p>
-
-<div class="sf-tabs" markdown>
-
-=== "Python 智能体后端"
-
-    ```bash
-    uv add steerable-agent-protocol steerable-agent-harness steerable-agent-runtime
-    ```
-
-    ```python
-    from steerable_agent_runtime import ToolRouter, tool
-    from steerable_agent_protocol import ToolCall
-
-    router = ToolRouter()
-
-    @tool(router=router, description="按路径读取文件")
-    async def read_file(path: str) -> dict:
-        return {"path": path, "content": open(path).read()}
-
-    result = await router.dispatch(
-        ToolCall(id="c1", name="read_file", arguments={"path": "README.md"})
-    )
-    # result.success、result.data、result.error 均有完整类型约束
-    ```
-
-=== "React 对话界面"
-
-    ```bash
-    pnpm add @steerable/agent-protocol @steerable/agent-ui
-    ```
-
-    ```tsx
-    import { ChatPanel, useChatStream } from '@steerable/agent-ui';
-
-    export function Chat() {
-      const { messages, send, isStreaming } = useChatStream({
-        endpoint: '/api/chats/123/send',
-      });
-      return <ChatPanel messages={messages} onSubmit={send} isStreaming={isStreaming} />;
-    }
-    ```
-
-=== "桌面应用 + 本地 Sidecar"
-
-    ```bash
-    # 将 Sidecar 二进制放入 resources/python-runtime/<platform>/
-    pnpm add @steerable/agent-runtime
-    ```
-
-    ```ts
-    import { AgentRuntime } from '@steerable/agent-runtime';
-
-    const runtime = new AgentRuntime({ sidecarPath });
-    await runtime.start();   // 启动进程并完成 lifecycle.ready 握手
-
-    const stream = await runtime.chatStream({
-      provider: 'openai_compat',
-      model: 'glm-5.3-flash',
-      baseUrl: process.env.GATEWAY_BASE_URL!,
-      apiKey: process.env.GATEWAY_API_KEY!,
-      messages: [{ role: 'user', content: 'hi' }],
-    });
-    for await (const event of stream.events) { /* 强类型 SSEEvent 流 */ }
-    ```
-
-</div>
-
-<h2 class="sf-section" id="architecture">五层架构</h2>
-
-<p class="sf-lede" markdown>
-严格单向依赖（Tier N 绝不引入 Tier N+1），采用哪一层只继承下方依赖。[架构规范](../spec/architecture.md)
-</p>
-
-<div class="sf-arch-stage" id="arch-stage" data-focus="all">
-<div class="sf-arch-head">
-<span class="sf-arch-badge">◆ 五层架构 · 严格向下依赖 ◆</span>
-<div class="sf-arch-controls" role="toolbar" aria-label="选择层级以高亮查看依赖关系">
-<button type="button" class="sf-arch-btn is-active" data-tier="all" aria-pressed="true">全部层级</button>
-<button type="button" class="sf-arch-btn" data-tier="t5" aria-pressed="false">T5 宿主壳</button>
-<button type="button" class="sf-arch-btn" data-tier="t4" aria-pressed="false">T4 UI</button>
-<button type="button" class="sf-arch-btn" data-tier="t3s" aria-pressed="false">T3 Sidecar</button>
-<button type="button" class="sf-arch-btn" data-tier="t3r" aria-pressed="false">T3 Runtime</button>
-<button type="button" class="sf-arch-btn" data-tier="t2" aria-pressed="false">T2 Harness</button>
-<button type="button" class="sf-arch-btn" data-tier="t1" aria-pressed="false">T1 Protocol</button>
-</div>
-</div>
-
-<div class="sf-svg-scroll">
-<svg class="sf-arch-svg" viewBox="0 0 820 420" role="img" aria-label="Steerable 五层架构图，从底部的 Tier 1 协议层向上堆叠至 Tier 5 宿主壳。" shape-rendering="crispEdges">
-  <g class="sf-arch-edges">
-    <line class="sf-edge" data-from="t5" data-to="t4" x1="210" y1="74" x2="210" y2="102" stroke="#1E242B" stroke-width="3" stroke-dasharray="5 4"/>
-    <rect class="sf-edge-lbl" data-from="t5" data-to="t4" x="158" y="79" width="78" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t5" data-to="t4" x="197" y="91" text-anchor="middle">界面渲染</text>
-
-    <path class="sf-edge" data-from="t5" data-to="t3s" d="M510 74 L510 88 L352 88 L352 178" fill="none" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t5" data-to="t3s" x="454" y="79" width="76" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t5" data-to="t3s" x="492" y="91" text-anchor="middle">进程托管</text>
-
-    <path class="sf-edge" data-from="t4" data-to="t3s" d="M276 154 L276 168 L302 168 L302 178" fill="none" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t4" data-to="t3s" x="236" y="158" width="72" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t4" data-to="t3s" x="272" y="170" text-anchor="middle">宿主桥接</text>
-
-    <path class="sf-edge" data-from="t4" data-to="t1" d="M108 154 L108 344" fill="none" stroke="#7C3AED" stroke-width="3" stroke-dasharray="5 4"/>
-    <rect class="sf-edge-lbl" data-from="t4" data-to="t1" x="69" y="244" width="78" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t4" data-to="t1" x="108" y="256" text-anchor="middle">协议类型</text>
-
-    <line class="sf-edge" data-from="t3s" data-to="t2" x1="376" y1="236" x2="376" y2="266" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t3s" data-to="t2" x="346" y="242" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t3s" data-to="t2" x="376" y="254" text-anchor="middle">内嵌</text>
-
-    <line class="sf-edge" data-from="t3r" data-to="t2" x1="600" y1="236" x2="600" y2="266" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t3r" data-to="t2" x="570" y="242" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t3r" data-to="t2" x="600" y="254" text-anchor="middle">内嵌</text>
-
-    <path class="sf-edge" data-from="t3s" data-to="t1" d="M196 236 L196 344" fill="none" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t3s" data-to="t1" x="162" y="286" width="68" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t3s" data-to="t1" x="196" y="298" text-anchor="middle">校验</text>
-
-    <path class="sf-edge" data-from="t3r" data-to="t1" d="M762 236 L762 344" fill="none" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t3r" data-to="t1" x="728" y="286" width="68" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t3r" data-to="t1" x="762" y="298" text-anchor="middle">校验</text>
-
-    <line class="sf-edge" data-from="t2" data-to="t1" x1="488" y1="322" x2="488" y2="344" stroke="#1E242B" stroke-width="3"/>
-    <rect class="sf-edge-lbl" data-from="t2" data-to="t1" x="458" y="324" width="60" height="16" fill="#F6EEDB" stroke="#1E242B" stroke-width="1.5"/>
-    <text class="sf-edge-txt" data-from="t2" data-to="t1" x="488" y="336" text-anchor="middle">引入</text>
-  </g>
-
-  <g class="sf-tier-node" data-tier="t5" tabindex="0" role="button" aria-label="Tier 5 宿主壳与 CLI">
-    <rect x="44" y="18" width="736" height="56" fill="#1E242B"/>
-    <rect x="40" y="14" width="736" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="40" y="14" width="144" height="56" fill="#2563EB" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="112" y="39" text-anchor="middle">TIER 5</text>
-    <text class="sf-tier-sub" x="112" y="55" text-anchor="middle">宿主壳 &amp; CLI</text>
-    <text class="sf-tier-pkg" x="198" y="38">@steerable/agent-shell · agent-shell-tauri · agent-shell-web · agent-cli · pack-sdk</text>
-    <text class="sf-tier-desc" x="198" y="56">Tauri 桌面窗口 · Node 宿主运行时 · 无头 HTTP 服务 · CLI/TUI</text>
-  </g>
-
-  <g class="sf-tier-node" data-tier="t4" tabindex="0" role="button" aria-label="Tier 4 React UI">
-    <rect x="44" y="106" width="342" height="52" fill="#1E242B"/>
-    <rect x="40" y="102" width="342" height="52" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="40" y="102" width="102" height="52" fill="#7C3AED" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="91" y="125" text-anchor="middle">TIER 4</text>
-    <text class="sf-tier-sub" x="91" y="141" text-anchor="middle">React UI</text>
-    <text class="sf-tier-pkg" x="156" y="124">@steerable/agent-ui</text>
-    <text class="sf-tier-desc" x="156" y="141">7 个组件 · 14 张卡片 · 3 个 Hooks</text>
-  </g>
-
-  <g class="sf-tier-node" data-tier="t3s" tabindex="0" role="button" aria-label="Tier 3 Sidecar">
-    <rect x="176" y="182" width="290" height="56" fill="#1E242B"/>
-    <rect x="172" y="178" width="290" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="172" y="178" width="84" height="56" fill="#EA7A2E" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="214" y="203" text-anchor="middle">TIER 3</text>
-    <text class="sf-tier-sub" x="214" y="219" text-anchor="middle">Sidecar</text>
-    <text class="sf-tier-pkg" x="268" y="202">steerable-sidecar</text>
-    <text class="sf-tier-desc" x="268" y="219">便携式 CPython · 38 个 RPC 方法</text>
-  </g>
-
-  <g class="sf-tier-node" data-tier="t3r" tabindex="0" role="button" aria-label="Tier 3 Runtime">
-    <rect x="484" y="182" width="296" height="56" fill="#1E242B"/>
-    <rect x="480" y="178" width="296" height="56" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="480" y="178" width="88" height="56" fill="#0E7490" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="524" y="203" text-anchor="middle">TIER 3</text>
-    <text class="sf-tier-sub" x="524" y="219" text-anchor="middle">Runtime</text>
-    <text class="sf-tier-pkg" x="580" y="202">steerable-agent-runtime</text>
-    <text class="sf-tier-desc" x="580" y="219">CoreLoop · 4 种协议 · ToolRouter</text>
-  </g>
-
-  <g class="sf-tier-node" data-tier="t2" tabindex="0" role="button" aria-label="Tier 2 Harness">
-    <rect x="244" y="270" width="490" height="54" fill="#1E242B"/>
-    <rect x="240" y="266" width="490" height="54" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="240" y="266" width="100" height="54" fill="#1E8250" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="290" y="290" text-anchor="middle">TIER 2</text>
-    <text class="sf-tier-sub" x="290" y="306" text-anchor="middle">Harness</text>
-    <text class="sf-tier-pkg" x="354" y="289">steerable-agent-harness · @steerable/agent-harness</text>
-    <text class="sf-tier-desc" x="354" y="306">纯函数策略 · 预算 · 重试 · 事实核查 · 安全分类</text>
-  </g>
-
-  <g class="sf-tier-node" data-tier="t1" tabindex="0" role="button" aria-label="Tier 1 Protocol">
-    <rect x="44" y="348" width="736" height="58" fill="#1E242B"/>
-    <rect x="40" y="344" width="736" height="58" fill="#FFFDF7" stroke="#1E242B" stroke-width="3"/>
-    <rect x="40" y="344" width="144" height="58" fill="#1E242B" stroke="#1E242B" stroke-width="3"/>
-    <text class="sf-tier-tag" x="112" y="370" text-anchor="middle">TIER 1</text>
-    <text class="sf-tier-sub" x="112" y="386" text-anchor="middle">协议底座</text>
-    <text class="sf-tier-pkg" x="198" y="369">@steerable/agent-protocol · steerable-agent-protocol</text>
-    <text class="sf-tier-desc" x="198" y="387">单一 JSON Schema → 自动生成 TS/Zod 与 Pydantic 类型 · 锁步版本 X.Y.Z</text>
-  </g>
-</svg>
-</div>
-
-<p class="sf-arch-caption" id="sf-arch-caption">
-点击任意层级高亮向下依赖——低层永不反向引入高层。
-</p>
-</div>
-
-<h2 class="sf-section" id="packages">包含哪些包</h2>
-
-| 包名 | 层级 | 核心能力 |
-| ---- | ---- | -------- |
-| [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent`、`ToolCall` / `ToolResult`、`ChatMessage`、Sidecar JSON-RPC 类型（由 `spec/` 自动生成） |
-| `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`、`consume_budget`、`next_retry_delay_ms`、命令安全规则 |
-| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop`、4 协议 `LLMProvider`、`@tool`、`ToolRouter`、SSE/stdio 传输与 Sidecar 生命周期 |
-| [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | 可移植 CPython（<1s 启动、已签名公证）与域名白名单 CONNECT 出口代理 |
-| [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | `ChatPanel`、`MessageList`、`ToolCallRenderer` 等 7 个组件 + 14 张卡片 + Hooks + Tailwind 预设 |
-| `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri / 无头宿主壳、共享 Node HostRuntime、Sidecar 守护与渲染前端 |
-| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | 命令行与终端会话（`steerable-cli login`），自动拉取平台运行时并与桌面端共用本地数据库 |
 
 <h2 class="sf-section" id="compare">框架横向对比</h2>
 
