@@ -9,6 +9,9 @@ This document covers two release modes:
   `steerable-*`. Requires registry credentials and the GitHub Actions
   workflow configured below.
 
+For the pipeline's structure and the constraints that keep every publish bound
+to its tag, see [`docs/release-pipeline.md`](docs/release-pipeline.md).
+
 ## Packages in scope
 
 | Tier | Package | Output |
@@ -235,11 +238,17 @@ without a registry.
         └─► verifies PyPI wheels + rust-vX.Y.Z Release
             and updates rust-artifacts.lock.json + exact native pins
 
-   # Release framework packages without changing the Rust bundle:
-   ./scripts/release/bump_to.sh A.B.C
-   git commit -am "chore(release): vA.B.C"
-   git tag vA.B.C
-   git push origin develop vA.B.C
+   # Release framework packages without changing the Rust bundle.
+   # Preferred: one human step, and the bump cannot be forgotten.
+   git push origin release/X.Y.Z
+        └─► release-prepare.yml bumps every package and opens the release PR;
+            merging it tags the merge commit and dispatches release.yml
+
+   # Manual equivalent (see docs/release-pipeline.md for the constraints):
+   ./scripts/release/bump_to.sh X.Y.Z
+   git commit -am "chore(release): vX.Y.Z"
+   git tag vX.Y.Z
+   git push origin main vX.Y.Z
         └─► release.yml verifies the pinned bundle, builds the platform
             sidecar bundles, runs the quickstart gate, then publishes
             npm (workspace packages, platform runtimes, CLI) and PyPI

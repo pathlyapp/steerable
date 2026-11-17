@@ -83,6 +83,7 @@ nav:
       - CoreLoop: spec/core-loop.md
       - Engine compatibility: spec/engine-compatibility.md
       - Compaction: spec/compaction.md
+      - Desktop paste: spec/desktop-paste.md
   - UI:
       - Components: ui/index.md
 

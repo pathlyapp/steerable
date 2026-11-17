@@ -13,6 +13,12 @@ resource paths, and updates.
 The crate is source-distributed with the npm package and is not published to
 crates.io.
 
+Composer paste goes through this host rather than the web content: the app
+menu owns `CmdOrCtrl+V`, so the host reads the OS pasteboard and ships it to
+the renderer. See
+[`docs/spec/desktop-paste.md`](https://github.com/pathlyapp/steerable/blob/main/docs/spec/desktop-paste.md)
+for that path and its failure modes.
+
 Packaged products place the complete portable Python sidecar at
 `python-runtime/<platform>` and the verified egress proxy at
 `engine/steerable-egress-proxy`. The Python runtime contains the native Rust
