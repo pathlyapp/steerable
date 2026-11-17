@@ -34,7 +34,7 @@ PRODUCT_LITERALS = (
     joined("e", "town"),
     joined("a", "roli"),
 )
-PRODUCT_PUBLIC_DOCS = frozenset({"docs/index.md"})
+PRODUCT_PUBLIC_DOCS = frozenset({"docs/index.md", "docs/zh/index.md", "docs/ja/index.md"})
 BANNED_ROOT_DOCS = {
     "ALIGN_TODO.md",
     "CORELOOP_TODO.md",

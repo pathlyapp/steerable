@@ -104,10 +104,10 @@ jobs:
             cat /tmp/probe1.txt | head -10
             exit 1
           fi
-      - name: D4 probe 2 — home page Tier diagram is a Mermaid graph BT block
+      - name: D4 probe 2 — home page Tier diagram renders as pixel architecture SVG
         run: |
-          if ! grep -q '<pre class="mermaid"><code>graph BT' _site/index.html ; then
-            echo "::error::Home page Tier diagram is no longer a Mermaid pre.mermaid block."
+          if ! grep -q '<svg class="sf-arch-svg"' _site/index.html ; then
+            echo "::error::Home page Tier diagram is missing the sf-arch-svg architecture diagram."
             exit 1
           fi
       - name: D4 probe 3 — sidecar boot sequence is a Mermaid sequenceDiagram
