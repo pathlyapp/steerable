@@ -772,7 +772,7 @@ GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77
 <h2 class="sf-section" id="users">導入事例</h2>
 
 <p class="sf-lede" markdown>
-本番製品、企業導入、大学での評価研究。
+本番デスクトップ製品と企業導入。
 </p>
 
 <div class="sf-brand-grid">
@@ -796,20 +796,6 @@ GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77
       <div class="sf-brand-item">
         <img src="../assets/users/etown-mark.png" alt="E-Town Holdings">
         <span>E-Town Holdings</span>
-      </div>
-    </div>
-  </div>
-
-  <div class="sf-brand-group">
-    <div class="sf-brand-group-title">研究・大学</div>
-    <div class="sf-brand-items">
-      <div class="sf-brand-item">
-        <img src="../assets/users/tsinghua-university.png" alt="Tsinghua University">
-        <span>清華大学</span>
-      </div>
-      <div class="sf-brand-item">
-        <img src="../assets/users/ucas.svg" alt="University of Chinese Academy of Sciences">
-        <span>中国科学院大学</span>
       </div>
     </div>
   </div>

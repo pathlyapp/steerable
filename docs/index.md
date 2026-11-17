@@ -832,7 +832,7 @@ Trade-offs and when to pick which: [Full comparison](comparison.md).
 <h2 class="sf-section" id="users">Who's using it</h2>
 
 <p class="sf-lede" markdown>
-Production desktop shells, enterprise deployments, and university research.
+Production desktop shells and enterprise deployments.
 </p>
 
 <div class="sf-brand-grid">
@@ -856,20 +856,6 @@ Production desktop shells, enterprise deployments, and university research.
       <div class="sf-brand-item">
         <img src="assets/users/etown-mark.png" alt="E-Town Holdings">
         <span>E-Town Holdings</span>
-      </div>
-    </div>
-  </div>
-
-  <div class="sf-brand-group">
-    <div class="sf-brand-group-title">Research & Universities</div>
-    <div class="sf-brand-items">
-      <div class="sf-brand-item">
-        <img src="assets/users/tsinghua-university.png" alt="Tsinghua University">
-        <span>Tsinghua University</span>
-      </div>
-      <div class="sf-brand-item">
-        <img src="assets/users/ucas.svg" alt="University of Chinese Academy of Sciences">
-        <span>UCAS</span>
       </div>
     </div>
   </div>

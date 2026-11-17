@@ -772,7 +772,7 @@ GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77
 <h2 class="sf-section" id="users">谁在使用</h2>
 
 <p class="sf-lede" markdown>
-生产桌面产品、企业部署与高校科研评测。
+生产桌面产品与企业部署。
 </p>
 
 <div class="sf-brand-grid">
@@ -796,20 +796,6 @@ GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77
       <div class="sf-brand-item">
         <img src="../assets/users/etown-mark.png" alt="E-Town Holdings">
         <span>亦庄控股</span>
-      </div>
-    </div>
-  </div>
-
-  <div class="sf-brand-group">
-    <div class="sf-brand-group-title">科研与高校</div>
-    <div class="sf-brand-items">
-      <div class="sf-brand-item">
-        <img src="../assets/users/tsinghua-university.png" alt="Tsinghua University">
-        <span>清华大学</span>
-      </div>
-      <div class="sf-brand-item">
-        <img src="../assets/users/ucas.svg" alt="University of Chinese Academy of Sciences">
-        <span>中国科学院大学</span>
       </div>
     </div>
   </div>
