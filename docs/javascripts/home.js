@@ -447,6 +447,64 @@
     });
   }
 
+  function initCelestialToggle() {
+    var btn = document.querySelector(".sf-celestial");
+    if (!btn || btn.dataset.sfInit === "1") return;
+    btn.dataset.sfInit = "1";
+
+    var lang = getPageLang();
+    var labels = {
+      en: { toDark: "Switch to dark mode", toLight: "Switch to light mode" },
+      zh: { toDark: "切换到黑天模式", toLight: "切换到白天模式" },
+      ja: { toDark: "ダークモードに切替", toLight: "ライトモードに切替" }
+    };
+    var copy = labels[lang] || labels.en;
+
+    function isDark() {
+      return document.body.getAttribute("data-md-color-scheme") === "slate";
+    }
+
+    function syncLabel() {
+      var dark = isDark();
+      var text = dark ? copy.toLight : copy.toDark;
+      btn.setAttribute("aria-pressed", dark ? "true" : "false");
+      btn.setAttribute("aria-label", text);
+      btn.setAttribute("title", text);
+    }
+
+    btn.addEventListener("click", function () {
+      var targetScheme = isDark() ? "default" : "slate";
+      var radio = document.querySelector(
+        'input[name="__palette"][data-md-color-scheme="' + targetScheme + '"]'
+      );
+      if (radio) {
+        radio.click();
+      } else {
+        document.body.setAttribute("data-md-color-scheme", targetScheme);
+      }
+      syncLabel();
+    });
+
+    if (typeof MutationObserver !== "undefined" && !window.__sfPaletteObs) {
+      window.__sfPaletteObs = new MutationObserver(function () {
+        var current = document.querySelector(".sf-celestial");
+        if (!current) return;
+        var dark = isDark();
+        var l = labels[getPageLang()] || labels.en;
+        var text = dark ? l.toLight : l.toDark;
+        current.setAttribute("aria-pressed", dark ? "true" : "false");
+        current.setAttribute("aria-label", text);
+        current.setAttribute("title", text);
+      });
+      window.__sfPaletteObs.observe(document.body, {
+        attributes: true,
+        attributeFilter: ["data-md-color-scheme"]
+      });
+    }
+
+    syncLabel();
+  }
+
   function initLanguagePreference() {
     if (window.__sfLangBound) return;
     window.__sfLangBound = true;
@@ -462,6 +520,7 @@
   function boot() {
     initLanguagePreference();
     if (!document.querySelector(".sf-hero")) return;
+    initCelestialToggle();
     initRunTerminal();
     initBenchmarkInteractions();
     initLoopStage();
