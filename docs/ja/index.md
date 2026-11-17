@@ -38,7 +38,7 @@ hide:
 
 # Steerable
 
-<p class="sf-tagline"><span class="sf-ribbon">◆ ローカル・量子化・低コストモデルを確実に制御するモデル品質レイヤー ◆</span></p>
+<p class="sf-tagline"><span class="sf-ribbon">◆ ローカル・低コストモデル向けの品質レイヤー ◆</span></p>
 
 <p class="sf-pills">
 <a href="#pillar-1" class="sf-pill">ハルシネーション抑制</a>
@@ -48,8 +48,7 @@ hide:
 </p>
 
 <p class="sf-sub" markdown>
-**低コストモデルでも、幻覚とサイレント失敗を大幅に削減。** GLM-5.3-Flash を用いた Terminal-Bench 2.1 で **79.0%** を達成。
-コマンド 1 つで完全なエージェントシェルが起動し、下層の各レイヤーは独立パッケージとして必要な部分だけ導入できます。
+GLM-5.3-Flash で Terminal-Bench 2.1 **79.0%**。1 コマンドで起動、または必要な層だけ組み込み。
 </p>
 
 <div class="sf-cta" markdown>
@@ -143,7 +142,7 @@ hide:
 <div class="sf-run-copy">
 <span class="sf-pillar-kicker">すぐ始められる</span>
 <p class="sf-run-title">1 コマンドでフル機能のエージェント</p>
-<p class="sf-run-text">チャット、統合ターミナル、組み込みスキル、モデル選択 UI、OS サンドボックス付き Sidecar を標準装備。ブラウザ、デスクトップアプリ、CLI のいずれでも同じシェル・同じデータで動作し、OpenAI 互換・Anthropic・Gemini の各キーに対応します。</p>
+<p class="sf-run-text">チャット・端末・サンドボックスを標準搭載。ブラウザ、デスクトップ、CLI で共通動作。</p>
 <a href="#quickstart" class="md-button">組み込み方法を見る</a>
 </div>
 <div class="sf-run-term">
@@ -184,29 +183,29 @@ hide:
 <h2 class="sf-section" id="why">なぜ Steerable か</h2>
 
 <p class="sf-lede" markdown>
-低コストモデルやローカルモデルは、データの捏造、未実施作業の完了宣言、テキストとしてのツール出力を頻繁に起こします。多くの SDK はそれを想定していませんが、Steerable は要所で検証と修復を行います。
+モデルの完全な従順さを前提とせず、ツール復元・根拠検証・隔離を確実に強制します。
 </p>
 
 <div class="sf-pillars" markdown>
 <div class="sf-pillar" id="pillar-1" markdown>
 <span class="sf-pillar-kicker">01 · ハルシネーション抑制</span>
-### ツール結果に裏付けられた回答
-グラウンディング判定が根拠のない回答を弾き、完了前拒否ゲートが下書きを差し戻します。テキストとして出力された不正なツール呼び出しも復元・実行し、サイレントな失敗を自動リトライへ変えます。
+### 根拠ある出力へ
+根拠なき回答や未実施報告を弾き、不正なテキストツール出力を自動復元して再試行。
 </div>
 <div class="sf-pillar" id="pillar-2" markdown>
 <span class="sf-pillar-kicker">02 · シンプル設計</span>
-### 1 日で理解できる構造
-独自のグラフ DSL や重いフレームワーク習得は不要。ツールは `@tool` デコレータ付きの通常関数、Harness は I/O ゼロの純粋関数、1 つの JSON Schema から TypeScript と Python の型を自動生成します。
+### DSL 不要の素直な設計
+グラフ DSL 不要。通常の `@tool` 関数、I/O ゼロの Harness、単一 Schema から型生成。
 </div>
 <div class="sf-pillar" id="pillar-3" markdown>
 <span class="sf-pillar-kicker">03 · すぐ使える</span>
-### 初期状態から Fail-closed
-Seatbelt / bwrap / Landlock / Windows Job Object によるプロセス隔離、61 ルールのコマンド分類器、ホスト許可リスト付き CONNECT プロキシを標準統合。キー不要の[ライブデモ](../demo/)もブラウザで試せます。
+### 初期状態から安全
+Seatbelt / bwrap / Windows 隔離、61 ルール分類器、出口プロキシ内蔵。[デモ](../demo/)もキー不要。
 </div>
 <div class="sf-pillar" id="pillar-4" markdown>
 <span class="sf-pillar-kicker">04 · レイヤー分離</span>
 ### 必要な層だけを採用
-5 つのレイヤーと 15 の独立公開パッケージで構成。下位層は上位層を絶対にインポートしないため、Protocol 型だけ・React UI だけ・Sidecar だけを切り出して利用できます。
+5 層 15 パッケージ、上位依存なし。Protocol・UI・Sidecar 単体でも導入可能。
 </div>
 </div>
 
@@ -308,14 +307,14 @@ Seatbelt / bwrap / Landlock / Windows Job Object によるプロセス隔離、6
 </div>
 
 <p class="sf-loop-caption" id="sf-loop-caption">
-上の各ブロックをクリック：単一の Rust <code>CoreLoop</code> エンジンが構造化された <code>LoopEvent</code> を生成し、デスクトップ Sidecar（stdio JSON-RPC）と FastAPI サーバー（SSE）の両方を駆動します。
+単一の Rust <code>CoreLoop</code> が <code>LoopEvent</code> を介してデスクトップ Sidecar と FastAPI サーバーの両方を駆動します。
 </p>
 </div>
 
-<h2 class="sf-section" id="bench">Flash クラスモデルでのベンチマーク</h2>
+<h2 class="sf-section" id="bench">Flash クラスモデルのベンチマーク</h2>
 
 <p class="sf-lede" markdown>
-Terminal-Bench 2.1（89 の実ターミナルタスク、非公開テスト、タイムアウトは失敗扱い）。見出しの <strong>79.0%</strong> は GLM-5.3-Flash（<code>@max</code>）の 3 回平均です。下図は GLM-5.3-Flash（<code>@high</code>）、DeepSeek-V3.1-0731（<code>DS0731 @high</code>）、Qwen（<code>@medium</code>、推論上限設定）での単発 <code>n=1</code> 結果を比較しています。[評価手法](../evals.md)
+Terminal-Bench 2.1（89 問）。<strong>79.0%</strong> は GLM-5.3-Flash <code>@max</code> の 3 回平均、下図は単発 <code>n=1</code> 比較。[評価手法](../evals.md)
 </p>
 
 <div class="sf-bench sf-bench--wide">
@@ -493,7 +492,7 @@ Terminal-Bench 2.1（89 の実ターミナルタスク、非公開テスト、�
 </div>
 
 <p class="sf-lede" markdown>
-GLM-5.3-Flash @high（上図の単発 <code>n=1</code> 結果）：**Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%。
+GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%。
 </p>
 
 <h2 class="sf-section" id="inside">主要コンポーネント</h2>
@@ -501,46 +500,46 @@ GLM-5.3-Flash @high（上図の単発 <code>n=1</code> 結果）：**Steerable 7
 <div class="sf-grid" markdown>
 <div class="sf-card" markdown>
 ### モデル品質レイヤー
-ローカルモデルや量子化・低コストモデルは構造化 `tool_calls` を崩しがちです。Steerable は不正出力（MiniMax XML・DeepSeek `<function=>`・Markdown）を復元・実行し、完了拒否（`accept` / `retry` / `narrate`）、グラウンディング検証、トークン見積りの自己較正を行います。
+不正ツール呼び出し（XML / `<function=>` / Markdown）を復元実行し、完了拒否・根拠検証・トークン較正を実施。
 
 <span class="sf-card-link">[評価結果を見る →](../evals.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### 単一ワイヤープロトコル
-1 つの JSON Schema から **TypeScript 型 + Pydantic モデル** を自動生成。`content` / `tool_call` / `tool_result` / `error` / `done` / `budget_exhausted` を統一し、両言語のバイト互換性をテストで保証します。15 の TS/Python パッケージは同一 `X.Y.Z` バージョンで同期公開され、npm には **sigstore provenance** を付与しています。
+1 つの JSON Schema から TS と Pydantic 型を生成。15 パッケージを同期公開し sigstore を付与。
 
 <span class="sf-card-link">[プロトコル仕様 →](../spec/overview.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### 純粋関数ハーネス
-ポリシー判定・予算管理・リトライ間隔・完了判定・トレース・コマンド安全性パターンを **I/O 非依存** の純粋関数として提供。FastAPI・Celery・Notebook にそのまま組み込めます。
+ポリシー・予算・リトライ・完了・安全判定を I/O ゼロの純粋関数として提供。
 
 <span class="sf-card-link">[安全性仕様 →](../spec/safety.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### プラガブル・ランタイム
-1 つの `LLMProvider` インターフェースで **4 種のワイヤープロトコル**（OpenAI 互換・OpenAI Responses・Anthropic・Gemini）に対応。ゲートウェイカタログ、ベンダー別サンプリング設定、`@tool`、`ToolRouter`、FastAPI SSE / stdio JSON-RPC を備えます。
+統一 `LLMProvider` で 4 種の LLM に対応し、`@tool`、`ToolRouter`、SSE / JSON-RPC を内蔵。
 
 <span class="sf-card-link">[ランタイム仕様 →](../spec/runtime.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### 組み込み可能 Sidecar
-stdio 経由で 38 個の JSON-RPC メソッドを提供する署名済み可搬 CPython バイナリ。**Tauri デスクトップアプリ**（`@steerable/agent-shell-tauri`）等に同梱でき、macOS 公証・Windows コード署名・OS サンドボックス・出口プロキシ・プラグイン基盤を備えます。
+署名済み可搬 CPython（38 RPC メソッド）。OS サンドボックスと出口プロキシを内蔵。
 
 <span class="sf-card-link">[Sidecar 仕様 →](../spec/sidecar.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### ヘッドレス React UI & Web Shell
-7 コンポーネント + 14 リッチカード + 3 フック + Tailwind プリセット。全状態を Storybook・axe アクセシビリティ・ビジュアルリグレッションで CI 保護し、そのまま Web Shell（`pnpm agent-shell:web`）を構成します。
+7 コンポーネント・14 カード・3 フック・Tailwind プリセットで Web Shell を構成。
 
 <span class="sf-card-link">[UI コンポーネント →](../ui/index.md)</span>
 </div>
 </div>
 
-<h2 class="sf-section" id="quickstart">導入方法 — 必要な層を選ぶ</h2>
+<h2 class="sf-section" id="quickstart">導入方法</h2>
 
 <p class="sf-lede" markdown>
-フルセットのシェルをすぐ起動したい場合は上の[1 コマンド起動](#run)、バックエンドなしの UI 確認は <code>pnpm shell:dev</code> をご利用ください。独自アプリへの組み込みは以下から選べます：
+必要な層だけ組み込めます（フルセットは[上部の起動コマンド](#run)、UI 単体は <code>pnpm shell:dev</code>）：
 </p>
 
 <div class="sf-tabs" markdown>
@@ -612,7 +611,7 @@ stdio 経由で 38 個の JSON-RPC メソッドを提供する署名済み可搬
 <h2 class="sf-section" id="architecture">5 層アーキテクチャ</h2>
 
 <p class="sf-lede" markdown>
-5 つの階層と厳格な「上位インポート禁止」ルール（Tier N は Tier N+1 を参照しない）。どの層を選んでも、その下位層のみを継承します。[アーキテクチャ仕様](../spec/architecture.md)
+上位インポート禁止の厳格な単方向依存——選んだ層の下位のみを継承します。[アーキテクチャ仕様](../spec/architecture.md)
 </p>
 
 <div class="sf-arch-stage" id="arch-stage" data-focus="all">
@@ -732,7 +731,7 @@ stdio 経由で 38 個の JSON-RPC メソッドを提供する署名済み可搬
 </div>
 
 <p class="sf-arch-caption" id="sf-arch-caption">
-上の各レイヤーをクリックすると、下位方向のみの依存関係をハイライトします。上位レイヤーへの逆依存は一切ありません。
+階層をクリックすると下位のみの依存関係をハイライトします。
 </p>
 </div>
 
@@ -740,18 +739,18 @@ stdio 経由で 38 個の JSON-RPC メソッドを提供する署名済み可搬
 
 | パッケージ | 階層 | 内容 |
 | ---------- | ---- | ---- |
-| [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent` エンベロープ、`ToolCall` / `ToolResult`、`ChatMessage`、Sidecar JSON-RPC 型——`spec/` から自動生成し CI で差分検査 |
-| `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`、`consume_budget`、`next_retry_delay_ms`、`is_terminal_result`、コマンド安全性パターン |
-| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop` + `LLMProvider`（OpenAI 互換 / Responses / Anthropic / Gemini）、`ToolRouter` + `@tool`、ストレージ・トランスポート層、TS 向け Sidecar ライフサイクル管理 |
-| [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | 可搬 CPython バイナリ（1 秒未満起動・macOS 公証・Windows 署名済み）とドメイン許可リスト付き CONNECT 出口プロキシ |
-| [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | `ChatPanel`、`MessageList`、`AgentSelector`、`ModelSelector`、`OrchestrationPlanCard`、`ToolCallRenderer`、`SSEStreamView` + `/cards` 14 カード + フック + Tailwind プリセット |
-| `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri / ヘッドレスシェル、共通 Node HostRuntime、Sidecar 監視、製品中立レンダラー |
-| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | 製品中立の CLI と TUI。`npm install -g @steerable/agent-cli` 後に `steerable-cli login` を実行。対応プラットフォーム用ランタイムが自動導入され、デスクトップ版と DB を共有 |
+| [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent`、`ToolCall` / `ToolResult`、`ChatMessage`、Sidecar JSON-RPC 型（`spec/` から生成） |
+| `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`、`consume_budget`、`next_retry_delay_ms`、コマンド安全性パターン |
+| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop`、4 方式 `LLMProvider`、`@tool`、`ToolRouter`、SSE/stdio と Sidecar 管理 |
+| [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | 可搬 CPython（<1s 起動・署名公証済み）とホスト許可制 CONNECT 出口プロキシ |
+| [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | 7 コンポーネント（`ChatPanel`・`ToolCallRenderer` 等）+ 14 カード + フック + Tailwind |
+| `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri / ヘッドレスシェル、共通 Node HostRuntime、Sidecar 監視、UI レンダラー |
+| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | CLI & TUI（`steerable-cli login`）。対応ランタイムを自動導入しデスクトップ版と DB 共有 |
 
 <h2 class="sf-section" id="compare">他フレームワークとの比較</h2>
 
 <p class="sf-lede" markdown>
-Steerable 以外にも選択肢はあります。検討対象になりやすい主要フレームワークとの率直な比較です：
+主要フレームワークとの比較：
 </p>
 
 <div class="sf-compare-wrap" markdown>
@@ -767,13 +766,13 @@ Steerable 以外にも選択肢はあります。検討対象になりやすい�
 </div>
 
 <p class="sf-lede" markdown>
-強み・弱みと選定基準の詳細は[詳細比較ページ](../comparison.md)をご覧ください。
+選定基準と詳細：[比較ページ](../comparison.md)。
 </p>
 
 <h2 class="sf-section" id="users">導入事例</h2>
 
 <p class="sf-lede" markdown>
-本番デスクトップ製品、エンタープライズ導入、および大学での評価研究に利用されています。
+本番製品、企業導入、大学での評価研究。
 </p>
 
 <div class="sf-brand-grid">
@@ -851,8 +850,8 @@ Steerable 以外にも選択肢はあります。検討対象になりやすい�
 
 <div class="sf-closing" markdown>
 <div class="sf-closing-copy">
-<strong>Steerable を動かしてみませんか？</strong>
-<span>API キー不要のブラウザデモ、またはアーキテクチャ詳細ガイドから始められます。</span>
+<strong>Steerable を試す</strong>
+<span>キー不要のライブデモ、またはアーキテクチャガイド。</span>
 </div>
 <div class="sf-closing-actions" markdown>
 <a href="../demo/" class="md-button md-button--primary">ライブデモを開く</a>

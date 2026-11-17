@@ -62,7 +62,7 @@ hide:
 
 # Steerable
 
-<p class="sf-tagline"><span class="sf-ribbon">◆ The model-quality layer that makes local, quantized, and cheap models behave ◆</span></p>
+<p class="sf-tagline"><span class="sf-ribbon">◆ The model-quality layer for local &amp; cheap models ◆</span></p>
 
 <p class="sf-pills">
 <a href="#pillar-1" class="sf-pill">Fewer hallucinations</a>
@@ -72,8 +72,7 @@ hide:
 </p>
 
 <p class="sf-sub" markdown>
-**Fewer hallucinations, fewer silent failures — even on cheap models.** 79.0% on Terminal-Bench 2.1 with GLM-5.3-Flash.
-One command boots a full agent shell; every layer underneath ships as its own package, so you adopt only what you need.
+**79.0%** on Terminal-Bench 2.1 with GLM-5.3-Flash. One command boots the full shell, or adopt any layer standalone.
 </p>
 
 <div class="sf-cta" markdown>
@@ -173,7 +172,7 @@ One command boots a full agent shell; every layer underneath ships as its own pa
 <div class="sf-run-copy">
 <span class="sf-pillar-kicker">Simple to start</span>
 <p class="sf-run-title">A full agent in one command</p>
-<p class="sf-run-text">Chat, an integrated terminal, bundled skills, a model picker, and a sandboxed sidecar, ready on first launch. Run it in the browser, as a desktop app, or from the command line — same shell, same data. Bring any OpenAI-compatible, Anthropic, or Gemini key.</p>
+<p class="sf-run-text">Chat, terminal, sandboxed sidecar, and any OpenAI-compat, Anthropic, or Gemini key — across browser, desktop, and CLI.</p>
 <a href="#quickstart" class="md-button">More ways to install</a>
 </div>
 <div class="sf-run-term">
@@ -214,30 +213,29 @@ One command boots a full agent shell; every layer underneath ships as its own pa
 <h2 class="sf-section" id="why">Why Steerable</h2>
 
 <p class="sf-lede" markdown>
-Cheap models invent data, claim work they never did, and emit tool calls as plain text. Every agent SDK assumes they don't.
-Steerable checks the model at each of those points — and stays out of your way.
+Other SDKs assume frontier obedience. Steerable enforces tool recovery, grounding, and confinement.
 </p>
 
 <div class="sf-pillars" markdown>
 <div class="sf-pillar" id="pillar-1" markdown>
 <span class="sf-pillar-kicker">01 · Fewer hallucinations</span>
-### Answers backed by real data
-Grounding judges reject answers the tool results don't support, a discipline retry catches claimed-but-undone work, and a completion veto can send a draft back before it reaches the user. Malformed tool calls written as text are recovered and executed, turning silent drops into automatic retries.
+### Grounded, not guessed
+Grounding judges, completion vetoes, and automatic recovery for malformed text tool calls.
 </div>
 <div class="sf-pillar" id="pillar-2" markdown>
 <span class="sf-pillar-kicker">02 · Simple to use</span>
-### Learn it in an afternoon
-No graph DSL or framework runtime to learn. Tools are plain functions with an `@tool` decorator, the harness is pure functions with zero I/O, and one JSON Schema generates both the TypeScript and Python types.
+### Zero DSL boilerplate
+No graph DSL. Plain `@tool` functions, zero-I/O harness, and one JSON Schema for TS & Python.
 </div>
 <div class="sf-pillar" id="pillar-3" markdown>
 <span class="sf-pillar-kicker">03 · Ready out of the box</span>
-### Fail-closed from day one
-Platform confinement (Seatbelt, bwrap/Landlock, Windows Job Objects), a 61-rule command classifier, and a per-host CONNECT egress allow-list come prewired. Try the hosted [live demo](demo/) in your browser with no API key.
+### Fail-closed by default
+Seatbelt / bwrap / Windows confinement, 61-rule classifier, and egress proxy. Try the keyless [live demo](demo/).
 </div>
 <div class="sf-pillar" id="pillar-4" markdown>
 <span class="sf-pillar-kicker">04 · Componentized</span>
 ### Take one layer, skip the rest
-Five tiers and 15 independently published packages. Lower tiers never import higher ones, so you can adopt only the protocol types, only the React UI, or only the sidecar without pulling in anything else.
+5 tiers, 15 packages, strict no-upward-imports. Adopt just the protocol, UI, or sidecar.
 </div>
 </div>
 
@@ -353,14 +351,14 @@ Five tiers and 15 independently published packages. Lower tiers never import hig
 </div>
 
 <p class="sf-loop-caption" id="sf-loop-caption">
-Click any block above: one Rust <code>CoreLoop</code> engine emits structured <code>LoopEvent</code> frames to both the desktop sidecar (stdio JSON-RPC) and the in-process FastAPI server (SSE).
+One Rust <code>CoreLoop</code> drives both the desktop sidecar (stdio JSON-RPC) and the FastAPI server (SSE) over <code>LoopEvent</code>.
 </p>
 </div>
 
 <h2 class="sf-section" id="bench">Frontier results on Flash-priced models</h2>
 
 <p class="sf-lede" markdown>
-Terminal-Bench 2.1, 89 real terminal tasks, hidden tests; timeouts count as fail. The headline <strong>79.0%</strong> is a 3-run mean on GLM-5.3-Flash (@max); charts below compare single <code>n=1</code> runs across GLM-5.3-Flash (@high), DeepSeek-V3.1-0731 (<code>DS0731</code> @high), and Qwen (@medium, its reasoning ceiling). [Methodology](evals.md)
+Terminal-Bench 2.1 (89 tasks). <strong>79.0%</strong> is GLM-5.3-Flash @max (3-run mean); charts compare single <code>n=1</code> runs. [Methodology](evals.md)
 </p>
 
 <div class="sf-bench sf-bench--wide">
@@ -538,7 +536,7 @@ Terminal-Bench 2.1, 89 real terminal tasks, hidden tests; timeouts count as fail
 </div>
 
 <p class="sf-lede" markdown>
-GLM-5.3-Flash @high (<code>n=1</code> cell shown in the charts above): **Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%.
+GLM-5.3-Flash @high (<code>n=1</code>): **Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%.
 </p>
 
 <h2 class="sf-section" id="inside">What's inside</h2>
@@ -546,46 +544,46 @@ GLM-5.3-Flash @high (<code>n=1</code> cell shown in the charts above): **Steerab
 <div class="sf-grid" markdown>
 <div class="sf-card" markdown>
 ### The model-quality layer
-Local, quantized, and cheap models break the structured-`tool_calls` assumptions every SDK makes. Steerable recovers *and executes* malformed calls (MiniMax XML, DeepSeek `<function=>`, markdown), vetoes completion drafts (`accept` / `retry` / `narrate`), judges grounding, and self-calibrates token estimates.
+Recovers malformed tool calls (XML / `<function=>` / markdown), plus completion vetoes, grounding, and token calibration.
 
 <span class="sf-card-link">[Evaluation results →](evals.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### One wire protocol
-One JSON Schema → generated **TypeScript types + Pydantic models**. `content`, `tool_call`, `tool_result`, `error`, `done`, `budget_exhausted` — all standardised, with a conformance suite keeping both SDKs byte-compatible. All 15 TS and Python packages share one lockstep `X.Y.Z`, pinned against a digest-locked Rust CoreLoop wheel; npm tarballs ship **sigstore provenance** attestations.
+One JSON Schema → TS & Pydantic types. 15 lockstep packages, digest-pinned CoreLoop, and sigstore provenance.
 
 <span class="sf-card-link">[Wire spec →](spec/overview.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### Pure-function harness
-Policy, budget, retry, completion, tracing, safety patterns. **Zero I/O coupling** — drop into FastAPI, Celery, or a notebook. Unit and golden tests in CI.
+Policy, budget, retry, completion, and safety patterns with zero I/O coupling — drop into any backend.
 
 <span class="sf-card-link">[Safety & policy spec →](spec/safety.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### Pluggable runtime
-One `LLMProvider` interface across **four wire protocols** — OpenAI-compatible chat/completions (Ollama, vLLM, DeepSeek, Groq, …), OpenAI Responses, Anthropic-native, Gemini-native — plus a live gateway model catalog, per-vendor sampling presets, `@tool` decorator, `ToolRouter`, SSE-over-HTTP and stdio JSON-RPC transports.
+One `LLMProvider` across 4 protocols (OpenAI / Responses / Anthropic / Gemini), `@tool`, `ToolRouter`, and SSE / JSON-RPC.
 
 <span class="sf-card-link">[Runtime spec →](spec/runtime.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### Embeddable sidecar
-A portable, signed CPython binary speaking JSON-RPC over stdio (38 methods). Ship local LLMs inside a **Tauri desktop app** (`@steerable/agent-shell-tauri`) or any native host — macOS notarised, Windows code-signed — with an OS sandbox, per-host egress proxy, and plugin lifecycle built in.
+Signed portable CPython (38 RPC methods) with OS sandbox and egress proxy for Tauri or native hosts.
 
 <span class="sf-card-link">[Sidecar spec →](spec/sidecar.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### Headless React UI & Web Shell
-7 components + 14 rich cards + 3 hooks + Tailwind preset, each state covered by Storybook, axe a11y, and visual-regression baselines in CI. The same components power the full Web Shell (`pnpm agent-shell:web`).
+7 components, 14 rich cards, 3 hooks, and Tailwind preset powering the Web Shell (`pnpm agent-shell:web`).
 
 <span class="sf-card-link">[UI components →](ui/index.md)</span>
 </div>
 </div>
 
-<h2 class="sf-section" id="quickstart">Quickstart — integrate a layer</h2>
+<h2 class="sf-section" id="quickstart">Quickstart</h2>
 
 <p class="sf-lede" markdown>
-Want the full shell out of the box? Use the [one-command launcher](#run) above, or run <code>pnpm shell:dev</code> for a zero-backend UI showcase. Pick a layer below to embed Steerable in your own stack:
+Embed any single layer (for the full shell see [above](#run); UI-only showcase: <code>pnpm shell:dev</code>):
 </p>
 
 <div class="sf-tabs" markdown>
@@ -657,7 +655,7 @@ Want the full shell out of the box? Use the [one-command launcher](#run) above, 
 <h2 class="sf-section" id="architecture">Architecture</h2>
 
 <p class="sf-lede" markdown>
-Five tiers, strict no-upward-imports rule. Tier N never imports Tier N+1 — adopting any layer means inheriting only the layers below it. [Architecture spec](spec/architecture.md)
+Strict no-upward-imports rule — adopt any tier and inherit only what sits below it. [Architecture spec](spec/architecture.md)
 </p>
 
 <div class="sf-arch-stage" id="arch-stage" data-focus="all">
@@ -793,7 +791,7 @@ Five tiers, strict no-upward-imports rule. Tier N never imports Tier N+1 — ado
 </div>
 
 <p class="sf-arch-caption" id="sf-arch-caption">
-Click any tier above to highlight its exact downward dependencies — no layer ever imports above itself.
+Click any tier to highlight its downward dependencies — no layer ever imports above itself.
 </p>
 </div>
 
@@ -801,18 +799,18 @@ Click any tier above to highlight its exact downward dependencies — no layer e
 
 | Package | Tier | What you get |
 | ------- | ---- | ------------ |
-| [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent` envelope, `ToolCall` / `ToolResult`, `ChatMessage`, sidecar JSON-RPC types — codegen from `spec/`, drift-checked in CI |
-| `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, `is_terminal_result`, command-safety patterns |
-| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop` + `LLMProvider` adapters (OpenAI-compat / Responses / Anthropic / Gemini), `ToolRouter` + `@tool`, storage & transport adapters (FastAPI SSE, stdio JSON-RPC); the TS package owns the sidecar process lifecycle for pure-TypeScript hosts |
-| [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | Portable CPython binary — boots in <1s, macOS notarised, Windows signed — plus the bundled per-host CONNECT allow-list egress proxy |
-| [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | `ChatPanel`, `MessageList`, `AgentSelector`, `ModelSelector`, `OrchestrationPlanCard`, `ToolCallRenderer`, `SSEStreamView` + 14-card `/cards` subpath + hooks + Tailwind preset |
-| `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri + headless host shell, shared Node HostRuntime, sidecar supervision, product-neutral renderer — published to npm (`dist` / source / pure-types respectively) |
-| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | Product-neutral command line and terminal session. `npm install -g @steerable/agent-cli`, then `steerable-cli login`. The install pulls one platform runtime package (sidecar, `run_code` interpreter, egress proxy) as an optional dependency, so nothing else has to be installed. Shares the host database with the desktop app. |
+| [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent`, `ToolCall` / `ToolResult`, `ChatMessage`, Sidecar JSON-RPC types (codegen from `spec/`) |
+| `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`, `consume_budget`, `next_retry_delay_ms`, command-safety patterns |
+| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop`, 4-protocol `LLMProvider`, `@tool`, `ToolRouter`, SSE/stdio transports & sidecar lifecycle |
+| [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | Portable CPython (<1s boot, signed & notarised) plus per-host CONNECT egress allow-list proxy |
+| [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | 7 core components (`ChatPanel`, `MessageList`, `ToolCallRenderer`, …) + 14 `/cards` + hooks + Tailwind preset |
+| `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri + headless host shell, shared Node HostRuntime, sidecar supervision, product-neutral renderer |
+| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | CLI & TUI (`steerable-cli login`), auto-pulling the platform runtime and sharing the host DB |
 
 <h2 class="sf-section" id="compare">How it compares</h2>
 
 <p class="sf-lede" markdown>
-Steerable isn't the only way to ship an agent. The short, honest version against the frameworks you're probably also evaluating:
+A direct look against frameworks you may also be evaluating:
 </p>
 
 <div class="sf-compare-wrap" markdown>
@@ -828,13 +826,13 @@ Steerable isn't the only way to ship an agent. The short, honest version against
 </div>
 
 <p class="sf-lede" markdown>
-Where Steerable genuinely differs, where it lags, and how to choose: [Full comparison](comparison.md).
+Trade-offs and when to pick which: [Full comparison](comparison.md).
 </p>
 
 <h2 class="sf-section" id="users">Who's using it</h2>
 
 <p class="sf-lede" markdown>
-Production desktop shells, enterprise deployments, and university research evaluations.
+Production desktop shells, enterprise deployments, and university research.
 </p>
 
 <div class="sf-brand-grid">
@@ -912,8 +910,8 @@ Production desktop shells, enterprise deployments, and university research evalu
 
 <div class="sf-closing" markdown>
 <div class="sf-closing-copy">
-<strong>Ready to see Steerable in action?</strong>
-<span>Explore the browser shell with zero setup, or walk through the full architecture guide.</span>
+<strong>Try Steerable</strong>
+<span>Launch the keyless browser demo or read the architecture guide.</span>
 </div>
 <div class="sf-closing-actions" markdown>
 <a href="demo/" class="md-button md-button--primary">Launch live demo</a>

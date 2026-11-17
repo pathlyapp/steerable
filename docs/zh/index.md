@@ -38,7 +38,7 @@ hide:
 
 # Steerable
 
-<p class="sf-tagline"><span class="sf-ribbon">◆ 让本地模型、量化模型与低价模型稳定可靠地执行工具调用 ◆</span></p>
+<p class="sf-tagline"><span class="sf-ribbon">◆ 本地、量化与低价模型的 Agent 质量层 ◆</span></p>
 
 <p class="sf-pills">
 <a href="#pillar-1" class="sf-pill">更少幻觉</a>
@@ -48,8 +48,7 @@ hide:
 </p>
 
 <p class="sf-sub" markdown>
-**更少幻觉、更少静默失败——即使使用高性价比小模型。** GLM-5.3-Flash 在 Terminal-Bench 2.1 上达到 **79.0%**。
-一条命令即可拉起完整 Agent Shell；底层的每一层也均可独立作为包引入，按需取用。
+GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整 Shell，或按需引入任意一层。
 </p>
 
 <div class="sf-cta" markdown>
@@ -143,7 +142,7 @@ hide:
 <div class="sf-run-copy">
 <span class="sf-pillar-kicker">快速启动</span>
 <p class="sf-run-title">一条命令启动完整智能体</p>
-<p class="sf-run-text">内置对话界面、集成终端、预置技能、模型选择器与系统级沙箱 Sidecar，首次启动即刻可用。支持浏览器、桌面端和命令行运行——共用同一套 Shell 与本地数据库，可接入任意 OpenAI 兼容、Anthropic 或 Gemini 密钥。</p>
+<p class="sf-run-text">对话、终端、沙箱与多模型支持。一套 Shell 跑通浏览器、桌面端与命令行。</p>
 <a href="#quickstart" class="md-button">查看集成方式</a>
 </div>
 <div class="sf-run-term">
@@ -184,29 +183,29 @@ hide:
 <h2 class="sf-section" id="why">为什么选择 Steerable</h2>
 
 <p class="sf-lede" markdown>
-低价和本地模型经常编造数据、声称完成了实际没做的操作、或把工具调用直接写成纯文本。现有 Agent SDK 往往默认模型不会犯这些错，而 Steerable 在每个关键节点做确定性兜底——同时保持足够轻量。
+不假设模型永远听话——在工具恢复、事实核查与沙箱边界做确定性兜底。
 </p>
 
 <div class="sf-pillars" markdown>
 <div class="sf-pillar" id="pillar-1" markdown>
 <span class="sf-pillar-kicker">01 · 更少幻觉</span>
-### 由真实工具结果支撑的回答
-事实核查器（Grounding Judge）会拦截未被工具结果支持的结论，纪律重试会捕获"嘴上说做了但实际未改"的情况，完成前否决门可在回答展示给用户前退回重写。纯文本形式的畸形工具调用会被自动解析并执行，把静默失败转化为自动重试。
+### 事实核查与自动纠错
+拦截无依据结论与空头支票，自动解析并重试纯文本畸形工具调用。
 </div>
 <div class="sf-pillar" id="pillar-2" markdown>
 <span class="sf-pillar-kicker">02 · 简单易用</span>
-### 一个下午即可上手
-无需学习复杂的图编排 DSL 或专有运行时。工具就是带 `@tool` 装饰器的普通函数，Harness 层是零 I/O 耦合的纯函数，一份 JSON Schema 自动生成 TypeScript 与 Python 双方类型。
+### 半天即可上手
+无图编排 DSL。`@tool` 装饰普通函数，Harness 零 I/O，单份 Schema 生成双端类型。
 </div>
 <div class="sf-pillar" id="pillar-3" markdown>
 <span class="sf-pillar-kicker">03 · 开箱即用</span>
-### 默认即安全、默认闭环
-开箱集成系统级沙箱（macOS Seatbelt、Linux bwrap/Landlock、Windows Job Object）、61 条命令风险分类规则与按域名放行的 CONNECT 出口代理。无需 API Key 即可直接在浏览器打开[在线演示](../demo/)。
+### 默认闭环沙箱
+内置 Seatbelt / bwrap / Windows 沙箱、61 条命令规则与白名单代理。免 Key [在线演示](../demo/)。
 </div>
 <div class="sf-pillar" id="pillar-4" markdown>
 <span class="sf-pillar-kicker">04 · 分层可拆</span>
-### 只取所需的一层，跳过其余部分
-五层架构与 15 个独立发布包，严格禁止下层反向引用上层。你可以只用协议类型、只接入 React UI，或只嵌入 Sidecar，不会强绑任何额外依赖。
+### 按层按需取用
+5 层 15 个独立包，严格单向依赖。可只引入协议、UI 或 Sidecar。
 </div>
 </div>
 
@@ -308,14 +307,14 @@ hide:
 </div>
 
 <p class="sf-loop-caption" id="sf-loop-caption">
-点击上方任意模块：同一套 Rust <code>CoreLoop</code> 引擎通过结构化 <code>LoopEvent</code> 协议，同时驱动桌面端 Sidecar（stdio JSON-RPC）与服务端 FastAPI（SSE）。
+同一套 Rust <code>CoreLoop</code> 通过结构化 <code>LoopEvent</code>，同时驱动桌面 Sidecar 与服务端 FastAPI。
 </p>
 </div>
 
-<h2 class="sf-section" id="bench">Flash 档位模型实测对比</h2>
+<h2 class="sf-section" id="bench">Flash 档位实测对比</h2>
 
 <p class="sf-lede" markdown>
-基于 Terminal-Bench 2.1 的 89 道真实终端任务（含隐藏测试集，超时计为失败）。标题中的 <strong>79.0%</strong> 为 GLM-5.3-Flash 在 <code>@max</code> 下的三次平均通过率；下方图表对比 GLM-5.3-Flash（<code>@high</code>）、DeepSeek-V3.1-0731（<code>DS0731 @high</code>）与 Qwen（<code>@medium</code>，其推理档位上限）上的单次 <code>n=1</code> 评测表现。[评测方法论](../evals.md)
+Terminal-Bench 2.1（89 题）。<strong>79.0%</strong> 为 GLM-5.3-Flash <code>@max</code> 三次均值；下图对比单次 <code>n=1</code> 表现。[评测方法](../evals.md)
 </p>
 
 <div class="sf-bench sf-bench--wide">
@@ -493,7 +492,7 @@ hide:
 </div>
 
 <p class="sf-lede" markdown>
-GLM-5.3-Flash @high（上方图表中的单次 <code>n=1</code> 组）：**Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%。
+GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%。
 </p>
 
 <h2 class="sf-section" id="inside">核心能力一览</h2>
@@ -501,46 +500,46 @@ GLM-5.3-Flash @high（上方图表中的单次 <code>n=1</code> 组）：**Steer
 <div class="sf-grid" markdown>
 <div class="sf-card" markdown>
 ### 模型质量保障层
-本地模型、量化模型与低价模型常打破传统 SDK 对标准 `tool_calls` 的假设。Steerable 可恢复并执行畸形调用（MiniMax XML、DeepSeek `<function=>`、Markdown 代码块），提供完成否决门（`accept` / `retry` / `narrate`）、事实核查与 Token 估算自校准。
+恢复畸形工具调用（XML / `<function=>` / 代码块），支持完成否决、事实核查与 Token 自校准。
 
 <span class="sf-card-link">[查看评测结果 →](../evals.md)</span>
 </div>
 <div class="sf-card" markdown>
-### 统一强类型通信协议
-单份 JSON Schema 生成 **TypeScript 类型 + Pydantic 模型**。`content`、`tool_call`、`tool_result`、`error`、`done`、`budget_exhausted` 全部标准化，并用一致性测试保证双语言字节级兼容。15 个 TS 与 Python 发布包共享 `X.Y.Z` 锁步版本，npm 包附带 **sigstore provenance** 溯源签名。
+### 统一强类型协议
+单份 JSON Schema 生成 TS 与 Pydantic 类型，15 个包共享锁步版本与 sigstore 溯源。
 
 <span class="sf-card-link">[协议规范 →](../spec/overview.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### 纯函数式 Harness
-策略判定、预算消耗、退避重试、终止判断、链路追踪与命令安全模式均以**零 I/O 耦合**的纯函数实现，可直接嵌入 FastAPI、Celery 或 Notebook，并在 CI 中由单元测试与黄金用例守护。
+策略、预算、重试、终止与命令安全均以零 I/O 纯函数实现，可嵌入任意服务。
 
 <span class="sf-card-link">[安全与策略规范 →](../spec/safety.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### 可插拔运行时
-统一 `LLMProvider` 接口覆盖**四种大模型协议**——OpenAI 兼容（Ollama、vLLM、DeepSeek、Groq 等）、OpenAI Responses、Anthropic 原生、Gemini 原生——附带网关模型目录、厂商采样预设、`@tool` 装饰器、`ToolRouter` 以及 FastAPI SSE / stdio JSON-RPC 传输层。
+统一 `LLMProvider` 覆盖 4 种大模型协议，内置 `@tool`、`ToolRouter` 与 SSE / JSON-RPC。
 
 <span class="sf-card-link">[运行时规范 →](../spec/runtime.md)</span>
 </div>
 <div class="sf-card" markdown>
 ### 可嵌入桌面 Sidecar
-签名并公证的便携式 CPython 二进制文件，通过 stdio 提供 38 个 JSON-RPC 方法。可打包进 **Tauri 桌面应用**（`@steerable/agent-shell-tauri`）或任何原生宿主（macOS 公证、Windows 代码签名），内置 OS 沙箱、域名白名单出口代理与插件生命周期。
+签名公证的可移植 CPython（38 个 RPC 方法），内置 OS 沙箱与出口域名白名单代理。
 
 <span class="sf-card-link">[Sidecar 规范 →](../spec/sidecar.md)</span>
 </div>
 <div class="sf-card" markdown>
-### 无头 React UI 与 Web Shell
-7 个核心组件 + 14 张富交互卡片 + 3 个 Hooks + Tailwind 预设，每个状态在 CI 中都有 Storybook、axe 无障碍检查与视觉回归基线，并直接驱动完整的 Web Shell（`pnpm agent-shell:web`）。
+### 无头 React UI & Web Shell
+7 个组件 + 14 张卡片 + 3 个 Hooks + Tailwind 预设，直接驱动完整的 Web Shell。
 
 <span class="sf-card-link">[UI 组件文档 →](../ui/index.md)</span>
 </div>
 </div>
 
-<h2 class="sf-section" id="quickstart">快速接入——按需选用任意一层</h2>
+<h2 class="sf-section" id="quickstart">快速接入</h2>
 
 <p class="sf-lede" markdown>
-想要直接运行完整桌面/网页端？请使用上方的[一键启动命令](#run)，或运行 <code>pnpm shell:dev</code> 打开零后端的 UI 卡片展示台。按下面的方式将 Steerable 嵌入你自己的技术栈：
+按需选用任意一层嵌入项目；运行完整 Shell 见[一键启动](#run)，纯 UI 预览运行 <code>pnpm shell:dev</code>。
 </p>
 
 <div class="sf-tabs" markdown>
@@ -612,7 +611,7 @@ GLM-5.3-Flash @high（上方图表中的单次 <code>n=1</code> 组）：**Steer
 <h2 class="sf-section" id="architecture">五层架构</h2>
 
 <p class="sf-lede" markdown>
-五层分工、严格禁止下层反向引用上层（Tier N 绝不引入 Tier N+1）——采用任意一层，只会继承它下方的依赖。[架构规范](../spec/architecture.md)
+严格单向依赖（Tier N 绝不引入 Tier N+1），采用哪一层只继承下方依赖。[架构规范](../spec/architecture.md)
 </p>
 
 <div class="sf-arch-stage" id="arch-stage" data-focus="all">
@@ -732,7 +731,7 @@ GLM-5.3-Flash @high（上方图表中的单次 <code>n=1</code> 组）：**Steer
 </div>
 
 <p class="sf-arch-caption" id="sf-arch-caption">
-点击上方任意层级，高亮查看它的向下传递依赖——低层永不反向引入高层。
+点击任意层级高亮向下依赖——低层永不反向引入高层。
 </p>
 </div>
 
@@ -740,18 +739,18 @@ GLM-5.3-Flash @high（上方图表中的单次 <code>n=1</code> 组）：**Steer
 
 | 包名 | 层级 | 核心能力 |
 | ---- | ---- | -------- |
-| [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent` 信封、`ToolCall` / `ToolResult`、`ChatMessage`、Sidecar JSON-RPC 类型——由 `spec/` 自动生成并在 CI 中检查漂移 |
-| `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`、`consume_budget`、`next_retry_delay_ms`、`is_terminal_result`、命令安全匹配规则 |
-| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop` + `LLMProvider` 适配器（OpenAI 兼容 / Responses / Anthropic / Gemini）、`ToolRouter` + `@tool`、存储与传输适配器；TS 包为纯 TS 宿主提供 Sidecar 生命周期托管 |
-| [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | 便携式 CPython 二进制（<1 秒冷启、macOS 公证、Windows 签名），附带按域名白名单放行的 CONNECT 出口代理 |
-| [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | `ChatPanel`、`MessageList`、`AgentSelector`、`ModelSelector`、`OrchestrationPlanCard`、`ToolCallRenderer`、`SSEStreamView` + `/cards` 14 张卡片 + Hooks + Tailwind 预设 |
-| `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri 与无头宿主壳、共享 Node HostRuntime、Sidecar 守护、产品中立的渲染前端 |
-| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | 产品中立的命令行与终端会话。`npm install -g @steerable/agent-cli` 后执行 `steerable-cli login`，安装时自动拉取对应平台的运行时包（Sidecar、`run_code` 解释器、出口代理），并与桌面端共用同一本地数据库 |
+| [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent`、`ToolCall` / `ToolResult`、`ChatMessage`、Sidecar JSON-RPC 类型（由 `spec/` 自动生成） |
+| `@steerable/agent-harness` · [`steerable-agent-harness`](https://pypi.org/project/steerable-agent-harness/) | 2 | `decide_tool_mode`、`consume_budget`、`next_retry_delay_ms`、命令安全规则 |
+| [`steerable-agent-runtime`](https://pypi.org/project/steerable-agent-runtime/) · [`@steerable/agent-runtime`](https://www.npmjs.com/package/@steerable/agent-runtime) | 3 | `CoreLoop`、4 协议 `LLMProvider`、`@tool`、`ToolRouter`、SSE/stdio 传输与 Sidecar 生命周期 |
+| [`steerable-sidecar`](https://pypi.org/project/steerable-sidecar/) · [`steerable-egress-proxy`](https://pypi.org/project/steerable-egress-proxy/) | 3 | 可移植 CPython（<1s 启动、已签名公证）与域名白名单 CONNECT 出口代理 |
+| [`@steerable/agent-ui`](https://www.npmjs.com/package/@steerable/agent-ui) | 4 | `ChatPanel`、`MessageList`、`ToolCallRenderer` 等 7 个组件 + 14 张卡片 + Hooks + Tailwind 预设 |
+| `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri / 无头宿主壳、共享 Node HostRuntime、Sidecar 守护与渲染前端 |
+| [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | 命令行与终端会话（`steerable-cli login`），自动拉取平台运行时并与桌面端共用本地数据库 |
 
 <h2 class="sf-section" id="compare">框架横向对比</h2>
 
 <p class="sf-lede" markdown>
-Steerable 并非唯一方案。以下是它与常见主流 Agent 框架与产品的直白对比：
+与常见主流 Agent 框架与产品的定位对比：
 </p>
 
 <div class="sf-compare-wrap" markdown>
@@ -767,13 +766,13 @@ Steerable 并非唯一方案。以下是它与常见主流 Agent 框架与产品
 </div>
 
 <p class="sf-lede" markdown>
-Steerable 真正擅长与落后的细节，以及选型建议：[查看完整对比](../comparison.md)。
+详细差异与选型建议：[查看完整对比](../comparison.md)。
 </p>
 
 <h2 class="sf-section" id="users">谁在使用</h2>
 
 <p class="sf-lede" markdown>
-生产级桌面客户端、企业部署与高校科研评测。
+生产桌面产品、企业部署与高校科研评测。
 </p>
 
 <div class="sf-brand-grid">
@@ -851,8 +850,8 @@ Steerable 真正擅长与落后的细节，以及选型建议：[查看完整对
 
 <div class="sf-closing" markdown>
 <div class="sf-closing-copy">
-<strong>准备好体验 Steerable 了吗？</strong>
-<span>无需密钥即可直接在浏览器体验完整 Shell，或阅读端到端架构指南。</span>
+<strong>开始使用 Steerable</strong>
+<span>免密钥打开在线演示，或阅读完整架构指南。</span>
 </div>
 <div class="sf-closing-actions" markdown>
 <a href="../demo/" class="md-button md-button--primary">启动在线演示</a>

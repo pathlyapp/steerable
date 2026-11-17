@@ -16,57 +16,57 @@
       copy: "Copy",
       copied: "Copied",
       loop: {
-        all: "Click any block above: one Rust CoreLoop engine emits structured LoopEvent frames to both the desktop sidecar (stdio JSON-RPC) and the in-process FastAPI server (SSE).",
-        core: "CoreLoop (Rust engine behind a Python facade): executes step loops, malformed tool-call recovery, grounding checks, completion vetoes, and mid-turn steering across 15 frozen LoopEvent kinds.",
-        desktop: "Desktop & Terminal: steerable-sidecar bundles portable CPython + CoreLoop with 38 JSON-RPC methods over stdio, driving Tauri windows (@steerable/agent-shell-tauri) and the CLI/TUI.",
-        server: "Server: steerable-agent-runtime runs the exact same CoreLoop in-process behind FastAPI SSE and 4 LLM wire protocols (OpenAI-compat, Responses, Anthropic, Gemini)."
+        all: "One Rust CoreLoop drives both the desktop sidecar (stdio JSON-RPC) and the FastAPI server (SSE) over LoopEvent.",
+        core: "CoreLoop (Rust engine): step loops, malformed tool-call recovery, grounding checks, completion vetoes, and mid-turn steering.",
+        desktop: "Desktop & Terminal: steerable-sidecar bundles CPython + CoreLoop with 38 JSON-RPC methods over stdio for Tauri and CLI/TUI.",
+        server: "Server: steerable-agent-runtime runs the same CoreLoop in-process behind FastAPI SSE and 4 LLM protocols."
       },
       arch: {
-        all: "Click any tier above to highlight its exact downward dependencies — no layer ever imports above itself.",
-        t5: "Tier 5 (Host Shell & CLI): renders with Tier 4 UI and supervises Tier 3 Sidecar; inherits Tier 1–4 without touching Tier 3 Python server adapters.",
-        t4: "Tier 4 (React UI): shares Tier 1 wire types and optionally bridges to Tier 3 Sidecar — skip the sidecar if you bring your own SSE endpoint.",
-        t3s: "Tier 3 (Sidecar): embeds Tier 2 Harness and validates Tier 1 Protocol into a portable CPython binary; never pulls in Tier 4 UI or Tier 5 Shell.",
-        t3r: "Tier 3 (Python Runtime): embeds Tier 2 Harness and validates Tier 1 Protocol for FastAPI/server hosts — zero React or desktop shell dependencies.",
-        t2: "Tier 2 (Harness): pure-function policy, budget, retry, grounding, and safety over Tier 1 Protocol types — zero I/O coupling.",
-        t1: "Tier 1 (Protocol): zero-dependency TypeScript/Zod and Pydantic wire types generated from JSON Schema — adoptable completely standalone."
+        all: "Click any tier to highlight its downward dependencies — no layer ever imports above itself.",
+        t5: "Tier 5 (Host Shell & CLI): renders with Tier 4 UI and supervises Tier 3 Sidecar; skips server-only adapters.",
+        t4: "Tier 4 (React UI): shares Tier 1 wire types and optionally bridges to Tier 3 Sidecar (optional if you bring your own SSE).",
+        t3s: "Tier 3 (Sidecar): embeds Tier 2 Harness + Tier 1 Protocol into portable CPython — zero UI or shell dependencies.",
+        t3r: "Tier 3 (Python Runtime): embeds Tier 2 Harness + Tier 1 Protocol for FastAPI/server hosts — zero React or shell dependencies.",
+        t2: "Tier 2 (Harness): pure-function policy, budget, retry, grounding, and safety over Tier 1 types — zero I/O.",
+        t1: "Tier 1 (Protocol): zero-dependency TS/Zod and Pydantic types generated from JSON Schema."
       }
     },
     zh: {
       copy: "复制",
       copied: "已复制",
       loop: {
-        all: "点击上方任意模块：同一套 Rust CoreLoop 引擎通过结构化 LoopEvent 协议，同时驱动桌面端 Sidecar（stdio JSON-RPC）与服务端 FastAPI（SSE）。",
-        core: "CoreLoop（Python 门面背后的 Rust 引擎）：在 15 种冻结的 LoopEvent 事件之上执行步进循环、畸形工具调用恢复、事实核查、完成否决与回合中实时纠偏。",
-        desktop: "桌面与终端：steerable-sidecar 将便携式 CPython 与 CoreLoop 打包在一起，通过 stdio 暴露 38 个 JSON-RPC 方法，驱动 Tauri 桌面窗（@steerable/agent-shell-tauri）与 CLI/TUI。",
-        server: "服务端：steerable-agent-runtime 在进程内运行完全一致的 CoreLoop，对接 FastAPI SSE 与 4 种大模型协议（OpenAI 兼容、Responses、Anthropic、Gemini）。"
+        all: "同一套 Rust CoreLoop 通过结构化 LoopEvent，同时驱动桌面 Sidecar 与服务端 FastAPI。",
+        core: "CoreLoop（Rust 引擎）：覆盖步进循环、畸形工具调用恢复、事实核查、完成否决与回合中纠偏。",
+        desktop: "桌面与终端：steerable-sidecar 内置 CPython + CoreLoop，通过 stdio 提供 38 个 RPC 方法，驱动 Tauri 与 CLI/TUI。",
+        server: "服务端：steerable-agent-runtime 在进程内运行同一 CoreLoop，对接 FastAPI SSE 与 4 种大模型协议。"
       },
       arch: {
-        all: "点击上方任意层级，高亮查看它的向下传递依赖——低层永不反向引入高层。",
-        t5: "Tier 5（宿主壳与 CLI）：使用 Tier 4 UI 渲染并托管 Tier 3 Sidecar；只依赖 Tier 1–4，无需引入服务端专用适配器。",
-        t4: "Tier 4（React UI）：共享 Tier 1 协议类型，并可选通过宿主机桥接 Tier 3 Sidecar——如果已有自己的 SSE 后端，可完全跳过 Sidecar。",
-        t3s: "Tier 3（Sidecar）：内嵌 Tier 2 Harness 并按 Tier 1 Protocol 校验，打包为独立可移植的 CPython 可执行程序，不包含任何 UI 或桌面壳依赖。",
-        t3r: "Tier 3（Python Runtime）：面向 FastAPI/服务端宿主，内嵌 Tier 2 Harness 与 Tier 1 Protocol，零 React 与桌面端依赖。",
-        t2: "Tier 2（Harness）：基于 Tier 1 协议类型的纯函数策略、预算、重试、事实核查与安全规则，零 I/O 耦合。",
-        t1: "Tier 1（Protocol）：由 JSON Schema 生成、零外部依赖的 TypeScript/Zod 与 Pydantic 通信类型，可完全独立采用。"
+        all: "点击任意层级高亮向下依赖——低层永不反向引入高层。",
+        t5: "Tier 5（宿主壳与 CLI）：使用 Tier 4 UI 并托管 Tier 3 Sidecar，不引入服务端适配器。",
+        t4: "Tier 4（React UI）：共享 Tier 1 协议类型，可选桥接 Tier 3 Sidecar（自有 SSE 后端可跳过）。",
+        t3s: "Tier 3（Sidecar）：内嵌 Tier 2 Harness 与 Tier 1 Protocol 的可移植 CPython，零 UI 与壳依赖。",
+        t3r: "Tier 3（Python Runtime）：面向服务端宿主，内嵌 Tier 2 与 Tier 1，零 React 与桌面依赖。",
+        t2: "Tier 2（Harness）：基于 Tier 1 协议的纯函数策略、预算、重试、核查与安全规则，零 I/O。",
+        t1: "Tier 1（Protocol）：由 JSON Schema 生成、零依赖的 TS/Zod 与 Pydantic 类型，可单独采用。"
       }
     },
     ja: {
       copy: "コピー",
       copied: "コピー済み",
       loop: {
-        all: "上の各ブロックをクリック：単一の Rust CoreLoop エンジンが構造化された LoopEvent を生成し、デスクトップ Sidecar（stdio JSON-RPC）と FastAPI サーバー（SSE）の両方を駆動します。",
-        core: "CoreLoop（Python ファサード配下の Rust エンジン）：15 種の固定 LoopEvent に基づき、ステップループ、不正ツール呼び出し修復、グラウンディング検証、完了拒否、ターン中ステアリングを実行します。",
-        desktop: "デスクトップ & ターミナル：steerable-sidecar は可搬 CPython と CoreLoop を同梱し、stdio 経由の 38 個の JSON-RPC メソッドで Tauri（@steerable/agent-shell-tauri）や CLI/TUI を駆動します。",
-        server: "サーバー：steerable-agent-runtime は同一の CoreLoop をプロセス内で実行し、FastAPI SSE と 4 種の LLM プロトコル（OpenAI 互換・Responses・Anthropic・Gemini）に接続します。"
+        all: "単一の Rust CoreLoop が LoopEvent を介してデスクトップ Sidecar と FastAPI サーバーの両方を駆動します。",
+        core: "CoreLoop（Rust エンジン）：ステップループ、不正ツール呼び出し復元、根拠検証、完了拒否、途中ステアリングを実行。",
+        desktop: "デスクトップ & 端末：steerable-sidecar は CPython + CoreLoop を同梱し、38 RPC メソッドで Tauri と CLI/TUI を駆動。",
+        server: "サーバー：steerable-agent-runtime は同一 CoreLoop をプロセス内で実行し、FastAPI SSE と 4 プロトコルに接続。"
       },
       arch: {
-        all: "上の各レイヤーをクリックすると、下位方向のみの依存関係をハイライトします。上位レイヤーへの逆依存は一切ありません。",
-        t5: "Tier 5（ホストシェル & CLI）：Tier 4 UI で描画し Tier 3 Sidecar を管理します。Tier 1–4 のみを継承し、サーバー専用アダプターは含みません。",
-        t4: "Tier 4（React UI）：Tier 1 ワイヤー型を共有し、必要に応じてホストブリッジ経由で Tier 3 Sidecar に接続します（独自 SSE がある場合は Sidecar 不要）。",
-        t3s: "Tier 3（Sidecar）：Tier 2 Harness を組み込み Tier 1 Protocol で検証した可搬 CPython バイナリ。UI やシェルには一切依存しません。",
-        t3r: "Tier 3（Python Runtime）：FastAPI などのサーバー向け。Tier 2 Harness と Tier 1 Protocol のみに依存し、React やデスクトップ殻を持ち込みません。",
-        t2: "Tier 2（Harness）：Tier 1 型に基づく純粋関数群（ポリシー・予算・リトライ・グラウンディング・安全性）。I/O 結合ゼロです。",
-        t1: "Tier 1（Protocol）：JSON Schema から生成される依存ゼロの TypeScript/Zod および Pydantic 型定義。単体で導入可能です。"
+        all: "階層をクリックすると下位のみの依存関係をハイライトします。",
+        t5: "Tier 5（シェル & CLI）：Tier 4 UI と Tier 3 Sidecar を統合。サーバー専用層には非依存。",
+        t4: "Tier 4（React UI）：Tier 1 型を共有し、必要に応じ Tier 3 Sidecar へ接続（独自 SSE なら不要）。",
+        t3s: "Tier 3（Sidecar）：Tier 2 と Tier 1 を内蔵する可搬 CPython。UI やシェルに非依存。",
+        t3r: "Tier 3（Runtime）：サーバー向け。Tier 2 と Tier 1 のみに依存し、React やシェルを含みません。",
+        t2: "Tier 2（Harness）：Tier 1 型上の純粋関数群（ポリシー・予算・リトライ・安全性）。I/O ゼロ。",
+        t1: "Tier 1（Protocol）：JSON Schema から自動生成される依存ゼロの TS/Zod・Pydantic 型定義。"
       }
     }
   };
