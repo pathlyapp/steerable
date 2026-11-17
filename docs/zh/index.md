@@ -103,10 +103,11 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 </div>
 
 <p class="sf-cta-secondary" markdown>
-[快速入门](../getting-started.md) · <a href="../storybook/">Storybook</a> · [GitHub](https://github.com/pathlyapp/steerable)
+[快速入门](../getting-started.md) · <a href="../storybook/">Storybook</a> · <a href="https://github.com/pathlyapp/steerable" target="_blank" rel="noopener noreferrer">★ GitHub Star</a> · <a href="#community">交流群</a>
 </p>
 
 <p class="sf-badges">
+  <a href="https://github.com/pathlyapp/steerable" target="_blank" rel="noopener noreferrer"><img alt="GitHub stars" src="https://img.shields.io/github/stars/pathlyapp/steerable?label=Star&color=f59e0b" /></a>
   <a href="https://github.com/pathlyapp/steerable/blob/main/LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" /></a>
   <a href="https://www.npmjs.com/package/@steerable/agent-protocol"><img alt="npm: @steerable/agent-protocol" src="https://img.shields.io/npm/v/@steerable/agent-protocol?label=%40steerable%2Fagent-protocol&color=cb3837" /></a>
   <a href="https://www.npmjs.com/package/@steerable/agent-ui"><img alt="npm: @steerable/agent-ui" src="https://img.shields.io/npm/v/@steerable/agent-ui?label=%40steerable%2Fagent-ui&color=cb3837" /></a>
@@ -180,6 +181,7 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 <a href="#why">核心机制</a>
 <a href="#bench">横向对比</a>
 <a href="#users">谁在使用</a>
+<a href="#community">交流群</a>
 </nav>
 
 <div class="sf-run" id="run">
@@ -840,6 +842,35 @@ GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77
 [Sidecar](../spec/sidecar.md){ .md-button }
 [ACP 编辑器接入](../spec/acp.md){ .md-button }
 [UI 组件](../ui/index.md){ .md-button }
+</div>
+</div>
+</div>
+
+<div class="sf-community" id="community">
+<div class="sf-community-copy">
+<span class="sf-pillar-kicker">社区交流 · 微信 / 企业微信群</span>
+<p class="sf-community-title">加入 Steerable 中文交流群</p>
+<p class="sf-community-text">与核心维护者及一线接入团队直接交流协议集成、低价与本地模型调优，以及 Sidecar 部署经验。</p>
+<ul class="sf-community-list">
+<li><strong>上手答疑</strong>：一键启动、沙箱边界与模型适配问题实时反馈</li>
+<li><strong>架构实践</strong>：Tier 1 协议、React UI 卡片与自定义 Runtime 讨论</li>
+<li><strong>版本同步</strong>：新版本动态、评测复现与路线图抢先了解</li>
+</ul>
+<div class="sf-community-actions">
+<a href="https://github.com/pathlyapp/steerable/issues" target="_blank" rel="noopener noreferrer" class="md-button">GitHub Issues</a>
+</div>
+</div>
+<div class="sf-community-qr-card">
+<div class="sf-community-qr-head">
+<div class="sf-run-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+<span class="sf-community-qr-tag">WECHAT GROUP</span>
+</div>
+<div class="sf-community-qr-body">
+<div class="sf-community-qr-frame">
+<img class="sf-community-qr" src="../assets/wechat-group-qr.png" alt="Steerable 中文交流群二维码" width="168" height="168" loading="lazy" />
+</div>
+<p class="sf-community-qr-caption">微信 / 企业微信扫码加入</p>
+<p class="sf-community-qr-hint">手机端可长按二维码识别</p>
 </div>
 </div>
 </div>

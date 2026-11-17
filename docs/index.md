@@ -127,10 +127,11 @@ hide:
 </div>
 
 <p class="sf-cta-secondary" markdown>
-[Get started](getting-started.md) · <a href="storybook/">Storybook</a> · [GitHub](https://github.com/pathlyapp/steerable)
+[Get started](getting-started.md) · <a href="storybook/">Storybook</a> · <a href="https://github.com/pathlyapp/steerable" target="_blank" rel="noopener noreferrer">★ Star on GitHub</a>
 </p>
 
 <p class="sf-badges">
+  <a href="https://github.com/pathlyapp/steerable" target="_blank" rel="noopener noreferrer"><img alt="GitHub stars" src="https://img.shields.io/github/stars/pathlyapp/steerable?label=Star&color=f59e0b" /></a>
   <a href="https://github.com/pathlyapp/steerable/blob/main/LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" /></a>
   <a href="https://www.npmjs.com/package/@steerable/agent-protocol"><img alt="npm: @steerable/agent-protocol" src="https://img.shields.io/npm/v/@steerable/agent-protocol?label=%40steerable%2Fagent-protocol&color=cb3837" /></a>
   <a href="https://www.npmjs.com/package/@steerable/agent-ui"><img alt="npm: @steerable/agent-ui" src="https://img.shields.io/npm/v/@steerable/agent-ui?label=%40steerable%2Fagent-ui&color=cb3837" /></a>
