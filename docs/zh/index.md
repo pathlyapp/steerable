@@ -88,7 +88,7 @@ hide:
 
 <p class="sf-pills">
 <a href="#pillar-1" class="sf-pill">更少幻觉</a>
-<a href="#pillar-2" class="sf-pill">简单易用</a>
+<a href="#pillar-2" class="sf-pill">代码最小</a>
 <a href="#pillar-3" class="sf-pill">开箱即用</a>
 <a href="#pillar-4" class="sf-pill">分层可拆</a>
 </p>
@@ -108,8 +108,10 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 
 <p class="sf-badges">
   <a href="https://github.com/pathlyapp/steerable/blob/main/LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" /></a>
+  <a href="https://www.npmjs.com/package/@steerable/agent-protocol"><img alt="npm: @steerable/agent-protocol" src="https://img.shields.io/npm/v/@steerable/agent-protocol?label=%40steerable%2Fagent-protocol&color=cb3837" /></a>
   <a href="https://www.npmjs.com/package/@steerable/agent-ui"><img alt="npm: @steerable/agent-ui" src="https://img.shields.io/npm/v/@steerable/agent-ui?label=%40steerable%2Fagent-ui&color=cb3837" /></a>
   <a href="https://pypi.org/project/steerable-agent-runtime/"><img alt="PyPI: steerable-agent-runtime" src="https://img.shields.io/pypi/v/steerable-agent-runtime?label=steerable-agent-runtime&color=3776ab" /></a>
+  <a href="https://pypi.org/project/steerable-sidecar/"><img alt="PyPI: steerable-sidecar" src="https://img.shields.io/pypi/v/steerable-sidecar?label=steerable-sidecar&color=3776ab" /></a>
 </p>
 
 <svg class="sf-px-ground" viewBox="0 0 960 64" preserveAspectRatio="none" aria-hidden="true" shape-rendering="crispEdges">
@@ -161,9 +163,9 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 <span class="sf-score-meta">TB 2.1 · @max 3 次均值 · 本仓库</span>
 </div>
 <div class="sf-score" markdown>
-<span class="sf-score-value">+5.6</span>
-<span class="sf-score-label">同 Flash 模型对比 P&#42;</span>
-<span class="sf-score-meta">P&#42; + GLM-5.3-Flash · 73.4%</span>
+<span class="sf-score-value">+23.6</span>
+<span class="sf-score-label">同 GLM 对比 Codex</span>
+<span class="sf-score-meta">Codex + GLM-5.3-Flash · 56.2% · @high n=1</span>
 </div>
 <div class="sf-score" markdown>
 <span class="sf-score-value">229.9M</span>
@@ -176,7 +178,7 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 <a href="#run">一键启动</a>
 <a href="#quickstart">方便集成</a>
 <a href="#why">核心机制</a>
-<a href="#bench">实测对比</a>
+<a href="#bench">横向对比</a>
 <a href="#users">谁在使用</a>
 </nav>
 
@@ -225,12 +227,12 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 <h2 class="sf-section" id="quickstart">方便集成</h2>
 
 <p class="sf-lede" markdown>
-只引入你需要的那一层——Python 后端、React 对话界面或桌面 Sidecar；纯 UI 预览运行 <code>pnpm shell:dev</code>。
+只引入你需要的那一层——Python 智能体、React 对话界面或 Node.js 智能体；纯 UI 预览运行 <code>pnpm shell:dev</code>。
 </p>
 
 <div class="sf-tabs" markdown>
 
-=== "Python 智能体后端"
+=== "Python 智能体"
 
     ```bash
     uv add steerable-agent-protocol steerable-agent-harness steerable-agent-runtime
@@ -269,7 +271,7 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
     }
     ```
 
-=== "桌面应用 + 本地 Sidecar"
+=== "Node.js 智能体"
 
     ```bash
     # 将 Sidecar 二进制放入 resources/python-runtime/<platform>/
@@ -292,35 +294,6 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
     for await (const event of stream.events) { /* 强类型 SSEEvent 流 */ }
     ```
 
-</div>
-
-<h2 class="sf-section" id="why">核心机制</h2>
-
-<p class="sf-lede" markdown>
-专为高性价比与本地模型打造——从工具解析、事实核查到 OS 沙箱逐层兜底。
-</p>
-
-<div class="sf-pillars" markdown>
-<div class="sf-pillar" id="pillar-1" markdown>
-<span class="sf-pillar-kicker">01 · 更少幻觉</span>
-### 事实核查与自动纠错
-拦截无依据结论与空头支票，自动解析并重试纯文本畸形工具调用。
-</div>
-<div class="sf-pillar" id="pillar-2" markdown>
-<span class="sf-pillar-kicker">02 · 简单易用</span>
-### 半天即可上手
-无图编排 DSL。`@tool` 装饰普通函数，Harness 零 I/O，单份 Schema 生成双端类型。
-</div>
-<div class="sf-pillar" id="pillar-3" markdown>
-<span class="sf-pillar-kicker">03 · 开箱即用</span>
-### 默认闭环沙箱
-内置 Seatbelt / bwrap / Windows 沙箱、61 条命令规则与白名单代理。免 Key [在线演示](../demo/)。
-</div>
-<div class="sf-pillar" id="pillar-4" markdown>
-<span class="sf-pillar-kicker">04 · 分层可拆</span>
-### 按层按需取用
-5 层 15 个独立包，严格单向依赖。可只引入协议、UI 或 Sidecar。
-</div>
 </div>
 
 <div class="sf-loop-stage" id="loop-stage" data-focus="all">
@@ -423,6 +396,35 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 <p class="sf-loop-caption" id="sf-loop-caption">
 同一套 Rust <code>CoreLoop</code> 通过结构化 <code>LoopEvent</code>，同时驱动桌面 Sidecar 与服务端 FastAPI。
 </p>
+</div>
+
+<h2 class="sf-section" id="why">核心机制</h2>
+
+<p class="sf-lede" markdown>
+专为高性价比与本地模型打造——从工具解析、事实核查到 OS 沙箱逐层兜底。
+</p>
+
+<div class="sf-pillars" markdown>
+<div class="sf-pillar" id="pillar-1" markdown>
+<span class="sf-pillar-kicker">01 · 更少幻觉</span>
+### 事实核查与自动纠错
+拦截无依据结论与空头支票，自动解析并重试纯文本畸形工具调用。
+</div>
+<div class="sf-pillar" id="pillar-2" markdown>
+<span class="sf-pillar-kicker">02 · 代码最小</span>
+### 适合 vibe coding
+代码体积最小。`@tool` 装饰普通函数，没有图编排 DSL。
+</div>
+<div class="sf-pillar" id="pillar-3" markdown>
+<span class="sf-pillar-kicker">03 · 开箱即用</span>
+### 默认闭环沙箱
+内置 Seatbelt / bwrap / Windows 沙箱、61 条命令规则与白名单代理。免 Key [在线演示](../demo/)。
+</div>
+<div class="sf-pillar" id="pillar-4" markdown>
+<span class="sf-pillar-kicker">04 · 分层可拆</span>
+### 按层按需取用
+5 层 15 个独立包，严格单向依赖。可只引入协议、UI 或 Sidecar。
+</div>
 </div>
 
 <h2 class="sf-section" id="architecture">五层架构</h2>
@@ -552,8 +554,6 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 </p>
 </div>
 
-<h2 class="sf-section" id="packages">15 个独立包</h2>
-
 | 包名 | 层级 | 核心能力 |
 | ---- | ---- | -------- |
 | [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent`、`ToolCall` / `ToolResult`、`ChatMessage`、Sidecar JSON-RPC 类型（由 `spec/` 自动生成） |
@@ -564,7 +564,7 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 | `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri / 无头宿主壳、共享 Node HostRuntime、Sidecar 守护与渲染前端 |
 | [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | 命令行与终端会话（`steerable-cli login`），自动拉取平台运行时并与桌面端共用本地数据库 |
 
-<h2 class="sf-section" id="bench">实测表现</h2>
+<h2 class="sf-section" id="bench">常见框架横向对比</h2>
 
 <p class="sf-lede" markdown>
 Terminal-Bench 2.1（89 题）。<strong>79.0%</strong> 为 GLM-5.3-Flash <code>@max</code> 三次均值；下图对比单次 <code>n=1</code> 结果。[评测方法](../evals.md)
@@ -748,8 +748,6 @@ Terminal-Bench 2.1（89 题）。<strong>79.0%</strong> 为 GLM-5.3-Flash <code>
 GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%。
 </p>
 
-<h2 class="sf-section" id="compare">框架对比</h2>
-
 <p class="sf-lede" markdown>
 不止看通过率——从部署形态、事件流、沙箱边界与模型质量层横向对比主流方案：
 </p>
@@ -790,6 +788,16 @@ GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77
         <img src="../assets/users/aroli.png" alt="Aroli">
         <span class="sf-brand-name">Aroli</span>
         <span class="sf-brand-domain">aroli.work</span>
+      </a>
+      <a href="https://dpkgs.cn" target="_blank" rel="noopener noreferrer" class="sf-brand-item">
+        <img src="../assets/users/dpkgs.png" alt="知构">
+        <span class="sf-brand-name">知构</span>
+        <span class="sf-brand-domain">dpkgs.cn</span>
+      </a>
+      <a href="https://idevault.com" target="_blank" rel="noopener noreferrer" class="sf-brand-item">
+        <img src="../assets/users/idevault.png" alt="IDEVault">
+        <span class="sf-brand-name">IDEVault</span>
+        <span class="sf-brand-domain">idevault.com</span>
       </a>
       <div class="sf-brand-item">
         <img src="../assets/users/petrochina.svg" alt="PetroChina">

@@ -88,7 +88,7 @@ hide:
 
 <p class="sf-pills">
 <a href="#pillar-1" class="sf-pill">ハルシネーション抑制</a>
-<a href="#pillar-2" class="sf-pill">シンプル設計</a>
+<a href="#pillar-2" class="sf-pill">最小コード</a>
 <a href="#pillar-3" class="sf-pill">すぐ使える</a>
 <a href="#pillar-4" class="sf-pill">レイヤー分離</a>
 </p>
@@ -108,8 +108,10 @@ GLM-5.3-Flash で Terminal-Bench 2.1 **79.0%**。1 コマンドで起動、ま�
 
 <p class="sf-badges">
   <a href="https://github.com/pathlyapp/steerable/blob/main/LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" /></a>
+  <a href="https://www.npmjs.com/package/@steerable/agent-protocol"><img alt="npm: @steerable/agent-protocol" src="https://img.shields.io/npm/v/@steerable/agent-protocol?label=%40steerable%2Fagent-protocol&color=cb3837" /></a>
   <a href="https://www.npmjs.com/package/@steerable/agent-ui"><img alt="npm: @steerable/agent-ui" src="https://img.shields.io/npm/v/@steerable/agent-ui?label=%40steerable%2Fagent-ui&color=cb3837" /></a>
   <a href="https://pypi.org/project/steerable-agent-runtime/"><img alt="PyPI: steerable-agent-runtime" src="https://img.shields.io/pypi/v/steerable-agent-runtime?label=steerable-agent-runtime&color=3776ab" /></a>
+  <a href="https://pypi.org/project/steerable-sidecar/"><img alt="PyPI: steerable-sidecar" src="https://img.shields.io/pypi/v/steerable-sidecar?label=steerable-sidecar&color=3776ab" /></a>
 </p>
 
 <svg class="sf-px-ground" viewBox="0 0 960 64" preserveAspectRatio="none" aria-hidden="true" shape-rendering="crispEdges">
@@ -161,9 +163,9 @@ GLM-5.3-Flash で Terminal-Bench 2.1 **79.0%**。1 コマンドで起動、ま�
 <span class="sf-score-meta">TB 2.1 · @max 3 回平均 · 本リポジトリ</span>
 </div>
 <div class="sf-score" markdown>
-<span class="sf-score-value">+5.6</span>
-<span class="sf-score-label">同一 Flash モデルで P&#42; 比</span>
-<span class="sf-score-meta">P&#42; + GLM-5.3-Flash · 73.4%</span>
+<span class="sf-score-value">+23.6</span>
+<span class="sf-score-label">同一 GLM で Codex 比</span>
+<span class="sf-score-meta">Codex + GLM-5.3-Flash · 56.2% · @high n=1</span>
 </div>
 <div class="sf-score" markdown>
 <span class="sf-score-value">229.9M</span>
@@ -176,7 +178,7 @@ GLM-5.3-Flash で Terminal-Bench 2.1 **79.0%**。1 コマンドで起動、ま�
 <a href="#run">クイック起動</a>
 <a href="#quickstart">組み込み</a>
 <a href="#why">仕組み・構成</a>
-<a href="#bench">実測・比較</a>
+<a href="#bench">横断比較</a>
 <a href="#users">導入事例</a>
 </nav>
 
@@ -225,12 +227,12 @@ GLM-5.3-Flash で Terminal-Bench 2.1 **79.0%**。1 コマンドで起動、ま�
 <h2 class="sf-section" id="quickstart">手軽に組み込み</h2>
 
 <p class="sf-lede" markdown>
-Python 基盤・React UI・デスクトップ Sidecar から必要な層だけを採用できます（UI 単体は <code>pnpm shell:dev</code>）。
+Python エージェント・React UI・Node.js エージェントから必要な層だけを採用できます（UI 単体は <code>pnpm shell:dev</code>）。
 </p>
 
 <div class="sf-tabs" markdown>
 
-=== "Python エージェント基盤"
+=== "Python エージェント"
 
     ```bash
     uv add steerable-agent-protocol steerable-agent-harness steerable-agent-runtime
@@ -269,7 +271,7 @@ Python 基盤・React UI・デスクトップ Sidecar から必要な層だけ�
     }
     ```
 
-=== "デスクトップアプリ + ローカル LLM"
+=== "Node.js エージェント"
 
     ```bash
     # resources/python-runtime/<platform>/ に Sidecar バイナリを同梱
@@ -292,35 +294,6 @@ Python 基盤・React UI・デスクトップ Sidecar から必要な層だけ�
     for await (const event of stream.events) { /* 型付き SSEEvent ストリーム */ }
     ```
 
-</div>
-
-<h2 class="sf-section" id="why">コアの仕組み</h2>
-
-<p class="sf-lede" markdown>
-ローカル・低コストモデルを前提に、ツール復元・根拠検証・OS 隔離を確実に強制します。
-</p>
-
-<div class="sf-pillars" markdown>
-<div class="sf-pillar" id="pillar-1" markdown>
-<span class="sf-pillar-kicker">01 · ハルシネーション抑制</span>
-### 根拠ある出力へ
-根拠なき回答や未実施報告を弾き、不正なテキストツール出力を自動復元して再試行。
-</div>
-<div class="sf-pillar" id="pillar-2" markdown>
-<span class="sf-pillar-kicker">02 · シンプル設計</span>
-### DSL 不要の素直な設計
-グラフ DSL 不要。通常の `@tool` 関数、I/O ゼロの Harness、単一 Schema から型生成。
-</div>
-<div class="sf-pillar" id="pillar-3" markdown>
-<span class="sf-pillar-kicker">03 · すぐ使える</span>
-### 初期状態から安全
-Seatbelt / bwrap / Windows 隔離、61 ルール分類器、出口プロキシ内蔵。[デモ](../demo/)もキー不要。
-</div>
-<div class="sf-pillar" id="pillar-4" markdown>
-<span class="sf-pillar-kicker">04 · レイヤー分離</span>
-### 必要な層だけを採用
-5 層 15 パッケージ、上位依存なし。Protocol・UI・Sidecar 単体でも導入可能。
-</div>
 </div>
 
 <div class="sf-loop-stage" id="loop-stage" data-focus="all">
@@ -423,6 +396,35 @@ Seatbelt / bwrap / Windows 隔離、61 ルール分類器、出口プロキシ�
 <p class="sf-loop-caption" id="sf-loop-caption">
 単一の Rust <code>CoreLoop</code> が <code>LoopEvent</code> を介してデスクトップ Sidecar と FastAPI サーバーの両方を駆動します。
 </p>
+</div>
+
+<h2 class="sf-section" id="why">コアの仕組み</h2>
+
+<p class="sf-lede" markdown>
+ローカル・低コストモデルを前提に、ツール復元・根拠検証・OS 隔離を確実に強制します。
+</p>
+
+<div class="sf-pillars" markdown>
+<div class="sf-pillar" id="pillar-1" markdown>
+<span class="sf-pillar-kicker">01 · ハルシネーション抑制</span>
+### 根拠ある出力へ
+根拠なき回答や未実施報告を弾き、不正なテキストツール出力を自動復元して再試行。
+</div>
+<div class="sf-pillar" id="pillar-2" markdown>
+<span class="sf-pillar-kicker">02 · 最小コード</span>
+### vibe coding 向き
+コード量が最小。通常関数に `@tool` を付けるだけ、グラフ DSL なし。
+</div>
+<div class="sf-pillar" id="pillar-3" markdown>
+<span class="sf-pillar-kicker">03 · すぐ使える</span>
+### 初期状態から安全
+Seatbelt / bwrap / Windows 隔離、61 ルール分類器、出口プロキシ内蔵。[デモ](../demo/)もキー不要。
+</div>
+<div class="sf-pillar" id="pillar-4" markdown>
+<span class="sf-pillar-kicker">04 · レイヤー分離</span>
+### 必要な層だけを採用
+5 層 15 パッケージ、上位依存なし。Protocol・UI・Sidecar 単体でも導入可能。
+</div>
 </div>
 
 <h2 class="sf-section" id="architecture">5 層アーキテクチャ</h2>
@@ -552,8 +554,6 @@ Seatbelt / bwrap / Windows 隔離、61 ルール分類器、出口プロキシ�
 </p>
 </div>
 
-<h2 class="sf-section" id="packages">15 の独立パッケージ</h2>
-
 | パッケージ | 階層 | 内容 |
 | ---------- | ---- | ---- |
 | [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent`、`ToolCall` / `ToolResult`、`ChatMessage`、Sidecar JSON-RPC 型（`spec/` から生成） |
@@ -564,7 +564,7 @@ Seatbelt / bwrap / Windows 隔離、61 ルール分類器、出口プロキシ�
 | `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri / ヘッドレスシェル、共通 Node HostRuntime、Sidecar 監視、UI レンダラー |
 | [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | CLI & TUI（`steerable-cli login`）。対応ランタイムを自動導入しデスクトップ版と DB 共有 |
 
-<h2 class="sf-section" id="bench">ベンチマーク結果</h2>
+<h2 class="sf-section" id="bench">主なフレームワークの横断比較</h2>
 
 <p class="sf-lede" markdown>
 Terminal-Bench 2.1（89 問）。<strong>79.0%</strong> は GLM-5.3-Flash <code>@max</code> の 3 回平均、下図は単発 <code>n=1</code> 比較。[評価手法](../evals.md)
@@ -748,8 +748,6 @@ Terminal-Bench 2.1（89 問）。<strong>79.0%</strong> は GLM-5.3-Flash <code>
 GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%。
 </p>
 
-<h2 class="sf-section" id="compare">フレームワーク比較</h2>
-
 <p class="sf-lede" markdown>
 スコアだけでなく、提供形態・イベント・サンドボックス・モデル品質の観点で比較：
 </p>
@@ -790,6 +788,16 @@ GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77
         <img src="../assets/users/aroli.png" alt="Aroli">
         <span class="sf-brand-name">Aroli</span>
         <span class="sf-brand-domain">aroli.work</span>
+      </a>
+      <a href="https://dpkgs.cn" target="_blank" rel="noopener noreferrer" class="sf-brand-item">
+        <img src="../assets/users/dpkgs.png" alt="DPKGS">
+        <span class="sf-brand-name">DPKGS</span>
+        <span class="sf-brand-domain">dpkgs.cn</span>
+      </a>
+      <a href="https://idevault.com" target="_blank" rel="noopener noreferrer" class="sf-brand-item">
+        <img src="../assets/users/idevault.png" alt="IDEVault">
+        <span class="sf-brand-name">IDEVault</span>
+        <span class="sf-brand-domain">idevault.com</span>
       </a>
       <div class="sf-brand-item">
         <img src="../assets/users/petrochina.svg" alt="PetroChina">

@@ -112,7 +112,7 @@ hide:
 
 <p class="sf-pills">
 <a href="#pillar-1" class="sf-pill">Fewer hallucinations</a>
-<a href="#pillar-2" class="sf-pill">Simple to use</a>
+<a href="#pillar-2" class="sf-pill">Smallest code</a>
 <a href="#pillar-3" class="sf-pill">Ready out of the box</a>
 <a href="#pillar-4" class="sf-pill">Componentized</a>
 </p>
@@ -132,8 +132,10 @@ hide:
 
 <p class="sf-badges">
   <a href="https://github.com/pathlyapp/steerable/blob/main/LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" /></a>
+  <a href="https://www.npmjs.com/package/@steerable/agent-protocol"><img alt="npm: @steerable/agent-protocol" src="https://img.shields.io/npm/v/@steerable/agent-protocol?label=%40steerable%2Fagent-protocol&color=cb3837" /></a>
   <a href="https://www.npmjs.com/package/@steerable/agent-ui"><img alt="npm: @steerable/agent-ui" src="https://img.shields.io/npm/v/@steerable/agent-ui?label=%40steerable%2Fagent-ui&color=cb3837" /></a>
   <a href="https://pypi.org/project/steerable-agent-runtime/"><img alt="PyPI: steerable-agent-runtime" src="https://img.shields.io/pypi/v/steerable-agent-runtime?label=steerable-agent-runtime&color=3776ab" /></a>
+  <a href="https://pypi.org/project/steerable-sidecar/"><img alt="PyPI: steerable-sidecar" src="https://img.shields.io/pypi/v/steerable-sidecar?label=steerable-sidecar&color=3776ab" /></a>
 </p>
 
 <svg class="sf-px-ground" viewBox="0 0 960 64" preserveAspectRatio="none" aria-hidden="true" shape-rendering="crispEdges">
@@ -191,9 +193,9 @@ hide:
 <span class="sf-score-meta">TB 2.1 · 3-run mean @max · this repo</span>
 </div>
 <div class="sf-score" markdown>
-<span class="sf-score-value">+5.6</span>
-<span class="sf-score-label">vs P&#42; on the same Flash model</span>
-<span class="sf-score-meta">P&#42; + GLM-5.3-Flash · 73.4%</span>
+<span class="sf-score-value">+23.6</span>
+<span class="sf-score-label">vs Codex on the same GLM</span>
+<span class="sf-score-meta">Codex + GLM-5.3-Flash · 56.2% · @high n=1</span>
 </div>
 <div class="sf-score" markdown>
 <span class="sf-score-value">229.9M</span>
@@ -255,12 +257,12 @@ hide:
 <h2 class="sf-section" id="quickstart">Easy to integrate</h2>
 
 <p class="sf-lede" markdown>
-Embed only the layer you need — Python backend, React chat UI, or desktop sidecar. UI-only showcase: <code>pnpm shell:dev</code>.
+Embed only the layer you need — a Python agent, React chat UI, or a Node.js agent. UI-only showcase: <code>pnpm shell:dev</code>.
 </p>
 
 <div class="sf-tabs" markdown>
 
-=== "Python agent backend"
+=== "Python agent"
 
     ```bash
     uv add steerable-agent-protocol steerable-agent-harness steerable-agent-runtime
@@ -299,7 +301,7 @@ Embed only the layer you need — Python backend, React chat UI, or desktop side
     }
     ```
 
-=== "Desktop app + local LLM"
+=== "Node.js agent"
 
     ```bash
     # Bundle the sidecar binary into resources/python-runtime/<platform>/
@@ -322,35 +324,6 @@ Embed only the layer you need — Python backend, React chat UI, or desktop side
     for await (const event of stream.events) { /* typed SSEEvent stream */ }
     ```
 
-</div>
-
-<h2 class="sf-section" id="why">Core mechanisms</h2>
-
-<p class="sf-lede" markdown>
-Built for imperfect models — deterministic tool recovery, grounding vetoes, and fail-closed confinement.
-</p>
-
-<div class="sf-pillars" markdown>
-<div class="sf-pillar" id="pillar-1" markdown>
-<span class="sf-pillar-kicker">01 · Fewer hallucinations</span>
-### Grounded, not guessed
-Grounding judges, completion vetoes, and automatic recovery for malformed text tool calls.
-</div>
-<div class="sf-pillar" id="pillar-2" markdown>
-<span class="sf-pillar-kicker">02 · Simple to use</span>
-### Zero DSL boilerplate
-No graph DSL. Plain `@tool` functions, zero-I/O harness, and one JSON Schema for TS & Python.
-</div>
-<div class="sf-pillar" id="pillar-3" markdown>
-<span class="sf-pillar-kicker">03 · Ready out of the box</span>
-### Fail-closed by default
-Seatbelt / bwrap / Windows confinement, 61-rule classifier, and egress proxy. Try the keyless [live demo](demo/).
-</div>
-<div class="sf-pillar" id="pillar-4" markdown>
-<span class="sf-pillar-kicker">04 · Componentized</span>
-### Take one layer, skip the rest
-5 tiers, 15 packages, strict no-upward-imports. Adopt just the protocol, UI, or sidecar.
-</div>
 </div>
 
 <div class="sf-loop-stage" id="loop-stage" data-focus="all">
@@ -467,6 +440,35 @@ Seatbelt / bwrap / Windows confinement, 61-rule classifier, and egress proxy. Tr
 <p class="sf-loop-caption" id="sf-loop-caption">
 One Rust <code>CoreLoop</code> drives both the desktop sidecar (stdio JSON-RPC) and the FastAPI server (SSE) over <code>LoopEvent</code>.
 </p>
+</div>
+
+<h2 class="sf-section" id="why">Core mechanisms</h2>
+
+<p class="sf-lede" markdown>
+Built for imperfect models — deterministic tool recovery, grounding vetoes, and fail-closed confinement.
+</p>
+
+<div class="sf-pillars" markdown>
+<div class="sf-pillar" id="pillar-1" markdown>
+<span class="sf-pillar-kicker">01 · Fewer hallucinations</span>
+### Grounded, not guessed
+Grounding judges, completion vetoes, and automatic recovery for malformed text tool calls.
+</div>
+<div class="sf-pillar" id="pillar-2" markdown>
+<span class="sf-pillar-kicker">02 · Smallest code</span>
+### Built for vibe coding
+The smallest code surface. Plain `@tool` functions, no graph DSL.
+</div>
+<div class="sf-pillar" id="pillar-3" markdown>
+<span class="sf-pillar-kicker">03 · Ready out of the box</span>
+### Fail-closed by default
+Seatbelt / bwrap / Windows confinement, 61-rule classifier, and egress proxy. Try the keyless [live demo](demo/).
+</div>
+<div class="sf-pillar" id="pillar-4" markdown>
+<span class="sf-pillar-kicker">04 · Componentized</span>
+### Take one layer, skip the rest
+5 tiers, 15 packages, strict no-upward-imports. Adopt just the protocol, UI, or sidecar.
+</div>
 </div>
 
 <h2 class="sf-section" id="architecture">Architecture</h2>
@@ -612,8 +614,6 @@ Click any tier to highlight its downward dependencies — no layer ever imports 
 </p>
 </div>
 
-<h2 class="sf-section" id="packages">15 standalone packages</h2>
-
 | Package | Tier | What you get |
 | ------- | ---- | ------------ |
 | [`@steerable/agent-protocol`](https://www.npmjs.com/package/@steerable/agent-protocol) · `steerable-agent-protocol` | 1 | `SSEEvent`, `ToolCall` / `ToolResult`, `ChatMessage`, Sidecar JSON-RPC types (codegen from `spec/`) |
@@ -624,7 +624,7 @@ Click any tier to highlight its downward dependencies — no layer ever imports 
 | `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri + headless host shell, shared Node HostRuntime, sidecar supervision, product-neutral renderer |
 | [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | CLI & TUI (`steerable-cli login`), auto-pulling the platform runtime and sharing the host DB |
 
-<h2 class="sf-section" id="bench">Benchmark results</h2>
+<h2 class="sf-section" id="bench">How common frameworks compare</h2>
 
 <p class="sf-lede" markdown>
 Terminal-Bench 2.1 (89 tasks). <strong>79.0%</strong> is GLM-5.3-Flash @max (3-run mean); charts compare single <code>n=1</code> runs. [Methodology](evals.md)
@@ -808,8 +808,6 @@ Terminal-Bench 2.1 (89 tasks). <strong>79.0%</strong> is GLM-5.3-Flash @max (3-r
 GLM-5.3-Flash @high (<code>n=1</code>): **Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%.
 </p>
 
-<h2 class="sf-section" id="compare">Framework comparison</h2>
-
 <p class="sf-lede" markdown>
 Beyond pass rates — how Steerable compares on runtime form, loop events, sandbox, and model recovery:
 </p>
@@ -850,6 +848,16 @@ Production desktop shells and enterprise deployments.
         <img src="assets/users/aroli.png" alt="Aroli">
         <span class="sf-brand-name">Aroli</span>
         <span class="sf-brand-domain">aroli.work</span>
+      </a>
+      <a href="https://dpkgs.cn" target="_blank" rel="noopener noreferrer" class="sf-brand-item">
+        <img src="assets/users/dpkgs.png" alt="DPKGS">
+        <span class="sf-brand-name">DPKGS</span>
+        <span class="sf-brand-domain">dpkgs.cn</span>
+      </a>
+      <a href="https://idevault.com" target="_blank" rel="noopener noreferrer" class="sf-brand-item">
+        <img src="assets/users/idevault.png" alt="IDEVault">
+        <span class="sf-brand-name">IDEVault</span>
+        <span class="sf-brand-domain">idevault.com</span>
       </a>
       <div class="sf-brand-item">
         <img src="assets/users/petrochina.svg" alt="PetroChina">
