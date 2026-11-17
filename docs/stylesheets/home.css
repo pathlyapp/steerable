@@ -1526,6 +1526,27 @@ body:has(.sf-hero) .md-typeset table:not([class]) th {
   background: #1e8250;
 }
 
+/* Visually highlight the Steerable column in the comparison table. */
+.sf-compare-wrap th:nth-child(2) {
+  background: #14532d;
+  color: #fffdf7;
+  border-left: 2.5px solid var(--px-ink);
+  border-right: 2.5px solid var(--px-ink);
+}
+
+.sf-compare-wrap td:nth-child(2) {
+  background: rgba(30, 130, 80, 0.09);
+  border-left: 2.5px solid #1e8250;
+  border-right: 2.5px solid #1e8250;
+  font-weight: 500;
+}
+
+[data-md-color-scheme="slate"] .sf-compare-wrap td:nth-child(2) {
+  background: rgba(52, 211, 153, 0.1);
+  border-left-color: #34d399;
+  border-right-color: #34d399;
+}
+
 .md-typeset table code {
   white-space: nowrap;
 }

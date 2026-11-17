@@ -758,11 +758,12 @@ GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77
 
 | 对比维度 | Steerable | OpenAI Codex | DeepSeek Harness | LangGraph | OpenAI Agents SDK | Claude Code / Agent SDK |
 | -------- | --------- | ------------ | ---------------- | --------- | ----------------- | ----------------------- |
-| **产品形态** | 分层库——同一循环同时跑在桌面 Sidecar 与服务端 | 产品家族：CLI、IDE、桌面端、云端，Rust 核心 | 基于 Cordis 的插件化 TS Harness | 图编排库——业务方手写状态图 | 基于 Responses API 的轻量框架 | 单一闭源分发包，同时支撑 CLI 与 Agent SDK |
-| **循环与事件** | `CoreLoop` + 结构化 `LoopEvent`；支持回合中 `agent.chat.steer` | 会话级 Turn 循环；`turn/steer`、中断、持久化队列；14 类 Hooks | 基于收件箱的循环；`steer` / `inject` / `followup` | 节点边界中断机制 | Handoffs + Guardrails；稳定版无回合中 steer | 回合中折叠队列；Hooks 可否决继续 |
-| **安全沙箱** | Seatbelt + bwrap/Landlock + Windows 宿主进程约束，Fail-closed；命令分类器；按域名出口代理 | 审批策略 + ExecPolicy + Seatbelt/bwrap+seccomp/Windows + Guardian | `sandbox.confine`，Fail-closed | 内置无沙箱 | Guardrails；Docker 或托管沙箱 | 权限模式；Seatbelt/bwrap 默认可选且 CLI 为 Fail-open |
-| **模型质量层** | 恢复畸形工具调用、完成否决、事实核查、Token 自校准 | 默认模型稳定输出标准 `tool_calls` | 默认模型输出标准 `tool_calls` | 基础编排底座，由开发者自建循环 | 面向旗舰前沿模型设计 | 面向旗舰前沿模型设计 |
-| **成熟度** | `0.12.x`；已在生产消费端支撑多个品牌化桌面应用 | 海量真实用户规模使用 | 公开预发布版（npm `0.2.x`，MIT） | 生产环境广泛采用 | 生产级，强绑定 OpenAI | 生产级；通过八个后端接入 Anthropic 模型 |
+| **定位与交付** | **5 层按需拆装**：签名桌面 Sidecar + FastAPI 服务端 + 14 卡 React UI，一套协议打通 | 闭环编程产品家族（CLI / IDE / 云端），非可嵌入 UI/SDK 栈 | TS 插件化底座（Cordis），偏 CLI / Web 宿主，无独立桌面 Sidecar | 仅状态图编排库，无内置 UI、沙箱或端侧运行时 | 仅服务端轻量编排，无桌面 Sidecar 或前端 UI | 闭源整包 CLI + SDK，无法拆层嵌入自有架构 |
+| **便宜 / 本地小模型** | **原生容错**：自动解析纯文本畸形调用 + 事实核查 + 完成否决（Flash 实测 **79.0%**） | 默认模型稳定输出标准 `tool_calls` | 默认模型输出标准 `tool_calls` | 无内置恢复，需业务方自建循环与校验 | 面向旗舰前沿模型设计 | 面向 Claude 前沿模型设计 |
+| **模型与厂商绑定** | **零绑定**：OpenAI 兼容（Ollama/vLLM）/ Responses / Anthropic / Gemini 四协议切换 | 以 Responses 协议与 OpenAI 生态为核心 | 支持多模型（侧重 DeepSeek / 标准接口） | 支持多模型（由业务代码接 SDK） | 强绑定 OpenAI（跨厂商需借助 LiteLLM 适配） | **仅支持 Anthropic 模型**（经 8 个后端路由） |
+| **默认沙箱与出网** | **默认 Fail-closed**：Seatbelt / bwrap / Windows + 61 条规则 + 按域名 CONNECT 白名单代理 | 平台沙箱 + 审批策略 + 托管网络代理 | `sandbox.confine`（Fail-closed） | **无内置沙箱**（需自建 Docker / 云沙箱） | 依赖 Docker 或托管沙箱（本地 Unix 无 Linux 隔离） | CLI 默认 **Fail-open**（缺沙箱仅警告仍继续执行） |
+| **TS + Python 契约** | **单份 JSON Schema 生成** TS/Zod + Pydantic，15 包锁步发布 + 黄金一致性测试 | 生成 TS 类型，双语言各自维护 SDK | TS 为主，Python SDK 通过 CLI/RPC 桥接 | Py / JS 两套独立库，无单源跨语言 Schema | Py / TS 两套独立库，无跨语言代码生成 | 仅发布 TS 类型定义（`sdk-tools.d.ts`） |
+| **取舍与现状** | `CoreLoop` 引擎为闭源二进制包；生态仍处早期（`0.12.x`） | 生产体量极大，但难以单独拆分其中一层嵌入 | 开源可自由扩展，仍处公开预发布（`0.2.x`） | 生态最成熟，但循环护栏与界面全部自建 | 上手快，但缺乏端侧与跨层能力 | 能力完备，但全闭源且锁死 Anthropic 模型 |
 
 </div>
 

@@ -758,11 +758,12 @@ GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77
 
 | 比較項目 | Steerable | OpenAI Codex | DeepSeek Harness | LangGraph | OpenAI Agents SDK | Claude Code / Agent SDK |
 | -------- | --------- | ------------ | ---------------- | --------- | ----------------- | ----------------------- |
-| **提供形態** | 階層型ライブラリ——同一ループをデスクトップ Sidecar とサーバーの両方で動作 | 製品群：CLI・IDE・デスクトップ・クラウド（Rust コア） | Cordis 上のプラグインベース TS ハーネス | オーケストレーションライブラリ——状態グラフを自作 | Responses API 上の軽量フレームワーク | 単一のクローズドソースバイナリで CLI と SDK を兼用 |
-| **ループ / イベント** | `CoreLoop` + 構造化 `LoopEvent`。ターン中 `agent.chat.steer` 対応 | セッション所有のターンループ、`turn/steer`、割り込み、永続キュー、14 種 Hooks | Inbox 駆動ループ、`steer` / `inject` / `followup` | ノード境界での割り込み | Handoffs + Guardrails、安定版はターン中 steer 非対応 | ターン中折りたたみキュー、Hooks による継続拒否 |
-| **サンドボックス** | Seatbelt + bwrap/Landlock + Windows 制約（Fail-closed）、コマンド分類、ホスト別出口プロキシ | 承認ポリシー + ExecPolicy + Seatbelt/bwrap+seccomp/Windows + Guardian | `sandbox.confine`（Fail-closed） | 組み込みなし | Guardrails、Docker / ホスト型サンドボックス | 権限モード、Seatbelt/bwrap はオプトインかつ CLI では Fail-open |
-| **モデル品質** | 不正ツール呼び出しの復元、完了拒否、グラウンディング検証、トークン較正 | 構造化 `tool_calls` を前提 | 構造化 `tool_calls` を前提 | 基盤ライブラリ（ループは開発者側） | フロンティアモデル向け | フロンティアモデル向け |
-| **成熟度** | `0.12.x`、複数ブランド向けデスクトップ製品の本番基盤として稼働 | 大規模な実利用実績 | パブリックプレリリース（npm `0.2.x`、MIT） | 本番環境で広く普及 | 本番運用可（OpenAI 依存） | 本番運用可（8 バックエンド経由で Anthropic モデル専用） |
+| **提供形態と範囲** | **5 層を自由に採用**：署名済み Sidecar + FastAPI + 14 カード React UI を単一プロトコルで統合 | 完結型製品群（CLI・IDE・クラウド）。組み込み用 UI/SDK 群ではない | Cordis 上の TS ハーネス。CLI/Web 向けで独立 Sidecar なし | 状態グラフのみ。UI・サンドボックス・デスクトップ基盤なし | サーバー向け軽量基盤。Sidecar や UI キットなし | クローズドな一体型 CLI + SDK。層ごとの切り出し不可 |
+| **低コスト・ローカルモデル** | **標準で自動修復**：テキスト形式の不正呼び出しを復元＋根拠検証＋完了拒否（Flash **79.0%**） | 構造化 `tool_calls` を前提 | 構造化 `tool_calls` を前提 | 復元機能なし（ループと検証は自前実装） | フロンティアモデル向け | Claude フロンティアモデル向け |
+| **モデル自由度** | **ロックインなし**：OpenAI 互換（Ollama/vLLM）・Responses・Anthropic・Gemini に対応 | Responses API と OpenAI 中心 | マルチモデル対応（DeepSeek / 標準 API 中心） | マルチモデル対応（各 SDK を自前接続） | OpenAI 強依存（他社は LiteLLM 経由） | **Anthropic モデル専用**（8 バックエンド経由） |
+| **初期サンドボックス** | **既定で Fail-closed**：Seatbelt / bwrap / Windows + 61 ルール + ホスト別 CONNECT 許可プロキシ | OS 隔離 + 承認ポリシー + 管理プロキシ | `sandbox.confine`（Fail-closed） | **組み込みなし**（Docker 等を自前構築） | Docker / ホスト型依存（ローカル Linux 隔離なし） | CLI は既定 **Fail-open**（隔離不可でも警告のみ続行） |
+| **TS・Python 契約** | **単一 JSON Schema から自動生成**：TS/Zod + Pydantic、15 パッケージ同期公開 + 互換テスト | TS 型を生成。両言語の SDK は個別実装 | TS 主体、Python は CLI/RPC ブリッジ | Py / JS は別個のライブラリ（単一 Schema 生成なし） | Py / TS は別個のライブラリ（言語間生成なし） | TS 型定義（`sdk-tools.d.ts`）のみ公開 |
+| **トレードオフ** | `CoreLoop` コアは非公開バイナリ、エコシステムはまだ初期段階（`0.12.x`） | 実運用実績は圧倒的だが、特定層だけの組み込みには不向き | OSS で拡張自在だがパブリックプレリリース（`0.2.x`） | エコシステム最成熟だが、ガードレールや UI は自作 | 導入は速いが、デスクトップ Sidecar 等の層がない | 高機能だが完全クローズドかつ Anthropic 専用 |
 
 </div>
 
