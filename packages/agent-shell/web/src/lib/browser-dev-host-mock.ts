@@ -4,17 +4,22 @@ import type {
   LocalBackendStreamEvent,
 } from './host-bridge';
 import type {
+  CatalogProviderDescriptor,
   ChatAgentWriteInput,
+  ChatLiveStream,
+  GatewayModelEntry,
   LocalChat,
   LocalChatAgent,
   LocalChatMessage,
+  LocalProject,
   LlmSettings,
 } from './local-api';
 import { pickDefaultAgentId } from '@/brand';
 import { isDemoMode } from './demo-flag';
+import { buildPlaybookScript, DEMO_SAMPLE_FILES } from './demo-playbook';
 import browserDevData from '../fixtures/browser-dev-data.json';
 
-type MutableChat = LocalChat;
+type MutableChat = LocalChat & { forkedFrom?: { chatId: string; title: string } | null };
 type MutableMessage = LocalChatMessage;
 
 interface BrowserDevFixture {
@@ -22,19 +27,42 @@ interface BrowserDevFixture {
   exportedAt?: string | null;
   source?: string | null;
   agents?: LocalChatAgent[];
+  projects?: LocalProject[];
   chats?: MutableChat[];
   messagesByChatId?: Record<string, MutableMessage[]>;
   llmSettings?: LlmSettings | null;
   skills?: Array<{ name: string; description: string; builtin?: boolean }>;
 }
 
+interface ActiveStreamRecord {
+  streamId: string;
+  chatId: string;
+  timers: number[];
+  onEvent: (payload: LocalBackendStreamEvent) => void;
+  steerNote: string | null;
+  snapshot: ChatLiveStream;
+}
+
 interface BrowserMockState {
   agents: LocalChatAgent[];
+  projects: LocalProject[];
   chats: MutableChat[];
   messagesByChatId: Record<string, MutableMessage[]>;
   llmSettings: LlmSettings;
+  webSearchSettings: { provider: 'ddg' | 'tavily'; apiKey: string };
+  telemetrySettings: { endpoint: string; privacyMode: 'metadata' | 'full'; serviceName: string };
+  insightsSettings: {
+    installId: string;
+    shareBehavior: boolean;
+    shareConversation: boolean;
+    shareProfile: boolean;
+    promptedAt: string;
+    profile: { displayName: string; email: string; company: string; note: string };
+    stats: { events: number; turns: number; profile: number; pending: number };
+  };
+  mcpServers: Array<Record<string, unknown>>;
   skills: Array<{ name: string; description: string; builtin?: boolean }>;
-  activeStreams: Map<string, number[]>;
+  activeStreams: Map<string, ActiveStreamRecord>;
   source: 'fixture' | 'fallback';
   fixtureMeta: Pick<BrowserDevFixture, 'exportedAt' | 'source'> | null;
 }
@@ -42,209 +70,145 @@ interface BrowserMockState {
 const suggestedReplyListeners = new Set<
   (payload: { chatId: string; messageId: string; suggestions: string[] }) => void
 >();
+const chatTitleListeners = new Set<(payload: { chatId: string; title: string }) => void>();
+const chatActivityListeners = new Set<(payload: { chatId: string; updatedAt: string }) => void>();
+const chatCreatedListeners = new Set<
+  (payload: { chatId: string; agentId?: string | null }) => void
+>();
 
-const USER_ID = 'browser-preview-user';
-const now = new Date();
+const DEMO_MODELS: GatewayModelEntry[] = [
+  {
+    id: 'glm-5.3-flash',
+    name: 'GLM-5.3-Flash',
+    window: 128_000,
+    modalities: ['text'],
+    reasoningLevels: ['low', 'medium', 'high', 'max'],
+    pricing: { promptPerMtok: 0.14, completionPerMtok: 0.56 },
+    joinedFrom: 'demo-catalog',
+    capabilities: 'known',
+  },
+  {
+    id: 'deepseek-v3.1-0731',
+    name: 'DeepSeek-V3.1-0731',
+    window: 128_000,
+    modalities: ['text'],
+    reasoningLevels: ['low', 'medium', 'high'],
+    pricing: { promptPerMtok: 0.27, completionPerMtok: 1.1 },
+    joinedFrom: 'demo-catalog',
+    capabilities: 'known',
+  },
+  {
+    id: 'qwen3-coder-plus',
+    name: 'Qwen3-Coder-Plus',
+    window: 128_000,
+    modalities: ['text'],
+    reasoningLevels: ['low', 'medium'],
+    pricing: { promptPerMtok: 0.3, completionPerMtok: 1.5 },
+    joinedFrom: 'demo-catalog',
+    capabilities: 'known',
+  },
+  {
+    id: 'claude-sonnet-4-6',
+    name: 'Claude Sonnet 4.6',
+    window: 200_000,
+    modalities: ['text', 'image'],
+    reasoningLevels: ['low', 'medium', 'high'],
+    pricing: { promptPerMtok: 3, completionPerMtok: 15 },
+    joinedFrom: 'demo-catalog',
+    capabilities: 'known',
+  },
+];
 
-function iso(minutesAgo: number): string {
-  return new Date(now.getTime() - minutesAgo * 60_000).toISOString();
-}
+const DEMO_CATALOG_PROVIDERS: CatalogProviderDescriptor[] = [
+  {
+    id: 'openrouter',
+    apiBaseUrl: 'https://openrouter.ai/api/v1',
+    envVars: ['OPENROUTER_API_KEY'],
+    wireKind: 'openai-compat',
+    models: ['glm-5.3-flash', 'deepseek-v3.1-0731', 'qwen3-coder-plus'],
+  },
+  {
+    id: 'deepseek',
+    apiBaseUrl: 'https://api.deepseek.com/v1',
+    envVars: ['DEEPSEEK_API_KEY'],
+    wireKind: 'openai-compat',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+  },
+  {
+    id: 'anthropic',
+    apiBaseUrl: 'https://api.anthropic.com',
+    envVars: ['ANTHROPIC_API_KEY'],
+    wireKind: 'anthropic',
+    models: ['claude-sonnet-4-6'],
+  },
+  {
+    id: 'ollama',
+    apiBaseUrl: 'http://127.0.0.1:11434',
+    envVars: [],
+    wireKind: 'ollama',
+    models: ['qwen3:8b', 'glm4:9b'],
+  },
+];
 
-function createChatRecord(input: {
-  id: string;
-  title: string;
-  agentId: string | null;
-  minutesAgo: number;
-  isPinned?: boolean;
-}): MutableChat {
-  return {
-    id: input.id,
-    projectId: null,
-    userId: USER_ID,
-    title: input.title,
-    agentId: input.agentId,
-    createdAt: iso(input.minutesAgo + 10),
-    updatedAt: iso(input.minutesAgo),
-    isPinned: Boolean(input.isPinned),
-    systemPrompt: null,
-    pinnedRefs: null,
-  };
-}
-
-function createMessage(input: {
-  id: string;
-  chatId: string;
-  role: MutableMessage['role'];
-  content: string;
-  minutesAgo: number;
-  messageMetadata?: string | null;
-}): MutableMessage {
-  return {
-    id: input.id,
-    chatId: input.chatId,
-    role: input.role,
-    content: input.content,
-    createdAt: iso(input.minutesAgo),
-    messageMetadata: input.messageMetadata ?? null,
-  };
-}
-
-function createInitialState(): BrowserMockState {
-  const fixtureState = createStateFromFixture(browserDevData as BrowserDevFixture);
-  if (fixtureState) return fixtureState;
-
-  const agents: LocalChatAgent[] = [
-    {
-      id: 'coach',
-      slug: 'coach',
-      name: 'Action coach',
-      icon: null,
-      color: '#2563eb',
-      description: 'Breaks a goal into an executable plan. Useful for debugging the standard chat path.',
-      rolePrompt: 'You are an action coach.',
-      isBuiltin: true,
-      sortOrder: 1,
-    },
-    {
-      id: 'tool-demo',
-      slug: 'tool-demo',
-      name: 'Tool demo',
-      icon: null,
-      color: '#7c3aed',
-      description: 'Simulates local tool calls and execution summaries. Useful for debugging tool cards.',
-      rolePrompt: 'You are the tool-demo agent.',
-      isBuiltin: true,
-      sortOrder: 2,
-    },
-    {
-      id: 'writer',
-      slug: 'writer',
-      name: 'Writing advisor',
-      icon: null,
-      color: '#16a34a',
-      description: 'Longer text replies, for debugging markdown and scrolling.',
-      rolePrompt: 'You are a writing advisor.',
-      isBuiltin: true,
-      sortOrder: 3,
-    },
-  ];
-
-  const chats = [
-    createChatRecord({
-      id: 'chat-browser-demo',
-      title: 'Browser UI debug sample',
-      agentId: 'coach',
-      minutesAgo: 8,
-      isPinned: true,
-    }),
-    createChatRecord({
-      id: 'chat-tool-demo',
-      title: 'Tool-call card preview',
-      agentId: 'tool-demo',
-      minutesAgo: 64,
-    }),
-  ];
+function createDefaultState(): BrowserMockState {
+  const fixture = browserDevData as BrowserDevFixture;
+  const agents = Array.isArray(fixture.agents) ? structuredClone(fixture.agents) : [];
+  const projects = Array.isArray(fixture.projects) ? structuredClone(fixture.projects) : [];
+  const chats = Array.isArray(fixture.chats) ? structuredClone(fixture.chats) : [];
+  const messagesByChatId = fixture.messagesByChatId ? structuredClone(fixture.messagesByChatId) : {};
 
   return {
     agents,
-    chats,
-    messagesByChatId: {
-      'chat-browser-demo': [
-        createMessage({
-          id: 'msg-demo-assistant-1',
-          chatId: 'chat-browser-demo',
-          role: 'assistant',
-          content:
-            'You can debug the chat UI in a normal browser here. This reply comes from the dev mock bridge and does not call a live model.',
-          minutesAgo: 7,
-        }),
-        createMessage({
-          id: 'msg-demo-user-1',
-          chatId: 'chat-browser-demo',
-          role: 'user',
-          content: 'I want to debug the chat UI in the browser.',
-          minutesAgo: 8,
-        }),
-      ],
-      'chat-tool-demo': [
-        createMessage({
-          id: 'msg-tool-assistant-1',
-          chatId: 'chat-tool-demo',
-          role: 'assistant',
-          content: 'I simulated a local command and put the result in a tool card.',
-          minutesAgo: 63,
-          messageMetadata: JSON.stringify({
-            executedActions: [
-              {
-                tool: 'local_exec',
-                arguments: { command: 'tool_demo list --limit 5' },
-                result: { success: true, output: 'Found 5 mock records.' },
-              },
-            ],
-          }),
-        }),
-        createMessage({
-          id: 'msg-tool-user-1',
-          chatId: 'chat-tool-demo',
-          role: 'user',
-          content: 'Show me the recent tool-call records.',
-          minutesAgo: 64,
-        }),
-      ],
-    },
-    llmSettings: {
-      provider: 'ollama',
-      model: 'browser-preview-model',
-      baseUrl: 'http://127.0.0.1:11434',
-      apiKey: '',
-      temperature: 0.3,
-      maxTotalTokens: 60_000,
-    },
-    skills: [
-      { name: 'tool-demo', description: 'Simulates query and replay tools.', builtin: true },
-      { name: 'local-exec', description: 'Simulates local command execution.', builtin: true },
-      { name: 'anti-deferred', description: 'Simulates the anti-deferral execution policy.', builtin: true },
-    ],
-    activeStreams: new Map(),
-    source: 'fallback',
-    fixtureMeta: null,
-  };
-}
-
-const state = createInitialState();
-
-function createStateFromFixture(fixture: BrowserDevFixture): BrowserMockState | null {
-  const agents = Array.isArray(fixture.agents) ? fixture.agents : [];
-  const chats = Array.isArray(fixture.chats) ? fixture.chats : [];
-  if (agents.length === 0 || chats.length === 0) return null;
-
-  const messagesByChatId = fixture.messagesByChatId ?? {};
-  return {
-    agents,
+    projects,
     chats,
     messagesByChatId,
-    llmSettings: fixture.llmSettings ?? {
-      provider: 'ollama',
-      model: 'browser-preview-model',
-      baseUrl: 'http://127.0.0.1:11434',
-      apiKey: '',
-      temperature: 0.3,
-      maxTotalTokens: 60_000,
+    llmSettings: fixture.llmSettings
+      ? { ...fixture.llmSettings }
+      : {
+          provider: 'openai-compat',
+          vendorId: 'openrouter',
+          model: 'glm-5.3-flash',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          apiKey: '',
+          temperature: 0.3,
+          maxTotalTokens: 60_000,
+        },
+    webSearchSettings: { provider: 'ddg', apiKey: '' },
+    telemetrySettings: { endpoint: '', privacyMode: 'metadata', serviceName: 'steerable-demo' },
+    insightsSettings: {
+      installId: 'demo-browser-install',
+      shareBehavior: false,
+      shareConversation: false,
+      shareProfile: false,
+      promptedAt: '2026-11-17T00:00:00.000Z',
+      profile: { displayName: '', email: '', company: '', note: '' },
+      stats: { events: 0, turns: 4, profile: 0, pending: 0 },
     },
-    skills:
-      Array.isArray(fixture.skills) && fixture.skills.length > 0
-        ? fixture.skills
-        : [
-            { name: 'tool-demo', description: 'Query and replay tools.', builtin: true },
-            { name: 'local-exec', description: 'Local command execution.', builtin: true },
-          ],
+    mcpServers: [],
+    skills: Array.isArray(fixture.skills) ? structuredClone(fixture.skills) : [],
     activeStreams: new Map(),
-    source: 'fixture',
+    source: chats.length > 0 ? 'fixture' : 'fallback',
     fixtureMeta: {
       exportedAt: fixture.exportedAt ?? null,
       source: fixture.source ?? null,
     },
   };
+}
+
+let state = createDefaultState();
+
+export function resetBrowserDevMockForTests(): void {
+  for (const active of state.activeStreams.values()) {
+    active.timers.forEach((timer) => window.clearTimeout(timer));
+  }
+  state = createDefaultState();
+}
+
+function encodeUtf8Base64(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
 }
 
 function paginateChats(page: number, limit: number) {
@@ -276,17 +240,29 @@ function stripQuery(path: string): string {
   return queryStart >= 0 ? path.slice(0, queryStart) : path;
 }
 
-function getChatIdFromPath(path: string, suffix = ''): string | null {
-  const cleanPath = stripQuery(path);
-  const match = cleanPath.match(/^\/api\/v2\/chats\/([^/]+)(?:\/.*)?$/);
+function matchChatSubroute(cleanPath: string): { chatId: string; rest: string } | null {
+  const match = cleanPath.match(/^\/api\/v2\/chats\/([^/]+)(\/.*)?$/);
   if (!match) return null;
-  if (suffix && !cleanPath.endsWith(suffix)) return null;
-  return decodeURIComponent(match[1]);
+  const segment = decodeURIComponent(match[1]);
+  if (segment === 'new' || segment === 'prune-empty') return null;
+  return { chatId: segment, rest: match[2] ?? '' };
 }
 
 function updateChatTimestamp(chatId: string) {
   const chat = state.chats.find((item) => item.id === chatId);
-  if (chat) chat.updatedAt = new Date().toISOString();
+  if (!chat) return;
+  const nowIso = new Date().toISOString();
+  chat.updatedAt = nowIso;
+  for (const listener of chatActivityListeners) {
+    listener({ chatId, updatedAt: nowIso });
+  }
+}
+
+function findActiveStreamByChat(chatId: string): ActiveStreamRecord | undefined {
+  for (const record of state.activeStreams.values()) {
+    if (record.chatId === chatId) return record;
+  }
+  return undefined;
 }
 
 async function request<T>(input: LocalBackendRequestInput): Promise<T> {
@@ -294,6 +270,7 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
   const path = input.path;
   const cleanPath = stripQuery(path);
 
+  // ---- Chats collection ----
   if (method === 'GET' && cleanPath === '/api/v2/chats') {
     const query = parseQuery(path);
     const page = Number(query.get('page') ?? '1');
@@ -301,6 +278,289 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
     return paginateChats(page, limit) as T;
   }
 
+  if (method === 'POST' && cleanPath === '/api/v2/chats/new') {
+    const body = (input.body ?? {}) as { agentId?: string; projectId?: string | null };
+    const agentId = body.agentId || pickDefaultAgentId(state.agents) || null;
+    const chatId = `chat-demo-${Date.now()}`;
+    const nowIso = new Date().toISOString();
+    const chat: MutableChat = {
+      id: chatId,
+      projectId: body.projectId ?? null,
+      userId: 'demo',
+      title: 'New chat',
+      agentId,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      isPinned: false,
+      systemPrompt: null,
+      pinnedRefs: null,
+    };
+    state.chats.unshift(chat);
+    state.messagesByChatId[chatId] = [];
+    return {
+      success: true,
+      chatId,
+      projectId: chat.projectId,
+      isTemporary: false,
+    } as T;
+  }
+
+  if (method === 'POST' && cleanPath === '/api/v2/chats/prune-empty') {
+    const body = input.body as { exceptChatId?: string | null } | undefined;
+    const except = body?.exceptChatId ?? null;
+    const deletedChatIds: string[] = [];
+    for (const chat of [...state.chats]) {
+      if (except && chat.id === except) continue;
+      const messages = state.messagesByChatId[chat.id] ?? [];
+      if (messages.length === 0) deletedChatIds.push(chat.id);
+    }
+    state.chats = state.chats.filter((chat) => !deletedChatIds.includes(chat.id));
+    for (const id of deletedChatIds) delete state.messagesByChatId[id];
+    return { deletedChatIds } as T;
+  }
+
+  // ---- Per-chat routes ----
+  const chatRoute = matchChatSubroute(cleanPath);
+  if (chatRoute) {
+    const { chatId, rest } = chatRoute;
+
+    if (method === 'GET' && rest === '') {
+      const chat = state.chats.find((c) => c.id === chatId);
+      return {
+        id: chatId,
+        title: chat?.title ?? 'Demo chat',
+        forkedFrom: chat?.forkedFrom ?? null,
+      } as T;
+    }
+
+    if (method === 'DELETE' && rest === '') {
+      const onlyIfEmpty = parseQuery(path).get('onlyIfEmpty') === '1';
+      if (onlyIfEmpty) {
+        const messages = state.messagesByChatId[chatId] ?? [];
+        const exists = state.chats.some((chat) => chat.id === chatId);
+        if (!exists || messages.length > 0) {
+          return { success: true, deleted: false, chatId } as T;
+        }
+      }
+      state.chats = state.chats.filter((chat) => chat.id !== chatId);
+      delete state.messagesByChatId[chatId];
+      return { success: true, deleted: true, message: 'deleted in demo', chatId } as T;
+    }
+
+    if (method === 'GET' && rest === '/messages') {
+      const messages = state.messagesByChatId[chatId] ?? [];
+      return {
+        messages: [...messages].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      } as T;
+    }
+
+    if (method === 'GET' && rest === '/live-stream') {
+      const active = findActiveStreamByChat(chatId);
+      return (active ? active.snapshot : { active: false }) as T;
+    }
+
+    if (method === 'POST' && rest === '/cancel') {
+      const active = findActiveStreamByChat(chatId);
+      if (active) {
+        cancelStream(active.streamId);
+        return { success: true } as T;
+      }
+      return { success: false, reason: 'not_running' } as T;
+    }
+
+    if (method === 'PUT' && rest === '/pin') {
+      const body = (input.body ?? {}) as { isPinned?: boolean };
+      const chat = state.chats.find((c) => c.id === chatId);
+      if (chat) chat.isPinned = Boolean(body.isPinned);
+      return {
+        success: true,
+        chatId,
+        isPinned: Boolean(chat?.isPinned),
+        message: 'updated',
+      } as T;
+    }
+
+    if (method === 'PATCH' && rest === '/settings') {
+      const body = (input.body ?? {}) as { title?: string; projectId?: string | null };
+      const chat = state.chats.find((c) => c.id === chatId);
+      if (chat) {
+        if (typeof body.title === 'string' && body.title.trim()) {
+          chat.title = body.title.trim();
+        }
+        if ('projectId' in body) {
+          chat.projectId = body.projectId ?? null;
+        }
+        updateChatTimestamp(chatId);
+      }
+      return {
+        id: chatId,
+        title: chat?.title ?? 'Demo chat',
+        projectId: chat?.projectId ?? null,
+      } as T;
+    }
+
+    if (method === 'POST' && rest === '/fork') {
+      const orig = state.chats.find((c) => c.id === chatId);
+      const newChatId = `chat-fork-${Date.now()}`;
+      const nowIso = new Date().toISOString();
+      const cloned: MutableChat = {
+        id: newChatId,
+        projectId: orig?.projectId ?? null,
+        userId: 'demo',
+        title: orig ? `${orig.title} (fork)` : 'Forked chat',
+        agentId: orig?.agentId ?? pickDefaultAgentId(state.agents) ?? null,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        isPinned: false,
+        systemPrompt: orig?.systemPrompt ?? null,
+        pinnedRefs: orig?.pinnedRefs ?? null,
+        forkedFrom: orig ? { chatId: orig.id, title: orig.title } : null,
+      };
+      state.chats.unshift(cloned);
+      state.messagesByChatId[newChatId] = (state.messagesByChatId[chatId] ?? []).map((m) => ({
+        ...m,
+        id: `${m.id}-fork-${Date.now()}`,
+        chatId: newChatId,
+      }));
+      return { chatId: newChatId } as T;
+    }
+
+    if (method === 'GET' && rest === '/branches') {
+      return { activeRecordId: `rec-${chatId}`, lineage: [], children: [] } as T;
+    }
+
+    if (method === 'GET' && rest === '/branches/tree') {
+      return {
+        activeRecordId: `rec-${chatId}`,
+        tree: null,
+        nodeCount: 1,
+        truncated: false,
+      } as T;
+    }
+
+    if (method === 'POST' && rest === '/branches/activate') {
+      const body = (input.body ?? {}) as { recordId?: string };
+      return {
+        activeRecordId: body.recordId ?? `rec-${chatId}`,
+        messageCount: (state.messagesByChatId[chatId] ?? []).length,
+      } as T;
+    }
+
+    if (method === 'GET' && rest === '/goal') {
+      return { goal: null } as T;
+    }
+
+    if (method === 'POST' && rest === '/goal') {
+      return { goal: null } as T;
+    }
+
+    if (method === 'GET' && rest === '/loops') {
+      return { loops: [] } as T;
+    }
+
+    if (method === 'DELETE' && rest.startsWith('/loops/')) {
+      return { success: true } as T;
+    }
+
+    if (method === 'GET' && rest === '/tasks') {
+      return { tasks: [] } as T;
+    }
+
+    if (method === 'GET' && rest === '/project-context') {
+      const chat = state.chats.find((c) => c.id === chatId);
+      const project = chat?.projectId
+        ? state.projects.find((p) => p.id === chat.projectId) ?? null
+        : null;
+      return {
+        project: project
+          ? {
+              id: project.id,
+              name: project.name,
+              folderPath: project.folderPath,
+              trusted: Boolean(project.trusted),
+            }
+          : null,
+        ruleFileCount: project ? 1 : 0,
+        rulesActive: Boolean(project?.trusted),
+      } as T;
+    }
+  }
+
+  // ---- Projects ----
+  if (method === 'GET' && cleanPath === '/api/v2/projects') {
+    const projects = [...state.projects].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    return { projects } as T;
+  }
+
+  if (method === 'POST' && cleanPath === '/api/v2/projects') {
+    const body = (input.body ?? {}) as {
+      name?: string;
+      folderPath?: string;
+      sourceFolders?: string[];
+    };
+    const nowIso = new Date().toISOString();
+    const project: LocalProject = {
+      id: `proj-${Date.now()}`,
+      name: (body.name || 'demo-project').trim(),
+      folderPath: body.folderPath || '/workspace/demo-project',
+      sourceFolders: body.sourceFolders ?? [],
+      trusted: true,
+      sortOrder: state.projects.length,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    state.projects.push(project);
+    return { success: true, project } as T;
+  }
+
+  if (method === 'PUT' && cleanPath === '/api/v2/projects/order') {
+    const body = (input.body ?? {}) as { orderedIds?: string[] };
+    const order = body.orderedIds ?? [];
+    state.projects.forEach((p) => {
+      const idx = order.indexOf(p.id);
+      p.sortOrder = idx >= 0 ? idx : order.length + (p.sortOrder ?? 0);
+    });
+    return { success: true, projects: [...state.projects] } as T;
+  }
+
+  const projectTrustMatch = cleanPath.match(/^\/api\/v2\/projects\/([^/]+)\/trust$/);
+  if (method === 'PUT' && projectTrustMatch) {
+    const projectId = decodeURIComponent(projectTrustMatch[1]);
+    const body = (input.body ?? {}) as { trusted?: boolean };
+    const project = state.projects.find((p) => p.id === projectId);
+    if (project) {
+      project.trusted = Boolean(body.trusted);
+      project.updatedAt = new Date().toISOString();
+    }
+    return { success: true, project } as T;
+  }
+
+  const projectMatch = cleanPath.match(/^\/api\/v2\/projects\/([^/]+)$/);
+  if (projectMatch) {
+    const projectId = decodeURIComponent(projectMatch[1]);
+    const project = state.projects.find((p) => p.id === projectId);
+    if (method === 'PUT' && project) {
+      const body = (input.body ?? {}) as Partial<LocalProject>;
+      if (typeof body.name === 'string') project.name = body.name;
+      if (typeof body.folderPath === 'string') project.folderPath = body.folderPath;
+      if (Array.isArray(body.sourceFolders)) project.sourceFolders = body.sourceFolders;
+      project.updatedAt = new Date().toISOString();
+      return { success: true, project } as T;
+    }
+    if (method === 'DELETE') {
+      state.projects = state.projects.filter((p) => p.id !== projectId);
+      let detachedChats = 0;
+      for (const c of state.chats) {
+        if (c.projectId === projectId) {
+          c.projectId = null;
+          detachedChats += 1;
+        }
+      }
+      return { success: true, detachedChats } as T;
+    }
+  }
+
+  // ---- Chat agents / skills / tools ----
   if (method === 'GET' && cleanPath === '/api/v2/chat-agents') {
     const includeArchived = parseQuery(path).get('include_archived') === 'true';
     const agents = includeArchived
@@ -314,7 +574,7 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
     const id =
       typeof crypto !== 'undefined' && 'randomUUID' in crypto
         ? crypto.randomUUID()
-        : `agent-browser-${Date.now()}`;
+        : `agent-demo-${Date.now()}`;
     const agent: LocalChatAgent = {
       id,
       slug: null,
@@ -351,13 +611,10 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
           ...current,
           name: typeof body.name === 'string' ? body.name : current.name,
           color: body.color === undefined ? current.color : body.color,
-          description:
-            body.description === undefined ? current.description : body.description,
-          rolePrompt:
-            body.rolePrompt === undefined ? current.rolePrompt : body.rolePrompt,
+          description: body.description === undefined ? current.description : body.description,
+          rolePrompt: body.rolePrompt === undefined ? current.rolePrompt : body.rolePrompt,
           skillIds: body.skillIds === undefined ? current.skillIds : body.skillIds,
-          toolPolicy:
-            body.toolPolicy === undefined ? current.toolPolicy : body.toolPolicy,
+          toolPolicy: body.toolPolicy === undefined ? current.toolPolicy : body.toolPolicy,
           allowExternalSkills:
             body.allowExternalSkills === undefined
               ? current.allowExternalSkills
@@ -376,8 +633,6 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
   }
 
   if (method === 'GET' && cleanPath === '/api/v2/chat-agents/skills') {
-    // fixture 只存 name/description；智能体的技能勾选还要 id 与 layer，
-    // 这里按真实接口的字段补齐（内置技能视作常驻层）。
     return {
       skills: state.skills.map((skill) => ({
         ...skill,
@@ -392,19 +647,23 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
   if (method === 'GET' && cleanPath === '/api/v2/chat-agents/tools') {
     return {
       tools: [
-        { name: 'local_exec_shell', description: 'Run a local shell command.', category: 'local' },
-        { name: 'local_read_file', description: 'Read a local text file.', category: 'local' },
-        { name: 'local_write_file', description: 'Write a local file.', category: 'local' },
-        { name: 'web_search', description: 'Search the web.', category: 'local' },
+        { name: 'local_exec_shell', description: 'Run a sandboxed shell command.', category: 'local' },
+        { name: 'local_read_file', description: 'Read a file from the workspace.', category: 'local' },
+        { name: 'local_write_file', description: 'Write or patch a workspace file.', category: 'local' },
+        { name: 'web_search', description: 'Search public documentation.', category: 'local' },
       ],
     } as T;
   }
 
+  if (method === 'GET' && cleanPath === '/api/v2/chat-agents/mcp-tools') {
+    return { tools: [] } as T;
+  }
+
   if (method === 'POST' && cleanPath === '/api/v2/chat-agents/skills/import') {
     const body = input.body as { path?: string } | undefined;
-    const name = body?.path?.split(/[\\/]/).filter(Boolean).pop() || 'browser-skill';
+    const name = body?.path?.split(/[\\/]/).filter(Boolean).pop() || 'demo-skill';
     if (!state.skills.some((skill) => skill.name === name)) {
-      state.skills.push({ name, description: 'Mock skill imported in the browser preview.' });
+      state.skills.push({ name, description: 'Skill imported in the interactive browser demo.' });
     }
     return { success: true, name } as T;
   }
@@ -415,6 +674,20 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
     return { success: true } as T;
   }
 
+  // ---- Children / background tasks ----
+  if (method === 'GET' && cleanPath === '/api/v2/children') {
+    return { children: [] } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/child-process') {
+    return { recordId: parseQuery(path).get('recordId') ?? '', timeline: [] } as T;
+  }
+
+  if (method === 'GET' && /^\/api\/v2\/tasks\/[^/]+\/process$/.test(cleanPath)) {
+    return { task: null, timeline: [], live: false, stale: false } as T;
+  }
+
+  // ---- LLM settings / catalog / models / diagnostics ----
   if (method === 'GET' && cleanPath === '/api/v2/local-settings/llm') {
     return state.llmSettings as T;
   }
@@ -424,64 +697,74 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
     return state.llmSettings as T;
   }
 
-  if (method === 'POST' && cleanPath === '/api/v2/chats/prune-empty') {
-    const body = input.body as { exceptChatId?: string | null } | undefined;
-    const except = body?.exceptChatId ?? null;
-    const deletedChatIds: string[] = [];
-    for (const chat of [...state.chats]) {
-      if (except && chat.id === except) continue;
-      const messages = state.messagesByChatId[chat.id] ?? [];
-      if (messages.length === 0) deletedChatIds.push(chat.id);
-    }
-    state.chats = state.chats.filter((chat) => !deletedChatIds.includes(chat.id));
-    for (const id of deletedChatIds) delete state.messagesByChatId[id];
-    return { deletedChatIds } as T;
-  }
-
-  if (method === 'POST' && cleanPath === '/api/v2/chats/new') {
-    const body = input.body as { agentId?: string } | undefined;
-    const agentId = body?.agentId || pickDefaultAgentId(state.agents) || null;
-    const chatId = `chat-browser-${Date.now()}`;
-    const chat = createChatRecord({
-      id: chatId,
-      title: 'New chat',
-      agentId,
-      minutesAgo: 0,
-    });
-    chat.createdAt = new Date().toISOString();
-    chat.updatedAt = chat.createdAt;
-    state.chats.unshift(chat);
-    state.messagesByChatId[chatId] = [];
+  if (method === 'GET' && cleanPath === '/api/v2/llm/credential') {
     return {
-      success: true,
-      chatId,
-      projectId: null,
-      isTemporary: false,
+      ok: true,
+      source: 'config',
+      envNames: [],
+      provider: state.llmSettings.provider,
+      vendorId: state.llmSettings.vendorId ?? 'openrouter',
+      model: state.llmSettings.model,
     } as T;
   }
 
-  const messagesChatId = getChatIdFromPath(path, '/messages');
-  if (method === 'GET' && messagesChatId) {
-    const messages = state.messagesByChatId[messagesChatId] ?? [];
-    return { messages: [...messages].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) } as T;
+  if (method === 'GET' && cleanPath === '/api/v2/llm/catalog') {
+    return { providers: DEMO_CATALOG_PROVIDERS } as T;
   }
 
-  const deleteChatId = getChatIdFromPath(path);
-  if (method === 'DELETE' && deleteChatId) {
-    const onlyIfEmpty = parseQuery(path).get('onlyIfEmpty') === '1';
-    if (onlyIfEmpty) {
-      const messages = state.messagesByChatId[deleteChatId] ?? [];
-      const exists = state.chats.some((chat) => chat.id === deleteChatId);
-      if (!exists || messages.length > 0) {
-        return { success: true, deleted: false, chatId: deleteChatId } as T;
-      }
-      state.chats = state.chats.filter((chat) => chat.id !== deleteChatId);
-      delete state.messagesByChatId[deleteChatId];
-      return { success: true, deleted: true, chatId: deleteChatId } as T;
-    }
-    state.chats = state.chats.filter((chat) => chat.id !== deleteChatId);
-    delete state.messagesByChatId[deleteChatId];
-    return { success: true, message: 'deleted in browser mock', chatId: deleteChatId } as T;
+  if (method === 'GET' && cleanPath === '/api/v2/llm/models') {
+    return {
+      models: DEMO_MODELS,
+      catalogStatus: 'live',
+      fetchedAt: Date.now(),
+      current: { model: state.llmSettings.model, reasoningEffort: 'high' },
+    } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/compat/flags') {
+    return {
+      flags: [
+        {
+          key: 'supportsUsageInStreaming',
+          field: 'supportsUsageInStreaming',
+          kind: 'bool',
+          default: true,
+          description: 'Include token usage frames at the end of streamed responses.',
+        },
+        {
+          key: 'supportsReasoningEffort',
+          field: 'supportsReasoningEffort',
+          kind: 'bool',
+          default: true,
+          description: 'Forward reasoning_effort to gateways that expose thinking levels.',
+        },
+      ],
+    } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/llm/presets') {
+    return {
+      presets: [
+        {
+          host: 'openrouter.ai',
+          modelPrefix: 'glm-5.3',
+          temperature: 0.3,
+          topP: null,
+          maxTokens: null,
+          reasoningEffort: 'high',
+          extraBody: null,
+        },
+      ],
+    } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/llm/presets/resolve') {
+    return {
+      preset: {
+        temperature: 0.3,
+        reasoningEffort: 'high',
+      },
+    } as T;
   }
 
   if (method === 'GET' && cleanPath === '/api/v2/llm/account') {
@@ -497,7 +780,147 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
     } as T;
   }
 
-  throw new Error(`Browser dev mock does not implement ${method} ${path}`);
+  if (method === 'POST' && cleanPath === '/api/v2/llm/diagnose') {
+    return {
+      ok: true,
+      steps: [
+        { name: 'Gateway DNS & TLS', ok: true, durationMs: 18, detail: 'Playbook endpoint reachable' },
+        { name: 'Model catalog check', ok: true, durationMs: 24, detail: `${state.llmSettings.model} listed` },
+      ],
+      ambientProxies: [],
+      hint: 'Interactive browser playbook active (run steerable-cli locally to probe live keys).',
+    } as T;
+  }
+
+  // ---- Sandbox, usage, search, telemetry, insights, MCP, portable, local files ----
+  if (method === 'GET' && cleanPath === '/api/v2/sidecar/sandbox-posture') {
+    return {
+      posture: { backend: 'seatbelt', enforcement: 'partial', reason: 'active' },
+      egress: { mode: 'per-host-proxy', reason: null },
+    } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/usage/summary') {
+    const sinceDays = Number(parseQuery(path).get('days') ?? '30');
+    return {
+      sinceDays,
+      byModel: [
+        {
+          model: 'glm-5.3-flash',
+          provider: 'openai-compat',
+          turns: 4,
+          promptTokens: 23_110,
+          completionTokens: 1_660,
+          totalTokens: 24_770,
+          cachedPromptTokens: 15_000,
+          costUsd: 0.0051,
+        },
+      ],
+      totals: {
+        turns: 4,
+        promptTokens: 23_110,
+        completionTokens: 1_660,
+        totalTokens: 24_770,
+        cachedPromptTokens: 15_000,
+        costUsd: 0.0051,
+        partialTurns: 0,
+      },
+    } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/usage/reliability') {
+    const sinceDays = Number(parseQuery(path).get('days') ?? '7');
+    return {
+      sinceDays,
+      total: 12,
+      failed: 0,
+      cancelled: 0,
+      recoveredByRetry: 2,
+      usedDirect: 10,
+      failuresByKind: [],
+    } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/local-settings/web-search') {
+    return state.webSearchSettings as T;
+  }
+  if (method === 'POST' && cleanPath === '/api/v2/local-settings/web-search') {
+    state.webSearchSettings = {
+      ...state.webSearchSettings,
+      ...(input.body as Partial<BrowserMockState['webSearchSettings']>),
+    };
+    return state.webSearchSettings as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/local-settings/telemetry') {
+    return state.telemetrySettings as T;
+  }
+  if (method === 'POST' && cleanPath === '/api/v2/local-settings/telemetry') {
+    state.telemetrySettings = {
+      ...state.telemetrySettings,
+      ...(input.body as Partial<BrowserMockState['telemetrySettings']>),
+    };
+    return state.telemetrySettings as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/local-settings/insights') {
+    return state.insightsSettings as T;
+  }
+  if (method === 'POST' && cleanPath === '/api/v2/local-settings/insights') {
+    const body = (input.body ?? {}) as Record<string, unknown>;
+    state.insightsSettings = {
+      ...state.insightsSettings,
+      ...(typeof body.shareBehavior === 'boolean' ? { shareBehavior: body.shareBehavior } : {}),
+      ...(typeof body.shareConversation === 'boolean'
+        ? { shareConversation: body.shareConversation }
+        : {}),
+      ...(typeof body.shareProfile === 'boolean' ? { shareProfile: body.shareProfile } : {}),
+    };
+    return state.insightsSettings as T;
+  }
+  if (method === 'POST' && cleanPath === '/api/v2/insights/events') {
+    return { ok: true } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/mcp/servers') {
+    return { servers: state.mcpServers } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/portable/config') {
+    return {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      llm: state.llmSettings,
+      agents: state.agents,
+    } as T;
+  }
+
+  if (method === 'POST' && cleanPath === '/api/v2/local/resolve-paths') {
+    return { resolved: [] } as T;
+  }
+
+  if (method === 'POST' && cleanPath === '/api/v2/local/open-path') {
+    return { success: true } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/local/download') {
+    const targetPath = parseQuery(path).get('path') ?? '';
+    const sample = DEMO_SAMPLE_FILES[targetPath];
+    const fileName = sample?.fileName ?? (targetPath.split('/').pop() || 'demo-artifact.txt');
+    const content =
+      sample?.content ??
+      `# Demo Artifact\n\nGenerated in browser interactive playbook for path: ${targetPath}\n`;
+    return {
+      fileName,
+      mime: sample?.mime ?? 'text/plain; charset=utf-8',
+      size: new TextEncoder().encode(content).byteLength,
+      base64: encodeUtf8Base64(content),
+    } as T;
+  }
+
+  // Soft fallback for any secondary diagnostic/export endpoint in demo mode
+  console.warn(`[browser-dev-host-mock] Unhandled route ${method} ${path}, returning empty object.`);
+  return {} as T;
 }
 
 function pushSse(
@@ -510,115 +933,211 @@ function pushSse(
   onEvent({ type: 'data', chunk: `${prefix}data: ${payload}\n\n` });
 }
 
-function scheduleStreamTimer(streamId: string, callback: () => void, delay: number) {
+function scheduleStreamTimer(record: ActiveStreamRecord, callback: () => void, delay: number) {
   const timer = window.setTimeout(callback, delay);
-  const timers = state.activeStreams.get(streamId) ?? [];
-  timers.push(timer);
-  state.activeStreams.set(streamId, timers);
+  record.timers.push(timer);
 }
 
 async function startStream(
   input: LocalBackendRequestInput,
   onEvent: (payload: LocalBackendStreamEvent) => void,
 ): Promise<string | null> {
-  const chatId = getChatIdFromPath(input.path, '/run');
+  const cleanPath = stripQuery(input.path);
+  const runMatch = cleanPath.match(/^\/api\/v2\/chats\/([^/]+)\/run$/);
+  const regenMatch = cleanPath.match(/^\/api\/v2\/chats\/([^/]+)\/messages\/([^/]+)\/regenerate$/);
+  const chatId = decodeURIComponent((runMatch?.[1] ?? regenMatch?.[1] ?? '').trim());
+
   if (!chatId) {
     onEvent({ type: 'error', error: `Invalid mock stream path: ${input.path}` });
     return null;
   }
 
-  const body = input.body as { message?: string } | undefined;
-  const message = body?.message?.trim() || 'Please demo a browser mock reply.';
-  const streamId = `browser-stream-${Date.now()}`;
-  state.activeStreams.set(streamId, []);
-
-  const userMessage = createMessage({
-    id: `msg-user-${Date.now()}`,
-    chatId,
-    role: 'user',
-    content: message,
-    minutesAgo: 0,
-  });
-  userMessage.createdAt = new Date().toISOString();
-  state.messagesByChatId[chatId] = [...(state.messagesByChatId[chatId] ?? []), userMessage];
-
-  const reply =
-    `This is a streaming reply from the browser dev mock. You wrote: "${message}".` +
-    ' Use it to debug message bubbles, scrolling, the stop button, tool cards, and later status.';
-  const chunks = reply.match(/.{1,8}/g) ?? [reply];
-  const reasoning = 'Call one mock tool, then interleave the reply with that call.';
-  const mockAction = {
-    id: 'browser-mock-1',
-    tool: 'browser_mock',
-    arguments: { path: input.path },
-    result: { success: true, output: 'Generated mock stream in browser preview.' },
+  const body = (input.body ?? {}) as {
+    message?: string;
+    model?: string;
+    reasoningEffort?: string;
+    execPolicy?: string;
+    mode?: string;
   };
 
-  scheduleStreamTimer(streamId, () => {
-    pushSse(onEvent, { type: 'reasoning', content: reasoning });
-  }, 80);
+  let promptText = body.message?.trim() || '';
+  if (regenMatch && !promptText) {
+    const priorUser = [...(state.messagesByChatId[chatId] ?? [])]
+      .reverse()
+      .find((m) => m.role === 'user');
+    promptText = priorUser?.content || 'Regenerate response';
+  }
+  if (!promptText) promptText = 'Show Steerable demo playbook';
 
-  scheduleStreamTimer(streamId, () => {
-    pushSse(onEvent, {
-      type: 'executed_actions',
-      actions: [{ ...mockAction, result: undefined }],
-    });
-  }, 160);
+  const streamId = `demo-stream-${Date.now()}`;
+  const record: ActiveStreamRecord = {
+    streamId,
+    chatId,
+    timers: [],
+    onEvent,
+    steerNote: null,
+    snapshot: { active: true, status: 'running', content: '', executedActions: [], timeline: [] },
+  };
+  state.activeStreams.set(streamId, record);
 
-  scheduleStreamTimer(streamId, () => {
-    pushSse(onEvent, {
-      type: 'executed_actions',
-      actions: [mockAction],
-    });
-  }, 280);
+  const isFirstTurn = (state.messagesByChatId[chatId] ?? []).length === 0;
+  if (!regenMatch) {
+    const userMessage: MutableMessage = {
+      id: `msg-user-${Date.now()}`,
+      chatId,
+      role: 'user',
+      content: promptText,
+      createdAt: new Date().toISOString(),
+      messageMetadata: null,
+    };
+    state.messagesByChatId[chatId] = [...(state.messagesByChatId[chatId] ?? []), userMessage];
+  }
 
-  chunks.forEach((chunk, index) => {
-    scheduleStreamTimer(streamId, () => {
-      pushSse(onEvent, { content: chunk });
-    }, 360 + index * 80);
+  const script = buildPlaybookScript({
+    message: promptText,
+    model: body.model || state.llmSettings.model,
+    reasoningEffort: body.reasoningEffort ?? 'high',
+    execPolicy: body.execPolicy ?? 'workspace',
+    mode: body.mode ?? 'agent',
   });
 
-  scheduleStreamTimer(streamId, () => {
-    const assistantMessage = createMessage({
-      id: `msg-assistant-${Date.now()}`,
+  if (isFirstTurn) {
+    const chat = state.chats.find((c) => c.id === chatId);
+    if (chat && (chat.title === 'New chat' || !chat.title)) {
+      chat.title = script.chatTitle;
+      for (const listener of chatTitleListeners) {
+        listener({ chatId, title: script.chatTitle });
+      }
+    }
+  }
+
+  let delay = 60;
+  const accumulatedActions: unknown[] = [];
+  const persistedTimeline: unknown[] = [];
+
+  script.rounds.forEach((round, roundIndex) => {
+    if (roundIndex > 0) {
+      scheduleStreamTimer(record, () => {
+        pushSse(onEvent, { type: 'completion', status: 'executing' });
+      }, delay);
+      delay += 120;
+    }
+
+    scheduleStreamTimer(record, () => {
+      pushSse(onEvent, { type: 'reasoning', content: round.reasoning });
+      persistedTimeline.push({ type: 'reasoning', content: round.reasoning });
+      record.snapshot.timeline = [...persistedTimeline];
+    }, delay);
+    delay += 140;
+
+    const roundCompletedActions: unknown[] = [];
+    round.actions.forEach((action) => {
+      const runningAction = { ...action, result: undefined };
+      const runningList = [...accumulatedActions, ...roundCompletedActions, runningAction];
+      scheduleStreamTimer(record, () => {
+        pushSse(onEvent, { type: 'executed_actions', actions: runningList });
+        record.snapshot.executedActions = runningList;
+      }, delay);
+      delay += 180;
+
+      roundCompletedActions.push(action);
+      const completedList = [...accumulatedActions, ...roundCompletedActions];
+      scheduleStreamTimer(record, () => {
+        pushSse(onEvent, { type: 'executed_actions', actions: completedList });
+        record.snapshot.executedActions = completedList;
+      }, delay);
+      delay += 120;
+    });
+
+    accumulatedActions.push(...roundCompletedActions);
+    persistedTimeline.push({ type: 'tools', actions: roundCompletedActions });
+  });
+
+  const baseReply = script.reply;
+  const chunks = baseReply.match(/.{1,14}/gs) ?? [baseReply];
+  chunks.forEach((chunk) => {
+    scheduleStreamTimer(record, () => {
+      pushSse(onEvent, { content: chunk });
+      record.snapshot.content = `${record.snapshot.content ?? ''}${chunk}`;
+    }, delay);
+    delay += 38;
+  });
+
+  scheduleStreamTimer(record, () => {
+    let finalReply = baseReply;
+    if (record.steerNote) {
+      const steerSuffix = `\n\n> Steered mid-turn: "${record.steerNote}"`;
+      pushSse(onEvent, { content: steerSuffix });
+      finalReply += steerSuffix;
+    }
+
+    if (script.turnFiles && script.turnFiles.length > 0) {
+      pushSse(onEvent, {
+        type: 'agent',
+        event: 'turn_files',
+        payload: { files: script.turnFiles },
+      });
+    }
+
+    pushSse(onEvent, {
+      type: 'agent',
+      event: 'turn_usage',
+      payload: { usage: script.usage },
+    });
+
+    const assistantId = `msg-assistant-${Date.now()}`;
+    const finalTimeline = [...persistedTimeline, { type: 'text', content: finalReply }];
+    const assistantMessage: MutableMessage = {
+      id: assistantId,
       chatId,
       role: 'assistant',
-      content: reply,
-      minutesAgo: 0,
+      content: finalReply,
+      createdAt: new Date().toISOString(),
       messageMetadata: JSON.stringify({
-        executedActions: [mockAction],
-        timeline: [
-          { type: 'reasoning', content: reasoning },
-          { type: 'tools', actions: [mockAction] },
-          { type: 'text', content: reply },
-        ],
-        durationMs: 1_200,
-        suggestedReplies: ['Keep improving this result', 'Try another presentation', 'Tell me the next step'],
+        completionStatus: 'completed',
+        executedActions: accumulatedActions,
+        timeline: finalTimeline,
+        ...(script.turnFiles ? { turnFiles: script.turnFiles } : {}),
+        usage: script.usage,
+        durationMs: delay,
+        suggestedReplies: script.suggestedReplies,
       }),
-    });
-    assistantMessage.createdAt = new Date().toISOString();
-    state.messagesByChatId[chatId] = [
-      ...(state.messagesByChatId[chatId] ?? []),
-      assistantMessage,
-    ];
+    };
+    state.messagesByChatId[chatId] = [...(state.messagesByChatId[chatId] ?? []), assistantMessage];
     updateChatTimestamp(chatId);
-    pushSse(onEvent, { type: 'message_id', messageId: assistantMessage.id });
+
+    pushSse(onEvent, { type: 'message_id', messageId: assistantId });
     pushSse(onEvent, '[DONE]');
     onEvent({ type: 'end', status: 200 });
     state.activeStreams.delete(streamId);
-    const suggestions = ['Keep improving this result', 'Try another presentation', 'Tell me the next step'];
+
     for (const listener of suggestedReplyListeners) {
-      listener({ chatId, messageId: assistantMessage.id, suggestions });
+      listener({
+        chatId,
+        messageId: assistantId,
+        suggestions: script.suggestedReplies,
+      });
     }
-  }, 440 + chunks.length * 80);
+  }, delay + 60);
 
   return streamId;
 }
 
 function cancelStream(streamId: string) {
-  const timers = state.activeStreams.get(streamId) ?? [];
-  timers.forEach((timer) => window.clearTimeout(timer));
+  const record = state.activeStreams.get(streamId);
+  if (!record) return;
+  record.timers.forEach((timer) => window.clearTimeout(timer));
   state.activeStreams.delete(streamId);
+  pushSse(record.onEvent, { type: 'completion', status: 'cancelled' });
+  pushSse(record.onEvent, '[DONE]');
+  record.onEvent({ type: 'end', status: 200 });
+}
+
+async function steerChat(chatId: string, content: string): Promise<boolean> {
+  const active = findActiveStreamByChat(chatId);
+  if (!active) return false;
+  active.steerNote = content.trim();
+  return true;
 }
 
 export function installBrowserDevHostMock() {
@@ -629,29 +1148,45 @@ export function installBrowserDevHostMock() {
 
   window.steerableHost = {
     runtime: 'local',
-    platform: 'win32',
+    platform: 'darwin',
     local: {
       selectDirectory: async () => ({
         canceled: false,
-        filePaths: ['C:\\browser-preview\\mock-skill'],
+        filePaths: ['/workspace/steerable-eval-sandbox'],
       }),
-      // 浏览器 dev 模式没有桌面截图和剪贴板，如实返回失败。
       captureScreenshot: async () => ({
         success: false as const,
-        error: 'Browser dev mode cannot capture a window screenshot.',
+        error: 'Browser demo mode cannot capture a window screenshot.',
       }),
     },
     localBackend: {
       request,
       startStream,
       cancelStream,
+      steerChat,
     },
     onMenuNewChat: () => undefined,
     offMenuNewChat: () => undefined,
     onMenuOpenTerminal: () => undefined,
     offMenuOpenTerminal: () => undefined,
-    onChatTitleUpdated: () => () => undefined,
-    onChatActivity: () => () => undefined,
+    onChatTitleUpdated: (callback) => {
+      chatTitleListeners.add(callback);
+      return () => {
+        chatTitleListeners.delete(callback);
+      };
+    },
+    onChatCreated: (callback) => {
+      chatCreatedListeners.add(callback);
+      return () => {
+        chatCreatedListeners.delete(callback);
+      };
+    },
+    onChatActivity: (callback) => {
+      chatActivityListeners.add(callback);
+      return () => {
+        chatActivityListeners.delete(callback);
+      };
+    },
     onSuggestedReplies: (callback) => {
       suggestedReplyListeners.add(callback);
       return () => {

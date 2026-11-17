@@ -70,7 +70,13 @@ import {
 } from "@/lib/pending-first-message";
 import { readOrchestrationSetting } from "@/lib/orchestration-settings";
 import { pickDefaultAgentId } from "@/brand";
-import { t } from "@/i18n";
+import { isDemoMode } from "@/lib/demo-flag";
+import {
+  DEMO_STARTER_PROMPTS_EN,
+  DEMO_STARTER_PROMPTS_ZH,
+  type DemoStarterPrompt,
+} from "@/lib/demo-playbook";
+import { getLocale, t } from "@/i18n";
 import {
   appendAttachmentRefs,
   collectImageAttachments,
@@ -1751,77 +1757,106 @@ function EmptyChatGate() {
     [ctx],
   );
 
-  const handleSubmit = useCallback(async () => {
-    if (isCreating) return;
-    const rawText = inputValue.trim();
-    if (!rawText && files.length === 0) return;
-    trackBehavior('composer_send', {
-      empty: false,
-      home: true,
-      mode: mode === 'plan' ? 'plan' : 'agent',
-      execPolicy,
-      length: rawText.length,
-    });
-
-    const mentionedAgentIds = mentionReferences
-      .filter((ref) => ref.type === "agent")
-      .map((ref) => ref.id);
-    const referencedChatIds = mentionReferences
-      .filter((ref) => ref.type === "chat")
-      .map((ref) => ref.id);
-    // 文件路径引用与图像元数据在会话建好、附件落盘之后再装配（见下）——
-    // 落地页提交时还没有 chatId，不能像旧代码那样直接用 `f.path`（浏览器
-    // 模式下它是空串，会把一条空引用写进正文，模型以为收到了文件却读不到）。
-    const baseMetadata = {
-      ...(mode === "plan" ? { mode: "plan" as const } : {}),
-      ...(execPolicy === "full" ? { execPolicy: "full" as const } : {}),
-      ...(ctx.selectedAgentId ? { agentId: ctx.selectedAgentId } : {}),
-      ...(mentionedAgentIds.length > 0 ? { mentionedAgentIds } : {}),
-      ...(referencedChatIds.length > 0 ? { referencedChatIds } : {}),
-      ...(modelOverride ? { model: modelOverride } : {}),
-      ...(effortOverride ? { reasoningEffort: effortOverride } : {}),
-    };
-
-    setIsCreating(true);
-    setCreateError(null);
-    try {
-      const id = await ctx.createChat({
-        ...(selectedProjectId && showProjectsChrome ? { projectId: selectedProjectId } : {}),
-        ...(ctx.selectedAgentId ? { agentId: ctx.selectedAgentId } : {}),
+  const submitPrompt = useCallback(
+    async (rawText: string, overrideMode?: ChatMode) => {
+      if (isCreating) return;
+      const trimmed = rawText.trim();
+      const effectiveMode = overrideMode ?? mode;
+      if (!trimmed && files.length === 0) return;
+      trackBehavior('composer_send', {
+        empty: false,
+        home: true,
+        mode: effectiveMode === 'plan' ? 'plan' : 'agent',
+        execPolicy,
+        length: trimmed.length,
       });
-      if (!id) throw new Error(t("Failed to create the chat. Please try again."));
-      // 会话已建，把附件落进会话空间（与 LocalChatPanel 同一套语义）：
-      // 所有文件都写落盘路径引用（agent 用 local_read_file 读回）；仅图片
-      // 额外进 metadata.images 走多模态，非图片文件不会被图片逻辑吞掉。
-      const { files: resolvedFiles, failures } = await saveChatAttachments(id, files);
-      if (failures.length > 0) {
-        // 落地页一旦跳转就没法让用户重试了，所以这里宁可中止本次发送：
-        // 删掉刚建的空会话，保留输入框（含失败文件），把原因显示出来。
-        await ctx.deleteChat(id);
-        setCreateError(formatAttachmentFailures(failures));
-        setIsCreating(false);
-        return;
-      }
 
-      const content = appendAttachmentRefs(rawText, resolvedFiles);
-      const imageAttachments = collectImageAttachments(resolvedFiles);
-      const metadata = {
-        ...baseMetadata,
-        ...(imageAttachments.length > 0 ? { images: imageAttachments } : {}),
+      const mentionedAgentIds = mentionReferences
+        .filter((ref) => ref.type === "agent")
+        .map((ref) => ref.id);
+      const referencedChatIds = mentionReferences
+        .filter((ref) => ref.type === "chat")
+        .map((ref) => ref.id);
+      // 文件路径引用与图像元数据在会话建好、附件落盘之后再装配（见下）——
+      // 落地页提交时还没有 chatId，不能像旧代码那样直接用 `f.path`（浏览器
+      // 模式下它是空串，会把一条空引用写进正文，模型以为收到了文件却读不到）。
+      const baseMetadata = {
+        ...(effectiveMode === "plan" ? { mode: "plan" as const } : {}),
+        ...(execPolicy === "full" ? { execPolicy: "full" as const } : {}),
+        ...(ctx.selectedAgentId ? { agentId: ctx.selectedAgentId } : {}),
+        ...(mentionedAgentIds.length > 0 ? { mentionedAgentIds } : {}),
+        ...(referencedChatIds.length > 0 ? { referencedChatIds } : {}),
+        ...(modelOverride ? { model: modelOverride } : {}),
+        ...(effortOverride ? { reasoningEffort: effortOverride } : {}),
       };
 
-      setPendingFirstMessage({
-        chatId: id,
-        content,
-        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-      });
-      navigate(`/agent/${id}`);
-      // 跳转成功后组件即卸载，不用清 isCreating；失败才恢复可交互。
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err));
-      setIsCreating(false);
-    }
-  }, [inputValue, files, mentionReferences, mode, execPolicy, modelOverride, effortOverride, isCreating, selectedProjectId, ctx, navigate]);
+      setIsCreating(true);
+      setCreateError(null);
+      try {
+        const id = await ctx.createChat({
+          ...(selectedProjectId && showProjectsChrome ? { projectId: selectedProjectId } : {}),
+          ...(ctx.selectedAgentId ? { agentId: ctx.selectedAgentId } : {}),
+        });
+        if (!id) throw new Error(t("Failed to create the chat. Please try again."));
+        // 会话已建，把附件落进会话空间（与 LocalChatPanel 同一套语义）：
+        // 所有文件都写落盘路径引用（agent 用 local_read_file 读回）；仅图片
+        // 额外进 metadata.images 走多模态，非图片文件不会被图片逻辑吞掉。
+        const { files: resolvedFiles, failures } = await saveChatAttachments(id, files);
+        if (failures.length > 0) {
+          // 落地页一旦跳转就没法让用户重试了，所以这里宁可中止本次发送：
+          // 删掉刚建的空会话，保留输入框（含失败文件），把原因显示出来。
+          await ctx.deleteChat(id);
+          setCreateError(formatAttachmentFailures(failures));
+          setIsCreating(false);
+          return;
+        }
+
+        const content = appendAttachmentRefs(trimmed, resolvedFiles);
+        const imageAttachments = collectImageAttachments(resolvedFiles);
+        const metadata = {
+          ...baseMetadata,
+          ...(imageAttachments.length > 0 ? { images: imageAttachments } : {}),
+        };
+
+        setPendingFirstMessage({
+          chatId: id,
+          content,
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+        });
+        navigate(`/agent/${id}`);
+        // 跳转成功后组件即卸载，不用清 isCreating；失败才恢复可交互。
+      } catch (err) {
+        setCreateError(err instanceof Error ? err.message : String(err));
+        setIsCreating(false);
+      }
+    },
+    [
+      inputValue,
+      files,
+      mentionReferences,
+      mode,
+      execPolicy,
+      modelOverride,
+      effortOverride,
+      isCreating,
+      selectedProjectId,
+      showProjectsChrome,
+      ctx,
+      navigate,
+    ],
+  );
+
+  const handleSubmit = useCallback(async () => {
+    await submitPrompt(inputValue);
+  }, [submitPrompt, inputValue]);
+
+  const demoStarters: readonly DemoStarterPrompt[] = useMemo(() => {
+    if (!isDemoMode()) return [];
+    const prefersZh =
+      getLocale().startsWith('zh') ||
+      (typeof navigator !== 'undefined' && /^zh/i.test(navigator.language || ''));
+    return prefersZh ? DEMO_STARTER_PROMPTS_ZH : DEMO_STARTER_PROMPTS_EN;
+  }, []);
 
   return (
     <div
@@ -1887,6 +1922,32 @@ function EmptyChatGate() {
             onMentionReferencesChange={setMentionReferences}
           />
         </div>
+        {demoStarters.length > 0 && (
+          <div
+            className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2"
+            data-testid="demo-playbook-starters"
+          >
+            {demoStarters.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                disabled={isCreating}
+                onClick={() => void submitPrompt(item.prompt, item.mode)}
+                className="group flex flex-col items-start gap-1 rounded-agent-md border border-agent-border bg-agent-canvas px-3 py-2.5 text-left transition-colors hover:border-agent-foreground/40 hover:bg-agent-muted/60 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span className="flex w-full items-center justify-between gap-2 text-xs font-semibold text-agent-foreground">
+                  <span>{item.title}</span>
+                  <span className="shrink-0 rounded border border-agent-border bg-agent-muted px-1.5 py-0.5 font-mono text-[10px] font-medium text-agent-muted-foreground">
+                    {item.tag}
+                  </span>
+                </span>
+                <span className="line-clamp-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+                  {item.summary}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
         {isCreating && (
           <p className="text-xs text-agent-muted-foreground">
             {t("Creating chat…")}

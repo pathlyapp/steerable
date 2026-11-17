@@ -11,8 +11,20 @@ export function AppShell() {
         <Outlet />
       </main>
       {isDemoMode() ? (
-        <div className="border-t border-agent-border bg-agent-muted px-3 py-1 text-xs text-agent-muted-foreground">
-          Demo &middot; simulated data, no live model
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-agent-border bg-agent-muted px-3 py-1 text-xs text-agent-muted-foreground">
+          <span>
+            Demo &middot; interactive CoreLoop &amp; sandbox playbook (no live model — run{' '}
+            <code className="rounded bg-agent-canvas px-1 py-0.5 font-mono text-[11px] text-agent-foreground">
+              steerable-cli login
+            </code>{' '}
+            locally for live LLMs)
+          </span>
+          <a
+            href="../"
+            className="font-medium text-agent-foreground underline underline-offset-2 hover:opacity-80"
+          >
+            &larr; Docs
+          </a>
         </div>
       ) : (
         !hasHostBridge() && (

