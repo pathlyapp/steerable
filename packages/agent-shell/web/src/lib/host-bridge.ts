@@ -16,6 +16,20 @@ export type LocalBackendRequestInput = {
   body?: unknown;
 };
 
+export type LocalBackendBinaryRequestInput = {
+  method?: 'GET' | 'POST';
+  path: string;
+  body?: unknown;
+  signal?: AbortSignal;
+};
+
+export interface LocalBackendBinaryResponse {
+  status: number;
+  headers: Headers;
+  arrayBuffer: () => Promise<ArrayBuffer>;
+  blob: () => Promise<Blob>;
+}
+
 export type LocalBackendStreamEvent =
   | { type: 'data'; chunk: string; parsed?: SSEEvent }
   | { type: 'end'; status: number }
@@ -180,6 +194,13 @@ export interface HostBridge {
   };
   localBackend: {
     request: <T>(input: LocalBackendRequestInput) => Promise<T>;
+    requestBinary?: (
+      input: LocalBackendBinaryRequestInput,
+    ) => Promise<LocalBackendBinaryResponse>;
+    resolveAuthorizedFetch?: (path: string) => {
+      url: string;
+      headers: Record<string, string>;
+    };
     startStream: (
       input: LocalBackendRequestInput,
       onEvent: (payload: LocalBackendStreamEvent) => void,

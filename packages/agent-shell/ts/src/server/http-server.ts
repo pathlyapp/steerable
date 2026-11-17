@@ -25,11 +25,12 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { readFile, stat } from 'node:fs/promises';
+import { createReadStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
 import type { LocalBackendRouter } from '../local-backend/router.js';
+import type { PackBackendBinaryResponse } from '../local-backend/pack-backend-routes.js';
 import { getActiveCoreLoopStreamId } from '../local-backend/coreloop-stream.js';
 import { getSidecarSupervisor } from '../llm/index.js';
 import type { ScopedStore } from '../storage/scoped-store.js';
@@ -129,6 +130,140 @@ function sendJson(res: ServerResponse, status: number, data: unknown): void {
   res.end(body);
 }
 
+type ParsedByteRange =
+  | { kind: 'none' }
+  | { kind: 'invalid' }
+  | { kind: 'range'; start: number; end: number };
+
+function parseByteRange(header: string | string[] | undefined, size: number): ParsedByteRange {
+  if (header === undefined) return { kind: 'none' };
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (!raw) return { kind: 'none' };
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(raw.trim());
+  if (!match) return { kind: 'invalid' };
+  const [, startText, endText] = match;
+  if (!startText && !endText) return { kind: 'invalid' };
+  if (size <= 0) return { kind: 'invalid' };
+  if (!startText) {
+    const suffix = Number(endText);
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) return { kind: 'invalid' };
+    const start = Math.max(0, size - suffix);
+    return { kind: 'range', start, end: size - 1 };
+  }
+  const start = Number(startText);
+  if (!Number.isSafeInteger(start) || start < 0 || start >= size) return { kind: 'invalid' };
+  if (!endText) return { kind: 'range', start, end: size - 1 };
+  const requestedEnd = Number(endText);
+  if (!Number.isSafeInteger(requestedEnd) || requestedEnd < start) return { kind: 'invalid' };
+  return { kind: 'range', start, end: Math.min(requestedEnd, size - 1) };
+}
+
+function contentDispositionInline(fileName: string | undefined): string | undefined {
+  if (!fileName) return undefined;
+  const ascii = fileName.replace(/[^\x20-\x7E]+/g, '_').replace(/["\\]/g, '_');
+  const encoded = encodeURIComponent(fileName);
+  return `inline; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}
+
+async function sendBinaryResponse(
+  req: IncomingMessage,
+  res: ServerResponse,
+  response: PackBackendBinaryResponse,
+): Promise<void> {
+  const disposition = contentDispositionInline(response.fileName);
+  if (response.kind === 'bytes') {
+    const headers: Record<string, string | number> = {
+      'Content-Type': response.contentType,
+      'Content-Length': response.body.byteLength,
+      'Cache-Control': response.cacheControl ?? 'private, no-store',
+    };
+    if (disposition) headers['Content-Disposition'] = disposition;
+    res.writeHead(response.status, headers);
+    res.end(req.method === 'HEAD' ? undefined : response.body);
+    return;
+  }
+
+  let fileStat;
+  try {
+    fileStat = await stat(response.filePath);
+  } catch {
+    sendJson(res, 404, { detail: 'file not found' });
+    return;
+  }
+  if (!fileStat.isFile()) {
+    sendJson(res, 404, { detail: 'file not found' });
+    return;
+  }
+
+  const size = fileStat.size;
+  const etag = response.etag ?? `W/"${size}-${Math.round(fileStat.mtimeMs)}"`;
+  const range = response.status === 200 ? parseByteRange(req.headers.range, size) : { kind: 'none' as const };
+  if (range.kind === 'invalid') {
+    res.writeHead(416, {
+      'Content-Range': `bytes */${size}`,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-store',
+    });
+    res.end();
+    return;
+  }
+
+  const headers: Record<string, string | number> = {
+    'Content-Type': response.contentType,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': response.cacheControl ?? 'private, no-cache',
+    ETag: etag,
+  };
+  if (disposition) headers['Content-Disposition'] = disposition;
+
+  if (range.kind === 'range') {
+    headers['Content-Range'] = `bytes ${range.start}-${range.end}/${size}`;
+    headers['Content-Length'] = range.end - range.start + 1;
+    res.writeHead(206, headers);
+  } else {
+    headers['Content-Length'] = size;
+    res.writeHead(response.status, headers);
+  }
+
+  if (req.method === 'HEAD' || size === 0) {
+    res.end();
+    return;
+  }
+
+  const stream = createReadStream(
+    response.filePath,
+    range.kind === 'range' ? { start: range.start, end: range.end } : undefined,
+  );
+  const onResClose = () => {
+    if (!stream.destroyed) stream.destroy();
+  };
+  res.on('close', onResClose);
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      res.off('close', onResClose);
+      resolve();
+    };
+    stream.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      res.off('close', onResClose);
+      if (!res.headersSent) {
+        sendJson(res, 500, { detail: 'failed to read file' });
+        resolve();
+        return;
+      }
+      res.destroy(err);
+      reject(err);
+    });
+    stream.on('close', done);
+    res.on('finish', done);
+    stream.pipe(res);
+  });
+}
+
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -215,12 +350,19 @@ export function createBsServer(deps: BsServerDeps): Server {
     }
 
     try {
-      const response = await localBackendRouter.handle(request);
+      const response = typeof localBackendRouter.handleRaw === 'function'
+        ? await localBackendRouter.handleRaw({ ...request, headers: req.headers })
+        : await localBackendRouter.handle(request);
       log.info(`[bs] ${request.method} ${pathname} -> ${response.status}`);
-      sendJson(res, response.status, response.data);
+      if ('kind' in response) {
+        await sendBinaryResponse(req, res, response);
+      } else {
+        sendJson(res, response.status, response.data);
+      }
     } catch (err) {
       log.error(`[bs] ${request.method} ${pathname} threw`, err);
-      sendJson(res, 500, { detail: 'internal error' });
+      if (!res.headersSent) sendJson(res, 500, { detail: 'internal error' });
+      else res.end();
     }
   }
 

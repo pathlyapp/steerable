@@ -153,7 +153,7 @@ import {
   collectPackForcedSkillVars,
   collectPackWorldState,
 } from './pack-turn-hooks.js';
-import { matchPackBackendRoute } from './pack-backend-routes.js';
+import { matchPackBackendRoute, type PackBackendBinaryResponse } from './pack-backend-routes.js';
 import { invokePackHttpRoute } from '../host/http-routes.js';
 import { installProductCli } from '../cli-install.js';
 import { collectTurnFiles } from './turn-files.js';
@@ -164,6 +164,8 @@ export interface LocalBackendRequest {
   method: string;
   path: string;
   body?: unknown;
+  /** 原始请求头（HTTP 模式下透传）。 */
+  headers?: Record<string, string | string[] | undefined>;
   /** Authenticated identity supplied by the BS HTTP layer. */
   principal?: Principal;
 }
@@ -172,6 +174,10 @@ export interface LocalBackendResponse<T = unknown> {
   status: number;
   data: T;
 }
+
+export type LocalBackendRawResponse<T = unknown> =
+  | LocalBackendResponse<T>
+  | PackBackendBinaryResponse;
 
 function stringRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -586,14 +592,26 @@ export class LocalBackendRouter {
     return this.store;
   }
 
-  handle(request: LocalBackendRequest): Promise<LocalBackendResponse> {
+  async handle(request: LocalBackendRequest): Promise<LocalBackendResponse> {
+    const response = await this.handleRaw(request);
+    if ('kind' in response) {
+      return {
+        status: 406,
+        data: { detail: 'binary response requires HTTP transport' },
+      };
+    }
+    return response;
+  }
+
+  /** 与 handle() 相同，但保留包路由返回的二进制流/字节响应供 HTTP 层直接输出。 */
+  handleRaw(request: LocalBackendRequest): Promise<LocalBackendRawResponse> {
     return this.storeContext.run(
       this.resolveStore(request.principal),
       () => this.handleScoped(request),
     );
   }
 
-  private async handleScoped(request: LocalBackendRequest): Promise<LocalBackendResponse> {
+  private async handleScoped(request: LocalBackendRequest): Promise<LocalBackendRawResponse> {
     const { method } = request;
     const url = new URL(request.path, 'http://local.backend');
     const pathname = url.pathname;
@@ -2670,6 +2688,7 @@ export class LocalBackendRouter {
         params: packMatch.params,
         query: url.searchParams,
         body: request.body,
+        ...(request.headers ? { headers: request.headers } : {}),
       });
     }
 
