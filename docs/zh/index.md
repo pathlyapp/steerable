@@ -160,12 +160,12 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 <div class="sf-score sf-score--ours" markdown>
 <span class="sf-score-value">79.0%</span>
 <span class="sf-score-label">Steerable + GLM-5.3-Flash</span>
-<span class="sf-score-meta">TB 2.1 · @max 3 次均值 · 本仓库</span>
+<span class="sf-score-meta">TB 2.1 · 本仓库</span>
 </div>
 <div class="sf-score" markdown>
 <span class="sf-score-value">+23.6</span>
 <span class="sf-score-label">同 GLM 对比 Codex</span>
-<span class="sf-score-meta">Codex + GLM-5.3-Flash · 56.2% · @high n=1</span>
+<span class="sf-score-meta">Codex + GLM-5.3-Flash · 56.2%</span>
 </div>
 <div class="sf-score" markdown>
 <span class="sf-score-value">229.9M</span>

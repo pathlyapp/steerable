@@ -190,12 +190,12 @@ hide:
 <div class="sf-score sf-score--ours" markdown>
 <span class="sf-score-value">79.0%</span>
 <span class="sf-score-label">Steerable + GLM-5.3-Flash</span>
-<span class="sf-score-meta">TB 2.1 · 3-run mean @max · this repo</span>
+<span class="sf-score-meta">TB 2.1 · this repo</span>
 </div>
 <div class="sf-score" markdown>
 <span class="sf-score-value">+23.6</span>
 <span class="sf-score-label">vs Codex on the same GLM</span>
-<span class="sf-score-meta">Codex + GLM-5.3-Flash · 56.2% · @high n=1</span>
+<span class="sf-score-meta">Codex + GLM-5.3-Flash · 56.2%</span>
 </div>
 <div class="sf-score" markdown>
 <span class="sf-score-value">229.9M</span>
