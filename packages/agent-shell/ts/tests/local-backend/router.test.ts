@@ -2238,6 +2238,37 @@ describe('占位与 fallback 路由', () => {
     );
   });
 
+  it('二进制包路由：handleRaw 透传 headers 并原样返回 file/bytes；handle 回 406', async () => {
+    const handler = vi.fn(() => ({
+      status: 200,
+      kind: 'bytes' as const,
+      body: new Uint8Array([1, 2, 3]),
+      contentType: 'application/pdf',
+    }));
+    h.packRoute = { params: {}, route: { handler } };
+    const router = makeRouter();
+    const raw = await router.handleRaw({
+      method: 'GET',
+      path: '/api/v2/aroli/file-preview/raw',
+      headers: { range: 'bytes=0-1' },
+    });
+    expect(raw).toEqual({
+      status: 200,
+      kind: 'bytes',
+      body: new Uint8Array([1, 2, 3]),
+      contentType: 'application/pdf',
+    });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: { range: 'bytes=0-1' } }),
+    );
+
+    const jsonOnly = await router.handle({
+      method: 'GET',
+      path: '/api/v2/aroli/file-preview/raw',
+    });
+    expect(jsonOnly.status).toBe(406);
+  });
+
   it('fallback：GET 列表型端点返回空集合形状；其他 GET 返回 {}；非 GET 返回 noop', async () => {
     const router = makeRouter();
     const listLike = await router.handle({ method: 'GET', path: '/api/v2/unknowns' });

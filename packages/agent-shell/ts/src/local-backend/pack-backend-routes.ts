@@ -12,13 +12,25 @@
  */
 
 import type {
+  PackBackendAnyResponse,
+  PackBackendBinaryBytesResponse,
+  PackBackendBinaryFileResponse,
+  PackBackendBinaryResponse,
   PackBackendRoute,
   PackBackendRouteRequest,
   PackBackendRouteResponse,
 } from '@steerable/pack-sdk';
 
 // 类型单一真源在 @steerable/pack-sdk（阶段 2.2）；re-export 兼容既有调用方。
-export type { PackBackendRoute, PackBackendRouteRequest, PackBackendRouteResponse };
+export type {
+  PackBackendAnyResponse,
+  PackBackendBinaryBytesResponse,
+  PackBackendBinaryFileResponse,
+  PackBackendBinaryResponse,
+  PackBackendRoute,
+  PackBackendRouteRequest,
+  PackBackendRouteResponse,
+};
 
 interface RegisteredPackBackendRoute extends PackBackendRoute {
   readonly packId: string;

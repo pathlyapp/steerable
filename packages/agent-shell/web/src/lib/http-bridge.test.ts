@@ -336,4 +336,46 @@ describe('浏览器形态的 local.* 降级', () => {
     expect(bridge.setZoom).toBeUndefined();
     expect(bridge.onZoomChanged).toBeUndefined();
   });
+
+  it('requestBinary 透传 AbortSignal 与 Bearer 头并返回原始字节；resolveAuthorizedFetch 带鉴权头', async () => {
+    vi.stubGlobal('__DEEPPATH_BS__', { platform: 'darwin', flavor: 'test', brandName: 'T', token: 'tok-bin' });
+    const bytes = new Uint8Array([7, 8, 9]).buffer;
+    const fetchMock = stubFetch(() => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/pdf' }),
+      arrayBuffer: () => Promise.resolve(bytes),
+      blob: () => Promise.resolve(new Blob([bytes])),
+    }));
+    const controller = new AbortController();
+    const bridge = createHttpBridge();
+    const res = await bridge.localBackend.requestBinary!({
+      path: '/api/v2/aroli/file-preview/raw?chatId=c1',
+      signal: controller.signal,
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/v2/aroli/file-preview/raw?chatId=c1', {
+      method: 'GET',
+      headers: { Authorization: 'Bearer tok-bin' },
+      body: undefined,
+      signal: controller.signal,
+    });
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([7, 8, 9]));
+    expect(bridge.localBackend.resolveAuthorizedFetch!('/api/v2/aroli/file-preview/raw')).toEqual({
+      url: '/api/v2/aroli/file-preview/raw',
+      headers: { Authorization: 'Bearer tok-bin' },
+    });
+  });
+
+  it('requestBinary 非 2xx 时解析 detail 并抛出带 status 的错误', async () => {
+    stubFetch(() => ({
+      ok: false,
+      status: 404,
+      json: () => Promise.resolve({ detail: '找不到这个文件' }),
+    }));
+    const bridge = createHttpBridge();
+    const err = await bridge.localBackend.requestBinary!({ path: '/missing' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('找不到这个文件');
+    expect((err as Error & { status?: number }).status).toBe(404);
+  });
 });

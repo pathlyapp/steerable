@@ -18,6 +18,8 @@ import type {
   ApprovalPromptRequest,
   AskUserPromptRequest,
   HostBridge,
+  LocalBackendBinaryRequestInput,
+  LocalBackendBinaryResponse,
   LocalBackendRequestInput,
   LocalBackendStreamEvent,
   TerminalSession,
@@ -71,6 +73,34 @@ async function http<T>(method: string, path: string, body?: unknown): Promise<T>
     throw err;
   }
   return data;
+}
+
+async function httpBinary(
+  input: LocalBackendBinaryRequestInput,
+): Promise<LocalBackendBinaryResponse> {
+  const method = input.method ?? 'GET';
+  const res = await fetch(input.path, {
+    method,
+    headers: {
+      ...(input.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...authHeaders(),
+    },
+    body: input.body !== undefined ? JSON.stringify(input.body) : undefined,
+    signal: input.signal,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    const err = new Error(httpErrorMessage(data, res.status)) as Error & { status?: number; data?: unknown };
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return {
+    status: res.status,
+    headers: res.headers,
+    arrayBuffer: () => res.arrayBuffer(),
+    blob: () => res.blob(),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -256,6 +286,11 @@ export function createHttpBridge(): HostBridge {
     localBackend: {
       request: <T>(input: LocalBackendRequestInput) =>
         http<T>(input.method, input.path, input.body),
+      requestBinary: (input: LocalBackendBinaryRequestInput) => httpBinary(input),
+      resolveAuthorizedFetch: (path: string) => ({
+        url: path,
+        headers: authHeaders(),
+      }),
       startStream,
       cancelStream,
       steerChat: async (chatId, content, options) => {

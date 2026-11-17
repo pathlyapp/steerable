@@ -290,19 +290,50 @@ export interface PackBackendRouteResponse<T = unknown> {
   data: T;
 }
 
+/** 二进制文件流响应：由宿主 HTTP 层按字节流式输出并自动支持 Range 206。 */
+export interface PackBackendBinaryFileResponse {
+  readonly status: number;
+  readonly kind: 'file';
+  readonly filePath: string;
+  readonly contentType: string;
+  readonly fileName?: string;
+  readonly cacheControl?: string;
+  readonly etag?: string;
+}
+
+/** 内存二进制响应：由宿主 HTTP 层直接输出字节，不经过 JSON/base64 编码。 */
+export interface PackBackendBinaryBytesResponse {
+  readonly status: number;
+  readonly kind: 'bytes';
+  readonly body: Uint8Array;
+  readonly contentType: string;
+  readonly fileName?: string;
+  readonly cacheControl?: string;
+}
+
+export type PackBackendBinaryResponse =
+  | PackBackendBinaryFileResponse
+  | PackBackendBinaryBytesResponse;
+
+export type PackBackendAnyResponse<T = unknown> =
+  | PackBackendRouteResponse<T>
+  | PackBackendBinaryResponse;
+
 /** 包路由请求：段参数 + query + 反序列化后的 body。 */
 export interface PackBackendRouteRequest {
   readonly params: Record<string, string>;
   /** URL query（searchParams 原样透传，多值键取逗号拼接语义同 URL 规范）。 */
   readonly query: URLSearchParams;
   readonly body: unknown;
+  /** 原始请求头（HTTP 模式下透传，便于检查 Range / If-None-Match）。 */
+  readonly headers?: Record<string, string | string[] | undefined>;
 }
 
 export interface PackBackendRoute {
   readonly method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** 路径模式，如 '/api/v2/ppt-preview/edits/:id/cancel'。 */
   readonly path: string;
-  readonly handler: (req: PackBackendRouteRequest) => Promise<PackBackendRouteResponse>;
+  readonly handler: (req: PackBackendRouteRequest) => Promise<PackBackendAnyResponse>;
 }
 
 // ─── 回合级钩子契约 ───

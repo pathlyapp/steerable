@@ -667,4 +667,99 @@ describe('BS HTTP server', () => {
       expect((await post('/host/local/exec-shell', { command: 'pwd' })).status).toBe(200);
     });
   });
+
+  describe('二进制流与 Range 206 响应', () => {
+    const handleRaw = vi.fn();
+
+    beforeEach(async () => {
+      handleRaw.mockReset();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      const deps = makeDeps(webDistDir);
+      server = createBsServer({
+        ...deps,
+        localBackendRouter: {
+          ...deps.localBackendRouter,
+          handleRaw,
+        } as unknown as BsServerDeps['localBackendRouter'],
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    });
+
+    it('kind=bytes 直接输出原始字节并带 Content-Type / Content-Disposition', async () => {
+      handleRaw.mockResolvedValue({
+        status: 200,
+        kind: 'bytes',
+        body: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+        contentType: 'application/pdf',
+        fileName: '报告.pdf',
+      });
+      const res = await get('/api/v2/aroli/file-preview/raw');
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('application/pdf');
+      expect(res.headers.get('content-disposition')).toContain('inline;');
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+    });
+
+    it('kind=file 支持全量流、HEAD、Range 206 切片及 416 越界拒绝', async () => {
+      const filePath = path.join(webDistDir, 'sample.bin');
+      writeFileSync(filePath, '0123456789ABCDEF');
+      handleRaw.mockResolvedValue({
+        status: 200,
+        kind: 'file',
+        filePath,
+        contentType: 'application/pdf',
+      });
+
+      const full = await get('/api/v2/aroli/file-preview/raw');
+      expect(full.status).toBe(200);
+      expect(full.headers.get('accept-ranges')).toBe('bytes');
+      expect(full.headers.get('content-length')).toBe('16');
+      expect(full.headers.get('etag')).toMatch(/^W\/"16-\d+"$/);
+      expect(await full.text()).toBe('0123456789ABCDEF');
+
+      const head = await fetch(`${base}/api/v2/aroli/file-preview/raw`, {
+        method: 'HEAD',
+        headers: AUTH,
+      });
+      expect(head.status).toBe(200);
+      expect(head.headers.get('content-length')).toBe('16');
+      expect(await head.text()).toBe('');
+
+      const partial = await fetch(`${base}/api/v2/aroli/file-preview/raw`, {
+        headers: { ...AUTH, Range: 'bytes=2-6' },
+      });
+      expect(partial.status).toBe(206);
+      expect(partial.headers.get('content-range')).toBe('bytes 2-6/16');
+      expect(partial.headers.get('content-length')).toBe('5');
+      expect(await partial.text()).toBe('23456');
+
+      const suffix = await fetch(`${base}/api/v2/aroli/file-preview/raw`, {
+        headers: { ...AUTH, Range: 'bytes=-4' },
+      });
+      expect(suffix.status).toBe(206);
+      expect(suffix.headers.get('content-range')).toBe('bytes 12-15/16');
+      expect(await suffix.text()).toBe('CDEF');
+
+      const invalid = await fetch(`${base}/api/v2/aroli/file-preview/raw`, {
+        headers: { ...AUTH, Range: 'bytes=99-120' },
+      });
+      expect(invalid.status).toBe(416);
+      expect(invalid.headers.get('content-range')).toBe('bytes */16');
+    });
+
+    it('未授权请求访问二进制端点仍返回 401，文件不存在返回 404', async () => {
+      const unauth = await fetch(`${base}/api/v2/aroli/file-preview/raw`);
+      expect(unauth.status).toBe(401);
+
+      handleRaw.mockResolvedValue({
+        status: 200,
+        kind: 'file',
+        filePath: path.join(webDistDir, 'missing.pdf'),
+        contentType: 'application/pdf',
+      });
+      const missing = await get('/api/v2/aroli/file-preview/raw');
+      expect(missing.status).toBe(404);
+    });
+  });
 });
