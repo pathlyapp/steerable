@@ -193,7 +193,7 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-1 items-start gap-2">
             {!payload.intro && (
-              <MessageQuestionIcon size={14} className="mt-0.5 text-[var(--agent-muted-foreground,#6b7280)]" />
+              <MessageQuestionIcon size={14} className="mt-0.5 text-[var(--agent-muted-foreground,#4b5563)]" />
             )}
             {payload.intro ? (
               <p className="flex-1 text-sm">{payload.intro}</p>
@@ -223,7 +223,7 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
               <li key={q.id} className="space-y-2">
                 <div className="flex items-center gap-2">
                   {q.header && (
-                    <span className="inline-flex items-center rounded-full bg-[var(--agent-muted,#f3f4f6)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--agent-muted-foreground,#6b7280)]">
+                    <span className="inline-flex items-center rounded-full bg-[var(--agent-muted,#f3f4f6)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--agent-muted-foreground,#4b5563)]">
                       {q.header}
                     </span>
                   )}
@@ -231,7 +231,7 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
                 <p className="text-sm font-medium">
                   {idx + 1}. {q.text}
                   {!inputOnly && q.multiSelect && (
-                    <span className="ml-1.5 text-xs font-normal text-[var(--agent-muted-foreground,#6b7280)]">
+                    <span className="ml-1.5 text-xs font-normal text-[var(--agent-muted-foreground,#4b5563)]">
                       {multiSelectLabel}
                     </span>
                   )}
@@ -244,7 +244,7 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
                     placeholder={q.placeholder || (q.type === 'password' ? '输入密码' : '输入你的回答...')}
                     value={customText[q.id] || ''}
                     onChange={(e) => setCustomText((p) => ({ ...p, [q.id]: e.target.value }))}
-                    className="w-full rounded-lg border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-background,#fff)] px-3 py-1.5 text-xs text-[var(--agent-foreground,#111827)] outline-none placeholder:text-[var(--agent-muted-foreground,#6b7280)] focus:border-[var(--agent-primary,#18181b)] focus:ring-1 focus:ring-[var(--agent-primary,#18181b)] disabled:cursor-not-allowed disabled:opacity-60"
+                    className="w-full rounded-lg border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-background,#fff)] px-3 py-1.5 text-xs text-[var(--agent-foreground,#111827)] outline-none placeholder:text-[var(--agent-muted-foreground,#4b5563)] focus:border-[var(--agent-primary,#18181b)] focus:ring-1 focus:ring-[var(--agent-primary,#18181b)] disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 )}
 
@@ -269,7 +269,7 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
                               'rounded-full border px-3 py-1.5 text-xs font-medium transition-all duration-200',
                               selected
                                 ? 'border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-muted,#f3f4f6)] text-[var(--agent-foreground,#111827)] ring-1 ring-[var(--agent-border,#e5e7eb)]'
-                                : 'border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-card-bg,#fff)] text-[var(--agent-muted-foreground,#6b7280)] hover:bg-[var(--agent-muted,#f3f4f6)] hover:text-[var(--agent-foreground,#111827)]',
+                                : 'border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-card-bg,#fff)] text-[var(--agent-muted-foreground,#4b5563)] hover:bg-[var(--agent-muted,#f3f4f6)] hover:text-[var(--agent-foreground,#111827)]',
                               isReadOnly ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
                             ].join(' ')}
                           >
@@ -287,7 +287,7 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
                           disabled={isReadOnly}
                           onClick={() => enterCustom(q.id)}
                           className={[
-                            'rounded-full border border-dashed border-[var(--agent-border,#e5e7eb)] px-3 py-1.5 text-xs font-medium text-[var(--agent-muted-foreground,#6b7280)] transition-all duration-200 hover:bg-[var(--agent-muted,#f3f4f6)] hover:text-[var(--agent-foreground,#111827)]',
+                            'rounded-full border border-dashed border-[var(--agent-border,#e5e7eb)] px-3 py-1.5 text-xs font-medium text-[var(--agent-muted-foreground,#4b5563)] transition-all duration-200 hover:bg-[var(--agent-muted,#f3f4f6)] hover:text-[var(--agent-foreground,#111827)]',
                             isReadOnly ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
                           ].join(' ')}
                         >
@@ -309,13 +309,13 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
                           onChange={(e) =>
                             setCustomText((p) => ({ ...p, [q.id]: e.target.value }))
                           }
-                          className="flex-1 rounded-lg border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-background,#fff)] px-3 py-1.5 text-xs text-[var(--agent-foreground,#111827)] outline-none placeholder:text-[var(--agent-muted-foreground,#6b7280)] focus:border-[var(--agent-primary,#18181b)] focus:ring-1 focus:ring-[var(--agent-primary,#18181b)] disabled:cursor-not-allowed disabled:opacity-60"
+                          className="flex-1 rounded-lg border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-background,#fff)] px-3 py-1.5 text-xs text-[var(--agent-foreground,#111827)] outline-none placeholder:text-[var(--agent-muted-foreground,#4b5563)] focus:border-[var(--agent-primary,#18181b)] focus:ring-1 focus:ring-[var(--agent-primary,#18181b)] disabled:cursor-not-allowed disabled:opacity-60"
                         />
                         <button
                           type="button"
                           disabled={isReadOnly}
                           onClick={() => cancelCustom(q.id)}
-                          className="text-xs text-[var(--agent-muted-foreground,#6b7280)] transition-colors duration-200 hover:text-[var(--agent-foreground,#111827)]"
+                          className="text-xs text-[var(--agent-muted-foreground,#4b5563)] transition-colors duration-200 hover:text-[var(--agent-foreground,#111827)]"
                         >
                           取消
                         </button>
@@ -329,14 +329,14 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
         </ol>
 
         {payload.outro && (
-          <p className="text-xs text-[var(--agent-muted-foreground,#6b7280)] whitespace-pre-line">
+          <p className="text-xs text-[var(--agent-muted-foreground,#4b5563)] whitespace-pre-line">
             {payload.outro}
           </p>
         )}
 
         {!isReadOnly && onSubmit && (
           <div className="flex items-center justify-between pt-1">
-            <span className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+            <span className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">
               {bottomHint}
             </span>
             <button
@@ -346,7 +346,7 @@ export const AskUserQuestionsCard: React.FC<AskUserQuestionsCardProps> = ({
               className={[
                 'inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-medium transition-all duration-200',
                 submitting || (requireAllAnswered && !allAnswered)
-                  ? 'cursor-not-allowed bg-[var(--agent-muted,#f3f4f6)] text-[var(--agent-muted-foreground,#6b7280)]'
+                  ? 'cursor-not-allowed bg-[var(--agent-muted,#f3f4f6)] text-[var(--agent-muted-foreground,#4b5563)]'
                   : 'bg-[var(--agent-primary,#18181b)] text-[var(--agent-primary-foreground,#fff)] shadow-sm hover:opacity-90',
               ].join(' ')}
             >

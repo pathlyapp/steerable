@@ -105,7 +105,7 @@ export const ThinkingProcessCard: React.FC<ThinkingProcessCardProps> = ({
     : defaultLabel;
 
   const defaultBodyClasses =
-    'whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-[var(--agent-muted-foreground,#6b7280)]';
+    'whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-[var(--agent-muted-foreground,#4b5563)]';
 
   return (
     <div className={['steerable-thinking-process', className].filter(Boolean).join(' ')}>
@@ -116,18 +116,18 @@ export const ThinkingProcessCard: React.FC<ThinkingProcessCardProps> = ({
           'flex items-center gap-1 text-xs transition-colors duration-200',
           isStreaming
             ? 'font-medium text-[var(--agent-foreground,#111827)]'
-            : 'text-[var(--agent-muted-foreground,#6b7280)] hover:text-[var(--agent-foreground,#111827)]',
+            : 'text-[var(--agent-muted-foreground,#4b5563)] hover:text-[var(--agent-foreground,#111827)]',
         ].join(' ')}
       >
         {expanded ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
         <span>{labelNode}</span>
         {duration && !isStreaming && (
-          <span className="ml-1 text-[var(--agent-muted-foreground,#6b7280)]">({duration})</span>
+          <span className="ml-1 text-[var(--agent-muted-foreground,#4b5563)]">({duration})</span>
         )}
         {isStreaming && !expanded && (
           <span
             aria-hidden
-            className="ml-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--agent-muted-foreground,#6b7280)]"
+            className="ml-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--agent-muted-foreground,#4b5563)]"
           />
         )}
       </button>

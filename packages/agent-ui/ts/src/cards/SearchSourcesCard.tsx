@@ -59,7 +59,7 @@ function FaviconCircle({ src, size = 18 }: { src: string | null; size?: number }
       >
         <GlobeIcon
           size={Math.round(size * 0.55)}
-          className="text-[var(--agent-muted-foreground,#6b7280)]"
+          className="text-[var(--agent-muted-foreground,#4b5563)]"
         />
       </span>
     );
@@ -129,7 +129,7 @@ export const SearchSourcesCard: React.FC<SearchSourcesCardProps> = ({
         className={
           isCard
             ? 'flex w-full items-center justify-between gap-2 px-3 py-2 text-left'
-            : 'group flex items-center gap-2 rounded-md py-1 text-sm text-[var(--agent-muted-foreground,#6b7280)] transition-colors duration-150 hover:text-[var(--agent-foreground,#111827)]'
+            : 'group flex items-center gap-2 rounded-md py-1 text-sm text-[var(--agent-muted-foreground,#4b5563)] transition-colors duration-150 hover:text-[var(--agent-foreground,#111827)]'
         }
       >
         <span className={isCard ? 'flex items-center gap-2' : 'flex items-center'}>
@@ -140,7 +140,7 @@ export const SearchSourcesCard: React.FC<SearchSourcesCardProps> = ({
                   <FaviconCircle key={`${idx}-${s.url}`} src={s.favicon ?? faviconUrlFor(s.url)} />
                 ))}
               </span>
-              <span className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+              <span className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                 {summaryLabel}
               </span>
             </>
@@ -158,7 +158,7 @@ export const SearchSourcesCard: React.FC<SearchSourcesCardProps> = ({
                 ))}
                 {more > 0 && (
                   <span
-                    className="inline-flex items-center justify-center rounded-full border-2 border-[var(--agent-background,#fff)] bg-[var(--agent-muted,#f3f4f6)] text-[10px] font-medium text-[var(--agent-muted-foreground,#6b7280)]"
+                    className="inline-flex items-center justify-center rounded-full border-2 border-[var(--agent-background,#fff)] bg-[var(--agent-muted,#f3f4f6)] text-[10px] font-medium text-[var(--agent-muted-foreground,#4b5563)]"
                     style={{ width: 18, height: 18, marginLeft: -6, zIndex: 0 }}
                   >
                     +{more}
@@ -172,7 +172,7 @@ export const SearchSourcesCard: React.FC<SearchSourcesCardProps> = ({
         <ChevronDownIcon
           size={isCard ? 14 : 14}
           className={[
-            isCard ? 'text-[var(--agent-muted-foreground,#6b7280)]' : 'h-3.5 w-3.5',
+            isCard ? 'text-[var(--agent-muted-foreground,#4b5563)]' : 'h-3.5 w-3.5',
             'transition-transform duration-200',
             expanded ? 'rotate-180' : '',
           ].filter(Boolean).join(' ')}
@@ -192,18 +192,18 @@ export const SearchSourcesCard: React.FC<SearchSourcesCardProps> = ({
                   <FaviconCircle src={s.favicon ?? faviconUrlFor(s.url)} size={16} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{s.title || extractDomain(s.url)}</span>
-                    <span className="block truncate text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+                    <span className="block truncate text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                       {extractDomain(s.url)}
                     </span>
                     {s.snippet && (
-                      <span className="mt-1 block text-xs text-[var(--agent-muted-foreground,#6b7280)] line-clamp-2">
+                      <span className="mt-1 block text-xs text-[var(--agent-muted-foreground,#4b5563)] line-clamp-2">
                         {s.snippet}
                       </span>
                     )}
                   </span>
                   <ExternalLinkIcon
                     size={12}
-                    className="mt-1 flex-shrink-0 text-[var(--agent-muted-foreground,#6b7280)]"
+                    className="mt-1 flex-shrink-0 text-[var(--agent-muted-foreground,#4b5563)]"
                   />
                 </a>
               </li>
@@ -224,13 +224,13 @@ export const SearchSourcesCard: React.FC<SearchSourcesCardProps> = ({
                   <div className="truncate text-xs text-[var(--agent-foreground,#111827)]">
                     {s.title || extractDomain(s.url)}
                   </div>
-                  <div className="truncate text-[11px] text-[var(--agent-muted-foreground,#6b7280)]">
+                  <div className="truncate text-[11px] text-[var(--agent-muted-foreground,#4b5563)]">
                     {extractDomain(s.url)}
                   </div>
                 </div>
                 <ExternalLinkIcon
                   size={12}
-                  className="shrink-0 text-[var(--agent-muted-foreground,#6b7280)] opacity-0 transition-opacity group-hover/item:opacity-100"
+                  className="shrink-0 text-[var(--agent-muted-foreground,#4b5563)] opacity-0 transition-opacity group-hover/item:opacity-100"
                 />
               </a>
             ))}

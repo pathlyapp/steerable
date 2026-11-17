@@ -49,16 +49,16 @@ export const AnalysisDocumentCard: React.FC<AnalysisDocumentCardProps> = ({
     >
       {payload.title && headerVariant === 'strip' ? (
         <div className="border-b border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-muted,#f3f4f6)]/50 px-4 py-2">
-          <span className="block truncate text-xs font-medium text-[var(--agent-muted-foreground,#6b7280)]">
+          <span className="block truncate text-xs font-medium text-[var(--agent-muted-foreground,#4b5563)]">
             {payload.title}
           </span>
         </div>
       ) : (
         <header className="mb-3 flex items-center gap-2 border-b border-[var(--agent-border,#e5e7eb)] px-4 pt-3 pb-2">
-          <BookIcon size={14} className="text-[var(--agent-muted-foreground,#6b7280)]" />
+          <BookIcon size={14} className="text-[var(--agent-muted-foreground,#4b5563)]" />
           <h3 className="text-sm font-medium">{payload.title || '分析报告'}</h3>
           {payload.modelId && (
-            <span className="ml-auto rounded-full bg-[var(--agent-muted,#f3f4f6)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[var(--agent-muted-foreground,#6b7280)]">
+            <span className="ml-auto rounded-full bg-[var(--agent-muted,#f3f4f6)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[var(--agent-muted-foreground,#4b5563)]">
               {payload.modelId}
             </span>
           )}

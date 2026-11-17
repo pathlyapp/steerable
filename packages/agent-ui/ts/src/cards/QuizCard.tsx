@@ -226,7 +226,7 @@ export const QuizCard: React.FC<QuizCardProps> = ({
           {isReadOnly && <CheckIcon size={12} className="text-emerald-700" />}
         </div>
         {payload.description && (
-          <p className="break-words text-xs leading-relaxed text-[var(--agent-muted-foreground,#6b7280)]">
+          <p className="break-words text-xs leading-relaxed text-[var(--agent-muted-foreground,#4b5563)]">
             {payload.description}
           </p>
         )}
@@ -244,7 +244,7 @@ export const QuizCard: React.FC<QuizCardProps> = ({
                     {idx + 1}. {q.stem}
                   </p>
                   {metaNode && (
-                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--agent-muted-foreground,#6b7280)]">
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--agent-muted-foreground,#4b5563)]">
                       {metaNode}
                     </div>
                   )}
@@ -277,7 +277,7 @@ export const QuizCard: React.FC<QuizCardProps> = ({
             </div>
           ) : (
             submitHint && (
-              <span className="min-w-0 flex-1 break-words text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+              <span className="min-w-0 flex-1 break-words text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                 {submitHint}
               </span>
             )

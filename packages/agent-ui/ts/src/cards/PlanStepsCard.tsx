@@ -30,8 +30,8 @@ export const PlanStepsCard: React.FC<PlanStepsCardProps> = ({ payload, isStreami
         className,
       ].filter(Boolean).join(' ')}
     >
-      <ListChecksIcon size={14} className="mt-0.5 flex-shrink-0 text-[var(--agent-muted-foreground,#6b7280)]" />
-      <div className="flex flex-wrap items-center gap-1 text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+      <ListChecksIcon size={14} className="mt-0.5 flex-shrink-0 text-[var(--agent-muted-foreground,#4b5563)]" />
+      <div className="flex flex-wrap items-center gap-1 text-xs text-[var(--agent-muted-foreground,#4b5563)]">
         {steps.map((step, idx) => (
           <React.Fragment key={`${idx}-${step}`}>
             {idx > 0 && <span aria-hidden className="select-none opacity-40">/</span>}

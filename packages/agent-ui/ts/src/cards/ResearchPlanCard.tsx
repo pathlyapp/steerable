@@ -42,13 +42,13 @@ const STATUS_LABELS: Record<Status, string> = {
 };
 
 const STATUS_COLOR: Record<Status, string> = {
-  pending: 'bg-[var(--agent-muted,#f3f4f6)] text-[var(--agent-muted-foreground,#6b7280)]',
-  searching: 'bg-[var(--agent-muted,#f3f4f6)] text-[var(--agent-muted-foreground,#6b7280)]',
-  evidenced_strong: 'bg-green-500/15 text-green-700 dark:text-green-400',
-  evidenced_medium: 'bg-blue-500/15 text-blue-700 dark:text-blue-400',
-  evidenced_weak: 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-  conflicted: 'bg-red-500/15 text-red-700 dark:text-red-400',
-  exhausted: 'bg-zinc-500/15 text-zinc-700 dark:text-zinc-400',
+  pending: 'bg-[var(--agent-muted,#f3f4f6)] text-[var(--agent-muted-foreground,#4b5563)]',
+  searching: 'bg-[var(--agent-muted,#f3f4f6)] text-[var(--agent-muted-foreground,#4b5563)]',
+  evidenced_strong: 'bg-green-500/15 text-green-800 dark:text-green-400',
+  evidenced_medium: 'bg-blue-500/15 text-blue-800 dark:text-blue-400',
+  evidenced_weak: 'bg-amber-500/15 text-amber-800 dark:text-amber-400',
+  conflicted: 'bg-red-500/15 text-red-800 dark:text-red-400',
+  exhausted: 'bg-zinc-500/15 text-zinc-800 dark:text-zinc-400',
 };
 
 const DECISION_LABEL: Record<'continue' | 'expand' | 'converge', string> = {
@@ -93,11 +93,11 @@ export const ResearchPlanCard: React.FC<ResearchPlanCardProps> = ({
               <span className="truncate text-sm font-medium">{payload.topic}</span>
             </div>
             <div className="inline-flex shrink-0 items-center gap-1">
-              <span className="rounded-full bg-[var(--agent-muted,#f3f4f6)] px-2 py-0.5 text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+              <span className="rounded-full bg-[var(--agent-muted,#f3f4f6)] px-2 py-0.5 text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                 第 {round}/{totalRounds} 轮
               </span>
               {payload.final && (
-                <span className="rounded-full bg-green-500/15 px-2 py-0.5 text-xs text-green-700 dark:text-green-400">
+                <span className="rounded-full bg-green-500/15 px-2 py-0.5 text-xs text-green-800 dark:text-green-400">
                   已收敛
                 </span>
               )}
@@ -126,19 +126,19 @@ export const ResearchPlanCard: React.FC<ResearchPlanCardProps> = ({
                   className="rounded-md border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-card-bg,#fff)] p-2.5"
                 >
                   <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                    <span className="rounded-full bg-[var(--agent-muted,#f3f4f6)] px-1.5 py-0.5 text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+                    <span className="rounded-full bg-[var(--agent-muted,#f3f4f6)] px-1.5 py-0.5 text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                       {KIND_LABELS[kind] ?? kind}
                     </span>
                     <span className={`rounded-full px-1.5 py-0.5 text-xs ${STATUS_COLOR[status]}`}>
                       {STATUS_LABELS[status] ?? status}
                     </span>
-                    <span className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+                    <span className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                       证据 {q.evidenceCount ?? 0}
                     </span>
                   </div>
                   <div className="text-sm">{q.question}</div>
                   {q.note && (
-                    <div className="mt-1 whitespace-pre-wrap text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+                    <div className="mt-1 whitespace-pre-wrap text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                       {q.note}
                     </div>
                   )}
@@ -150,12 +150,12 @@ export const ResearchPlanCard: React.FC<ResearchPlanCardProps> = ({
 
         {payload.decision && (
           <div className="rounded-md border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-muted,#f3f4f6)]/40 px-2.5 py-2">
-            <div className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">下一步决策</div>
+            <div className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">下一步决策</div>
             <div className="text-sm font-medium">
               {decisionLabel ?? payload.decision.next}
             </div>
             {payload.decision.reason && (
-              <div className="mt-0.5 whitespace-pre-wrap text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+              <div className="mt-0.5 whitespace-pre-wrap text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                 {payload.decision.reason}
               </div>
             )}

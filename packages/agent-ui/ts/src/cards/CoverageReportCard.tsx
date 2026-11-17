@@ -91,17 +91,17 @@ export const CoverageReportCard: React.FC<CoverageReportCardProps> = ({
 
         <div className="grid grid-cols-2 gap-2">
           <div className="rounded-md border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-background,#fff)] p-2">
-            <p className="text-[11px] text-[var(--agent-muted-foreground,#6b7280)]">整体覆盖率</p>
+            <p className="text-[11px] text-[var(--agent-muted-foreground,#4b5563)]">整体覆盖率</p>
             <p className="text-base font-semibold">{pct(payload.overallCoverage)}</p>
           </div>
           <div className="rounded-md border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-background,#fff)] p-2">
-            <p className="text-[11px] text-[var(--agent-muted-foreground,#6b7280)]">整体掌握率</p>
+            <p className="text-[11px] text-[var(--agent-muted-foreground,#4b5563)]">整体掌握率</p>
             <p className="text-base font-semibold">{pct(payload.overallMastery)}</p>
           </div>
         </div>
 
         {payload.summary && (
-          <p className="text-xs text-[var(--agent-muted-foreground,#6b7280)] whitespace-pre-line">
+          <p className="text-xs text-[var(--agent-muted-foreground,#4b5563)] whitespace-pre-line">
             {payload.summary}
           </p>
         )}
@@ -116,7 +116,7 @@ export const CoverageReportCard: React.FC<CoverageReportCardProps> = ({
               >
                 <div className="mb-1 flex items-center justify-between">
                   <span className="text-sm font-medium">{section.name}</span>
-                  <span className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+                  <span className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                     覆盖 {pct(section.coverage)} · 掌握 {pct(section.mastery)}
                   </span>
                 </div>
@@ -132,7 +132,7 @@ export const CoverageReportCard: React.FC<CoverageReportCardProps> = ({
                   />
                 </div>
                 {renderSectionStats && (
-                  <div className="mt-1 text-[11px] text-[var(--agent-muted-foreground,#6b7280)]">
+                  <div className="mt-1 text-[11px] text-[var(--agent-muted-foreground,#4b5563)]">
                     {asReactNode(renderSectionStats(section))}
                   </div>
                 )}
@@ -169,7 +169,7 @@ export const CoverageReportCard: React.FC<CoverageReportCardProps> = ({
                       {point.name}
                       {point.sectionName ? ` · ${point.sectionName}` : ''}
                     </p>
-                    <p className="text-[var(--agent-muted-foreground,#6b7280)]">
+                    <p className="text-[var(--agent-muted-foreground,#4b5563)]">
                       正确率 {pct(point.accuracy)} · {point.recommendation}
                     </p>
                   </div>
@@ -182,10 +182,10 @@ export const CoverageReportCard: React.FC<CoverageReportCardProps> = ({
                 <li key={wp.id}>
                   <span className="font-medium">{wp.name}</span>
                   {wp.sectionName && (
-                    <span className="ml-1 text-[var(--agent-muted-foreground,#6b7280)]">· {wp.sectionName}</span>
+                    <span className="ml-1 text-[var(--agent-muted-foreground,#4b5563)]">· {wp.sectionName}</span>
                   )}
-                  <span className="ml-1 text-[var(--agent-muted-foreground,#6b7280)]">· 正确率 {pct(wp.accuracy)}</span>
-                  <p className="text-[var(--agent-muted-foreground,#6b7280)]">{wp.recommendation}</p>
+                  <span className="ml-1 text-[var(--agent-muted-foreground,#4b5563)]">· 正确率 {pct(wp.accuracy)}</span>
+                  <p className="text-[var(--agent-muted-foreground,#4b5563)]">{wp.recommendation}</p>
                 </li>
               ))}
             </ul>
@@ -194,7 +194,7 @@ export const CoverageReportCard: React.FC<CoverageReportCardProps> = ({
 
         {payload.actions?.allowRemediateQuiz && onRemediate && weakPoints.length > 0 && (
           <div className="flex items-center justify-between pt-1">
-            <span className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+            <span className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">
               {remediateHint}
             </span>
             <button

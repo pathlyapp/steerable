@@ -87,7 +87,7 @@ const STATUS_LABEL: Record<OrchestrationTaskStatus, string> = {
 };
 
 const DOT_CLASS: Record<OrchestrationTaskStatus, string> = {
-  pending: 'bg-[var(--agent-muted-foreground,#9ca3af)]',
+  pending: 'bg-[var(--agent-muted-foreground,#4b5563)]',
   running: 'bg-amber-500 animate-pulse',
   ok: 'bg-emerald-500',
   skipped: 'bg-[var(--agent-muted-foreground,#d1d5db)]',
@@ -137,14 +137,14 @@ export const OrchestrationPlanCard: React.FC<OrchestrationPlanCardProps> = ({
       >
         {above}
         <div className="rounded-lg border border-[var(--agent-border,#e5e7eb)] bg-[var(--agent-card-bg,#fff)] text-sm shadow-sm">
-          <div className="flex w-full items-center gap-2 px-3 py-2 text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+          <div className="flex w-full items-center gap-2 px-3 py-2 text-xs text-[var(--agent-muted-foreground,#4b5563)]">
             <LoaderIcon size={14} className="shrink-0 animate-spin" />
             <GitBranchIcon size={14} className="shrink-0" />
             <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
               {headerLabel ?? (
                 <span className="font-medium text-[var(--agent-foreground,#111827)]">协调员</span>
               )}
-              <span className="text-[var(--agent-muted-foreground,#9ca3af)]">·</span>
+              <span className="text-[var(--agent-muted-foreground,#4b5563)]">·</span>
               <span>{loadingHint ?? '正在规划'}</span>
             </span>
           </div>
@@ -167,17 +167,17 @@ export const OrchestrationPlanCard: React.FC<OrchestrationPlanCardProps> = ({
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 text-sm shadow-sm">
           <div className="flex w-full items-start gap-2 px-3 py-2 text-xs">
             <AlertIcon size={14} className="mt-0.5 shrink-0 text-rose-700" />
-            <GitBranchIcon size={14} className="mt-0.5 shrink-0 text-[var(--agent-muted-foreground,#6b7280)]" />
+            <GitBranchIcon size={14} className="mt-0.5 shrink-0 text-[var(--agent-muted-foreground,#4b5563)]" />
             <div className="min-w-0 flex-1">
               <div className="inline-flex items-center gap-1.5 whitespace-nowrap">
                 {headerLabel ?? (
                   <span className="font-medium text-[var(--agent-foreground,#111827)]">协调员</span>
                 )}
-                <span className="text-[var(--agent-muted-foreground,#6b7280)]">·</span>
+                <span className="text-[var(--agent-muted-foreground,#4b5563)]">·</span>
                 <span className="text-rose-700">规划失败</span>
               </div>
               {failure && (
-                <div className="mt-1 break-words leading-relaxed text-[var(--agent-muted-foreground,#6b7280)]">
+                <div className="mt-1 break-words leading-relaxed text-[var(--agent-muted-foreground,#4b5563)]">
                   {failure}
                 </div>
               )}
@@ -216,7 +216,7 @@ export const OrchestrationPlanCard: React.FC<OrchestrationPlanCardProps> = ({
         <button
           type="button"
           onClick={() => setExpanded(!expanded)}
-          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs text-[var(--agent-muted-foreground,#6b7280)] transition-all duration-200 hover:text-[var(--agent-foreground,#111827)]"
+          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs text-[var(--agent-muted-foreground,#4b5563)] transition-all duration-200 hover:text-[var(--agent-foreground,#111827)]"
         >
           <span className="flex min-w-0 items-center gap-2">
             {expanded ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
@@ -227,23 +227,23 @@ export const OrchestrationPlanCard: React.FC<OrchestrationPlanCardProps> = ({
               )}
               {headerSecondary !== undefined ? (
                 <>
-                  <span className="text-[var(--agent-muted-foreground,#9ca3af)]">·</span>
+                  <span className="text-[var(--agent-muted-foreground,#4b5563)]">·</span>
                   <span>{headerSecondary}</span>
                 </>
               ) : (
                 <>
-                  <span className="text-[var(--agent-muted-foreground,#9ca3af)]">·</span>
+                  <span className="text-[var(--agent-muted-foreground,#4b5563)]">·</span>
                   <span>{tasks.length} 个子任务</span>
                 </>
               )}
               {!hideMode && payload.mode && (
-                <span className="ml-1 rounded-full bg-[var(--agent-muted,#f3f4f6)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[var(--agent-muted-foreground,#6b7280)]">
+                <span className="ml-1 rounded-full bg-[var(--agent-muted,#f3f4f6)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[var(--agent-muted-foreground,#4b5563)]">
                   {payload.mode}
                 </span>
               )}
             </span>
             {payload.rationale && !expanded && (
-              <span className="min-w-0 flex-1 truncate text-[var(--agent-muted-foreground,#9ca3af)]">
+              <span className="min-w-0 flex-1 truncate text-[var(--agent-muted-foreground,#4b5563)]">
                 {payload.rationale}
               </span>
             )}
@@ -272,7 +272,7 @@ export const OrchestrationPlanCard: React.FC<OrchestrationPlanCardProps> = ({
         {expanded && (
           <div className="px-3 pb-3">
             {payload.rationale && (
-              <p className="pb-2 text-xs leading-relaxed text-[var(--agent-muted-foreground,#6b7280)]">
+              <p className="pb-2 text-xs leading-relaxed text-[var(--agent-muted-foreground,#4b5563)]">
                 {payload.rationale}
               </p>
             )}
@@ -297,17 +297,17 @@ export const OrchestrationPlanCard: React.FC<OrchestrationPlanCardProps> = ({
                         <span className="font-medium text-[var(--agent-foreground,#111827)]">
                           {agentNameFor ? agentNameFor(t.agentId) : t.agentId}
                         </span>
-                        <span className="text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+                        <span className="text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                           {STATUS_LABEL[status]}
                         </span>
                       </div>
                       {t.prompt && (
-                        <p className="mt-0.5 line-clamp-2 text-xs text-[var(--agent-muted-foreground,#6b7280)]">
+                        <p className="mt-0.5 line-clamp-2 text-xs text-[var(--agent-muted-foreground,#4b5563)]">
                           {t.prompt}
                         </p>
                       )}
                       {(t.dependsOn?.length ?? 0) > 0 && (
-                        <p className="mt-0.5 text-[10px] uppercase tracking-wider text-[var(--agent-muted-foreground,#9ca3af)]">
+                        <p className="mt-0.5 text-[10px] uppercase tracking-wider text-[var(--agent-muted-foreground,#4b5563)]">
                           依赖：{t.dependsOn!.join(', ')}
                         </p>
                       )}
