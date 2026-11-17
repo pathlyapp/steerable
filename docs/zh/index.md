@@ -174,18 +174,18 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 
 <nav class="sf-subnav" aria-label="页面导航">
 <a href="#run">一键启动</a>
-<a href="#quickstart">快速接入</a>
-<a href="#why">机制与架构</a>
-<a href="#bench">实测与对比</a>
+<a href="#quickstart">方便集成</a>
+<a href="#why">核心机制</a>
+<a href="#bench">实测对比</a>
 <a href="#users">谁在使用</a>
 </nav>
 
 <div class="sf-run" id="run">
 <div class="sf-run-copy">
-<span class="sf-pillar-kicker">快速启动</span>
-<p class="sf-run-title">一条命令启动完整智能体</p>
-<p class="sf-run-text">对话、终端、沙箱与多模型支持。一套 Shell 跑通浏览器、桌面端与命令行。</p>
-<a href="#quickstart" class="md-button">查看集成方式</a>
+<span class="sf-pillar-kicker">01 · 一键启动</span>
+<p class="sf-run-title">一条命令跑起完整智能体</p>
+<p class="sf-run-text">开箱即用的对话界面、终端、沙箱与多模型支持，一套 Shell 跑通浏览器、桌面端与命令行。</p>
+<a href="#quickstart" class="md-button">查看代码集成 ↓</a>
 </div>
 <div class="sf-run-term">
 <input type="radio" name="sf-run-mode" id="sf-run-web" class="sf-run-radio" checked>
@@ -222,10 +222,10 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 </div>
 </div>
 
-<h2 class="sf-section" id="quickstart">快速接入</h2>
+<h2 class="sf-section" id="quickstart">方便集成</h2>
 
 <p class="sf-lede" markdown>
-按需选用任意一层嵌入项目；运行完整 Shell 见[一键启动](#run)，纯 UI 预览运行 <code>pnpm shell:dev</code>。
+只引入你需要的那一层——Python 后端、React 对话界面或桌面 Sidecar；纯 UI 预览运行 <code>pnpm shell:dev</code>。
 </p>
 
 <div class="sf-tabs" markdown>
@@ -294,10 +294,10 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 
 </div>
 
-<h2 class="sf-section" id="why">为什么选择 Steerable</h2>
+<h2 class="sf-section" id="why">核心机制</h2>
 
 <p class="sf-lede" markdown>
-不假设模型永远听话——在工具恢复、事实核查与沙箱边界做确定性兜底。
+专为高性价比与本地模型打造——从工具解析、事实核查到 OS 沙箱逐层兜底。
 </p>
 
 <div class="sf-pillars" markdown>
@@ -552,7 +552,7 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 </p>
 </div>
 
-<h2 class="sf-section" id="packages">包含哪些包</h2>
+<h2 class="sf-section" id="packages">15 个独立包</h2>
 
 | 包名 | 层级 | 核心能力 |
 | ---- | ---- | -------- |
@@ -564,10 +564,10 @@ GLM-5.3-Flash 在 Terminal-Bench 2.1 达到 **79.0%**。一条命令拉起完整
 | `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri / 无头宿主壳、共享 Node HostRuntime、Sidecar 守护与渲染前端 |
 | [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | 命令行与终端会话（`steerable-cli login`），自动拉取平台运行时并与桌面端共用本地数据库 |
 
-<h2 class="sf-section" id="bench">Flash 档位实测对比</h2>
+<h2 class="sf-section" id="bench">实测表现</h2>
 
 <p class="sf-lede" markdown>
-Terminal-Bench 2.1（89 题）。<strong>79.0%</strong> 为 GLM-5.3-Flash <code>@max</code> 三次均值；下图对比单次 <code>n=1</code> 表现。[评测方法](../evals.md)
+Terminal-Bench 2.1（89 题）。<strong>79.0%</strong> 为 GLM-5.3-Flash <code>@max</code> 三次均值；下图对比单次 <code>n=1</code> 结果。[评测方法](../evals.md)
 </p>
 
 <div class="sf-bench sf-bench--wide">
@@ -748,10 +748,10 @@ Terminal-Bench 2.1（89 题）。<strong>79.0%</strong> 为 GLM-5.3-Flash <code>
 GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%。
 </p>
 
-<h2 class="sf-section" id="compare">框架横向对比</h2>
+<h2 class="sf-section" id="compare">框架对比</h2>
 
 <p class="sf-lede" markdown>
-与常见主流 Agent 框架与产品的定位对比：
+不止看通过率——从部署形态、事件流、沙箱边界与模型质量层横向对比主流方案：
 </p>
 
 <div class="sf-compare-wrap" markdown>

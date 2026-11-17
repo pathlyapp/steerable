@@ -206,16 +206,16 @@ hide:
 <a href="#run">Quick start</a>
 <a href="#quickstart">Integrate</a>
 <a href="#why">Architecture</a>
-<a href="#bench">Benchmarks &amp; compare</a>
+<a href="#bench">Compare</a>
 <a href="#users">Users</a>
 </nav>
 
 <div class="sf-run" id="run">
 <div class="sf-run-copy">
-<span class="sf-pillar-kicker">Simple to start</span>
-<p class="sf-run-title">A full agent in one command</p>
+<span class="sf-pillar-kicker">01 · Quick start</span>
+<p class="sf-run-title">One command, full agent</p>
 <p class="sf-run-text">Chat, terminal, sandboxed sidecar, and any OpenAI-compat, Anthropic, or Gemini key — across browser, desktop, and CLI.</p>
-<a href="#quickstart" class="md-button">More ways to install</a>
+<a href="#quickstart" class="md-button">Embed a layer ↓</a>
 </div>
 <div class="sf-run-term">
 <input type="radio" name="sf-run-mode" id="sf-run-web" class="sf-run-radio" checked>
@@ -252,10 +252,10 @@ hide:
 </div>
 </div>
 
-<h2 class="sf-section" id="quickstart">Quickstart</h2>
+<h2 class="sf-section" id="quickstart">Easy to integrate</h2>
 
 <p class="sf-lede" markdown>
-Embed any single layer (for the full shell see [above](#run); UI-only showcase: <code>pnpm shell:dev</code>):
+Embed only the layer you need — Python backend, React chat UI, or desktop sidecar. UI-only showcase: <code>pnpm shell:dev</code>.
 </p>
 
 <div class="sf-tabs" markdown>
@@ -324,10 +324,10 @@ Embed any single layer (for the full shell see [above](#run); UI-only showcase: 
 
 </div>
 
-<h2 class="sf-section" id="why">Why Steerable</h2>
+<h2 class="sf-section" id="why">Core mechanisms</h2>
 
 <p class="sf-lede" markdown>
-Other SDKs assume frontier obedience. Steerable enforces tool recovery, grounding, and confinement.
+Built for imperfect models — deterministic tool recovery, grounding vetoes, and fail-closed confinement.
 </p>
 
 <div class="sf-pillars" markdown>
@@ -612,7 +612,7 @@ Click any tier to highlight its downward dependencies — no layer ever imports 
 </p>
 </div>
 
-<h2 class="sf-section" id="packages">What's in the box</h2>
+<h2 class="sf-section" id="packages">15 standalone packages</h2>
 
 | Package | Tier | What you get |
 | ------- | ---- | ------------ |
@@ -624,7 +624,7 @@ Click any tier to highlight its downward dependencies — no layer ever imports 
 | `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri + headless host shell, shared Node HostRuntime, sidecar supervision, product-neutral renderer |
 | [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | CLI & TUI (`steerable-cli login`), auto-pulling the platform runtime and sharing the host DB |
 
-<h2 class="sf-section" id="bench">Frontier results on Flash-priced models</h2>
+<h2 class="sf-section" id="bench">Benchmark results</h2>
 
 <p class="sf-lede" markdown>
 Terminal-Bench 2.1 (89 tasks). <strong>79.0%</strong> is GLM-5.3-Flash @max (3-run mean); charts compare single <code>n=1</code> runs. [Methodology](evals.md)
@@ -808,10 +808,10 @@ Terminal-Bench 2.1 (89 tasks). <strong>79.0%</strong> is GLM-5.3-Flash @max (3-r
 GLM-5.3-Flash @high (<code>n=1</code>): **Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%.
 </p>
 
-<h2 class="sf-section" id="compare">How it compares</h2>
+<h2 class="sf-section" id="compare">Framework comparison</h2>
 
 <p class="sf-lede" markdown>
-A direct look against frameworks you may also be evaluating:
+Beyond pass rates — how Steerable compares on runtime form, loop events, sandbox, and model recovery:
 </p>
 
 <div class="sf-compare-wrap" markdown>

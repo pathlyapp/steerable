@@ -176,16 +176,16 @@ GLM-5.3-Flash で Terminal-Bench 2.1 **79.0%**。1 コマンドで起動、ま�
 <a href="#run">クイック起動</a>
 <a href="#quickstart">組み込み</a>
 <a href="#why">仕組み・構成</a>
-<a href="#bench">ベンチ・比較</a>
+<a href="#bench">実測・比較</a>
 <a href="#users">導入事例</a>
 </nav>
 
 <div class="sf-run" id="run">
 <div class="sf-run-copy">
-<span class="sf-pillar-kicker">すぐ始められる</span>
-<p class="sf-run-title">1 コマンドでフル機能のエージェント</p>
+<span class="sf-pillar-kicker">01 · クイック起動</span>
+<p class="sf-run-title">1 コマンドで即起動</p>
 <p class="sf-run-text">チャット・端末・サンドボックスを標準搭載。ブラウザ、デスクトップ、CLI で共通動作。</p>
-<a href="#quickstart" class="md-button">組み込み方法を見る</a>
+<a href="#quickstart" class="md-button">コード組み込み ↓</a>
 </div>
 <div class="sf-run-term">
 <input type="radio" name="sf-run-mode" id="sf-run-web" class="sf-run-radio" checked>
@@ -222,10 +222,10 @@ GLM-5.3-Flash で Terminal-Bench 2.1 **79.0%**。1 コマンドで起動、ま�
 </div>
 </div>
 
-<h2 class="sf-section" id="quickstart">導入方法</h2>
+<h2 class="sf-section" id="quickstart">手軽に組み込み</h2>
 
 <p class="sf-lede" markdown>
-必要な層だけ組み込めます（フルセットは[上部の起動コマンド](#run)、UI 単体は <code>pnpm shell:dev</code>）：
+Python 基盤・React UI・デスクトップ Sidecar から必要な層だけを採用できます（UI 単体は <code>pnpm shell:dev</code>）。
 </p>
 
 <div class="sf-tabs" markdown>
@@ -294,10 +294,10 @@ GLM-5.3-Flash で Terminal-Bench 2.1 **79.0%**。1 コマンドで起動、ま�
 
 </div>
 
-<h2 class="sf-section" id="why">なぜ Steerable か</h2>
+<h2 class="sf-section" id="why">コアの仕組み</h2>
 
 <p class="sf-lede" markdown>
-モデルの完全な従順さを前提とせず、ツール復元・根拠検証・隔離を確実に強制します。
+ローカル・低コストモデルを前提に、ツール復元・根拠検証・OS 隔離を確実に強制します。
 </p>
 
 <div class="sf-pillars" markdown>
@@ -552,7 +552,7 @@ Seatbelt / bwrap / Windows 隔離、61 ルール分類器、出口プロキシ�
 </p>
 </div>
 
-<h2 class="sf-section" id="packages">収録パッケージ一覧</h2>
+<h2 class="sf-section" id="packages">15 の独立パッケージ</h2>
 
 | パッケージ | 階層 | 内容 |
 | ---------- | ---- | ---- |
@@ -564,7 +564,7 @@ Seatbelt / bwrap / Windows 隔離、61 ルール分類器、出口プロキシ�
 | `@steerable/agent-shell` · `agent-shell-web` · `agent-shell-tauri` · `pack-sdk` | 5 | Tauri / ヘッドレスシェル、共通 Node HostRuntime、Sidecar 監視、UI レンダラー |
 | [`@steerable/agent-cli`](https://www.npmjs.com/package/@steerable/agent-cli) · `@steerable/runtime-<target>` | 5 | CLI & TUI（`steerable-cli login`）。対応ランタイムを自動導入しデスクトップ版と DB 共有 |
 
-<h2 class="sf-section" id="bench">Flash クラスモデルのベンチマーク</h2>
+<h2 class="sf-section" id="bench">ベンチマーク結果</h2>
 
 <p class="sf-lede" markdown>
 Terminal-Bench 2.1（89 問）。<strong>79.0%</strong> は GLM-5.3-Flash <code>@max</code> の 3 回平均、下図は単発 <code>n=1</code> 比較。[評価手法](../evals.md)
@@ -748,10 +748,10 @@ Terminal-Bench 2.1（89 問）。<strong>79.0%</strong> は GLM-5.3-Flash <code>
 GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77.5% · P&#42; 73.0% · D&#42; H&#42; 66.3% · C&#42; 56.2%。
 </p>
 
-<h2 class="sf-section" id="compare">他フレームワークとの比較</h2>
+<h2 class="sf-section" id="compare">フレームワーク比較</h2>
 
 <p class="sf-lede" markdown>
-主要フレームワークとの比較：
+スコアだけでなく、提供形態・イベント・サンドボックス・モデル品質の観点で比較：
 </p>
 
 <div class="sf-compare-wrap" markdown>
