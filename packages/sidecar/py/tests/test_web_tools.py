@@ -848,6 +848,84 @@ async def test_ddg_bot_check_is_actionable() -> None:
     assert "DuckDuckGo" in result.error
 
 
+async def test_ddg_falls_back_to_bing_rss_on_bot_check() -> None:
+    rss = """<?xml version="1.0" encoding="utf-8" ?>
+    <rss version="2.0"><channel>
+      <item>
+        <title>Blocked Result</title>
+        <link>https://evil.com/bad</link>
+        <description>Should be filtered by domain policy</description>
+      </item>
+      <item>
+        <title>HK Visa Fee</title>
+        <link>https://www.ustraveldocs.com/hk/</link>
+        <description>Pay via FPS or CITIC Bank.</description>
+      </item>
+    </channel></rss>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "html.duckduckgo.com":
+            return httpx.Response(202, text="anomaly-modal")
+        if request.url.host == "www.bing.com":
+            return httpx.Response(
+                302,
+                headers={"location": "https://cn.bing.com/search?format=rss&q=hk+visa"},
+            )
+        if request.url.host == "cn.bing.com":
+            return httpx.Response(200, text=rss)
+        return httpx.Response(404)
+
+    provider = DdgSearchProvider(
+        timeout_ms=5_000,
+        blocked_domains=("evil.com",),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    hits = await provider.search("hk visa", max_results=5)
+    assert hits == [
+        WebSearchHit(
+            title="HK Visa Fee",
+            url="https://www.ustraveldocs.com/hk/",
+            snippet="Pay via FPS or CITIC Bank.",
+        )
+    ]
+
+
+async def test_web_search_clips_oversized_snippets_to_prevent_spill() -> None:
+    assert WebToolsConfig.resolve({}).search_max_snippet_chars == 350
+    with pytest.raises(ValueError):
+        WebToolsConfig.resolve({"STEERABLE_WEB_SEARCH_MAX_SNIPPET_CHARS": "10"})
+
+    long_snippet = "甲" * 2000
+    provider = _FakeSearchProvider(
+        [WebSearchHit(title="Long", url="https://example.com/long", snippet=long_snippet)]
+    )
+    cfg = WebToolsConfig(search_max_snippet_chars=120)
+    router = ToolRouter()
+    register_web_tools(router, config=cfg, search_provider=provider, environ={})
+    result = await _call(router, "web_search", {"query": "q"})
+    assert result.success is True
+    snippet = result.data["results"][0]["snippet"]
+    assert len(snippet) == 120
+    assert snippet.endswith("…")
+
+
+async def test_web_fetch_flags_empty_spa_html_with_note() -> None:
+    spa_html = "<html><head><title>App</title></head><body><div id='app'></div>" + ("<script src='/app.js'></script>" * 10) + "</body></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text=spa_html,
+        )
+
+    router = _make_router(handler=httpx.MockTransport(handler), dns=_PUBLIC_DNS)
+    result = await _call(router, "web_fetch", {"url": "https://example.com/"})
+    assert result.success is True
+    assert result.data["content"] == ""
+    assert "SPA" in result.data["note"]
+
+
 # ─── approval gating ────────────────────────────────────────────────────────
 
 

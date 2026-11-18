@@ -69,6 +69,7 @@ import ipaddress
 import logging
 import os
 import socket
+import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -163,6 +164,13 @@ def _confined_error(tool: str, target: str) -> str:
     )
 
 
+def _clip_snippet(text: str, max_chars: int) -> str:
+    stripped = text.strip()
+    if len(stripped) <= max_chars:
+        return stripped
+    return stripped[: max_chars - 1].rstrip() + "…"
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -219,6 +227,7 @@ class WebToolsConfig:
     fetch_max_redirects: int = 5
     search_timeout_ms: int = 30_000
     search_max_results: int = 8
+    search_max_snippet_chars: int = 350
     search_provider: str = "tavily"
     search_api_key: str | None = None
     search_base_url: str = "https://api.tavily.com"
@@ -267,6 +276,10 @@ class WebToolsConfig:
             search_max_results=_bounded_int(
                 env, "STEERABLE_WEB_SEARCH_MAX_RESULTS", 8,
                 minimum=1, ceiling=_SEARCH_RESULTS_CEILING,
+            ),
+            search_max_snippet_chars=_bounded_int(
+                env, "STEERABLE_WEB_SEARCH_MAX_SNIPPET_CHARS", 350,
+                minimum=80, ceiling=4_000,
             ),
             search_provider=provider,
             search_api_key=api_key,
@@ -622,25 +635,58 @@ class _DdgLiteParser(HTMLParser):
         super().close()
 
 
+_DEFAULT_BING_RSS_URL = "https://www.bing.com/search"
+_MAX_BING_RSS_REDIRECTS = 3
+
+
+def _is_bing_host(host: str) -> bool:
+    normalized = host.lower().rstrip(".")
+    return normalized == "bing.com" or normalized.endswith(".bing.com")
+
+
+def _parse_bing_rss(xml_text: str) -> list[WebSearchHit]:
+    if not xml_text or len(xml_text) > 2_000_000:
+        return []
+    lowered = xml_text.lower()
+    if "<!entity" in lowered or "<!doctype" in lowered:
+        return []
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+    hits: list[WebSearchHit] = []
+    for item in root.findall("./channel/item"):
+        url = (item.findtext("link") or "").strip()
+        parsed = urlsplit(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            continue
+        title = (item.findtext("title") or "").strip() or url
+        snippet = (item.findtext("description") or "").strip()
+        hits.append(WebSearchHit(title=title, url=url, snippet=snippet))
+    return hits
+
+
 class DdgSearchProvider:
     """DuckDuckGo lite HTML (``GET {base_url}/html/?q=``) — no API key.
 
     This is an explicit opt-in backend (``STEERABLE_WEB_SEARCH_PROVIDER=ddg``),
     not a silent fallback when Tavily is empty. Lite HTML is a public search
-    page, not a JSON API; markup changes can empty the hit list, which the
-    tool reports instead of inventing results.
+    page, not a JSON API; when DuckDuckGo triggers a bot check or fails,
+    it falls back to Bing RSS (``bing.com/search?format=rss``).
     """
 
     def __init__(
         self,
         *,
         base_url: str = "https://html.duckduckgo.com",
+        bing_rss_url: str | None = _DEFAULT_BING_RSS_URL,
         timeout_ms: int = 30_000,
         allowed_domains: tuple[str, ...] = (),
         blocked_domains: tuple[str, ...] = (),
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._endpoint = base_url.rstrip("/") + "/html/"
+        self._bing_rss_url = bing_rss_url
         self._timeout = httpx.Timeout(timeout_ms / 1000)
         self._allowed_domains = allowed_domains
         self._blocked_domains = blocked_domains
@@ -664,7 +710,7 @@ class DdgSearchProvider:
             return False
         return True
 
-    async def _request(
+    async def _request_ddg(
         self, client: httpx.AsyncClient, query: str, max_results: int
     ) -> list[WebSearchHit]:
         try:
@@ -708,6 +754,64 @@ class DdgSearchProvider:
             if len(hits) >= max_results:
                 break
         return hits
+
+    async def _request_bing_rss(
+        self, client: httpx.AsyncClient, query: str, max_results: int
+    ) -> list[WebSearchHit] | None:
+        if not self._bing_rss_url:
+            return None
+        url = self._bing_rss_url
+        params: dict[str, str] | None = {"format": "rss", "q": query}
+        headers = {
+            "User-Agent": _USER_AGENT,
+            "Accept": "application/rss+xml, application/xml, text/xml",
+        }
+        try:
+            for _ in range(_MAX_BING_RSS_REDIRECTS + 1):
+                response = await client.get(url, params=params, headers=headers)
+                params = None
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("location")
+                    if not location:
+                        return None
+                    next_url = urljoin(url, location)
+                    parsed = urlsplit(next_url)
+                    if parsed.scheme not in ("http", "https") or not _is_bing_host(
+                        parsed.hostname or ""
+                    ):
+                        return None
+                    url = next_url
+                    continue
+                if response.status_code != 200:
+                    return None
+                raw_hits = _parse_bing_rss(response.text)
+                if not raw_hits:
+                    return None
+                hits: list[WebSearchHit] = []
+                for hit in raw_hits:
+                    if not self._policy_allows(hit.url):
+                        continue
+                    hits.append(hit)
+                    if len(hits) >= max_results:
+                        break
+                return hits
+        except httpx.HTTPError:
+            return None
+        return None
+
+    async def _request(
+        self, client: httpx.AsyncClient, query: str, max_results: int
+    ) -> list[WebSearchHit]:
+        try:
+            return await self._request_ddg(client, query, max_results)
+        except WebSearchBackendError as ddg_exc:
+            logger.warning(
+                "ddg web_search failed (%s); falling back to Bing RSS", ddg_exc
+            )
+            fallback_hits = await self._request_bing_rss(client, query, max_results)
+            if fallback_hits is not None:
+                return fallback_hits
+            raise ddg_exc
 
 
 class WebSearchBackendError(Exception):
@@ -1135,17 +1239,24 @@ async def _read_response(
     charset = response.charset_encoding or "utf-8"
     decoded = raw.decode(charset, errors="replace")
     content = _html_to_text(decoded) if content_type in ("text/html", "application/xhtml+xml") else decoded
-    return ToolResult(
-        success=True,
-        data={
-            "url": url,
-            "status": response.status_code,
-            "content_type": content_type or None,
-            "bytes": len(raw),
-            "truncated": truncated,
-            "content": content,
-        },
-    )
+    data: dict[str, Any] = {
+        "url": url,
+        "status": response.status_code,
+        "content_type": content_type or None,
+        "bytes": len(raw),
+        "truncated": truncated,
+        "content": content,
+    }
+    if (
+        content_type in ("text/html", "application/xhtml+xml")
+        and len(raw) > 200
+        and not content.strip()
+    ):
+        data["note"] = (
+            "HTML body yielded empty text (likely a JS-rendered SPA or "
+            "challenge page); prefer web_search or another readable URL."
+        )
+    return ToolResult(success=True, data=data)
 
 
 # ---------------------------------------------------------------------------
@@ -1341,7 +1452,9 @@ def register_web_tools(
                         {
                             "title": hit.title,
                             "url": hit.url,
-                            "snippet": hit.snippet,
+                            "snippet": _clip_snippet(
+                                hit.snippet, cfg.search_max_snippet_chars
+                            ),
                             **(
                                 {"published_at": hit.published_at}
                                 if hit.published_at

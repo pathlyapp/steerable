@@ -357,14 +357,22 @@ describe('deriveWebEgressHosts (3.1b/3.1d)', () => {
         env: { STEERABLE_WEB_SEARCH_BASE_URL: 'https://search.internal:8443' },
       }),
     ).toEqual(['search.internal:8443']);
-    // ddg is in-process without a key — the lite HTML origin still needs CONNECT.
+    // ddg is in-process without a key — the lite HTML origin still needs CONNECT,
+    // plus Bing RSS fallback hosts when DDG triggers a bot check.
     expect(
       deriveWebEgressHosts({
         webTools: true,
         searchEnv: { STEERABLE_WEB_SEARCH_PROVIDER: 'ddg' },
         env: {},
       }),
-    ).toEqual(['html.duckduckgo.com']);
+    ).toEqual(['html.duckduckgo.com', 'www.bing.com', 'cn.bing.com']);
+    expect(
+      deriveWebEgressHosts({
+        webTools: true,
+        searchEnv: {},
+        env: { STEERABLE_WEB_SEARCH_PROVIDER: 'ddg' },
+      }),
+    ).toEqual(['html.duckduckgo.com', 'www.bing.com', 'cn.bing.com']);
   });
 
   it('drops malformed entries so the proxy (fail-loud on bad --allow) still starts', () => {

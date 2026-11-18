@@ -84,6 +84,14 @@ describe('processStatusLabel', () => {
         elapsedMs: 83_000,
       }),
     ).toBe('Worked 1m 23s · Thought 2 times · 1 tool calls');
+    expect(
+      processStatusLabel({
+        process: [reasoning('先读配置'), tool('web_fetch', false), reasoning('再写')],
+        isStreaming: false,
+        elapsedMs: 83_000,
+        hideThinking: true,
+      }),
+    ).toBe('Worked 1m 23s · 1 tool calls');
   });
 
   it('omits empty counts and sub-second work time', () => {

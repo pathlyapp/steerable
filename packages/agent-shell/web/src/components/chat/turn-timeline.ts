@@ -10,7 +10,7 @@
 
 import type { ExecutedAction } from './ExecutedActionsCard';
 
-export type TurnBlock =
+export type ProcessTimelineBlock<TTool = unknown> =
   | {
       type: 'reasoning';
       content: string;
@@ -19,7 +19,9 @@ export type TurnBlock =
       durationMs?: number;
     }
   | { type: 'text'; content: string; sealed?: boolean }
-  | { type: 'tools'; actions: ExecutedAction[] };
+  | { type: 'tools'; actions: TTool[] };
+
+export type TurnBlock = ProcessTimelineBlock<ExecutedAction>;
 
 /**
  * 内容指纹：只要屏上会多出/变化一行，它就变。过程面板用它决定「要不要把
@@ -204,26 +206,56 @@ export function parseTurnBlocks(raw: unknown): TurnBlock[] | null {
  * While streaming, every text block stays in the process as a post-think
  * response so the next reasoning burst cannot restyle it as thinking.
  */
-export function splitTurnProcess(
-  blocks: TurnBlock[],
+export function splitTurnProcess<TTool = ExecutedAction>(
+  blocks: ReadonlyArray<ProcessTimelineBlock<TTool>>,
   options?: { finalize?: boolean },
 ): {
-  process: TurnBlock[];
-  answer: Extract<TurnBlock, { type: 'text' }>[];
+  process: ProcessTimelineBlock<TTool>[];
+  answer: Extract<ProcessTimelineBlock<TTool>, { type: 'text' }>[];
 } {
   const finalize = options?.finalize ?? true;
   if (!finalize) {
-    return { process: blocks, answer: [] };
+    return { process: [...blocks], answer: [] };
   }
   let split = blocks.length;
   while (split > 0 && blocks[split - 1].type === 'text') split -= 1;
   return {
     process: blocks.slice(0, split),
-    answer: blocks.slice(split) as Extract<TurnBlock, { type: 'text' }>[],
+    answer: blocks.slice(split) as Extract<ProcessTimelineBlock<TTool>, { type: 'text' }>[],
   };
 }
 
-export function countProcessTools(process: TurnBlock[]): number {
+/**
+ * Filter thinking blocks and merge consecutive tool groups that become adjacent
+ * once reasoning is hidden (Codex-style compact process presentation).
+ */
+export function compactProcessBlocks<TTool>(
+  process: ReadonlyArray<ProcessTimelineBlock<TTool>>,
+  options: { hideThinking: boolean; mergeAdjacentTools?: boolean },
+): ProcessTimelineBlock<TTool>[] {
+  if (!options.hideThinking) return [...process];
+  const mergeAdjacentTools = options.mergeAdjacentTools ?? true;
+  const out: ProcessTimelineBlock<TTool>[] = [];
+  for (const block of process) {
+    if (block.type === 'reasoning') continue;
+    if (block.type === 'tools' && mergeAdjacentTools) {
+      const prev = out[out.length - 1];
+      if (prev && prev.type === 'tools') {
+        out[out.length - 1] = {
+          type: 'tools',
+          actions: [...prev.actions, ...block.actions],
+        };
+        continue;
+      }
+    }
+    out.push(block);
+  }
+  return out;
+}
+
+export function countProcessTools(
+  process: ReadonlyArray<ProcessTimelineBlock<unknown>>,
+): number {
   let n = 0;
   for (const block of process) {
     if (block.type === 'tools') n += block.actions.length;
@@ -231,7 +263,9 @@ export function countProcessTools(process: TurnBlock[]): number {
   return n;
 }
 
-export function countProcessReasoning(process: TurnBlock[]): number {
+export function countProcessReasoning(
+  process: ReadonlyArray<ProcessTimelineBlock<unknown>>,
+): number {
   let n = 0;
   for (const block of process) {
     if (block.type === 'reasoning' && block.content.trim().length > 0) n += 1;
@@ -239,6 +273,8 @@ export function countProcessReasoning(process: TurnBlock[]): number {
   return n;
 }
 
-export function processHasReasoning(process: TurnBlock[]): boolean {
+export function processHasReasoning(
+  process: ReadonlyArray<ProcessTimelineBlock<unknown>>,
+): boolean {
   return process.some((block) => block.type === 'reasoning' && block.content.trim().length > 0);
 }

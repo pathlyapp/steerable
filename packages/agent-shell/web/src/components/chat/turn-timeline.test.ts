@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ExecutedAction } from './ExecutedActionsCard';
 import {
   appendDelta,
+  compactProcessBlocks,
   countProcessTools,
   fallbackTimeline,
   parseTurnBlocks,
@@ -156,5 +157,27 @@ describe('turn-timeline', () => {
     });
     expect(parseTurnBlocks([{ type: 'image' }])).toBeNull();
     expect(parseTurnBlocks([])).toBeNull();
+  });
+
+  it('filters reasoning and merges adjacent tool groups when hideThinking is enabled', () => {
+    const process = [
+      { type: 'reasoning' as const, content: '想1' },
+      { type: 'text' as const, content: '先查一下。' },
+      { type: 'tools' as const, actions: [tool('web_fetch')] },
+      { type: 'reasoning' as const, content: '想2' },
+      { type: 'tools' as const, actions: [tool('browser_navigate'), tool('browser_read')] },
+      { type: 'text' as const, content: '换个方法。' },
+      { type: 'tools' as const, actions: [tool('local_exec_shell')] },
+    ];
+    expect(compactProcessBlocks(process, { hideThinking: false })).toEqual(process);
+    expect(compactProcessBlocks(process, { hideThinking: true })).toEqual([
+      { type: 'text', content: '先查一下。' },
+      {
+        type: 'tools',
+        actions: [tool('web_fetch'), tool('browser_navigate'), tool('browser_read')],
+      },
+      { type: 'text', content: '换个方法。' },
+      { type: 'tools', actions: [tool('local_exec_shell')] },
+    ]);
   });
 });

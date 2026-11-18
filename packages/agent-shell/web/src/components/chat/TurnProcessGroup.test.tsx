@@ -429,13 +429,28 @@ describe('TurnProcessGroup', () => {
     expect(screen.getAllByTestId('tools-flow')).toHaveLength(2);
   });
 
-  it('hides thinking body when the setting is 隐藏, even after expanding work', () => {
+  it('hides thinking body and merges adjacent tools when the setting is 隐藏, even after expanding work', () => {
     renderGroup({ isStreaming: false, thinkingDisplay: 'hidden' });
+    expect(processToggle().textContent).toBe('2 tool calls');
     fireEvent.click(processToggle());
     expect(screen.queryByTestId('turn-thinking')).toBeNull();
     expect(screen.queryByTestId('thinking-peek')).toBeNull();
     expect(screen.queryByText('先读配置')).toBeNull();
-    expect(screen.getAllByTestId('tools-flow')).toHaveLength(2);
+    expect(screen.getAllByTestId('tools-flow')).toHaveLength(1);
+    expect(screen.getByTestId('tools-flow').textContent).toBe('csv_get_config,web_fetch');
+  });
+
+  it('omits the work disclosure after finish when thinking is hidden and no tools or narration exist', () => {
+    renderGroup({
+      isStreaming: false,
+      thinkingDisplay: 'hidden',
+      blocks: [
+        { type: 'reasoning', content: '先想一下' },
+        { type: 'text', content: '直接回答。' },
+      ],
+    });
+    expect(screen.queryByTestId('turn-process-toggle')).toBeNull();
+    expect(screen.getByTestId('answer').textContent).toBe('直接回答。');
   });
 
   it('folds a tools-only turn when the setting is off', () => {
