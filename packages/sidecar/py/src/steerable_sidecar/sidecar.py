@@ -86,6 +86,7 @@ from steerable_agent_runtime import (
     PluginLoadError,
     PluginStateError,
     PolicyDeniedError,
+    ReasoningEffortUnsupported,
     RequiredDelegationGate,
     RouterToolExecutor,
     SandboxedToolExecutor,
@@ -2362,7 +2363,24 @@ class Sidecar:
                     overridden["model"] = model
                 if reasoning_effort is not None:
                     overridden["reasoningEffort"] = reasoning_effort
-                return self._llm_provider_factory(overridden)
+                try:
+                    return self._llm_provider_factory(overridden)
+                except ReasoningEffortUnsupported as exc:
+                    # Built-in read-only profiles (explore/research) pin a low
+                    # effort hint without pinning a model. When the inherited
+                    # parent model has no reasoning knob (e.g. deepseek-flash
+                    # or deepseek-chat), drop the profile's effort override
+                    # instead of failing the delegation.
+                    if (
+                        model is None
+                        and reasoning_effort is not None
+                        and exc.reason in ("no_reasoning_knob", "unknown_model")
+                    ):
+                        fallback = {**params}
+                        fallback.pop("reasoningEffort", None)
+                        fallback.pop("reasoning_effort", None)
+                        return self._llm_provider_factory(fallback)
+                    raise
 
             subagent_executor = SubagentExecutor(
                 executor,

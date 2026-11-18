@@ -1606,6 +1606,69 @@ async def test_profile_reasoning_effort_rebuilds_the_child_provider() -> None:
     assert seen[-1]["model"] == "parent-model"
     assert seen[-1]["reasoningEffort"] == "low"
     assert seen[-1]["baseUrl"] == "http://127.0.0.1:1/v1"
+
+
+@pytest.mark.asyncio
+async def test_profile_reasoning_effort_drops_override_for_non_reasoning_parent() -> None:
+    """Inherited parent models without a reasoning knob (e.g. deepseek-flash)
+    must not fail `explore`/`research` delegations that request `reasoningEffort`."""
+    from steerable_agent_runtime import ReasoningEffortUnsupported
+
+    seen: list[dict[str, Any]] = []
+    scripted = _ScriptedProvider(
+        [
+            _tool_round(
+                ToolCall(
+                    id="d1",
+                    name="delegate_subagent",
+                    arguments={"task": "look it up", "subagent_type": "research"},
+                )
+            ),
+            _text_round("parent final"),
+        ]
+    )
+
+    def factory(params: dict[str, Any]) -> Any:
+        seen.append(dict(params))
+        if len(seen) == 1:
+            return scripted
+        if params.get("reasoningEffort"):
+            raise ReasoningEffortUnsupported(
+                params.get("model"),
+                str(params["reasoningEffort"]),
+                (),
+                "no_reasoning_knob",
+            )
+        return _ScriptedProvider([_text_round("child ok")])
+
+    sidecar = _make_sidecar(scripted, llm_provider_factory=factory)
+
+    _stream_id, events = await _run_stream(
+        sidecar,
+        {
+            "provider": "openai_compat",
+            "model": "deepseek-flash",
+            "baseUrl": "https://api.deepseek.com/v1",
+            "messages": [{"role": "user", "content": "delegate"}],
+            "useCoreLoop": True,
+            "subagent": {
+                "profiles": {"research": {"reasoningEffort": "low"}},
+            },
+        },
+    )
+
+    assert len(seen) == 3
+    assert seen[1]["reasoningEffort"] == "low"
+    assert "reasoningEffort" not in seen[2]
+    assert seen[2]["model"] == "deepseek-flash"
+    tool_results = [
+        p["toolResult"]
+        for m, p in events
+        if m == "stream.chunk" and "toolResult" in p
+    ]
+    assert len(tool_results) == 1
+    assert tool_results[0]["success"] is True
+    assert "child ok" in str(tool_results[0])
 @pytest.mark.asyncio
 async def test_subagent_disabled_with_explicit_false() -> None:
     """``params.subagent: false`` turns the default delegation seam off."""
