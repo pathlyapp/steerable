@@ -91,6 +91,9 @@ export function createProductViteConfig(options: ProductViteConfigOptions) {
         // shell 渲染层源码（产品入口与包 web 模块都以 `@/` 引用它）。
         '@': webSrcDir,
       },
+      // 跨仓 `shell:link` 时产品与 shell 各自有独立 node_modules；必须去重
+      // React 与 Router，否则 AppShell 的 <Outlet /> 会读到另一份 Context 而白屏。
+      dedupe: ['react', 'react-dom', 'react-router-dom'],
     },
     // 静态资产（favicon 等中性默认）随 shell web 包分发；产品可在自己的
     // web root 放 public/ 覆盖（vite 不合并双 publicDir——需要产品级资产

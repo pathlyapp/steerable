@@ -430,7 +430,11 @@ export function deriveWebEgressHosts(options: {
     const domain = entry.trim().toLowerCase().replace(/^\.+/, '');
     if (domain) hosts.push(domain);
   }
-  if (searchEnv.STEERABLE_WEB_SEARCH_API_KEY || searchEnv.STEERABLE_WEB_SEARCH_PROVIDER === 'ddg') {
+  if (
+    searchEnv.STEERABLE_WEB_SEARCH_API_KEY
+    || searchEnv.STEERABLE_WEB_SEARCH_PROVIDER === 'ddg'
+    || env.STEERABLE_WEB_SEARCH_PROVIDER === 'ddg'
+  ) {
     // 与 WebToolsConfig.resolve 的 search_base_url 推导保持一致：显式
     // STEERABLE_WEB_SEARCH_BASE_URL 优先，否则按 provider 取默认端点。
     // ddg 无钥也在 sidecar 进程内执行，必须放行 html.duckduckgo.com。
@@ -448,6 +452,9 @@ export function deriveWebEgressHosts(options: {
       if (entry) hosts.push(entry);
     } catch {
       /* 畸形 base url：sidecar 侧 resolve 同样失败，web_search 不会注册 */
+    }
+    if (provider === 'ddg' && !explicit) {
+      hosts.push('www.bing.com', 'cn.bing.com');
     }
   }
   // 框架代理对畸形 --allow 条目 fail loud（拒启 → 整体回退端口级）。在

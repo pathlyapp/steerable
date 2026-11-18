@@ -9,6 +9,7 @@ import { formatElapsedCompact } from './elapsed';
 import {
   countProcessReasoning,
   countProcessTools,
+  type ProcessTimelineBlock,
   type TurnBlock,
 } from './turn-timeline';
 
@@ -71,15 +72,16 @@ function formatElapsedPart(
 
 /** Work disclosure: live is only 「工作中」; finished is a counts + duration summary. */
 export function processStatusLabel(input: {
-  process: TurnBlock[];
+  process: ReadonlyArray<ProcessTimelineBlock<unknown>>;
   isStreaming: boolean;
   elapsedMs?: number;
+  hideThinking?: boolean;
 }): string {
-  const { process, isStreaming, elapsedMs } = input;
+  const { process, isStreaming, elapsedMs, hideThinking } = input;
   if (isStreaming) return t('Working');
 
   const parts: string[] = [];
-  const thinks = countProcessReasoning(process);
+  const thinks = hideThinking ? 0 : countProcessReasoning(process);
   const tools = countProcessTools(process);
   const elapsed = formatElapsedPart(false, elapsedMs);
   if (elapsed) parts.push(t('Worked {elapsed}', { elapsed }));
