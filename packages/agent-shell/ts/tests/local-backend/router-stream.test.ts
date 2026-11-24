@@ -858,6 +858,156 @@ describe('regenerate', () => {
 });
 
 // ---------------------------------------------------------------------------
+// edit：暂停/中止后修改最近一次提交的用户消息重发（#25）
+// ---------------------------------------------------------------------------
+
+describe('edit user message (#25)', () => {
+  async function seedTwoTurns() {
+    const chat = await seedChat('已有标题');
+    const u1 = await h.store.addMessage(chat.id, 'user', '第一个问题');
+    const a1 = await h.store.addMessage(chat.id, 'assistant', '第一个回答');
+    const u2 = await h.store.addMessage(chat.id, 'user', '未写完的半截问题');
+    const a2 = await h.store.addMessage(chat.id, 'assistant', '旧的半截回答');
+    return { chat, u1, a1, u2, a2 };
+  }
+
+  it('T4: 修改最后一条 user 消息（显式 id 与 latest）→ fork 旧分支、截断旧问答、插入新问题并重跑', async () => {
+    const { chat, u2 } = await seedTwoTurns();
+    const { supervisor, seen } = installStream((opts) => opts.onText('修改后的全新回答'));
+    await h.store.setChatRecordId(chat.id, 'rec-old');
+
+    const cap = makeEmitCapture();
+    const res = await makeRouter().handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/messages/${u2.id}/edit`,
+        body: { message: '补充完整后的第二个问题' },
+      },
+      cap.emit,
+    );
+    expect(res.status).toBe(200);
+    expect(supervisor.forkSession).toHaveBeenCalledWith(
+      expect.objectContaining({ recordId: 'rec-old', beforeUserIndex: 1 }),
+    );
+    expect(await h.store.getChatRecordId(chat.id)).toBe('fork-rec-1');
+
+    const remaining = (await h.store.listMessages(chat.id, 10)).reverse();
+    expect(remaining.map((m) => m.content)).toEqual([
+      '第一个问题',
+      '第一个回答',
+      '补充完整后的第二个问题',
+      '修改后的全新回答',
+    ]);
+    expect(seen[0].messages.at(-1)?.content).toBe('补充完整后的第二个问题');
+
+    // 支持 'latest' 占位符（对应前端未重新水合 DB id 时的实时编辑）
+    const capLatest = makeEmitCapture();
+    const resLatest = await makeRouter().handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/messages/latest/edit`,
+        body: { message: '再次修改后的第二个问题' },
+      },
+      capLatest.emit,
+    );
+    expect(resLatest.status).toBe(200);
+    const afterLatest = (await h.store.listMessages(chat.id, 10)).reverse();
+    expect(afterLatest.map((m) => m.content)).toEqual([
+      '第一个问题',
+      '第一个回答',
+      '再次修改后的第二个问题',
+      '修改后的全新回答',
+    ]);
+  });
+
+  it('T4: 非最后一条 user 消息返回 409，assistant 消息返回 400，空消息返回 400', async () => {
+    const { chat, u1, a2, u2 } = await seedTwoTurns();
+    installStream(() => {});
+
+    const resOldUser = await makeRouter().handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/messages/${u1.id}/edit`,
+        body: { message: '试图改第一轮' },
+      },
+      makeEmitCapture().emit,
+    );
+    expect(resOldUser.status).toBe(409);
+
+    const resAssistant = await makeRouter().handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/messages/${a2.id}/edit`,
+        body: { message: '试图改助手回复' },
+      },
+      makeEmitCapture().emit,
+    );
+    expect(resAssistant.status).toBe(400);
+
+    const resEmpty = await makeRouter().handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/messages/${u2.id}/edit`,
+        body: { message: '   ' },
+      },
+      makeEmitCapture().emit,
+    );
+    expect(resEmpty.status).toBe(400);
+  });
+
+  it('T5: 回合流式运行中调用 /edit → 自动中止在途回合后重跑，无 409 chat_busy', async () => {
+    const chat = await seedChat('已有标题');
+    const router = makeRouter();
+    let releaseFirstTurn!: () => void;
+    let firstTurnCount = 0;
+
+    installStream(async (opts) => {
+      firstTurnCount += 1;
+      if (firstTurnCount === 1) {
+        opts.onText('旧回复生成到一半...');
+        await new Promise<void>((resolve) => {
+          releaseFirstTurn = resolve;
+          opts.signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return;
+      }
+      opts.onText('停止后重改的新回复');
+    });
+
+    const firstTurnPromise = router.handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/run`,
+        body: { message: '误触回车的半句话' },
+      },
+      makeEmitCapture().emit,
+    );
+
+    // 等待第一轮真正进入流式并写入 user 消息
+    await new Promise((r) => setTimeout(r, 30));
+
+    const editCap = makeEmitCapture();
+    const editRes = await router.handleStream(
+      {
+        method: 'POST',
+        path: `/api/v2/chats/${chat.id}/messages/latest/edit`,
+        body: { message: '修改完整后的问题' },
+      },
+      editCap.emit,
+    );
+    releaseFirstTurn?.();
+    await firstTurnPromise;
+
+    expect(editRes.status).toBe(200);
+    const messages = (await h.store.listMessages(chat.id, 10)).reverse();
+    expect(messages.map((m) => m.content)).toEqual([
+      '修改完整后的问题',
+      '停止后重改的新回复',
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // resume：续跑被中断的 turn（W7-1）
 // ---------------------------------------------------------------------------
 

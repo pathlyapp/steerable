@@ -13,6 +13,87 @@ export interface RegenerateMessageLike {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
+  messageMetadata?: string | null;
+}
+
+function isInternalUserMessage(message: RegenerateMessageLike): boolean {
+  if (message.role !== 'user' || !message.messageMetadata) return false;
+  try {
+    const metadata = JSON.parse(message.messageMetadata) as {
+      internal?: unknown;
+      trigger?: unknown;
+    };
+    return (
+      metadata.internal === true &&
+      (metadata.trigger === 'goal' || metadata.trigger === 'loop')
+    );
+  } catch {
+    return false;
+  }
+}
+
+export type EditUserMessageResolution =
+  | {
+      ok: true;
+      targetMessageId: string;
+      userOrdinal: number;
+    }
+  | {
+      ok: false;
+      reason: 'not_found' | 'not_user' | 'not_latest_user';
+    };
+
+/**
+ * Resolve the target user message for `POST /api/v2/chats/:id/messages/:messageId/edit`.
+ *
+ * Accepts `'latest'` to address the most recent non-internal user turn (used by
+ * live UI turns whose client message id has not yet been hydrated from SQLite),
+ * or an explicit persisted `messageId` (rejected with `not_latest_user` if a
+ * newer user turn already follows it).
+ */
+export function resolveEditUserMessageContext(
+  messagesAsc: RegenerateMessageLike[],
+  targetMessageId: string,
+): EditUserMessageResolution {
+  let latestUserIdx = -1;
+  for (let i = messagesAsc.length - 1; i >= 0; i -= 1) {
+    if (messagesAsc[i].role === 'user' && !isInternalUserMessage(messagesAsc[i])) {
+      latestUserIdx = i;
+      break;
+    }
+  }
+
+  let targetIdx: number;
+  if (targetMessageId === 'latest') {
+    if (latestUserIdx === -1) {
+      return { ok: false, reason: 'not_found' };
+    }
+    targetIdx = latestUserIdx;
+  } else {
+    targetIdx = messagesAsc.findIndex((m) => m.id === targetMessageId);
+    if (targetIdx === -1) {
+      return { ok: false, reason: 'not_found' };
+    }
+    if (messagesAsc[targetIdx].role !== 'user' || isInternalUserMessage(messagesAsc[targetIdx])) {
+      return { ok: false, reason: 'not_user' };
+    }
+    if (targetIdx !== latestUserIdx) {
+      return { ok: false, reason: 'not_latest_user' };
+    }
+  }
+
+  let userOrdinal = 0;
+  for (let i = 0; i < targetIdx; i += 1) {
+    if (messagesAsc[i].role === 'user') {
+      userOrdinal += 1;
+    }
+  }
+
+  return {
+    ok: true,
+    targetMessageId: messagesAsc[targetIdx].id,
+    userOrdinal,
+  };
 }
 
 export type RegenerateResolution =

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SessionTodoList } from './SessionTodoList';
-import type { SessionTodo } from './todo-list-model';
+import { resolveLatestSessionTodos, type SessionTodo } from './todo-list-model';
 
 afterEach(cleanup);
 
@@ -49,5 +49,52 @@ describe('SessionTodoList', () => {
     fireEvent.click(header);
     expect(header.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByTestId('todo-item-c')).toBeTruthy();
+  });
+
+  it('T9: tool_start 阶段仅含 arguments 时即实时逐项推进进度 (#24)', () => {
+    const step1 = resolveLatestSessionTodos({
+      messages: [],
+      currentTurnActions: [
+        {
+          id: 'tc-1',
+          tool: 'todo_write',
+          mode: 'agent',
+          arguments: {
+            todos: [
+              { id: '1', content: '步骤一', status: 'in_progress' },
+              { id: '2', content: '步骤二', status: 'pending' },
+              { id: '3', content: '步骤三', status: 'pending' },
+              { id: '4', content: '步骤四', status: 'pending' },
+            ],
+          },
+        },
+      ],
+    })!;
+    const { rerender } = render(<SessionTodoList todos={step1} />);
+    expect(screen.getAllByTestId('todo-progress')[0].textContent).toBe('1/4');
+    expect(screen.getByTestId('todo-item-1').getAttribute('data-status')).toBe('in_progress');
+
+    const step2 = resolveLatestSessionTodos({
+      messages: [],
+      currentTurnActions: [
+        {
+          id: 'tc-2',
+          tool: 'todo_write',
+          mode: 'agent',
+          arguments: {
+            todos: [
+              { id: '1', content: '步骤一', status: 'completed' },
+              { id: '2', content: '步骤二', status: 'in_progress' },
+              { id: '3', content: '步骤三', status: 'pending' },
+              { id: '4', content: '步骤四', status: 'pending' },
+            ],
+          },
+        },
+      ],
+    })!;
+    rerender(<SessionTodoList todos={step2} />);
+    expect(screen.getAllByTestId('todo-progress')[0].textContent).toBe('2/4');
+    expect(screen.getByTestId('todo-item-1').getAttribute('data-status')).toBe('completed');
+    expect(screen.getByTestId('todo-item-2').getAttribute('data-status')).toBe('in_progress');
   });
 });

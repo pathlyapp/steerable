@@ -156,6 +156,8 @@ export interface LocalChatPanelProps {
   inputBanner?: ReactNode;
   /** W1.2.1: regenerate an assistant turn (fork-preserving). */
   onRegenerate?: (messageId: string) => Promise<void>;
+  /** Edit the latest user message and resubmit (fork-preserving). */
+  onEditUserMessage?: (messageId: string, nextContent: string) => void | Promise<void>;
   /** W7-1: 上一轮被中断（崩溃/强杀）——消息列表尾部展示「继续上次回复」卡片。 */
   interrupted?: boolean;
   /** W7-1: 点击「继续上次回复」。 */
@@ -231,6 +233,7 @@ export function LocalChatPanel({
   pendingFollowUps,
   onRemoveFollowUp,
   onRegenerate,
+  onEditUserMessage,
   interrupted,
   onContinueInterrupted,
   onDismissInterrupted,
@@ -543,6 +546,7 @@ export function LocalChatPanel({
                 emptyState={emptyState ?? <EmptyChat onSelectPrompt={handleSelectPrompt} />}
                 mode={mode}
                 onRegenerate={onRegenerate}
+                onEditUserMessage={onEditUserMessage}
                 interrupted={interrupted}
                 onContinueInterrupted={onContinueInterrupted}
                 onDismissInterrupted={onDismissInterrupted}

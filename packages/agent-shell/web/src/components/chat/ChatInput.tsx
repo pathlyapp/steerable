@@ -237,8 +237,46 @@ function mentionChipClassName(ref?: MentionReference): string {
   return `${base} bg-agent-foreground/10 text-agent-foreground`;
 }
 
+function isIgnoredEditorBr(root: HTMLElement, br: HTMLBRElement): boolean {
+  if (
+    br.hasAttribute('data-empty-scaffold') ||
+    br.hasAttribute('data-editor-sentinel')
+  ) {
+    return true;
+  }
+  return (
+    (root.textContent ?? '') === '' &&
+    root.querySelectorAll('br').length === 1 &&
+    !root.querySelector('[data-mention-chip]')
+  );
+}
+
 function getEditableText(element: HTMLDivElement): string {
-  return (element.textContent ?? '').replace(/\u00a0/g, ' ');
+  let out = '';
+  const walk = (node: Node) => {
+    if (
+      node instanceof HTMLElement &&
+      (node.getAttribute('contenteditable') === 'false' || node.tagName === 'BUTTON')
+    ) {
+      out += (node.textContent ?? '').replace(/\u00a0/g, ' ');
+      return;
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      out += (node.textContent ?? '').replace(/\u00a0/g, ' ');
+      return;
+    }
+    if (node instanceof HTMLBRElement) {
+      if (!isIgnoredEditorBr(element, node)) {
+        out += '\n';
+      }
+      return;
+    }
+    for (const child of Array.from(node.childNodes)) {
+      walk(child);
+    }
+  };
+  walk(element);
+  return out;
 }
 function isEditorDomEmpty(editor: HTMLDivElement): boolean {
   return getEditableText(editor).length === 0;
@@ -354,6 +392,12 @@ function parseMentionSegments(
   return segments;
 }
 
+function createEditorSentinelBr(): HTMLBRElement {
+  const br = document.createElement('br');
+  br.setAttribute('data-editor-sentinel', 'true');
+  return br;
+}
+
 /**
  * Empty editors need a text node (IME marked-text attachment) plus a `<br>`
  * (caret height). Replacing this while focused kills the first Pinyin letter.
@@ -369,14 +413,20 @@ function writeEditorValue(
   mcpTools: McpToolItem[] = [],
 ) {
   if (next.length === 0) {
-    editor.replaceChildren(document.createTextNode(''), document.createElement('br'));
+    const scaffoldBr = document.createElement('br');
+    scaffoldBr.setAttribute('data-empty-scaffold', 'true');
+    editor.replaceChildren(document.createTextNode(''), scaffoldBr);
     return;
   }
 
   const segments = parseMentionSegments(next, mentionReferences, agents, chats, skills, mcpTools);
   const hasMentions = segments.some((s) => s.type === 'mention');
   if (!hasMentions) {
-    editor.textContent = next;
+    const nodes: Node[] = [document.createTextNode(next)];
+    if (next.endsWith('\n')) {
+      nodes.push(createEditorSentinelBr());
+    }
+    editor.replaceChildren(...nodes);
     return;
   }
 
@@ -455,6 +505,8 @@ function writeEditorValue(
   const last = nodes[nodes.length - 1];
   if (last instanceof HTMLButtonElement) {
     nodes.push(document.createTextNode(''));
+  } else if (next.endsWith('\n')) {
+    nodes.push(document.createTextNode(''), createEditorSentinelBr());
   }
 
   editor.replaceChildren(...nodes);
@@ -479,6 +531,85 @@ function updateEditorHeight(editor: HTMLDivElement) {
   editor.style.height = `${next}px`;
 }
 
+function domNodeTextLength(root: HTMLDivElement, node: Node): number {
+  if (
+    node instanceof HTMLElement &&
+    (node.getAttribute('contenteditable') === 'false' || node.tagName === 'BUTTON')
+  ) {
+    return (node.textContent ?? '').length;
+  }
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.textContent?.length ?? 0;
+  }
+  if (node instanceof HTMLBRElement) {
+    return isIgnoredEditorBr(root, node) ? 0 : 1;
+  }
+  let sum = 0;
+  for (const child of Array.from(node.childNodes)) {
+    sum += domNodeTextLength(root, child);
+  }
+  return sum;
+}
+
+function domPointToTextOffset(root: HTMLDivElement, container: Node, offset: number): number {
+  let acc = 0;
+  let found = false;
+
+  const walk = (node: Node): boolean => {
+    if (node === container) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        acc += Math.min(Math.max(offset, 0), node.textContent?.length ?? 0);
+      } else if (
+        node instanceof HTMLElement &&
+        (node.getAttribute('contenteditable') === 'false' || node.tagName === 'BUTTON')
+      ) {
+        acc += offset > 0 ? (node.textContent ?? '').length : 0;
+      } else if (node instanceof HTMLBRElement) {
+        acc += offset > 0 && !isIgnoredEditorBr(root, node) ? 1 : 0;
+      } else {
+        const children = Array.from(node.childNodes);
+        const bound = Math.min(Math.max(offset, 0), children.length);
+        for (let i = 0; i < bound; i += 1) {
+          acc += domNodeTextLength(root, children[i]);
+        }
+      }
+      found = true;
+      return true;
+    }
+
+    if (
+      node instanceof HTMLElement &&
+      (node.getAttribute('contenteditable') === 'false' || node.tagName === 'BUTTON')
+    ) {
+      if (node.contains(container)) {
+        acc += (node.textContent ?? '').length;
+        found = true;
+        return true;
+      }
+      acc += (node.textContent ?? '').length;
+      return false;
+    }
+
+    if (node.nodeType === Node.TEXT_NODE) {
+      acc += node.textContent?.length ?? 0;
+      return false;
+    }
+
+    if (node instanceof HTMLBRElement) {
+      acc += isIgnoredEditorBr(root, node) ? 0 : 1;
+      return false;
+    }
+
+    for (const child of Array.from(node.childNodes)) {
+      if (walk(child)) return true;
+    }
+    return false;
+  };
+
+  walk(root);
+  return found ? acc : getEditableText(root).length;
+}
+
 function offsetFromPoint(root: HTMLDivElement, x: number, y: number): number | null {
   const doc = document as Document & {
     caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
@@ -487,23 +618,17 @@ function offsetFromPoint(root: HTMLDivElement, x: number, y: number): number | n
   if (typeof doc.caretPositionFromPoint === 'function') {
     const pos = doc.caretPositionFromPoint(x, y);
     if (!pos || !root.contains(pos.offsetNode)) return null;
-    const measure = document.createRange();
-    measure.selectNodeContents(root);
-    measure.setEnd(pos.offsetNode, pos.offset);
-    return measure.toString().length;
+    return domPointToTextOffset(root, pos.offsetNode, pos.offset);
   }
   const range = doc.caretRangeFromPoint?.(x, y);
   if (!range || !root.contains(range.startContainer)) return null;
-  const measure = document.createRange();
-  measure.selectNodeContents(root);
-  measure.setEnd(range.startContainer, range.startOffset);
-  return measure.toString().length;
+  return domPointToTextOffset(root, range.startContainer, range.startOffset);
 }
 
 function getSelectionOffsets(root: HTMLDivElement): { start: number; end: number } {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0) {
-    const end = root.innerText.length;
+    const end = getEditableText(root).length;
     return { start: end, end };
   }
 
@@ -512,28 +637,14 @@ function getSelectionOffsets(root: HTMLDivElement): { start: number; end: number
     !root.contains(range.startContainer) ||
     !root.contains(range.endContainer)
   ) {
-    const end = root.textContent?.length ?? 0;
-    return { start: end, end };
-  }
-
-  const getOffset = (container: Node, offset: number) => {
-    const measureRange = document.createRange();
-    measureRange.selectNodeContents(root);
-    measureRange.setEnd(container, offset);
-    return measureRange.toString().length;
-  };
-
-  try {
-    return {
-      start: getOffset(range.startContainer, range.startOffset),
-      end: getOffset(range.endContainer, range.endOffset),
-    };
-  } catch {
-    // The caret can sit on the empty scaffold's <br> with an offset the
-    // range rejects. Paste still belongs at the end of the draft.
     const end = getEditableText(root).length;
     return { start: end, end };
   }
+
+  return {
+    start: domPointToTextOffset(root, range.startContainer, range.startOffset),
+    end: domPointToTextOffset(root, range.endContainer, range.endOffset),
+  };
 }
 
 function setCaretOffset(root: HTMLDivElement, offset: number) {
@@ -577,7 +688,16 @@ function setCaretOffset(root: HTMLDivElement, offset: number) {
     }
 
     if (node instanceof HTMLBRElement) {
-      if (remaining <= 1) {
+      if (isIgnoredEditorBr(root, node)) {
+        return false;
+      }
+      if (remaining === 0) {
+        range.setStartBefore(node);
+        range.collapse(true);
+        placed = true;
+        return true;
+      }
+      if (remaining === 1) {
         range.setStartAfter(node);
         range.collapse(true);
         placed = true;
@@ -885,6 +1005,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     // this guard that Enter falls through to the "insert newline" branch below
     // and the user ends up with a stray blank line after committing text.
     const compositionEndAtRef = useRef<number>(0);
+    const enterPressedDuringCompositionRef = useRef(false);
+    const swallowPostCompositionEnterRef = useRef(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dropBoxRef = useRef<HTMLDivElement>(null);
@@ -1182,11 +1304,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         return;
       }
 
+      const needsTrailingSentinel =
+        value.endsWith('\n') &&
+        !editor.querySelector('br[data-editor-sentinel="true"]');
+
       const wrote =
         editorText !== value ||
         pendingCaretOffset !== null ||
+        needsTrailingSentinel ||
         (!value && !hasEmptyImeScaffold(editor));
-      if (editorText !== value || pendingCaretOffset !== null) {
+      if (editorText !== value || pendingCaretOffset !== null || needsTrailingSentinel) {
         writeEditorValue(
           editor,
           value,
@@ -1397,9 +1524,19 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       return { start: caret, end: caret };
     };
 
+    const flushPendingInputSync = () => {
+      if (inputSyncTimerRef.current === null) return;
+      cancelPendingInputSync();
+      if (!isComposingRef.current) {
+        editorRef.current?.removeAttribute('data-composing');
+        syncFromEditor();
+      }
+    };
+
     const replaceSelection = (insertText: string) => {
       const editor = editorRef.current;
       if (!editor) return;
+      flushPendingInputSync();
       const { start, end } = editCaret(editor);
       applyEdit((current) => ({
         next: `${current.slice(0, start)}${insertText}${current.slice(end)}`,
@@ -1428,6 +1565,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     };
 
     const handleEditorPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+      swallowPostCompositionEnterRef.current = false;
       if (event.button !== 0) return;
       const editor = editorRef.current;
       if (!editor) return;
@@ -1470,6 +1608,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
     const markComposing = () => {
       isComposingRef.current = true;
+      enterPressedDuringCompositionRef.current = false;
+      swallowPostCompositionEnterRef.current = false;
       cancelPendingInputSync();
       editorRef.current?.setAttribute('data-composing', 'true');
     };
@@ -1542,6 +1682,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const handleCompositionEnd = () => {
       isComposingRef.current = false;
       compositionEndAtRef.current = Date.now();
+      swallowPostCompositionEnterRef.current = !enterPressedDuringCompositionRef.current;
+      enterPressedDuringCompositionRef.current = false;
       editorRef.current?.removeAttribute('data-composing');
       syncFromEditor();
       // Safari can flush the committed glyphs after compositionend.
@@ -1566,6 +1708,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       setComposerPasteTarget(editor);
       const onCompositionStart = () => {
         isComposingRef.current = true;
+        enterPressedDuringCompositionRef.current = false;
+        swallowPostCompositionEnterRef.current = false;
         inputSyncGenRef.current += 1;
         if (inputSyncTimerRef.current !== null) {
           clearTimeout(inputSyncTimerRef.current);
@@ -1648,6 +1792,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       // no-op without mirror overlay
     };
 
+    const handleKeyUp = (event: KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === 'Enter') {
+        enterPressedDuringCompositionRef.current = false;
+        swallowPostCompositionEnterRef.current = false;
+      }
+    };
+
     const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
       // Cmd/Ctrl+V never reaches a paste event when the app menu owns the
       // shortcut, and WKWebView leaves that event's clipboard empty. Read the
@@ -1661,14 +1812,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         requestHostPaste(event.currentTarget);
         return;
       }
-      // An open composition session owns the keystroke, including Enter used
-      // to confirm the highlighted candidate. Returning without
-      // preventDefault lets the IME commit the word. WKWebView can report
-      // isComposing / keyCode 229 on Enter after the session has already
-      // ended; that case is not an open session (`isComposingRef` is false)
-      // and must still send.
-      if (isComposingRef.current) return;
-      if (event.key !== 'Enter' && event.nativeEvent.isComposing) return;
+      // An open composition session (including Chinese IME English sub-buffers
+      // where nativeEvent.isComposing is true) owns the keystroke, including
+      // Enter used to confirm raw English or highlighted candidates. WKWebView
+      // reports keyCode 229 with isComposing === false on plain Enter, which
+      // passes through here and still submits.
+      if (isComposingRef.current || event.nativeEvent.isComposing) {
+        if (event.key === 'Enter') {
+          enterPressedDuringCompositionRef.current = true;
+        }
+        return;
+      }
+
+      if (event.key !== 'Enter') {
+        swallowPostCompositionEnterRef.current = false;
+      }
 
       if (event.key === 'Backspace' || event.key === 'Delete') {
         const editor = editorRef.current;
@@ -1700,10 +1858,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       ) {
         editorRef.current?.setAttribute('data-composing', 'true');
       }
-      // See `compositionEndAtRef` above: treat an Enter that lands right after
-      // `compositionend` as "confirm candidate", not "submit/newline".
-      if (event.key === 'Enter' && Date.now() - compositionEndAtRef.current < 50) {
-        return;
+      // Treat an Enter that lands right after `compositionend` (same physical
+      // keystroke confirming IME text) as "confirm candidate", not "submit/newline".
+      if (event.key === 'Enter') {
+        const sinceCompositionEnd = Date.now() - compositionEndAtRef.current;
+        if (
+          (swallowPostCompositionEnterRef.current && sinceCompositionEnd < 300) ||
+          sinceCompositionEnd < 50
+        ) {
+          swallowPostCompositionEnterRef.current = false;
+          return;
+        }
       }
 
       if (mentionQuery && mentionSuggestions.length > 0) {
@@ -1761,6 +1926,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         event.key === 'Enter' && !event.shiftKey;
       if (isSendCombo) {
         event.preventDefault();
+        flushPendingInputSync();
         const submittedText = getEditableText(event.currentTarget).trim();
         // streaming 期间：Enter = follow-up 排队（本轮结束后自动作为下一轮
         // 发出）；⌘/Ctrl+Enter = 轮中插队（注入运行中的回合；注入不了时
@@ -1788,7 +1954,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           }
           return;
         }
-        if (canSend) {
+        if (!disabled && (Boolean(submittedText) || actualFiles.length > 0)) {
           void onSubmit();
         }
         return;
@@ -2112,6 +2278,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
               onBeforeInput={handleBeforeInput}
               onPaste={handlePaste}
               onKeyDown={handleKeyDown}
+              onKeyUp={handleKeyUp}
               onCompositionStart={handleCompositionStart}
               onCompositionEnd={handleCompositionEnd}
               onScroll={handleEditorScroll}

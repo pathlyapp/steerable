@@ -24,7 +24,7 @@ from .hooks import (
     TranscriptAppend,
 )
 from .llm import LLMMessage
-from .reminders import TodoPlanningReminder, reminder_entry
+from .reminders import TodoPlanningReminder, TodoProgressReminder, reminder_entry
 
 #: The tool name the model calls.
 TODO_TOOL_NAME = "todo_write"
@@ -42,10 +42,12 @@ _MAX_TODOS = 50
 #: OpenAI descriptor.
 _DESCRIPTION = (
     "Track multi-step work as an ordered task list. Create the list when a "
-    "task needs several steps; rewrite it as you progress — mark the task "
-    "you are working on in_progress (at most one) and completed the moment "
-    "it is done. Each call replaces the whole list. Skip it for single-step "
-    "requests."
+    "task needs several steps; rewrite it step by step as you progress — mark "
+    "each task completed the moment it finishes (you may call todo_write in "
+    "the same turn alongside your next tool call) and mark the next task "
+    "in_progress (at most one). Never wait until the end to mark all tasks "
+    "completed at once. Each call replaces the whole list. Skip it for "
+    "single-step requests."
 )
 
 #: JSON Schema for the tool's arguments — one full-replace list.
@@ -335,6 +337,71 @@ class TodoPlanningNudge(NoopHooks):
         self._fired = True
         entry = reminder_entry("planning.todo_missing")
         fragment = TodoPlanningReminder(self._calls)
+        return PreStepAction(
+            kind="proceed",
+            appends=[
+                TranscriptAppend(
+                    message=LLMMessage.text_of(fragment.role, fragment.render()),
+                    kind=entry.fragment.content_kind,
+                    fragment=fragment,
+                )
+            ],
+            append_action="reminder",
+        )
+
+
+#: Non-todo tool calls while an unfinished task list exists before reminding
+#: the model to update step statuses incrementally (#24).
+DEFAULT_TODO_PROGRESS_AFTER_CALLS = 3
+DEFAULT_TODO_PROGRESS_MAX_NUDGES = 6
+
+
+class TodoProgressNudge(NoopHooks):
+    """``pre_step`` hook: remind a turn with an active todo list to update
+    step statuses incrementally rather than batching all completions at the end.
+
+    Per-turn state: construct one instance per run.
+    """
+
+    def __init__(
+        self,
+        store: TodoStore,
+        *,
+        after_calls: int = DEFAULT_TODO_PROGRESS_AFTER_CALLS,
+        max_nudges: int = DEFAULT_TODO_PROGRESS_MAX_NUDGES,
+    ) -> None:
+        self._store = store
+        self._after_calls = max(1, after_calls)
+        self._max_nudges = max(0, max_nudges)
+        self._calls_since_update = 0
+        self._nudges_sent = 0
+
+    async def post_tool_result(self, result: Any, call: Any, ctx: Any) -> Any:
+        if call.name == TODO_TOOL_NAME:
+            self._calls_since_update = 0
+        else:
+            self._calls_since_update += 1
+        return result
+
+    async def pre_step(self, transcript: Any, ctx: Any) -> PreStepAction:
+        if (
+            self._nudges_sent >= self._max_nudges
+            or self._calls_since_update < self._after_calls
+        ):
+            return PreStepAction(kind="proceed")
+        chat_id = str(getattr(ctx, "chat_id", None) or "")
+        unfinished = [
+            item
+            for item in self._store.get(chat_id)
+            if item["status"] in _UNFINISHED_STATUSES
+        ]
+        if not unfinished:
+            return PreStepAction(kind="proceed")
+        calls = self._calls_since_update
+        self._calls_since_update = 0
+        self._nudges_sent += 1
+        entry = reminder_entry("planning.todo_progress")
+        fragment = TodoProgressReminder(calls, len(unfinished))
         return PreStepAction(
             kind="proceed",
             appends=[
