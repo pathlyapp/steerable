@@ -142,6 +142,32 @@ class TodoPlanningReminder(ContextFragment):
         return ("[system notice]", "ignore this notice and continue.")
 
 
+class TodoProgressReminder(ContextFragment):
+    """A turn has an unfinished task list but has executed several tool calls
+    without updating step statuses via ``todo_write``."""
+
+    content_kind = "reminder.todo_progress"
+    max_tokens = 200
+
+    def __init__(self, calls: int, unfinished: int) -> None:
+        self._calls = calls
+        self._unfinished = unfinished
+
+    def body(self) -> str:
+        return (
+            f"[system notice] {self._calls} tool calls since the last "
+            f"todo_write update ({self._unfinished} unfinished item(s) remain). "
+            "If you finished a step or moved on to the next one, call "
+            "todo_write now (you may batch it alongside your next tool call) "
+            "to mark finished steps completed and the active step in_progress "
+            "— do not wait until the end to mark everything completed at once."
+        )
+
+    @classmethod
+    def type_markers(cls) -> tuple[str, str]:
+        return ("[system notice]", "mark everything completed at once.")
+
+
 # ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
@@ -219,6 +245,11 @@ REMINDER_CATALOG: tuple[ReminderEntry, ...] = (
         id="planning.todo_missing",
         failure_mode="多步长任务全程不建 todo 清单，进度只存在于模型的注意力里",
         fragment=TodoPlanningReminder,
+    ),
+    ReminderEntry(
+        id="planning.todo_progress",
+        failure_mode="建完 todo 清单后连续多步不更新状态，直到结束才一次性全标完成",
+        fragment=TodoProgressReminder,
     ),
 )
 

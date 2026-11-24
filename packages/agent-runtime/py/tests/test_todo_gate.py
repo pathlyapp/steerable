@@ -6,9 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 from steerable_agent_protocol.generated import ToolCall, ToolResult
-from steerable_agent_runtime import TodoCompletionGate, TodoPlanningNudge, TodoStore
+from steerable_agent_runtime import (
+    TodoCompletionGate,
+    TodoPlanningNudge,
+    TodoProgressNudge,
+    TodoStore,
+)
 from steerable_agent_runtime.hooks import CompletionDraft
-from steerable_agent_runtime.reminders import TodoPlanningReminder
+from steerable_agent_runtime.reminders import TodoPlanningReminder, TodoProgressReminder
 
 
 def _draft(status: str = "completed") -> CompletionDraft:
@@ -150,3 +155,49 @@ class TestTodoPlanningNudge:
         for _ in range(2):
             await _call(nudge, "local_exec_shell", ctx)
         assert (await nudge.pre_step([], ctx)).appends
+
+
+class TestTodoProgressNudge:
+    @pytest.mark.asyncio
+    async def test_fires_when_unfinished_todos_go_stale_and_resets_on_todo_write(
+        self,
+    ) -> None:
+        store = TodoStore()
+        _seed(store, "c1", ["in_progress", "pending", "pending"])
+        nudge = TodoProgressNudge(store, after_calls=3)
+        ctx = _ctx()
+
+        # Short 2-step work does not trigger a progress reminder
+        await _call(nudge, "local_read_file", ctx)
+        await _call(nudge, "local_exec_shell", ctx)
+        assert not (await nudge.pre_step([], ctx)).appends
+
+        # 3rd non-todo call triggers reminder
+        await _call(nudge, "local_write_file", ctx)
+        action = await nudge.pre_step([], ctx)
+        assert action.appends is not None
+        assert action.append_action == "reminder"
+        fragment = action.appends[0].fragment
+        assert isinstance(fragment, TodoProgressReminder)
+        assert "3 tool calls since the last todo_write update" in fragment.render()
+
+        # Calling todo_write resets counter
+        await _call(nudge, "local_read_file", ctx)
+        await _call(nudge, "local_read_file", ctx)
+        await _call(nudge, "todo_write", ctx)
+        await _call(nudge, "local_read_file", ctx)
+        assert not (await nudge.pre_step([], ctx)).appends
+
+    @pytest.mark.asyncio
+    async def test_silent_when_no_list_or_all_completed(self) -> None:
+        store = TodoStore()
+        nudge = TodoProgressNudge(store, after_calls=2)
+        ctx = _ctx()
+        for _ in range(3):
+            await _call(nudge, "local_exec_shell", ctx)
+        assert not (await nudge.pre_step([], ctx)).appends
+
+        _seed(store, "c1", ["completed", "completed"])
+        for _ in range(3):
+            await _call(nudge, "local_exec_shell", ctx)
+        assert not (await nudge.pre_step([], ctx)).appends

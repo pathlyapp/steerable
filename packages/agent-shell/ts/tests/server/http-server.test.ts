@@ -206,11 +206,15 @@ describe('BS HTTP server', () => {
       expect(mocks.routerHandleStream).toHaveBeenCalledOnce();
     });
 
-    it('流式路径（messages/:id/regenerate）也走 SSE', async () => {
+    it('流式路径（messages/:id/regenerate 与 messages/:id/edit）也走 SSE', async () => {
       mocks.routerHandleStream.mockResolvedValue({ status: 200 });
       const res = await post('/api/v2/chats/c1/messages/m1/regenerate', {});
       expect(res.headers.get('content-type')).toContain('text/event-stream');
-      expect(mocks.routerHandleStream).toHaveBeenCalledOnce();
+      expect(mocks.routerHandleStream).toHaveBeenCalledTimes(1);
+
+      const editRes = await post('/api/v2/chats/c1/messages/latest/edit', { message: 'updated' });
+      expect(editRes.headers.get('content-type')).toContain('text/event-stream');
+      expect(mocks.routerHandleStream).toHaveBeenCalledTimes(2);
     });
 
     it('流式 handler 抛异常 → 写入 event: error 帧后结束', async () => {

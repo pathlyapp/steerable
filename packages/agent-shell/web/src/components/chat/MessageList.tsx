@@ -175,6 +175,8 @@ interface MessageListProps {
   mode?: ChatMode;
   /** W1.2.1: regenerate an assistant turn (fork-preserving). */
   onRegenerate?: (messageId: string) => Promise<void>;
+  /** Edit the latest user message and resubmit (fork-preserving). */
+  onEditUserMessage?: (messageId: string, nextContent: string) => void | Promise<void>;
   /**
    * W7-1: the chat's last turn was interrupted (crash/kill — no completion
    * record). Rendered as a tail card offering to continue the turn; hidden
@@ -236,6 +238,7 @@ export function MessageList({
   failureAction,
   mode,
   onRegenerate,
+  onEditUserMessage,
   interrupted = false,
   onContinueInterrupted,
   onDismissInterrupted,
@@ -418,6 +421,16 @@ export function MessageList({
     return turns;
   }, [visibleMessages]);
 
+  const lastUserId = useMemo(() => {
+    for (let i = visibleMessages.length - 1; i >= 0; i -= 1) {
+      const m = visibleMessages[i];
+      if (m.role === 'user' && internalTrigger(m) === null) {
+        return m.id;
+      }
+    }
+    return null;
+  }, [visibleMessages]);
+
   return (
     <div className="relative flex-1 overflow-hidden">
       <div
@@ -446,6 +459,11 @@ export function MessageList({
                           message={turn.userGroup.messages[0]}
                           agents={agents}
                           chats={chats}
+                          onEdit={
+                            turn.userGroup.messages[0].id === lastUserId && onEditUserMessage
+                              ? (nextText) => onEditUserMessage(turn.userGroup!.messages[0].id, nextText)
+                              : undefined
+                          }
                         />
                       )
                     ) : (
@@ -467,6 +485,11 @@ export function MessageList({
                                   chats={chats}
                                   isGrouped
                                   isAppended={idx > 0}
+                                  onEdit={
+                                    msg.id === lastUserId && onEditUserMessage
+                                      ? (nextText) => onEditUserMessage(msg.id, nextText)
+                                      : undefined
+                                  }
                                 />
                               )
                             ))}

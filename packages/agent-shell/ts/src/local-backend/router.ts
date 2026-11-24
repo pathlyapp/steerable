@@ -112,6 +112,7 @@ import {
 } from './context-compactor.js';
 import {
   planRegenerateTruncate,
+  resolveEditUserMessageContext,
   resolveRegenerateContext,
   resolveRegenerateForkOrdinal,
 } from './regenerate-helper.js';
@@ -556,6 +557,10 @@ export class LocalBackendRouter {
   /** 4.6a/4.6c：任务面板的路由入口（列表 + 合并/丢弃）。未注入时任务路由 503。 */
   private readonly taskService: TaskService | null;
   private takeAskReplay: ((chatId: string) => ResolvedAsk | undefined) | null = null;
+  private readonly activeTurnRuns = new Map<
+    string,
+    { abort: AbortController; done: Promise<void> }
+  >();
 
   constructor(
     private readonly toolRouter: ToolRouter,
@@ -2870,7 +2875,8 @@ export class LocalBackendRouter {
     const pathname = url.pathname;
     const sendMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/(send|run|agent)$/);
     const regenerateMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/messages\/([^/]+)\/regenerate$/);
-    if (!sendMatch && !regenerateMatch) {
+    const editMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/messages\/([^/]+)\/edit$/);
+    if (!sendMatch && !regenerateMatch && !editMatch) {
       emit(this.sse('error', { message: `Stream route not found: ${request.method} ${pathname}` }));
       return { status: 404 };
     }
@@ -2879,7 +2885,11 @@ export class LocalBackendRouter {
       return { status: 404 };
     }
 
-    const chatId = sendMatch ? sendMatch[1] : regenerateMatch![1];
+    const chatId = sendMatch
+      ? sendMatch[1]
+      : regenerateMatch
+        ? regenerateMatch[1]
+        : editMatch![1];
     const payload = this.toRecord(request.body);
 
     let chat = await this.store.getChat(chatId);
@@ -2888,10 +2898,11 @@ export class LocalBackendRouter {
       // 会话任务反复打开运行，本地会话却可能已经被用户清理、被空会话 prune、
       // 或换机重装后不复存在。首次发送时按 URL 里的 id 现场补建，避免 404
       // `chat not found` 把一次本该能跑的任务直接打断。
-      //   • regenerate 例外——没有历史消息就无从"重新生成"，保持 404。
+      //   • regenerate / edit 例外——没有历史消息就无从"重新生成/编辑"，保持 404。
       //   • 只有真的带了一条用户消息才补建，空 body 不该凭空落一条空会话。
       const shouldAutoProvision =
         !regenerateMatch &&
+        !editMatch &&
         payload.resume !== true &&
         typeof payload.message === 'string' &&
         payload.message.trim().length > 0;
@@ -2914,13 +2925,86 @@ export class LocalBackendRouter {
       return { status: 404 };
     }
 
-    return this.withChatWriteLock(chatId, emit, async (emit) => {
+    if (editMatch) {
+      const running = this.activeTurnRuns.get(chatId);
+      if (running) {
+        running.abort.abort();
+        const activeStreamId = getActiveCoreLoopStreamId(chatId);
+        if (activeStreamId) {
+          await getSidecarSupervisor()?.cancelChat(activeStreamId).catch(() => {});
+        }
+        await running.done;
+      } else {
+        const activeStreamId = getActiveCoreLoopStreamId(chatId);
+        if (activeStreamId) {
+          await getSidecarSupervisor()?.cancelChat(activeStreamId).catch(() => {});
+        }
+      }
+    }
+
+    const turnAbort = new AbortController();
+    if (signal) {
+      if (signal.aborted) turnAbort.abort();
+      else signal.addEventListener('abort', () => turnAbort.abort(), { once: true });
+    }
+    let resolveTurnDone!: () => void;
+    const turnDone = new Promise<void>((resolve) => {
+      resolveTurnDone = resolve;
+    });
+    const turnEntry = { abort: turnAbort, done: turnDone };
+    this.activeTurnRuns.set(chatId, turnEntry);
+
+    try {
+    return await this.withChatWriteLock(chatId, emit, async (emit) => {
     // W7-1: resume=true（仅 send 路由）续跑 durable record 里被中断的 turn，
-    // 不追加新用户消息；与 regenerate 互斥（regenerate 有自己的路径参数语义）。
-    const isResume = !regenerateMatch && payload.resume === true;
+    // 不追加新用户消息；与 regenerate / edit 互斥。
+    const isResume = !regenerateMatch && !editMatch && payload.resume === true;
 
     let userMessageText: string;
-    if (regenerateMatch) {
+    if (editMatch) {
+      const editedText = String(payload.message ?? payload.content ?? '').trim();
+      if (!editedText) {
+        emit(this.sse('error', { message: 'message is required' }));
+        return { status: 400 };
+      }
+      if (!getSidecarSupervisor()) {
+        emit(this.sse('error', { message: 'coreloop enabled but sidecar is not running' }));
+        return { status: 503 };
+      }
+      const rawTargetId = editMatch[2];
+      const priorMessages = (await this.store.listMessages(chatId, 200)).reverse();
+      const resolution = resolveEditUserMessageContext(priorMessages, rawTargetId);
+      if (!resolution.ok) {
+        if (resolution.reason === 'not_found') {
+          emit(this.sse('error', { message: 'edit target message not found' }));
+          return { status: 404 };
+        }
+        if (resolution.reason === 'not_user') {
+          emit(this.sse('error', { message: 'edit target message is not a user message' }));
+          return { status: 400 };
+        }
+        emit(this.sse('error', { message: 'only the most recent user message can be edited' }));
+        return { status: 409 };
+      }
+      userMessageText = editedText;
+      const supervisor = getSidecarSupervisor();
+      const outcome = supervisor
+        ? await supervisor.forkSession({
+            recordId: await this.store.getChatRecordId(chatId) ?? chatId,
+            beforeUserIndex: resolution.userOrdinal,
+            newRecordId: `${chatId}:r${Date.now().toString(36)}`,
+          })
+        : null;
+      if (outcome?.ok) {
+        await this.store.setChatRecordId(chatId, outcome.fork.recordId);
+      }
+      const plan = planRegenerateTruncate(outcome);
+      if (!plan.proceed) {
+        emit(this.sse('error', { message: plan.message }));
+        return { status: 409 };
+      }
+      await this.store.deleteMessagesFrom(chatId, resolution.targetMessageId);
+    } else if (regenerateMatch) {
       // Regenerate = truncate-and-rerun, *not* "append a fresh 'please
       // regenerate' user turn on top of the old reply". The old bug ignored
       // the :messageId path param entirely, so regenerating just piled a new
@@ -3197,7 +3281,7 @@ export class LocalBackendRouter {
       chatMode,
       payload,
       emit,
-      signal,
+      signal: turnAbort.signal,
       shouldGenerateTitle,
       firstUserMessageForTitle,
       resume: isResume,
@@ -3208,6 +3292,12 @@ export class LocalBackendRouter {
       parentAgentId: turnAgents.parent?.id ?? null,
     });
     });
+    } finally {
+      if (this.activeTurnRuns.get(chatId) === turnEntry) {
+        this.activeTurnRuns.delete(chatId);
+      }
+      resolveTurnDone();
+    }
   }
 
   /**

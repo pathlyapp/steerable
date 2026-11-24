@@ -1,5 +1,5 @@
 import { render } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '@steerable/agent-protocol';
 import {
   peekConversationPreview,
@@ -232,5 +232,69 @@ describe('MessageList 继续按钮的作用范围（T-CNT-17）', () => {
     expect(container.querySelectorAll('[data-action="regenerate"]')).toHaveLength(1);
     // 详情入口保留：诊断信息是排查时唯一能拿到的现场。
     expect(container.querySelectorAll('[data-action="details"]')).toHaveLength(1);
+  });
+
+  it('T6: 仅最后一条用户消息提供编辑入口，支持修改并重新提交以及 Escape/取消还原 (#25)', async () => {
+    const onEditUserMessage = vi.fn();
+    const messages: ChatMessage[] = [
+      { id: 'u1', role: 'user', content: '第一条旧消息', createdAt: '2026-11-05T06:00:00.000Z' },
+      { id: 'a1', role: 'assistant', content: '第一条回复', createdAt: '2026-11-05T06:00:05.000Z' },
+      { id: 'u2', role: 'user', content: '误触回车的半句', createdAt: '2026-11-05T06:01:00.000Z' },
+      { id: 'a2', role: 'assistant', content: '半截回复', createdAt: '2026-11-05T06:01:05.000Z' },
+    ];
+
+    const { container, getByTestId, queryByTestId } = render(
+      <MessageList
+        messages={messages}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+        onEditUserMessage={onEditUserMessage}
+      />,
+    );
+
+    const editButtons = container.querySelectorAll<HTMLButtonElement>(
+      '[data-action="edit-user-message"]',
+    );
+    expect(editButtons).toHaveLength(1);
+
+    // 打开编辑 → Escape 取消不触发提交
+    editButtons[0].click();
+    await Promise.resolve();
+    const inputAfterOpen = container.querySelector<HTMLTextAreaElement>(
+      '[data-testid="edit-user-message-input"]',
+    );
+    expect(inputAfterOpen).not.toBeNull();
+    expect(inputAfterOpen!.value).toBe('误触回车的半句');
+
+    inputAfterOpen!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(queryByTestId('edit-user-message-input')).toBeNull();
+    expect(onEditUserMessage).not.toHaveBeenCalled();
+
+    // 再次打开编辑 → 修改内容并点「保存并提交」
+    const reopenBtn = container.querySelector<HTMLButtonElement>(
+      '[data-action="edit-user-message"]',
+    )!;
+    reopenBtn.click();
+    await new Promise((r) => setTimeout(r, 0));
+    const textarea = getByTestId('edit-user-message-input') as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'value',
+    )?.set;
+    setter?.call(textarea, '补全后的完整问题');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const saveBtn = container.querySelector<HTMLButtonElement>(
+      '[data-action="save-edit-user-message"]',
+    )!;
+    saveBtn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(onEditUserMessage).toHaveBeenCalledWith('u2', '补全后的完整问题');
   });
 });

@@ -51,7 +51,7 @@ import { getResolvedHostTools } from '../host-tools-runtime.js';
 /** 与 router.handleStream 内部的路由正则保持一致——只有这些路径是流式。 */
 const STREAM_PATH_PATTERNS = [
   /^\/api\/v2\/chats\/[^/]+\/(send|run|agent)$/,
-  /^\/api\/v2\/chats\/[^/]+\/messages\/[^/]+\/regenerate$/,
+  /^\/api\/v2\/chats\/[^/]+\/messages\/[^/]+\/(regenerate|edit)$/,
 ];
 
 /**

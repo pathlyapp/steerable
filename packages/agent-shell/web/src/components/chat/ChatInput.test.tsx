@@ -1021,3 +1021,110 @@ describe('ChatInput 粘贴图片', () => {
     }
   });
 });
+
+describe('ChatInput Shift+Enter newline & Chinese IME Enter guard (#25)', () => {
+  it('T1: renders trailing sentinel <br> on Shift+Enter and advances caret across repeated newlines', () => {
+    const onSubmit = vi.fn();
+    let latest = '';
+    function Harness() {
+      const [val, setVal] = useState('hello');
+      latest = val;
+      return <ChatInput value={val} onChange={setVal} onSubmit={onSubmit} />;
+    }
+    render(<Harness />);
+    const editor = screen.getByTestId('chat-composer');
+    editor.focus();
+
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    expect(latest).toBe('hello\n');
+    expect(editor.querySelector('br[data-editor-sentinel="true"]')).not.toBeNull();
+
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    expect(latest).toBe('hello\n\n');
+
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    expect(latest).toBe('hello\n\n\n');
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('T1: preserves newlines and @mention chips together when pressing Shift+Enter', () => {
+    let latest = '';
+    const agents = [
+      {
+        id: 'a1',
+        name: 'Coder',
+        slug: 'coder',
+        icon: 'code',
+        color: '#2563eb',
+        description: 'Coder agent',
+        rolePrompt: '',
+        isBuiltin: true,
+      },
+    ];
+    function Harness() {
+      const [val, setVal] = useState('@Coder');
+      latest = val;
+      return (
+        <MemoryRouter>
+          <ChatInput
+            value={val}
+            onChange={setVal}
+            onSubmit={vi.fn()}
+            agents={agents}
+          />
+        </MemoryRouter>
+      );
+    }
+    render(<Harness />);
+    const editor = screen.getByTestId('chat-composer');
+    editor.focus();
+
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    expect(latest).toBe('@Coder\n');
+    expect(editor.querySelector('[data-mention-chip]')).not.toBeNull();
+    expect(editor.querySelector('br[data-editor-sentinel="true"]')).not.toBeNull();
+
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    expect(latest).toBe('@Coder\n\n');
+  });
+
+  it('T2: blocks Enter submission when nativeEvent.isComposing is true even without prior compositionstart', () => {
+    const onSubmit = vi.fn();
+    render(<ChatInput value="claude" onChange={vi.fn()} onSubmit={onSubmit} />);
+    const editor = screen.getByTestId('chat-composer');
+    editor.focus();
+
+    fireEvent.keyDown(editor, { key: 'Enter', keyCode: 229, isComposing: true });
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('T2: swallows post-compositionend Enter even >50ms later, then submits on next Enter after keyUp', () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      function Harness() {
+        const [val, setVal] = useState('');
+        return <ChatInput value={val} onChange={setVal} onSubmit={onSubmit} />;
+      }
+      render(<Harness />);
+      const editor = screen.getByTestId('chat-composer');
+      editor.focus();
+
+      fireEvent.compositionStart(editor);
+      editor.textContent = 'deeppath';
+      fireEvent.compositionEnd(editor);
+
+      // Simulate 120ms render lag between compositionend and the same Enter keydown.
+      vi.advanceTimersByTime(120);
+      fireEvent.keyDown(editor, { key: 'Enter', keyCode: 13, isComposing: false });
+      expect(onSubmit).not.toHaveBeenCalled();
+
+      fireEvent.keyUp(editor, { key: 'Enter', keyCode: 13 });
+      // Next physical Enter sends immediately.
+      fireEvent.keyDown(editor, { key: 'Enter', keyCode: 13, isComposing: false });
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

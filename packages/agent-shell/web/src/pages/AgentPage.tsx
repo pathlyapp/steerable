@@ -515,6 +515,7 @@ function AgentChatView({
     const inner = createHostChatTransport(chatId);
     return {
       cancelActive: () => inner.cancelActive(),
+      waitForIdle: () => inner.waitForIdle(),
       stream: (
         input: { content: string; metadata?: Record<string, unknown> },
         onEvent: (event: SSEEvent) => void,
@@ -1089,6 +1090,30 @@ function AgentChatView({
     [sendUserMessage, modelOverride, effortOverride, execPolicy],
   );
 
+  const handleEditUserMessage = useCallback(
+    async (messageId: string, nextContent: string) => {
+      const trimmed = nextContent.trim();
+      if (!trimmed) return;
+      if (isStreaming) {
+        handleCancel();
+        await transport.waitForIdle();
+        await Promise.resolve();
+      }
+      const idx = messages.findIndex((m) => m.id === messageId);
+      if (idx !== -1) {
+        setMessages(messages.slice(0, idx));
+      }
+      await handleSubmit({
+        content: trimmed,
+        metadata: {
+          ...(mode === "plan" ? { mode: "plan" } : {}),
+          replaceMessageId: "latest",
+        },
+      });
+    },
+    [handleCancel, handleSubmit, isStreaming, messages, mode, setMessages, transport],
+  );
+
   const handleSelectSuggestion = useCallback(
     (text: string) => {
       void handleSubmit({ content: text });
@@ -1534,6 +1559,7 @@ function AgentChatView({
               }
             : undefined
         }
+        onEditUserMessage={hasHostBridge() ? handleEditUserMessage : undefined}
         inputPlaceholder={t("Message the local Agent…")}
         agents={ctx.agents}
         chats={ctx.chats}

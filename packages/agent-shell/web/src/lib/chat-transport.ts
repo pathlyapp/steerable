@@ -224,13 +224,18 @@ export interface HostChatTransport extends ChatStreamTransport {
    * 直接调它把主进程里的 agent 循环真正停下来。
    */
   cancelActive: () => void;
+  /** 等待当前正在进行的流彻底结束（若空闲则立即完成）。 */
+  waitForIdle: () => Promise<void>;
 }
 
 export function createHostChatTransport(chatId: string): HostChatTransport {
   // 当前 in-flight 流的 id。startStream resolve 后写入，流结束（end/error）
   // 或被取消后清空。同一 transport 一次只会有一条流（useChatStream 在
   // isStreaming 时拒绝重入）。
-  const active: { streamId: string | null } = { streamId: null };
+  const active: { streamId: string | null; inFlight: Promise<void> | null } = {
+    streamId: null,
+    inFlight: null,
+  };
 
   return {
     cancelActive: () => {
@@ -250,6 +255,11 @@ export function createHostChatTransport(chatId: string): HostChatTransport {
             body: {},
           })
           .catch(() => {});
+      }
+    },
+    waitForIdle: async () => {
+      if (active.inFlight) {
+        await active.inFlight.catch(() => {});
       }
     },
     // 轮中转向：仅在 CoreLoop 路径（STEERABLE_USE_CORELOOP=1）且回合仍
@@ -277,12 +287,24 @@ export function createHostChatTransport(chatId: string): HostChatTransport {
       // the cancel handle returned at the end. Declaring it up-front sidesteps
       // any temporal-dead-zone surprises.
       const ref: { streamId: string | null } = { streamId: null };
+      const rawMetadata = input.metadata ?? {};
+      const replaceMessageId =
+        typeof rawMetadata.replaceMessageId === 'string' && rawMetadata.replaceMessageId
+          ? rawMetadata.replaceMessageId
+          : null;
+      const { replaceMessageId: _omitted, ...forwardedMetadata } = rawMetadata;
+      const streamPath = replaceMessageId
+        ? `/api/v2/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(replaceMessageId)}/edit`
+        : `/api/v2/chats/${encodeURIComponent(chatId)}/run`;
 
-      await new Promise<void>((resolve, reject) => {
+      const runPromise = new Promise<void>((resolve, reject) => {
         let settled = false;
         const settle = (err?: Error) => {
           if (settled) return;
           settled = true;
+          if (active.inFlight === runPromise) {
+            active.inFlight = null;
+          }
           if (err) reject(err);
           else resolve();
         };
@@ -291,10 +313,10 @@ export function createHostChatTransport(chatId: string): HostChatTransport {
           .startStream(
             {
               method: 'POST',
-              path: `/api/v2/chats/${encodeURIComponent(chatId)}/run`,
+              path: streamPath,
               body: {
                 message: input.content,
-                ...(input.metadata ?? {}),
+                ...forwardedMetadata,
               },
             },
             (payload) => {
@@ -325,6 +347,8 @@ export function createHostChatTransport(chatId: string): HostChatTransport {
             settle(new Error(msg));
           });
       });
+      active.inFlight = runPromise;
+      await runPromise;
 
       // Return cancel handle per the transport contract. Note: framework's
       // hook stores this AFTER stream completion, so it's a no-op in practice.
