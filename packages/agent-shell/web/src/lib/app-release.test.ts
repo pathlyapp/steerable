@@ -51,5 +51,18 @@ describe('sidebar release labels', () => {
       'Installing',
     );
     expect(sidebarUpdateLabel(snap({ phase: 'error', message: 'offline' }), false)).toBe('Retry');
+    expect(
+      sidebarReleaseView(
+        snap({
+          phase: 'ready',
+          availableVersion: '0.3.0',
+          releaseNotes: '  • Multiline composer input  ',
+        }),
+        false,
+      ),
+    ).toMatchObject({
+      availableVersion: '0.3.0',
+      releaseNotes: '• Multiline composer input',
+    });
   });
 });

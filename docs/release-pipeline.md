@@ -16,7 +16,8 @@ Two paths produce a `v*` tag, and both end in the same `release.yml` chain.
 ```
 release/X.Y.Z branch pushed
   → release-prepare.yml runs scripts/release/bump_to.sh X.Y.Z
-  → commits the bump, opens the release PR
+    (updates CHANGELOG.md + docs/changelog.md; uses LLM rewrite when configured)
+  → commits the bump, opens the release PR with the extracted release notes
   → dispatches ci.yml for the branch (see below)
   → PR merged into main
   → release-tag.yml tags the PR's merge commit and dispatches release.yml
@@ -49,10 +50,11 @@ release.yml (validate)
   └── publish-pypi.yml            pure-Python wheels
 ```
 
-`validate` resolves the version, creates the GitHub Release, and gates on
-`scripts/check_lockstep_versions.py --expected X.Y.Z` — every framework
-package must report exactly that version, and the Rust artifact pin must be
-coherent.
+`validate` resolves the version, gates on `scripts/check_lockstep_versions.py --expected X.Y.Z`
+(every framework package must report exactly that version, and the Rust artifact pin must be
+coherent), gates on `scripts/release/changelog.py extract --version X.Y.Z` (a non-empty
+`## [X.Y.Z]` section must exist in `CHANGELOG.md` and match `docs/changelog.md`), and
+creates the GitHub Release from that curated section.
 
 Each publish job is idempotent: it skips a package already on the registry.
 That makes a partial failure recoverable by re-triggering the chain, and it is

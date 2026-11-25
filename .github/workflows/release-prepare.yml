@@ -52,6 +52,11 @@ jobs:
 
       - name: Run lockstep bump script
         shell: bash
+        env:
+          CHANGELOG_LLM_API_KEY: ${{ secrets.CHANGELOG_LLM_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          CHANGELOG_LLM_BASE_URL: ${{ vars.CHANGELOG_LLM_BASE_URL }}
+          CHANGELOG_LLM_MODEL: ${{ vars.CHANGELOG_LLM_MODEL }}
         run: ./scripts/release/bump_to.sh "${{ steps.version.outputs.value }}"
 
       - name: Commit and push bump
@@ -79,16 +84,24 @@ jobs:
           set -euo pipefail
           BRANCH="${GITHUB_REF#refs/heads/}"
           VERSION="${{ steps.version.outputs.value }}"
+          {
+            echo "Automated release prep for \`v$VERSION\`. Review or edit \`CHANGELOG.md\` on \`$BRANCH\` if needed, then merge this PR to publish."
+            echo ""
+            echo "## Release Notes (\`v$VERSION\`)"
+            echo ""
+            python3 scripts/release/changelog.py extract --version "$VERSION"
+          } > /tmp/release-pr-body.md
           EXISTING="$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
           if [ -n "$EXISTING" ]; then
-            echo "::notice title=skip::PR #$EXISTING already exists."
+            gh pr edit "$EXISTING" --body-file /tmp/release-pr-body.md
+            echo "::notice title=updated::Updated PR #$EXISTING release notes."
             exit 0
           fi
           gh pr create \
             --base main \
             --head "$BRANCH" \
             --title "chore(release): v$VERSION" \
-            --body "Automated release prep. Merge this PR to publish."
+            --body-file /tmp/release-pr-body.md
           # The bump commit above is pushed with GITHUB_TOKEN, which triggers
           # neither push nor pull_request workflows (recursive-workflow
           # protection). Dispatch CI explicitly so the release PR gets checks.

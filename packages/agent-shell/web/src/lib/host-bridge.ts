@@ -132,6 +132,7 @@ export interface AppReleaseSnapshot {
   availableVersion?: string;
   percent?: number;
   message?: string;
+  releaseNotes?: string;
 }
 
 export type PythonRunnerPhase =
