@@ -3,6 +3,8 @@ import type { AppReleasePhase, AppReleaseSnapshot } from './host-bridge';
 
 export interface AppReleaseView {
   version: string | null;
+  availableVersion?: string;
+  releaseNotes?: string;
   actionLabel: string | null;
   actionTitle?: string;
   clickable: boolean;
@@ -61,8 +63,11 @@ export function sidebarReleaseView(
   if (!snap?.version) {
     return { version: null, actionLabel: null, clickable: false, emphasize: false };
   }
+  const notes = snap.enabled ? snap.releaseNotes?.trim() : undefined;
   return {
     version: snap.version,
+    ...(snap.enabled && snap.availableVersion ? { availableVersion: snap.availableVersion } : {}),
+    ...(notes ? { releaseNotes: notes } : {}),
     actionLabel: sidebarUpdateLabel(snap, confirmedCurrent),
     actionTitle: sidebarUpdateTitle(snap),
     clickable: snap.enabled && sidebarUpdateClickable(snap.phase),

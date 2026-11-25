@@ -61,7 +61,26 @@ def check_readme_schema_claim() -> str | None:
     return None
 
 
-CHECKS = [check_core_loop_status, check_readme_schema_claim]
+def check_changelog_docs_sync() -> str | None:
+    """docs/changelog.md must stay synchronized with root CHANGELOG.md."""
+    import importlib.util
+    import sys
+
+    script = ROOT / "scripts" / "release" / "changelog.py"
+    spec = importlib.util.spec_from_file_location("steerable_changelog_drift", script)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    if not mod.sync_docs_file(ROOT / "CHANGELOG.md", ROOT / "docs" / "changelog.md", check_only=True):
+        return (
+            "docs/changelog.md is out of sync with CHANGELOG.md — "
+            "run `python3 scripts/release/changelog.py sync-docs`."
+        )
+    return None
+
+
+CHECKS = [check_core_loop_status, check_readme_schema_claim, check_changelog_docs_sync]
 
 
 def main() -> int:

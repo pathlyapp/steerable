@@ -96,3 +96,14 @@ def test_release_refuses_a_tag_that_is_not_on_main() -> None:
     assert any(
         "not an ancestor of main" in step.get("run", "") for step in steps
     ), "validate does not reject tags outside main"
+
+
+def test_release_gates_on_curated_changelog_section() -> None:
+    steps = _steps(_load("release.yml"), "validate")
+    assert any(
+        "scripts/release/changelog.py extract" in step.get("run", "")
+        for step in steps
+    ), "validate does not gate on CHANGELOG.md"
+    create = next(step for step in steps if "Create GitHub Release" in step.get("name", ""))
+    assert "--notes-file /tmp/release-notes.md" in create["run"]
+    assert "--generate-notes" not in create["run"]

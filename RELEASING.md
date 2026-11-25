@@ -385,7 +385,7 @@ Run locally before tagging `vX.Y.Z`:
 - [ ] `uv run pytest -q` ✓
 - [ ] `examples/py-minimal`, `examples/ts-minimal`, `examples/sidecar-roundtrip` all run
 - [ ] Mode B verification (`./scripts/release/verify-local-artifacts.sh`) ✓
-- [ ] `./scripts/release/bump_to.sh X.Y.Z` ✓ (refreshes lockfiles, runs lockstep gate)
+- [ ] `./scripts/release/bump_to.sh X.Y.Z` ✓ (updates `CHANGELOG.md` + `docs/changelog.md`, refreshes lockfiles, runs lockstep gate)
 - [ ] `git diff` reviewed ✓
 - [ ] `git commit -am "chore(release): vX.Y.Z" && git tag vX.Y.Z` ✓
 - [ ] `git push origin main vX.Y.Z` ✓ (CI takes over from here)

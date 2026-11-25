@@ -86,6 +86,7 @@ nav:
       - Desktop paste: spec/desktop-paste.md
   - UI:
       - Components: ui/index.md
+  - Changelog: changelog.md
 
 plugins:
   - search

@@ -20,6 +20,8 @@ pub struct AppReleaseSnapshot {
     percent: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release_notes: Option<String>,
 }
 
 struct Tracked {
@@ -27,6 +29,7 @@ struct Tracked {
     available_version: Option<String>,
     percent: Option<u8>,
     message: Option<String>,
+    release_notes: Option<String>,
 }
 
 impl Tracked {
@@ -36,6 +39,7 @@ impl Tracked {
             available_version: None,
             percent: None,
             message: None,
+            release_notes: None,
         }
     }
 }
@@ -100,6 +104,21 @@ fn clip_message(message: String) -> String {
     }
 }
 
+fn normalize_release_notes(body: Option<&str>) -> Option<String> {
+    const MAX_NOTES: usize = 4096;
+    let trimmed = body?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut chars = trimmed.chars();
+    let clipped: String = chars.by_ref().take(MAX_NOTES).collect();
+    if chars.next().is_some() {
+        Some(format!("{clipped}…"))
+    } else {
+        Some(clipped)
+    }
+}
+
 fn next_download_percent(downloaded: u64, total: u64, previous: u8) -> Option<u8> {
     if total == 0 {
         return None;
@@ -116,30 +135,36 @@ fn snapshot(app: &AppHandle) -> AppReleaseSnapshot {
     let enabled = updates_enabled();
     let state = app.state::<UpdateState>();
     let tracked = state.tracked.lock().ok();
-    let (phase, available_version, percent, message) = if let Some(tracked) = tracked.as_ref() {
-        (
-            if enabled {
-                tracked.phase.clone()
-            } else {
-                "disabled".into()
-            },
-            if enabled {
-                tracked.available_version.clone()
-            } else {
-                None
-            },
-            if enabled { tracked.percent } else { None },
-            if enabled {
-                tracked.message.clone()
-            } else {
-                None
-            },
-        )
-    } else if enabled {
-        ("idle".into(), None, None, None)
-    } else {
-        ("disabled".into(), None, None, None)
-    };
+    let (phase, available_version, percent, message, release_notes) =
+        if let Some(tracked) = tracked.as_ref() {
+            (
+                if enabled {
+                    tracked.phase.clone()
+                } else {
+                    "disabled".into()
+                },
+                if enabled {
+                    tracked.available_version.clone()
+                } else {
+                    None
+                },
+                if enabled { tracked.percent } else { None },
+                if enabled {
+                    tracked.message.clone()
+                } else {
+                    None
+                },
+                if enabled {
+                    tracked.release_notes.clone()
+                } else {
+                    None
+                },
+            )
+        } else if enabled {
+            ("idle".into(), None, None, None, None)
+        } else {
+            ("disabled".into(), None, None, None, None)
+        };
     AppReleaseSnapshot {
         version: app.package_info().version.to_string(),
         enabled,
@@ -147,6 +172,7 @@ fn snapshot(app: &AppHandle) -> AppReleaseSnapshot {
         available_version,
         percent,
         message,
+        release_notes,
     }
 }
 
@@ -156,12 +182,14 @@ fn publish(
     available_version: Option<String>,
     percent: Option<u8>,
     message: Option<String>,
+    release_notes: Option<String>,
 ) {
     if let Ok(mut tracked) = app.state::<UpdateState>().tracked.lock() {
         tracked.phase = phase.to_string();
         tracked.available_version = available_version;
         tracked.percent = percent;
         tracked.message = message;
+        tracked.release_notes = release_notes;
     }
     let _ = app.emit(EVENT, snapshot(app));
 }
@@ -191,13 +219,13 @@ pub async fn check_once(app: &AppHandle) {
     let state = app.state::<UpdateState>();
     let _gate = state.gate.lock().await;
     if !updates_enabled() {
-        publish(app, "disabled", None, None, None);
+        publish(app, "disabled", None, None, None, None);
         return;
     }
     if has_pending(app) {
         return;
     }
-    publish(app, "checking", None, None, None);
+    publish(app, "checking", None, None, None, None);
     let updater = match app.updater() {
         Ok(updater) => updater,
         Err(error) => {
@@ -208,6 +236,7 @@ pub async fn check_once(app: &AppHandle) {
                 None,
                 None,
                 Some(clip_message(error.to_string())),
+                None,
             );
             return;
         }
@@ -215,7 +244,7 @@ pub async fn check_once(app: &AppHandle) {
     let update = match updater.check().await {
         Ok(Some(update)) => update,
         Ok(None) => {
-            publish(app, "idle", None, None, Some("已是最新".into()));
+            publish(app, "idle", None, None, Some("已是最新".into()), None);
             return;
         }
         Err(error) => {
@@ -226,11 +255,13 @@ pub async fn check_once(app: &AppHandle) {
                 None,
                 None,
                 Some(clip_message(error.to_string())),
+                None,
             );
             return;
         }
     };
     let version = update.version.clone();
+    let release_notes = normalize_release_notes(update.body.as_deref());
     if !install_allowed() {
         publish(
             app,
@@ -238,12 +269,21 @@ pub async fn check_once(app: &AppHandle) {
             Some(version.clone()),
             None,
             Some("开发构建不安装更新".into()),
+            release_notes,
         );
         return;
     }
-    publish(app, "downloading", Some(version.clone()), Some(0), None);
+    publish(
+        app,
+        "downloading",
+        Some(version.clone()),
+        Some(0),
+        None,
+        release_notes.clone(),
+    );
     let mut downloaded: u64 = 0;
     let mut last_percent: u8 = 0;
+    let notes_for_progress = release_notes.clone();
     let bytes = match update
         .download(
             |chunk, total| {
@@ -261,6 +301,7 @@ pub async fn check_once(app: &AppHandle) {
                     Some(version.clone()),
                     Some(percent),
                     None,
+                    notes_for_progress.clone(),
                 );
             },
             || {},
@@ -276,6 +317,7 @@ pub async fn check_once(app: &AppHandle) {
                 Some(version),
                 None,
                 Some(clip_message(error.to_string())),
+                release_notes,
             );
             return;
         }
@@ -283,7 +325,7 @@ pub async fn check_once(app: &AppHandle) {
     if let Ok(mut pending) = app.state::<UpdateState>().pending.lock() {
         *pending = Some(PendingUpdate { update, bytes });
     }
-    publish(app, "ready", Some(version), None, None);
+    publish(app, "ready", Some(version), None, None, release_notes);
 }
 
 #[tauri::command]
@@ -300,7 +342,14 @@ pub async fn app_release_check(app: AppHandle) -> AppReleaseSnapshot {
 #[tauri::command]
 pub async fn app_release_install(app: AppHandle) -> AppReleaseSnapshot {
     if !install_allowed() {
-        publish(&app, "error", None, None, Some("开发构建不安装更新".into()));
+        publish(
+            &app,
+            "error",
+            None,
+            None,
+            Some("开发构建不安装更新".into()),
+            None,
+        );
         return snapshot(&app);
     }
     let pending = app
@@ -313,7 +362,15 @@ pub async fn app_release_install(app: AppHandle) -> AppReleaseSnapshot {
         return snapshot(&app);
     };
     let version = pending.update.version.clone();
-    publish(&app, "installing", Some(version.clone()), None, None);
+    let release_notes = normalize_release_notes(pending.update.body.as_deref());
+    publish(
+        &app,
+        "installing",
+        Some(version.clone()),
+        None,
+        None,
+        release_notes.clone(),
+    );
     let joined =
         tauri::async_runtime::spawn_blocking(move || pending.update.install(pending.bytes)).await;
     match joined {
@@ -328,6 +385,7 @@ pub async fn app_release_install(app: AppHandle) -> AppReleaseSnapshot {
                 Some(version),
                 None,
                 Some(clip_message(error.to_string())),
+                release_notes,
             );
         }
         Err(error) => {
@@ -337,6 +395,7 @@ pub async fn app_release_install(app: AppHandle) -> AppReleaseSnapshot {
                 Some(version),
                 None,
                 Some(clip_message(error.to_string())),
+                release_notes,
             );
         }
     }
@@ -345,7 +404,7 @@ pub async fn app_release_install(app: AppHandle) -> AppReleaseSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{clip_message, next_download_percent};
+    use super::{clip_message, next_download_percent, normalize_release_notes};
 
     #[test]
     fn reports_download_percent_in_steps() {
@@ -365,5 +424,15 @@ mod tests {
         let clipped = clip_message(long);
         assert!(clipped.ends_with('…'));
         assert_eq!(clipped.chars().count(), 181);
+    }
+
+    #[test]
+    fn normalizes_updater_release_notes() {
+        assert_eq!(normalize_release_notes(None), None);
+        assert_eq!(normalize_release_notes(Some("   \n  ")), None);
+        assert_eq!(
+            normalize_release_notes(Some("  • Added CDP attach\n  ")),
+            Some("• Added CDP attach".into())
+        );
     }
 }

@@ -54,6 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.value }}
+      notes_summary: ${{ steps.changelog.outputs.summary }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -109,6 +110,20 @@ jobs:
           python scripts/check_lockstep_versions.py --expected "$EXPECTED"
           python scripts/check_engine_compatibility.py
 
+      - id: changelog
+        name: Extract and gate CHANGELOG.md
+        env:
+          EXPECTED: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          python scripts/release/changelog.py extract --version "$EXPECTED" --out /tmp/release-notes.md
+          python scripts/release/changelog.py sync-docs --check
+          {
+            echo "summary<<__CHANGELOG_EOF__"
+            python scripts/release/changelog.py extract --version "$EXPECTED" --summary --max-chars 600
+            echo "__CHANGELOG_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release (idempotent)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -116,12 +131,13 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::notice title=skip::Release $TAG already exists; not recreating."
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file /tmp/release-notes.md
+            echo "::notice title=updated::Release $TAG already exists; refreshed notes from CHANGELOG.md."
           else
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "$TAG" \
-              --generate-notes
+              --notes-file /tmp/release-notes.md
           fi
 
   # Chained publish jobs. `if: success()` is implicit on `needs:`. The
@@ -201,6 +217,7 @@ jobs:
           NPM: ${{ needs.publish-npm.result }}
           PYPI: ${{ needs.publish-pypi.result }}
           NATIVE: ${{ needs.publish-native.result }}
+          NOTES_SUMMARY: ${{ needs.validate.outputs.notes_summary }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.validate.outputs.version }}
           ACTOR: ${{ github.actor }}
@@ -242,6 +259,11 @@ jobs:
           ]
           if version != "(unknown)":
               lines.append(f"[GitHub Release]({os.environ.get('RELEASE_URL', '')})")
+          notes_summary = (os.environ.get("NOTES_SUMMARY") or "").strip()
+          if notes_summary:
+              lines.append("")
+              lines.append("📝 更新内容：")
+              lines.append(notes_summary)
           payload = {
               "msg_type": "interactive",
               "card": {

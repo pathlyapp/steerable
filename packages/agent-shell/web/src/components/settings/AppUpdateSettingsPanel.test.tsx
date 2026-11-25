@@ -49,16 +49,21 @@ describe('AppUpdateSettingsPanel', () => {
       enabled: true,
       phase: 'ready',
       availableVersion: '0.3.0',
+      releaseNotes: '• Support attaching to running Chrome over CDP\n• Smaller desktop installer',
     });
     app.install.mockResolvedValue({
       version: '0.2.2',
       enabled: true,
       phase: 'installing',
       availableVersion: '0.3.0',
+      releaseNotes: '• Support attaching to running Chrome over CDP\n• Smaller desktop installer',
     });
     render(<AppUpdateSettingsPanel />);
 
     expect(await screen.findByText('Restart and install 0.3.0')).toBeTruthy();
+    const notes = screen.getByTestId('settings-app-release-notes');
+    expect(notes.textContent).toContain('Release notes · v0.3.0');
+    expect(notes.textContent).toContain('Support attaching to running Chrome over CDP');
     fireEvent.click(screen.getByTestId('settings-app-update'));
     await waitFor(() => {
       expect(app.install).toHaveBeenCalledOnce();

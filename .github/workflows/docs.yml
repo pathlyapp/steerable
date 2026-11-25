@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "CHANGELOG.md"
       - "docs/**"
       - "mkdocs.yml"
       - "packages/agent-ui/ts/**"
@@ -13,6 +14,7 @@ on:
       - "wrangler.jsonc"
   pull_request:
     paths:
+      - "CHANGELOG.md"
       - "docs/**"
       - "mkdocs.yml"
       - "packages/agent-ui/ts/**"

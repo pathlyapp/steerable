@@ -108,6 +108,10 @@ print(f"\n  {root_data['name']:<32}  {old:<10} -> {version}  (workspace root, no
 PY
 
 echo
+echo "Updating CHANGELOG.md and docs/changelog.md..."
+python3 scripts/release/changelog.py update --version "$VERSION"
+
+echo
 echo "Refreshing lockfiles..."
 pnpm install --lockfile-only
 uv lock

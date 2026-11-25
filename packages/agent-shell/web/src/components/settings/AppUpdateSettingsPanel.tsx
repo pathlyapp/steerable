@@ -52,6 +52,21 @@ export function AppUpdateSettingsPanel() {
           </button>
         ) : null}
       </div>
+      {release.releaseNotes ? (
+        <div
+          className="rounded-agent-md border border-agent-border bg-agent-card p-2.5 text-xs"
+          data-testid="settings-app-release-notes"
+        >
+          <p className="font-medium text-agent-foreground">
+            {release.availableVersion
+              ? t('Release notes · v{version}', { version: release.availableVersion })
+              : t('Release notes')}
+          </p>
+          <div className="mt-1.5 whitespace-pre-line leading-relaxed text-agent-muted-foreground">
+            {release.releaseNotes}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
