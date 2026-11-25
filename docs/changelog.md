@@ -2,6 +2,12 @@
 
 All notable changes to the Steerable framework (lockstep across TypeScript, Python, CLI, UI, and desktop host packages) are documented in this file.
 
+## [0.12.8](https://github.com/pathlyapp/steerable/compare/v0.12.7...v0.12.8) - 2026-11-25
+
+### Added
+- **release:** Added `scripts/release/changelog.py` to promote the `[Unreleased]` section, aggregate commits with optional LLM rewriting, and sync `docs/changelog.md`.
+- **shell:** In-app update release notes are now displayed in the desktop shell.
+
 ## [0.12.7](https://github.com/pathlyapp/steerable/compare/v0.12.6...v0.12.7) - 2026-11-24
 
 ### Added
