@@ -2,6 +2,21 @@
 
 All notable changes to the Steerable framework (lockstep across TypeScript, Python, CLI, UI, and desktop host packages) are documented in this file.
 
+## [0.14.0](https://github.com/pathlyapp/steerable/compare/v0.13.1...v0.14.0) - 2026-11-27
+
+### Breaking Changes
+- **runtime:** HTTP 413 responses are now unconditionally classified as `context_overflow`, regardless of provider or error body.
+
+### Added
+- **runtime:** Byte-budget compaction triggered by a 4 MiB `max_request_bytes` pressure threshold, with tiered tail-image offload.
+- **runtime:** Partial compaction support.
+- **runtime:** Ingress image normalizer that downscales images to a maximum of 1568px while keeping on-disk originals lossless.
+- **sidecar:** License RPC surface.
+- **shell:** Sidecar RPC wrappers for the Phase 10 surface.
+
+### Fixed
+- **runtime:** Phase 10 sidecar RPC wrappers are now wired up, and Rust artifacts are adopted at 1.0.12.
+
 ## [0.13.1](https://github.com/pathlyapp/steerable/compare/v0.13.0...v0.13.1) - 2026-11-26
 
 ### Fixed

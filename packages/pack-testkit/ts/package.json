@@ -1,6 +1,6 @@
 {
   "name": "@steerable/pack-testkit",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "type": "module",
   "description": "In-memory test host (`createPackTestHost`) and TypeScript AST static boundary guards for @steerable/pack-sdk scenario pack authors.",
   "license": "Apache-2.0",
