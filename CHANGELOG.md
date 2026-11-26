@@ -4,6 +4,8 @@ All notable changes to the Steerable framework (lockstep across TypeScript, Pyth
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/pathlyapp/steerable/compare/v0.12.8...v0.13.0) - 2026-11-26
+
 ### Added
 
 - **shell, security:** Unified `Principal` and `OriginChannel` turn context (`im` / `webhook` channel confinement), AES-256-GCM `CredentialBroker` with cross-origin redirect header stripping, unified `SecretRedactor` across transcripts, logs, spills, memories, and diagnostic bundles, runtime `/api/v2/auth/bootstrap`, `ApplicationManifest` switching (`steerable-cli app list|use|reset`), and `?safe=1` Safe Recovery Mode.
