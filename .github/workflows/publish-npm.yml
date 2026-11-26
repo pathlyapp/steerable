@@ -84,9 +84,16 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
-          # Setup the .npmrc to point at npmjs.org and read the auth token
-          # from `NODE_AUTH_TOKEN` (set in the publish step's `env:` below).
-          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm >= 11.5.1 for OIDC Trusted Publishing
+        run: |
+          npm_ver=$(npm --version)
+          echo "npm version: ${npm_ver}"
+          python3 - "${npm_ver}" <<'PY' || npm install -g npm@latest
+          import sys
+          major, minor, patch = (int(x) for x in sys.argv[1].split(".")[:3])
+          sys.exit(0 if (major, minor, patch) >= (11, 5, 1) else 1)
+          PY
 
       - name: Install + build workspace
         run: |
@@ -174,31 +181,41 @@ jobs:
 
       - name: Publish each @steerable/* TS package whose version is new
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          FALLBACK_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
         run: |
           set -euo pipefail
 
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::NPM_TOKEN secret is not configured. See RELEASING.md → 'Configuring NPM_TOKEN'."
-            exit 1
-          fi
-
           published_any=0
           # pack-sdk 是 agent-shell 的纯类型依赖（workspace:* 会被 pnpm 重写为
-          # 锁步版本号），必须先于 agent-shell 发布；agent-shell-web 是源码包，
-          # 产品经 vite.base + @/ alias 消费其 src/，与 ts 同版本发布。
-          # agent-runtime is consumed from source by no in-repo package and is
-          # published for external TypeScript hosts; it must exist before the
-          # CLI's optional platform dependencies resolve.
-          # Workspace packages first, then the assembled runtime packages.
-          # The runtime packages are generated into `dist/runtime/` and are not
-          # workspace members, so `pnpm --filter` cannot see them; they are
-          # published with `npm publish` from their own directory. They come
-          # after `agent-cli`'s dependencies are on the registry, and before
-          # `agent-cli` itself, which names them as optional dependencies.
+          # 锁步版本号），必须先于 agent-shell 发布；pack-testkit 先于 agent-cli；
+          # agent-shell-web 是源码包，产品经 vite.base + @/ alias 消费其 src/，与 ts 同版本发布。
+          # Workspace packages first, then the assembled runtime packages, then agent-cli.
           WORKSPACE_PACKAGES="packages/agent-protocol/ts packages/agent-harness/ts packages/agent-ui/ts packages/pack-sdk/ts packages/pack-testkit/ts packages/agent-runtime/ts packages/agent-shell/ts packages/agent-client/ts packages/agent-shell/web packages/agent-shell/tauri"
           RUNTIME_PACKAGES="dist/runtime/runtime-darwin-arm64 dist/runtime/runtime-darwin-x64 dist/runtime/runtime-linux-x64 dist/runtime/runtime-linux-arm64 dist/runtime/runtime-win32-x64"
+
+          npm_publish_with_oidc_or_fallback() {
+            target=$1
+            pkg_name=$2
+            # 1. Primary path: OIDC Trusted Publishing (no static _authToken set,
+            #    so npm CLI >= 11.5.1 exchanges GitHub Actions OIDC automatically).
+            if env -u NODE_AUTH_TOKEN -u NPM_TOKEN npm publish "${target}" --access public --provenance; then
+              return 0
+            fi
+            # 2. Optional fallback for first-time package bootstrap if a valid NPM_TOKEN exists.
+            if [ -n "${FALLBACK_NPM_TOKEN:-}" ]; then
+              echo "::warning::OIDC publish failed for ${pkg_name}; retrying with FALLBACK_NPM_TOKEN..."
+              tmp_npmrc=$(mktemp)
+              printf "//registry.npmjs.org/:_authToken=%s\n" "${FALLBACK_NPM_TOKEN}" > "${tmp_npmrc}"
+              if NPM_CONFIG_USERCONFIG="${tmp_npmrc}" npm publish "${target}" --access public --provenance; then
+                rm -f "${tmp_npmrc}"
+                return 0
+              fi
+              rm -f "${tmp_npmrc}"
+            fi
+            echo "::error::Failed to publish ${pkg_name}. Ensure npm Trusted Publisher is configured at https://www.npmjs.com/package/${pkg_name}/access (GitHub Actions: owner=pathlyapp, repo=steerable, workflow=release.yml, allow npm publish)."
+            return 1
+          }
 
           publish_workspace() {
             dir=$1
@@ -210,13 +227,17 @@ jobs:
             fi
             echo "::group::publish ${name}@${local_version}"
             if [ "${DRY_RUN}" = "true" ]; then
-              echo "DRY_RUN=true; would run: pnpm --filter ${name} publish --no-git-checks --access public --provenance"
+              echo "DRY_RUN=true; would pack ${dir} with pnpm and publish via OIDC"
               ( cd "${dir}" && npm pack --dry-run )
             else
-              # `pnpm publish` rewrites `workspace:*` ranges to the resolved
-              # version, runs the package's `prepublishOnly` script, and
-              # honours `publishConfig.access` + `publishConfig.provenance`.
-              pnpm --filter "${name}" publish --no-git-checks
+              # `pnpm pack` rewrites `workspace:*` ranges to the resolved lockstep
+              # version and runs `prepublishOnly`; `npm publish` then authenticates
+              # natively via GitHub Actions OIDC Trusted Publishing.
+              pack_dir=$(mktemp -d)
+              ( cd "${dir}" && pnpm pack --pack-destination "${pack_dir}" >/dev/null )
+              tarball=$(ls "${pack_dir}"/*.tgz)
+              npm_publish_with_oidc_or_fallback "${tarball}" "${name}"
+              rm -rf "${pack_dir}"
             fi
             echo "::endgroup::"
             published_any=1
@@ -239,9 +260,7 @@ jobs:
               echo "DRY_RUN=true; would run: (cd ${dir} && npm publish --access public --provenance)"
               ( cd "${dir}" && npm pack --dry-run )
             else
-              # `npm publish` from the package directory: these packages have no
-              # `workspace:` ranges, and they are not workspace members.
-              ( cd "${dir}" && npm publish --access public --provenance )
+              ( cd "${dir}" && npm_publish_with_oidc_or_fallback "." "${name}" )
             fi
             echo "::endgroup::"
             published_any=1

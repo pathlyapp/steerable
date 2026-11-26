@@ -187,22 +187,13 @@ without a registry.
          `steerable-plugin-sdk`,
          `steerable-sidecar`. See "Configuring PyPI publish" below.
 
-2. **Configure `NPM_TOKEN`**:
-   - Generate a **Granular Access Token** (recommended over the legacy
-     "automation" type) at
-     <https://www.npmjs.com/settings/~/tokens>:
-     - **Permissions** → "Read and write"
-     - **Packages and scopes** → restrict to the `@steerable` scope
-     - Expiry: pick something ≥1 year so a release tag push doesn't fail
-       on silent token expiry; rotate by setting a new token before the
-       old expires.
-   - Drop it into the repo:
-
-     ```bash
-     gh secret set NPM_TOKEN \
-       --repo pathlyapp/steerable \
-       --body "<paste-the-token>"
-     ```
+2. **Configure npm publish (Trusted Publishing / OIDC — recommended)**:
+   - On npmjs.com, open each `@steerable/*` package's **Settings → Trusted Publisher** (`https://www.npmjs.com/package/@steerable/<pkg>/access`) and add **GitHub Actions**:
+     - **Organization or user**: `pathlyapp`
+     - **Repository**: `steerable`
+     - **Workflow filename**: `release.yml` (npm validates the top-level calling workflow)
+     - **Allowed actions**: enable **`npm publish`** (direct publish)
+   - For a brand-new `@steerable/*` package that does not exist on npm yet, publish its initial tarball once interactively (`npm login` + `pnpm pack` + `npm publish <tarball> --access public`), then add the Trusted Publisher above. `NPM_TOKEN` in GitHub Secrets is optional fallback only.
 
 3. **Configure PyPI publish (pick one)**:
 
