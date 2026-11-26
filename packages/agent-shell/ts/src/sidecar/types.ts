@@ -197,6 +197,45 @@ export interface SidecarSessionMessages {
   messages: Array<{ seq: number; role: string; content: string }>;
 }
 
+/** Phase 10 R3: `agent.session.compact` parameters (supports Partial Compaction). */
+export interface SidecarSessionCompactParams {
+  recordId: string;
+  focus?: string;
+  keepHeadTurns?: number;
+  keepTailMessages?: number;
+  provider?: string;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
+  maxContextTokens?: number;
+  maxRequestBytes?: number;
+}
+
+/** Phase 10 R3: `agent.session.compact` result. */
+export interface SidecarSessionCompactResult {
+  recordId: string;
+  recordExists: boolean;
+  compacted: number;
+  preTokens: number;
+  postTokens: number;
+  preBytes: number;
+  postBytes: number;
+  summaryText?: string;
+  messages: Array<{ seq: number; role: string; content: string }>;
+}
+
+/** Phase 10 R3: `agent.session.context_status` result. */
+export interface SidecarSessionContextStatus {
+  recordId: string;
+  recordExists: boolean;
+  estimatedTokens: number;
+  maxContextTokens: number;
+  estimatedBytes: number;
+  maxRequestBytes: number;
+  messageCount: number;
+  compactionCount: number;
+}
+
 /**
  * `agent.children.list` result: the durable child-agent index for one parent
  * session. `status` is composed, never stored raw — a terminal row reports
@@ -744,4 +783,38 @@ export interface SidecarModelCatalog {
   fetchedAt?: number;
   /** Absent on the offline path (no gateway/env context to report). */
   current?: { model: string | null; reasoningEffort: string | null };
+}
+
+export type SidecarLicenseState =
+  | 'disabled'
+  | 'valid'
+  | 'expiring'
+  | 'grace'
+  | 'expired'
+  | 'invalid';
+
+export interface SidecarLicenseStatus {
+  enforced: boolean;
+  state: SidecarLicenseState;
+  errorCode: string | null;
+  message: string | null;
+  licenseId: string | null;
+  customer: string | null;
+  product: string | null;
+  features: string[];
+  issuedAt?: string | null;
+  notBefore: string | null;
+  notAfter: string | null;
+  graceDays: number | null;
+  expiringNoticeDays?: number | null;
+  daysRemaining: number | null;
+  graceDaysRemaining: number | null;
+  maxUsers: number | null;
+  maxConcurrentRuns: number | null;
+  activeConcurrentRuns: number;
+  deploymentId: string | null;
+  boundDeploymentId?: string | null;
+  keyEnvironment?: string | null;
+  observedNow?: number;
+  maxRecordedTime?: number | null;
 }

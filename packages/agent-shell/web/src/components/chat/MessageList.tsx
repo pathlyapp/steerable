@@ -211,6 +211,36 @@ interface MessageListProps {
   onSelectSuggestion?: (text: string) => void;
 }
 
+const COMPACTED_SUMMARY_PREFIX = '[context compacted: earlier conversation summarized]';
+
+function CompactionSummaryDivider({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const body = content.startsWith(COMPACTED_SUMMARY_PREFIX)
+    ? content.slice(COMPACTED_SUMMARY_PREFIX.length).trim()
+    : content;
+  return (
+    <div data-testid="compaction-divider" className="my-2">
+      <div className="flex items-center gap-2 text-[11px] text-agent-muted-foreground">
+        <div className="h-px flex-1 bg-agent-border/60" />
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="rounded-full border border-agent-border/60 bg-agent-muted/40 px-2.5 py-0.5 transition-colors hover:text-agent-foreground"
+        >
+          {t('Earlier conversation compacted')}
+        </button>
+        <div className="h-px flex-1 bg-agent-border/60" />
+      </div>
+      {expanded && body ? (
+        <div className="mt-1.5 rounded-agent-md border border-agent-border/60 bg-agent-muted/30 px-3 py-2 text-xs whitespace-pre-wrap text-agent-muted-foreground">
+          {body}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function MessageList({
   messages,
   isStreaming,
@@ -453,6 +483,11 @@ export function MessageList({
                     {turn.userGroup.messages.length === 1 ? (
                       internalTrigger(turn.userGroup.messages[0]) ? (
                         null
+                      ) : turn.userGroup.messages[0].content.startsWith(COMPACTED_SUMMARY_PREFIX) ? (
+                        <CompactionSummaryDivider
+                          key={turn.userGroup.messages[0].id}
+                          content={turn.userGroup.messages[0].content}
+                        />
                       ) : (
                         <UserMessage
                           key={turn.userGroup.messages[0].id}
@@ -477,6 +512,10 @@ export function MessageList({
                             {turn.userGroup.messages.map((msg, idx) => (
                               internalTrigger(msg) ? (
                                 null
+                              ) : msg.content.startsWith(COMPACTED_SUMMARY_PREFIX) ? (
+                                <div key={msg.id} className="px-3 py-1">
+                                  <CompactionSummaryDivider content={msg.content} />
+                                </div>
                               ) : (
                                 <UserMessage
                                   key={msg.id}

@@ -117,6 +117,8 @@ async function runCli(options: CliOptions): Promise<number> {
         'signing-key-env': { type: 'string' },
         profile: { type: 'string' },
         manifest: { type: 'string' },
+        'require-license': { type: 'boolean', default: false },
+        'license-file': { type: 'string' },
         'redact-content': { type: 'boolean' },
         'no-redact-content': { type: 'boolean', default: false },
         suite: { type: 'string' },
@@ -178,6 +180,11 @@ async function runCli(options: CliOptions): Promise<number> {
     const report = await runPreflightChecks({
       profile,
       manifestPath: typeof parsed.values.manifest === 'string' ? parsed.values.manifest : undefined,
+      requireLicense: parsed.values['require-license'] === true,
+      licenseFilePath:
+        typeof parsed.values['license-file'] === 'string'
+          ? parsed.values['license-file']
+          : (options.env ?? process.env).STEERABLE_LICENSE_FILE,
     });
     if (parsed.values.json) {
       stdout.write(`${JSON.stringify(report)}\n`);
@@ -203,7 +210,15 @@ async function runCli(options: CliOptions): Promise<number> {
         ? parsed.values.out
         : `steerable-diag-${Date.now()}.tgz`;
     const redactContent = parsed.values['no-redact-content'] !== true;
-    const bundle = exportDiagBundle({ dataDir, outFile, redactContent });
+    const bundle = exportDiagBundle({
+      dataDir,
+      outFile,
+      redactContent,
+      licenseFilePath:
+        typeof parsed.values['license-file'] === 'string'
+          ? parsed.values['license-file']
+          : (options.env ?? process.env).STEERABLE_LICENSE_FILE,
+    });
     if (parsed.values.json) {
       stdout.write(`${JSON.stringify(bundle)}\n`);
     } else {

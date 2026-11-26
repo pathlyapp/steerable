@@ -346,4 +346,34 @@ describe('AssistantMessage 失败与停止', () => {
     expect(screen.queryByTestId('continued-here')).toBeNull();
     expect(screen.getByTestId('turn-failure')).toBeTruthy();
   });
+
+  it('T-CMP-04: 流式结束带 [stream error] 前缀但 messageMetadata 已含结构化 failure 时，直接展示真实分类与 traceId 而非 Not classified', () => {
+    render(
+      <AssistantMessage
+        message={{
+          ...MESSAGE,
+          content: '[stream error] HTTP 413 <html>413 Request Entity Too Large</html>',
+          messageMetadata: JSON.stringify({
+            completionStatus: 'failed',
+            completionReason: 'HTTP 413 Request Entity Too Large',
+            traceId: 'trace-413-live',
+            failure: {
+              kind: 'context_overflow',
+              statusCode: 413,
+              provider: 'openai_compat',
+            },
+          }),
+        } as ChatMessage}
+        isStreaming={false}
+        agents={[]}
+        currentAgent={null}
+      />,
+    );
+    const card = screen.getByTestId('turn-failure');
+    expect(card.getAttribute('data-failure-kind')).toBe('context_overflow');
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    const details = screen.getByTestId('turn-failure-details');
+    expect(details.textContent).not.toContain('Not classified');
+    expect(details.textContent).toContain('trace-413-live');
+  });
 });

@@ -6,16 +6,52 @@
  * required binaries (`soffice`, `gs`, etc.) and required font files.
  */
 import { execFileSync } from 'node:child_process';
-import { X509Certificate } from 'node:crypto';
+import { createPublicKey, verify as cryptoVerify, X509Certificate } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+const DEFAULT_PRODUCTION_PUBKEY_HEX =
+  'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a';
+const BUILTIN_TEST_PUBKEY_HEX =
+  '823a0180dd445bb17da134192431fe2c6a9c0281487be99112cfd3909c3af842';
+
+function canonicalizeJcs(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalizeJcs(item)).join(',')}]`;
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj)
+    .filter((k) => obj[k] !== undefined)
+    .sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalizeJcs(obj[k])}`).join(',')}}`;
+}
+
+function parseDateBoundaryMs(raw: string, endOfDay: boolean): number | null {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) {
+    const ms = Date.parse(`${raw.trim()}T${endOfDay ? '23:59:59.999Z' : '00:00:00.000Z'}`);
+    return Number.isFinite(ms) ? ms : null;
+  }
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : null;
+}
 
 export interface PreflightManifest {
   readonly name?: string;
   readonly minDiskFreeMb?: number;
   readonly tlsCertPath?: string;
   readonly minCertDaysRemaining?: number;
+  readonly requireLicense?: boolean;
+  readonly licenseFilePath?: string;
+  readonly licenseStateDir?: string;
+  readonly expectedProduct?: string;
+  readonly licensePubkeyHex?: string;
+  readonly minLicenseDaysRemaining?: number;
+  readonly allowTestLicenseKeys?: boolean;
   readonly requiredCommands?: ReadonlyArray<{
     readonly bin: string;
     readonly remediation?: string;
@@ -95,6 +131,12 @@ export async function runPreflightChecks(options: {
   readonly profile?: 'server' | 'desktop';
   readonly manifest?: PreflightManifest;
   readonly manifestPath?: string;
+  readonly requireLicense?: boolean;
+  readonly licenseFilePath?: string;
+  readonly licenseStateDir?: string;
+  readonly expectedProduct?: string;
+  readonly licensePubkeyHex?: string;
+  readonly allowTestLicenseKeys?: boolean;
   readonly cpuArchOverride?: string;
   readonly cpuFlagsOverride?: readonly string[];
   readonly envPathOverride?: string;
@@ -266,6 +308,193 @@ export async function runPreflightChecks(options: {
               `Install font "${font.name}" into /usr/share/fonts/ and run \`fc-cache -fv\`.`,
           }),
     });
+  }
+
+  // 7. Commercial license file check (active only when STEERABLE_LICENSE_FILE is set or --require-license / manifest.requireLicense)
+  const resolvedLicensePath =
+    options.licenseFilePath ?? manifest.licenseFilePath ?? process.env.STEERABLE_LICENSE_FILE;
+  const shouldCheckLicense =
+    Boolean(options.requireLicense) ||
+    Boolean(manifest.requireLicense) ||
+    Boolean(resolvedLicensePath && resolvedLicensePath.trim().length > 0);
+
+  if (shouldCheckLicense) {
+    if (!resolvedLicensePath || !fs.existsSync(resolvedLicensePath)) {
+      checks.push({
+        id: 'license',
+        status: 'fail',
+        detail: resolvedLicensePath
+          ? `License file not found at "${resolvedLicensePath}".`
+          : 'Commercial license required (--require-license), but STEERABLE_LICENSE_FILE is not set.',
+        remediation:
+          'Mount a valid `.lic` file and set STEERABLE_LICENSE_FILE=/var/lib/steerable/license/<product>.lic.',
+      });
+    } else {
+      try {
+        const rawText = fs.readFileSync(resolvedLicensePath, 'utf8');
+        const envelope = JSON.parse(rawText) as {
+          payload?: Record<string, unknown>;
+          keyEnvironment?: string;
+          signature?: string;
+        };
+        const payload = envelope.payload;
+        if (
+          !payload ||
+          typeof payload !== 'object' ||
+          typeof envelope.signature !== 'string' ||
+          typeof payload.licenseId !== 'string' ||
+          typeof payload.product !== 'string' ||
+          typeof payload.notBefore !== 'string' ||
+          typeof payload.notAfter !== 'string'
+        ) {
+          checks.push({
+            id: 'license',
+            status: 'fail',
+            detail: `Malformed license envelope in "${resolvedLicensePath}".`,
+            remediation: 'Replace the corrupted `.lic` file with a freshly issued signed license.',
+          });
+        } else {
+          const allowTest =
+            options.allowTestLicenseKeys ??
+            manifest.allowTestLicenseKeys ??
+            process.env.STEERABLE_LICENSE_ALLOW_TEST_KEYS === '1';
+          if (envelope.keyEnvironment === 'test' && !allowTest) {
+            checks.push({
+              id: 'license',
+              status: 'fail',
+              detail: `License "${payload.licenseId}" uses test keyEnvironment, which is forbidden in production.`,
+              remediation: 'Re-issue the license with the offline production signing key.',
+            });
+          } else {
+            const pubHex = (
+              options.licensePubkeyHex ??
+              manifest.licensePubkeyHex ??
+              process.env.STEERABLE_LICENSE_PUBKEY_HEX ??
+              (envelope.keyEnvironment === 'test'
+                ? BUILTIN_TEST_PUBKEY_HEX
+                : DEFAULT_PRODUCTION_PUBKEY_HEX)
+            ).trim();
+            const rawPub = Buffer.from(pubHex, 'hex');
+            const spki = createPublicKey({
+              key: Buffer.concat([ED25519_SPKI_PREFIX, rawPub]),
+              format: 'der',
+              type: 'spki',
+            });
+            const canonicalBytes = Buffer.from(canonicalizeJcs(payload), 'utf8');
+            const sigBytes = Buffer.from(envelope.signature.trim(), 'base64url');
+            const sigValid =
+              rawPub.length === 32 &&
+              sigBytes.length === 64 &&
+              cryptoVerify(null, canonicalBytes, spki, sigBytes);
+
+            const expectedProd =
+              options.expectedProduct ??
+              manifest.expectedProduct ??
+              process.env.KEEL_LICENSE_PRODUCT;
+            const stateDir =
+              options.licenseStateDir ??
+              manifest.licenseStateDir ??
+              process.env.STEERABLE_LICENSE_STATE_DIR ??
+              path.dirname(resolvedLicensePath);
+            const deployIdFile = path.join(stateDir, '.deployment_id');
+            const persistedDeployId = fs.existsSync(deployIdFile)
+              ? fs.readFileSync(deployIdFile, 'utf8').trim()
+              : null;
+            const boundDeployId =
+              typeof payload.deploymentId === 'string' && payload.deploymentId.trim()
+                ? payload.deploymentId.trim()
+                : null;
+
+            const notBeforeMs = parseDateBoundaryMs(payload.notBefore, false);
+            const notAfterMs = parseDateBoundaryMs(payload.notAfter, true);
+            const graceDays =
+              typeof payload.graceDays === 'number' && payload.graceDays >= 0
+                ? payload.graceDays
+                : 15;
+            const warnDays =
+              manifest.minLicenseDaysRemaining ??
+              (typeof payload.expiringNoticeDays === 'number' ? payload.expiringNoticeDays : 30);
+
+            if (!sigValid) {
+              checks.push({
+                id: 'license',
+                status: 'fail',
+                detail: `Ed25519 signature verification failed for license "${payload.licenseId}".`,
+                remediation: 'Ensure the `.lic` file was not modified and matches this binary public key.',
+              });
+            } else if (expectedProd && payload.product !== expectedProd) {
+              checks.push({
+                id: 'license',
+                status: 'fail',
+                detail: `License product mismatch: expected "${expectedProd}", got "${payload.product}".`,
+                remediation: `Issue a license bound to product "${expectedProd}".`,
+              });
+            } else if (boundDeployId && persistedDeployId && boundDeployId !== persistedDeployId) {
+              checks.push({
+                id: 'license',
+                status: 'fail',
+                detail: `License deploymentId mismatch: license bound to "${boundDeployId}", host has "${persistedDeployId}".`,
+                remediation: `Request a license bound to deploymentId "${persistedDeployId}".`,
+              });
+            } else if (notBeforeMs === null || notAfterMs === null) {
+              checks.push({
+                id: 'license',
+                status: 'fail',
+                detail: `Invalid notBefore/notAfter date format in license "${payload.licenseId}".`,
+              });
+            } else if (now < notBeforeMs) {
+              checks.push({
+                id: 'license',
+                status: 'fail',
+                detail: `License "${payload.licenseId}" is not yet valid (notBefore=${payload.notBefore}); verify host NTP clock.`,
+                remediation: 'Synchronize host system clock via chrony/ntpd or check license start date.',
+              });
+            } else {
+              const daysRemaining = Math.ceil((notAfterMs - now) / (24 * 60 * 60 * 1000));
+              const graceEndMs = notAfterMs + graceDays * 24 * 60 * 60 * 1000;
+              const graceRemaining = Math.ceil((graceEndMs - now) / (24 * 60 * 60 * 1000));
+              if (now > graceEndMs) {
+                checks.push({
+                  id: 'license',
+                  status: 'fail',
+                  detail: `License "${payload.licenseId}" expired (grace period ended on ${new Date(graceEndMs).toISOString().slice(0, 10)}).`,
+                  remediation: 'Renew the commercial `.lic` file before starting production inference.',
+                });
+              } else if (now > notAfterMs) {
+                checks.push({
+                  id: 'license',
+                  status: 'warn',
+                  detail: `License "${payload.licenseId}" is in grace period (${graceRemaining} grace days left).`,
+                  remediation: 'Upload a renewed `.lic` file as soon as possible.',
+                });
+              } else if (daysRemaining <= warnDays) {
+                checks.push({
+                  id: 'license',
+                  status: 'warn',
+                  detail: `License "${payload.licenseId}" expires in ${daysRemaining} days (notAfter=${payload.notAfter}).`,
+                  remediation: 'Contact vendor to renew the license before expiration.',
+                });
+              } else {
+                checks.push({
+                  id: 'license',
+                  status: 'pass',
+                  detail: `License "${payload.licenseId}" (${payload.product}) verified; ${daysRemaining} days remaining.`,
+                });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        checks.push({
+          id: 'license',
+          status: 'fail',
+          detail: `Failed to verify license "${resolvedLicensePath}": ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          remediation: 'Verify `.lic` JSON syntax and file permissions.',
+        });
+      }
+    }
   }
 
   return {

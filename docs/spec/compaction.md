@@ -347,15 +347,20 @@ prompt token 总量反而下降（light 68,605 → 61,360；heavy 281,748 →
 2. **fold 视界对齐**——✅ 已发布（v0.6.18，2026-09-16）。
    评测套件发现的 tail 泄漏；fold/offload 视界 = tail 起点，兜底
    无视界 fold 只接退化情形。针召回 0.58/0.80 → 1.00/1.00。
-3. **P1 区段事务**——✅ 大部分已发布（v0.6.18，2026-09-16）：
-   record v3 括号三元组 + loop 接线 + L2 断言。剩余：start
-   先于 summarizer 落库（hook 持有 record 通道）与恢复时复用已
-   付费摘要，随崩溃注入测试一起落地。
-4. **P2 图像 offload**——✅ 已发布（v0.6.18，2026-09-16）：
-   prune 阶段内、视界内、计数门控；summarizer 回放文本化。
-5. **P3 per-model 策略**——✅ 已发布（v0.6.18，2026-09-16）：
-   `resolve_compaction_policy` 成为唯一决策点，两处组装
-   if/else 删除。
+3. **P1 区段事务**——✅ 已发布（v0.13.1，2026-11-26 全部闭环）：
+   record v3 括号三元组 + `CompactionJournal` 先于 summarizer 写入
+   `compaction_start` + 崩溃恢复 `recover_dangling_compaction` 复用已付费摘要
+   而不重复请求模型。
+4. **P2 图像双保险**——✅ 已发布（v0.13.1，2026-11-26 增强）：
+   入栈附件与截图双轨代理缩图（模型侧长边 `≤ 1568px`、超 `512 KiB` 转 JPEG `q=82`，
+   磁盘原图字节不变）+ 视界内计数 offload + 字节超限/`HTTP 413` 时的阶梯式尾部
+   图片强制卸载（Tier 1 卸载倒数第 2 张以前，Tier 2 仅保留最新 1 张）。
+5. **P3 per-model 策略与字节预算**——✅ 已发布（v0.13.1，2026-11-26 增强）：
+   `resolve_compaction_policy` 与 `resolve_max_request_bytes`（默认 `4 MiB`，
+   `0.85` 预步水位触发）双维门控；`HTTP 413` 无条件归类为 `context_overflow` 自愈。
+6. **P4 局部定向压缩（Partial Compaction）与双端对齐**——✅ 已发布（v0.13.1，2026-11-26）：
+   `agent.session.compact` 与 `/compact [focus]` 支持 `focus`、`keepHeadTurns`、
+   `keepTailMessages`；Python 与 Rust 原生 `CompactionHooks` 100% 行为对齐。
 
 ## 非目标
 

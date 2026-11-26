@@ -8,6 +8,10 @@
  */
 
 import { createHash } from 'node:crypto';
+import {
+  normalizeToolImagePayload,
+  type ToolImagePayload,
+} from '../attachments/image-normalizer.js';
 import { classifyShellCommand } from './safety-patterns.js';
 import { isRejectedBeforeEffectError } from './rejected-before-effect.js';
 import { compactToolResultJson } from '../local-backend/context-compactor.js';
@@ -64,6 +68,11 @@ function capResultForModelContext(out: unknown): unknown {
         : null;
     const image = data?._image;
     if (image && typeof image === 'object') {
+      const imgRecord = image as Record<string, unknown>;
+      const normalizedImage =
+        typeof imgRecord.b64 === 'string' && typeof imgRecord.media_type === 'string'
+          ? normalizeToolImagePayload(imgRecord as unknown as ToolImagePayload)
+          : image;
       const textOnly = { ...record, data: { ...data } };
       delete (textOnly.data as Record<string, unknown>)._image;
       const capped = capResultForModelContext(textOnly) as Record<string, unknown>;
@@ -71,7 +80,19 @@ function capResultForModelContext(out: unknown): unknown {
         capped.data && typeof capped.data === 'object'
           ? (capped.data as Record<string, unknown>)
           : {};
-      return { ...capped, data: { ...cappedData, _image: image } };
+      return {
+        ...capped,
+        data: {
+          ...cappedData,
+          _image:
+            typeof (normalizedImage as { b64?: unknown }).b64 === 'string'
+              ? {
+                  b64: (normalizedImage as ToolImagePayload).b64,
+                  media_type: (normalizedImage as ToolImagePayload).media_type,
+                }
+              : image,
+        },
+      };
     }
   }
   const json = JSON.stringify(out);

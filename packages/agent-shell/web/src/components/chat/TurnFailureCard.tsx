@@ -152,10 +152,14 @@ function actionLabel(action: FailureAction): string {
   switch (action.kind) {
     case 'retry':
       return t('Continue');
+    case 'compact-and-retry':
+      return t('Compact context and continue');
     case 'network-diagnostics':
       return t('Network diagnostics');
     case 'open-model-settings':
       return t('Open model settings');
+    case 'open-license-settings':
+      return t('Manage license');
     case 'new-chat':
       return t('New chat');
   }
@@ -174,6 +178,8 @@ function causeSummary(detail: TurnFailureDetail | undefined, reason: string): st
       return t('The service reported its own failure.');
     case 'context_overflow':
       return t('The request exceeds the model window.');
+    case 'license':
+      return t('The system deployment license is expired or invalid.');
     case 'invalid_request':
       return t('The service rejected the request.');
     default:
@@ -193,6 +199,8 @@ function categoryLabel(kind: string | undefined): string {
       return t('Service error');
     case 'context_overflow':
       return t('Conversation too long');
+    case 'license':
+      return t('System license');
     case 'invalid_request':
       return t('Rejected request');
     default:

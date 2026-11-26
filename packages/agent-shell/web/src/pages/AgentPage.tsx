@@ -12,6 +12,7 @@ import { ChatHeader } from "@/components/ChatHeader";
 import { EmptyChatHero } from "@/components/chat/EmptyChatHero";
 import type { RetryState } from "@/components/chat/RetryStatus";
 import type { FailureAction } from "@/components/chat/turn-failure";
+import { ContextUsagePill } from "@/components/chat/ContextUsagePill";
 import { LocalChatPanel } from "@/components/chat/LocalChatPanel";
 import { ModelPicker } from "@/components/chat/ModelPicker";
 import {
@@ -58,6 +59,7 @@ import {
 } from "@/components/chat/ChatProjectBadge";
 import { ProjectTrustBanner } from "@/components/chat/ProjectTrustBanner";
 import {
+  compactChat,
   getChatLiveStream,
   type ChatLiveStream,
   type LocalChatMessage,
@@ -686,6 +688,8 @@ function AgentChatView({
     persistExecPolicy(next);
   }, []);
 
+  const setMessagesRef = useRef<((updater: (prev: any[]) => any[]) => void) | null>(null);
+
   const handleUnknownEvent = useCallback((event: SSEEvent) => {
     const ev = event as any;
     if (ev.type !== "agent") return;
@@ -825,6 +829,23 @@ function AgentChatView({
       }
       pendingTurnUsageRef.current = undefined;
       setTailAssistantDbId(messageId);
+      const persistedMetadata = ev.payload?.messageMetadata;
+      if (typeof persistedMetadata === "string" && persistedMetadata) {
+        setMessagesRef.current?.((prev) => {
+          for (let idx = prev.length - 1; idx >= 0; idx -= 1) {
+            if (prev[idx]?.role === "assistant") {
+              const next = [...prev];
+              next[idx] = {
+                ...next[idx],
+                id: messageId,
+                messageMetadata: persistedMetadata,
+              };
+              return next;
+            }
+          }
+          return prev;
+        });
+      }
     }
     // AI 标题更新走的是后台 IPC 广播（chat-title-updated）而不是 SSE——
     // 见 AgentLayout 里的订阅。SSE 通道在 [DONE] 之后就不再监听了，title-gen
@@ -857,6 +878,7 @@ function AgentChatView({
     onUnknownEvent: handleUnknownEvent,
     onStreamError: handleStreamError,
   });
+  setMessagesRef.current = setMessages as any;
   const awaitingRemoteActiveSnapshotRef = useRef(false);
   useEffect(() => {
     awaitingRemoteActiveSnapshotRef.current = false;
@@ -1040,6 +1062,20 @@ function AgentChatView({
 
   const handleSubmit = useCallback(
     (input: { content: string; metadata?: Record<string, unknown> }) => {
+      const trimmedCmd = input.content.trim();
+      if (/^\/compact(?:\s+|$)/i.test(trimmedCmd) && hasHostBridge()) {
+        const focusArg = trimmedCmd.replace(/^\/compact\s*/i, "").trim();
+        void compactChat(chatId, focusArg ? { focus: focusArg } : {})
+          .then((res) => {
+            if (res.compacted > 0) {
+              onBranchTick();
+            }
+          })
+          .catch((err: unknown) =>
+            setNewChatError(err instanceof Error ? err.message : String(err)),
+          );
+        return;
+      }
         trackBehavior('composer_send', {
         empty: !input.content.trim(),
         mode: input.metadata?.mode === 'plan' ? 'plan' : 'agent',
@@ -1087,7 +1123,7 @@ function AgentChatView({
         metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
       });
     },
-    [sendUserMessage, modelOverride, effortOverride, execPolicy],
+    [sendUserMessage, modelOverride, effortOverride, execPolicy, chatId, onBranchTick],
   );
 
   const handleEditUserMessage = useCallback(
@@ -1297,6 +1333,27 @@ function AgentChatView({
             disabled: isStreaming,
             hint: isStreaming ? t("This chat is running. Continue when it finishes.") : undefined,
           };
+        case "compact-and-retry":
+          return hasHostBridge()
+            ? {
+                onClick: () => {
+                  void compactChat(chatId)
+                    .then(() => {
+                      onBranchTick();
+                      void handleContinueInterrupted();
+                    })
+                    .catch((err: unknown) =>
+                      setNewChatError(err instanceof Error ? err.message : String(err)),
+                    );
+                },
+                disabled: isStreaming,
+                hint: isStreaming
+                  ? t("This chat is running. Continue when it finishes.")
+                  : undefined,
+              }
+            : null;
+        case "open-license-settings":
+          return null;
         case "network-diagnostics":
           // 诊断区挂在设置页「通用」下（settingsChrome('diagnose') 控制显隐）。
           return settingsChrome("diagnose")
@@ -1330,10 +1387,12 @@ function AgentChatView({
     [
       chat?.agentId,
       chat?.projectId,
+      chatId,
       ctx,
       handleContinueInterrupted,
       isStreaming,
       navigate,
+      onBranchTick,
     ],
   );
 
@@ -1602,18 +1661,28 @@ function AgentChatView({
             : undefined
         }
         inputToolbarExtras={
-          <ModelPicker
-            model={modelOverride}
-            reasoningEffort={effortOverride}
-            onSelectModel={setModelOverride}
-            onSelectEffort={setEffortOverride}
-            onOpenSettings={
-              hasHostBridge() && settingsChrome("llm")
-                ? () => setLlmSettingsOpen(true)
-                : undefined
-            }
-            disabled={isStreaming}
-          />
+          <div className="inline-flex items-center gap-1.5">
+            <ModelPicker
+              model={modelOverride}
+              reasoningEffort={effortOverride}
+              onSelectModel={setModelOverride}
+              onSelectEffort={setEffortOverride}
+              onOpenSettings={
+                hasHostBridge() && settingsChrome("llm")
+                  ? () => setLlmSettingsOpen(true)
+                  : undefined
+              }
+              disabled={isStreaming}
+            />
+            <ContextUsagePill
+              chatId={chatId}
+              messageCount={effectiveMessages.length}
+              isStreaming={effectiveIsStreaming}
+              livePromptTokens={currentTurnUsage?.promptTokens}
+              liveCachedPromptTokens={currentTurnUsage?.cachedPromptTokens}
+              onCompacted={() => onBranchTick()}
+            />
+          </div>
         }
         mode={mode}
         onModeChange={handleModeChange}

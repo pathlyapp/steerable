@@ -138,17 +138,18 @@ default.
   on `steerable-plugin-sdk`. Name collisions fail closed. What we still
   lack is what Claude Code and Codex now both have: a marketplace, and in
   Claude Code's case a blocklist and an impersonation check.
-- **Context compaction: three default paths plus one opt-in, and both
-  breakers.** Pressure-triggered, overflow-reactive and manual
-  (`compact_now`) compaction are on by default; periodic micro-compaction
-  (tool-result pruning) is opt-in via `micro_compact_interval_rounds`. Two
-  circuit breakers match Claude Code's pair — three consecutive ineffective
-  compactions, or three whose freed space refills within three rounds — and
-  the tripping round appends an actionable thrashing reminder. A hysteresis
-  margin (which Claude Code does not have) keeps a borderline transcript
-  from re-compacting every round. What we still lack is Claude Code's
-  partial compaction that keeps a named prefix or suffix of the
-  conversation verbatim.
+- **Context compaction: dual token + wire-byte budgets, partial compaction,
+  and Python/Rust parity.** Pressure-triggered (`max_context_tokens` and
+  `max_request_bytes` at 4 MiB default), overflow-reactive (including
+  unconditional HTTP `413` recovery with tiered tail-image offload) and
+  authoritative session/manual compaction (`agent.session.compact` with
+  `focus`, `keepHeadTurns`, and `keepTailMessages` partial retention) ship in
+  both the Python runtime and the native Rust `CompactionHooks`; periodic
+  micro-compaction is opt-in via `micro_compact_interval_rounds`. Two circuit
+  breakers match Claude Code's pair — three consecutive ineffective
+  compactions, or three whose freed space refills within three rounds — plus a
+  write-ahead `compaction_start` journal that reuses an already-paid summary
+  after a crash and a hysteresis margin that prevents borderline thrashing.
 - **Structured questions reach the model end-to-end.** The `ask_user` tool
   follows Claude Code's `AskUserQuestion` constraints: 1–4 questions, a
   `header` chip label (≤12 chars, clipped when longer), 2–4 options per

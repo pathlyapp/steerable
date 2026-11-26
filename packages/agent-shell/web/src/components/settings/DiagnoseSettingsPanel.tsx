@@ -110,6 +110,8 @@ function kindLabel(kind: string): string {
       return t('Service error');
     case 'context_overflow':
       return t('Conversation too long');
+    case 'license':
+      return t('System license');
     case 'invalid_request':
       return t('Rejected request');
     default:

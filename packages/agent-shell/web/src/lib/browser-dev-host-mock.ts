@@ -466,6 +466,67 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
       return { tasks: [] } as T;
     }
 
+    if (method === 'GET' && rest === '/context-status') {
+      const msgs = state.messagesByChatId[chatId] ?? [];
+      const rawChars = msgs.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
+      const hasSummary = msgs.some((m) => m.content?.includes('<summary>'));
+      const estimatedTokens = hasSummary
+        ? Math.max(1_800, Math.round(rawChars / 3.5))
+        : Math.max(92_000, Math.round(rawChars / 3.5) + 90_000);
+      const estimatedBytes = Math.max(16_384, rawChars * 2);
+      return {
+        chatId,
+        recordId: `rec-${chatId}`,
+        estimatedTokens,
+        maxContextTokens: 128_000,
+        estimatedBytes,
+        maxRequestBytes: 4_194_304,
+        promptTokens: estimatedTokens,
+        cachedPromptTokens: Math.round(estimatedTokens * 0.62),
+        cacheCreationTokens: 0,
+        compactionCount: msgs.filter((m) => m.content?.includes('<summary>')).length,
+        compactionEpoch: msgs.filter((m) => m.content?.includes('<summary>')).length,
+      } as T;
+    }
+
+    if (method === 'POST' && rest === '/compact') {
+      const body = (input.body ?? {}) as {
+        focus?: string;
+        keepHeadTurns?: number;
+        keepTailMessages?: number;
+      };
+      const msgs = state.messagesByChatId[chatId] ?? [];
+      const keepTail = Math.max(1, body.keepTailMessages ?? 2);
+      const tail = msgs.slice(-keepTail);
+      const preTokens = Math.max(92_000, msgs.length * 4_500);
+      const postTokens = Math.max(3_200, tail.length * 1_600);
+      const focusNote = body.focus?.trim()
+        ? `Focused retention: ${body.focus.trim()}\n- `
+        : '';
+      const summaryText = `<summary>\n- ${focusNote}Compacted ${Math.max(1, msgs.length - tail.length)} earlier messages in the interactive browser demo while preserving active task state and deliverables.\n</summary>`;
+      const summaryMsg: MutableMessage = {
+        id: `msg-compact-${Date.now()}`,
+        chatId,
+        role: 'user',
+        content: summaryText,
+        createdAt: new Date().toISOString(),
+        messageMetadata: JSON.stringify({ compactionSummary: true, preTokens, postTokens }),
+      };
+      state.messagesByChatId[chatId] = [summaryMsg, ...tail];
+      const epochs = state.messagesByChatId[chatId].filter((m) =>
+        m.content?.includes('<summary>'),
+      ).length;
+      return {
+        compacted: Math.max(1, msgs.length - tail.length),
+        preTokens,
+        postTokens,
+        preBytes: preTokens * 4,
+        postBytes: postTokens * 4,
+        summaryText,
+        compactionEpoch: epochs,
+      } as T;
+    }
+
     if (method === 'GET' && rest === '/project-context') {
       const chat = state.chats.find((c) => c.id === chatId);
       const project = chat?.projectId

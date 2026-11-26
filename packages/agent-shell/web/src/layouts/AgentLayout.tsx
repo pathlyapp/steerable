@@ -19,7 +19,7 @@ import { trackBehavior } from '@/lib/insights';
 import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 import { deleteChatIfEmpty, pruneEmptyChats } from '@/lib/local-api';
 import { PORTABLE_CHATS_CHANGED_EVENT } from '@/lib/portable';
-import { getPackChatSlots, type PackChatSlotContribution } from '@/packs/registry';
+import { getPackChatSlots, getPackTopBanners, type PackChatSlotContribution } from '@/packs/registry';
 import {
   useChatsAndAgents,
   type UseChatsAndAgentsResult,
@@ -779,6 +779,9 @@ function AgentLayoutContent() {
                 }}
               />
             )}
+            {getPackTopBanners().map((BannerComponent, idx) => (
+              <BannerComponent key={idx} />
+            ))}
             <div className="min-h-0 flex-1 overflow-hidden">
               <Outlet
                 context={{

@@ -26,6 +26,7 @@ export type FailureKind =
   | 'auth'
   | 'invalid_request'
   | 'context_overflow'
+  | 'license'
   | 'unknown';
 
 /** One failure category with its count. */

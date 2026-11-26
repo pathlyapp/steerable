@@ -117,14 +117,14 @@ def describe_transport_error(exc: BaseException) -> str:
     return " <- ".join(f"{name}: {text}" if text else name for name, text in parts)
 
 
-#: Body substrings that mark a 400/413 as a context-window overflow rather
-#: than a generic invalid request. Covers OpenAI, Ollama, vLLM, DeepSeek,
-#: and Anthropic phrasings (matched case-insensitively).
+#: Body substrings that mark a 400/413 as a context-window or gateway body
+#: overflow rather than a generic invalid request. Covers OpenAI, Ollama,
+#: vLLM, DeepSeek, Anthropic, and reverse proxies (OpenResty/Nginx/Envoy)
+#: when upstream status codes are rewritten to 400 (matched case-insensitively).
 _OVERFLOW_MARKERS = (
     "context length",
     "context window",
     "context_length",
-    "context window",
     "maximum context",
     "too many tokens",
     "prompt is too long",
@@ -132,6 +132,12 @@ _OVERFLOW_MARKERS = (
     "exceeds the context",
     "context size",
     "token limit",
+    "request entity too large",
+    "payload too large",
+    "body too large",
+    "request too large",
+    "exceeds the maximum allowed size",
+    "input is too long",
 )
 
 
@@ -156,9 +162,11 @@ def parse_retry_after_ms(value: object, *, cap_ms: int = 180_000) -> int | None:
 
 def classify_http_status(status_code: int, body: str = "") -> LLMErrorKind:
     """Map an HTTP failure status (+ optional response body) to a kind."""
+    if status_code == 413:
+        return "context_overflow"
     lowered = body.lower()
     looks_overflow = any(marker in lowered for marker in _OVERFLOW_MARKERS)
-    if status_code in (400, 413) and looks_overflow:
+    if status_code == 400 and looks_overflow:
         return "context_overflow"
     if status_code in (401, 403):
         return "auth"

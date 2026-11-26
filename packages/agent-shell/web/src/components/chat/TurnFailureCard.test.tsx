@@ -37,10 +37,18 @@ describe('失败卡片的提示', () => {
     expect(p.secondary).toEqual([{ kind: 'retry' }]);
   });
 
-  it('对话过长的建议新建对话，因为继续大概率再失败', () => {
-    expect(failurePresentation({ kind: 'context_overflow' }).primary).toEqual({
-      kind: 'new-chat',
-    });
+  it('对话过长的主按钮是一键压缩并继续，新建对话与继续作为次按钮（Phase 10 R3）', () => {
+    const p = failurePresentation({ kind: 'context_overflow' });
+    expect(p.primary).toEqual({ kind: 'compact-and-retry' });
+    expect(p.secondary).toEqual([{ kind: 'new-chat' }, { kind: 'retry' }]);
+  });
+
+  it('系统授权失败不提供继续/重试按钮，并明确说明历史会话与导出仍可访问（Phase 10 R8）', () => {
+    const p = failurePresentation({ kind: 'license' });
+    expect(p.classified).toBe(true);
+    expect(p.primary).toEqual({ kind: 'open-license-settings' });
+    expect(p.secondary).toEqual([]);
+    expect(p.body).toContain('exports remain fully accessible');
   });
 
   it('没有类别时退回通用文案并标记为未分类', () => {

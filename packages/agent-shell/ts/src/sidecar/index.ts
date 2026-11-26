@@ -22,6 +22,8 @@ export type {
   SidecarChildEvent,
   SidecarChildUsage,
   SidecarHealthSnapshot,
+  SidecarLicenseState,
+  SidecarLicenseStatus,
   SidecarMethodOptions,
   SidecarRawChunk,
   SidecarSandboxPosture,

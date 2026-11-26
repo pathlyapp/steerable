@@ -36,11 +36,15 @@ import type {
   SidecarChatStreamHandlers,
   SidecarChatStreamRequest,
   SidecarHealthSnapshot,
+  SidecarLicenseStatus,
   SidecarMethodOptions,
   SidecarModelCatalog,
   SidecarReverseHandler,
   SidecarSandboxPosture,
   SidecarSessionBranches,
+  SidecarSessionCompactParams,
+  SidecarSessionCompactResult,
+  SidecarSessionContextStatus,
   SidecarSessionForkOutcome,
   SidecarSessionForkResult,
   SidecarSessionMessages,
@@ -446,6 +450,65 @@ export class SidecarSupervisor extends EventEmitter {
   }
 
   /**
+   * Phase 10 R3: authoritatively compact a durable session in `sessions.db`
+   * (with optional Partial Compaction `focus`, `keepHeadTurns`, `keepTailMessages`).
+   */
+  async sessionCompact(
+    params: SidecarSessionCompactParams,
+  ): Promise<SidecarSessionCompactResult | null> {
+    try {
+      return await this.call<SidecarSessionCompactResult>(
+        'agent.session.compact',
+        { ...params },
+        { timeoutMs: 60_000 },
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Phase 10 R3: fetch live token & wire-byte budget status for `sessions.db`.
+   */
+  async sessionContextStatus(params: {
+    recordId: string;
+    model?: string;
+    provider?: string;
+    baseUrl?: string;
+    maxContextTokens?: number;
+    maxRequestBytes?: number;
+  }): Promise<SidecarSessionContextStatus | null> {
+    try {
+      return await this.call<SidecarSessionContextStatus>(
+        'agent.session.context_status',
+        { ...params },
+        { timeoutMs: 10_000 },
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Phase 10 R3: queue manual/partial compaction on an active CoreLoop turn.
+   */
+  async compactChat(
+    streamId: string,
+    options?: { focus?: string; keepHeadTurns?: number; keepTailMessages?: number },
+  ): Promise<boolean> {
+    try {
+      const res = await this.call<{ ok: boolean }>(
+        'agent.chat.compact',
+        { streamId, ...options },
+        { timeoutMs: 5_000 },
+      );
+      return res.ok === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Every child agent recorded for one parent session.
    *
    * Soft-fail null keeps the caller honest: an empty list would be
@@ -533,6 +596,21 @@ export class SidecarSupervisor extends EventEmitter {
   /** Returns the most recent ready snapshot collected at boot. */
   getBootSnapshot(): SidecarHealthSnapshot | null {
     return this.readyHealth;
+  }
+
+  /** Query commercial license status from the native engine (`disabled` on public builds). */
+  async getLicenseStatus(): Promise<SidecarLicenseStatus> {
+    return this.call<SidecarLicenseStatus>('license.status', {});
+  }
+
+  /** Hot-reload the `.lic` file inside the native engine without restarting the sidecar. */
+  async reloadLicense(): Promise<SidecarLicenseStatus> {
+    return this.call<SidecarLicenseStatus>('license.reload', {});
+  }
+
+  /** Pre-verify candidate `.lic` text before atomic disk replacement. */
+  async verifyLicense(content: string): Promise<SidecarLicenseStatus> {
+    return this.call<SidecarLicenseStatus>('license.verify', { content });
   }
 
   /**

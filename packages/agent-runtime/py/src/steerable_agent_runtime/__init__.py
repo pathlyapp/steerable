@@ -132,7 +132,7 @@ from .compaction_policy import (
     is_large_window,
     resolve_compaction_policy,
 )
-from .compaction import CompactionHooks
+from .compaction import CompactionHooks, CompactionJournal
 from .errors import (
     ApprovalAborted,
     BudgetExhaustedError,
@@ -280,6 +280,7 @@ from .resume import (
     load_history_transcript,
     load_transcript,
     project_transcript,
+    recover_dangling_compaction,
 )
 from .retry import RetryHooks
 from .sandboxed import (
@@ -317,11 +318,15 @@ from .subagent import (
     subagent_tool_descriptor,
 )
 from .tokens import (
+    DEFAULT_MAX_REQUEST_BYTES,
     MODEL_TOKEN_FACTORS,
+    estimate_image_tokens,
     estimate_text_tokens,
     estimate_tokens,
+    estimate_wire_bytes,
     factor_for_model,
     register_model_factor,
+    resolve_max_request_bytes,
 )
 from .tool_search import TOOL_SEARCH_NAME, register_tool_search, tool_search_descriptor
 from .tools import RegisteredTool, ToolExposure, ToolRouter, tool
@@ -351,6 +356,7 @@ __all__ = [
     "TreeMember",
     "run_acp_child",
     "DEFAULT_MAX_ITEM_TOKENS",
+    "DEFAULT_MAX_REQUEST_BYTES",
     "DEFAULT_MAX_SERVER_TOOLS",
     "DEFAULT_SHELL_TOOLS",
     "EAGER_PRIORITY_THRESHOLD",
@@ -420,6 +426,7 @@ __all__ = [
     "resolve_compaction_policy",
     "is_large_window",
     "CompactionHooks",
+    "CompactionJournal",
     "CompletionAction",
     "CompletionDecision",
     "CompletionDraft",
@@ -541,8 +548,10 @@ __all__ = [
     "entry_from_dict",
     "entry_to_dict",
     "estimate_cost_usd",
+    "estimate_image_tokens",
     "estimate_text_tokens",
     "estimate_tokens",
+    "estimate_wire_bytes",
     "export_otlp_http",
     "export_trace",
     "export_metrics",
@@ -579,6 +588,7 @@ __all__ = [
     "price_for_model",
     "project_transcript",
     "qualify_mcp_name",
+    "recover_dangling_compaction",
     "reduce_execution_state",
     "register_mcp_catalog",
     "register_gateway_models",
@@ -589,6 +599,7 @@ __all__ = [
     "render_fragment_capped",
     "render_skill_catalog",
     "resolve_fork_seq",
+    "resolve_max_request_bytes",
     "resolve_model_info",
     "rule_from_amendment",
     "select_catalog",

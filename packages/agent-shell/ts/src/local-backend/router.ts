@@ -5,6 +5,7 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
 import { getLocale, tFor } from '../i18n.js';
+import { classifyErrorMessage } from '@steerable/agent-protocol';
 import { getAppRootDir, getUserDataDir, shellOpenPath } from '../runtime.js';
 import {
   acquireChatWriteLock,
@@ -191,6 +192,10 @@ import {
   renderAndPersistUiSurface,
 } from './ui-surface.js';
 import { assembleFactChainGraph } from './fact-chain.js';
+import {
+  bumpSessionCompactionEpoch,
+  getSessionCompactionEpoch,
+} from '../memory/injector.js';
 import { handleMemoryHttpRoute } from '../memory/routes.js';
 
 export interface LocalBackendRequest {
@@ -1845,16 +1850,179 @@ export class LocalBackendRouter {
 
     const compactMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/compact$/);
     if (compactMatch && method === 'POST') {
-      const chatId = compactMatch[1];
+      const chatId = decodeURIComponent(compactMatch[1]);
       const chat = await this.store.getChat(chatId);
       if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+      const body = this.toRecord(request.body);
+      const focus =
+        typeof body.focus === 'string' && body.focus.trim() ? body.focus.trim() : undefined;
+      const keepHeadTurns =
+        typeof body.keepHeadTurns === 'number' && Number.isInteger(body.keepHeadTurns)
+          ? body.keepHeadTurns
+          : undefined;
+      const keepTailMessages =
+        typeof body.keepTailMessages === 'number' && Number.isInteger(body.keepTailMessages)
+          ? body.keepTailMessages
+          : undefined;
+
+      const supervisor = getSidecarSupervisor();
+      const activeStreamId = getActiveCoreLoopStreamId(chatId);
+      if (activeStreamId && supervisor) {
+        const queued = await supervisor.compactChat(activeStreamId, {
+          focus,
+          keepHeadTurns,
+          keepTailMessages,
+        });
+        return {
+          status: 200,
+          data: {
+            compacted: 0,
+            queuedOnActiveTurn: queued,
+            compactionEpoch: getSessionCompactionEpoch(chatId),
+          },
+        };
+      }
+
+      if (supervisor) {
+        const activeRecordId = (await this.store.getChatRecordId(chatId)) ?? chatId;
+        const llm = resolveRuntimeLlmSettings(await this.store.getLlmSettings());
+        const rpcRes = await supervisor.sessionCompact({
+          recordId: activeRecordId,
+          focus,
+          keepHeadTurns,
+          keepTailMessages,
+          ...(llm?.provider ? { provider: llm.provider } : {}),
+          ...(llm?.model ? { model: llm.model } : {}),
+          ...(llm?.apiKey ? { apiKey: llm.apiKey } : {}),
+          ...(llm?.baseUrl ? { baseUrl: llm.baseUrl } : {}),
+        });
+        if (rpcRes && rpcRes.recordExists) {
+          if (rpcRes.compacted > 0) {
+            await this.store.replaceChatMessages(
+              chatId,
+              rpcRes.messages
+                .filter((m) => m.role === 'user' || m.role === 'assistant')
+                .map((m) => ({
+                  role: m.role as 'user' | 'assistant',
+                  content: m.content,
+                })),
+            );
+            const epoch = bumpSessionCompactionEpoch(chatId);
+            return {
+              status: 200,
+              data: {
+                compacted: rpcRes.compacted,
+                preTokens: rpcRes.preTokens,
+                postTokens: rpcRes.postTokens,
+                preBytes: rpcRes.preBytes,
+                postBytes: rpcRes.postBytes,
+                summaryText: rpcRes.summaryText ?? '',
+                compactionEpoch: epoch,
+              },
+            };
+          }
+          return {
+            status: 200,
+            data: {
+              compacted: 0,
+              preTokens: rpcRes.preTokens,
+              postTokens: rpcRes.postTokens,
+              preBytes: rpcRes.preBytes,
+              postBytes: rpcRes.postBytes,
+              compactionEpoch: getSessionCompactionEpoch(chatId),
+            },
+          };
+        }
+      }
+
       const plan = compactHistory(await this.historyTurns(chatId));
-      if (!plan) return { status: 200, data: { compacted: 0 } };
+      if (!plan) {
+        return {
+          status: 200,
+          data: { compacted: 0, compactionEpoch: getSessionCompactionEpoch(chatId) },
+        };
+      }
       await this.store.deleteMessagesFrom(chatId, plan.deleteFromId);
       for (const write of plan.writes) {
         await this.store.addMessage(chatId, write.role, write.content, write.messageMetadata);
       }
-      return { status: 200, data: { compacted: plan.compacted } };
+      const epoch = bumpSessionCompactionEpoch(chatId);
+      return {
+        status: 200,
+        data: { compacted: plan.compacted, compactionEpoch: epoch },
+      };
+    }
+
+    const contextStatusMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/context-status$/);
+    if (contextStatusMatch && method === 'GET') {
+      const chatId = decodeURIComponent(contextStatusMatch[1]);
+      const chat = await this.store.getChat(chatId);
+      if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+      const llm = resolveRuntimeLlmSettings(await this.store.getLlmSettings());
+      const supervisor = getSidecarSupervisor();
+      const activeRecordId = (await this.store.getChatRecordId(chatId)) ?? chatId;
+      const rpcStatus = supervisor
+        ? await supervisor.sessionContextStatus({
+            recordId: activeRecordId,
+            ...(llm?.model ? { model: llm.model } : {}),
+            ...(llm?.provider ? { provider: llm.provider } : {}),
+            ...(llm?.baseUrl ? { baseUrl: llm.baseUrl } : {}),
+          })
+        : null;
+
+      const uiMessages = await this.store.listMessages(chatId);
+      let lastPromptTokens = 0;
+      let lastCachedTokens = 0;
+      let lastCacheCreationTokens = 0;
+      for (const msg of uiMessages) {
+        if (msg.role !== 'assistant' || !msg.messageMetadata) continue;
+        try {
+          const meta = JSON.parse(msg.messageMetadata) as {
+            turnUsage?: {
+              promptTokens?: number;
+              cachedPromptTokens?: number;
+              cacheCreationTokens?: number;
+            };
+          };
+          if (meta?.turnUsage) {
+            lastPromptTokens = Number(meta.turnUsage.promptTokens ?? 0);
+            lastCachedTokens = Number(meta.turnUsage.cachedPromptTokens ?? 0);
+            lastCacheCreationTokens = Number(meta.turnUsage.cacheCreationTokens ?? 0);
+            break;
+          }
+        } catch {
+          // ignore malformed metadata
+        }
+      }
+
+      const fallbackBytes = uiMessages.reduce(
+        (sum, m) => sum + Buffer.byteLength(m.content || '', 'utf8') + 64,
+        0,
+      );
+      const fallbackTokens = Math.ceil(fallbackBytes / 3.5);
+      const maxRequestBytes =
+        Number(process.env.STEERABLE_MAX_REQUEST_BYTES || 0) > 0
+          ? Number(process.env.STEERABLE_MAX_REQUEST_BYTES)
+          : 4_194_304;
+
+      return {
+        status: 200,
+        data: {
+          chatId,
+          recordId: activeRecordId,
+          estimatedTokens: rpcStatus?.recordExists
+            ? rpcStatus.estimatedTokens
+            : Math.max(lastPromptTokens, fallbackTokens),
+          maxContextTokens: rpcStatus?.maxContextTokens ?? 131_072,
+          estimatedBytes: rpcStatus?.recordExists ? rpcStatus.estimatedBytes : fallbackBytes,
+          maxRequestBytes: rpcStatus?.maxRequestBytes ?? maxRequestBytes,
+          promptTokens: lastPromptTokens,
+          cachedPromptTokens: lastCachedTokens,
+          cacheCreationTokens: lastCacheCreationTokens,
+          compactionCount: rpcStatus?.compactionCount ?? 0,
+          compactionEpoch: getSessionCompactionEpoch(chatId),
+        },
+      };
     }
 
     const forkMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/fork$/);
@@ -2630,6 +2798,98 @@ export class LocalBackendRouter {
         return { status: 503, data: { error: 'sidecar 未就绪', posture: null, egress } };
       }
       return { status: 200, data: { posture: supervisor.getSandboxPosture(), egress } };
+    }
+
+    if (method === 'GET' && pathname === '/api/v2/license/status') {
+      const supervisor = await whenSidecarSupervisor();
+      if (!supervisor) {
+        return {
+          status: 200,
+          data: {
+            enforced: false,
+            state: 'disabled',
+            errorCode: null,
+            message: null,
+            licenseId: null,
+            customer: null,
+            product: null,
+            features: [],
+            notBefore: null,
+            notAfter: null,
+            graceDays: null,
+            daysRemaining: null,
+            graceDaysRemaining: null,
+            maxUsers: null,
+            maxConcurrentRuns: null,
+            activeConcurrentRuns: 0,
+            deploymentId: null,
+          },
+        };
+      }
+      return { status: 200, data: await supervisor.getLicenseStatus() };
+    }
+
+    if (method === 'POST' && pathname === '/api/v2/license/reload') {
+      const supervisor = await whenSidecarSupervisor();
+      if (!supervisor) {
+        return {
+          status: 200,
+          data: {
+            enforced: false,
+            state: 'disabled',
+            errorCode: null,
+            message: null,
+            licenseId: null,
+            customer: null,
+            product: null,
+            features: [],
+            notBefore: null,
+            notAfter: null,
+            graceDays: null,
+            daysRemaining: null,
+            graceDaysRemaining: null,
+            maxUsers: null,
+            maxConcurrentRuns: null,
+            activeConcurrentRuns: 0,
+            deploymentId: null,
+          },
+        };
+      }
+      return { status: 200, data: await supervisor.reloadLicense() };
+    }
+
+    if (method === 'POST' && pathname === '/api/v2/license/verify') {
+      const payload = this.toRecord(request.body);
+      const content = typeof payload.content === 'string' ? payload.content : '';
+      if (!content.trim()) {
+        return { status: 400, data: { error: 'content required' } };
+      }
+      const supervisor = await whenSidecarSupervisor();
+      if (!supervisor) {
+        return {
+          status: 200,
+          data: {
+            enforced: false,
+            state: 'disabled',
+            errorCode: null,
+            message: null,
+            licenseId: null,
+            customer: null,
+            product: null,
+            features: [],
+            notBefore: null,
+            notAfter: null,
+            graceDays: null,
+            daysRemaining: null,
+            graceDaysRemaining: null,
+            maxUsers: null,
+            maxConcurrentRuns: null,
+            activeConcurrentRuns: 0,
+            deploymentId: null,
+          },
+        };
+      }
+      return { status: 200, data: await supervisor.verifyLicense(content) };
     }
 
     if (method === 'GET' && pathname === '/api/v2/llm/account') {
@@ -5226,10 +5486,24 @@ export class LocalBackendRouter {
       sidecarLost = finalOutcome.sidecarLost === true;
       turnUsage = finalOutcome.usage;
       // 干净失败的趟（sidecar 正常收流但 status=failed，如 LLM 401/超时）
-      // 不走下面的 catch——这里补发 error 事件，否则前端只渲染一条空消息，
-      // 用户完全看不到失败原因。
-      if (completionStatus === 'failed' && completionReason) {
-        emit(this.sse('error', { message: completionReason }));
+      // 不走下面的 catch——这里补发 error 事件，并确保补全 failureInfo，
+      // 否则前端或续跑（Continue）分支落库时缺少 failure 元数据而退化为 Not classified。
+      if (completionStatus === 'failed') {
+        if (!failureInfo && completionReason) {
+          const fallbackKind = classifyErrorMessage(completionReason);
+          if (fallbackKind !== 'unknown') {
+            failureInfo = { errorKind: fallbackKind };
+          }
+        }
+        if (completionReason) {
+          emit(
+            this.sse('error', {
+              message: completionReason,
+              ...(failureInfo ? { failure: failureInfo } : {}),
+              ...(outcomeTraceId ? { traceId: outcomeTraceId } : {}),
+            }),
+          );
+        }
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
@@ -5243,7 +5517,12 @@ export class LocalBackendRouter {
         completionStatus = 'failed';
         completionReason = err instanceof Error ? err.message : String(err);
         failureInfo = readTurnFailureInfo(err);
-        emit(this.sse('error', { message: completionReason }));
+        if (!failureInfo && completionReason) {
+          const fallbackKind = classifyErrorMessage(completionReason);
+          if (fallbackKind !== 'unknown') {
+            failureInfo = { errorKind: fallbackKind };
+          }
+        }
       }
       // streamCoreLoopTurn attaches the sidecar trace id to failures — the
       // partial trace of a failed turn is the primary dogfood signal.
@@ -5251,6 +5530,15 @@ export class LocalBackendRouter {
       if (typeof failureTraceId === 'string' && failureTraceId) {
         outcomeTraceId = failureTraceId;
         passTraceIds.push(failureTraceId);
+      }
+      if (completionStatus === 'failed') {
+        emit(
+          this.sse('error', {
+            message: completionReason,
+            ...(failureInfo ? { failure: failureInfo } : {}),
+            ...(outcomeTraceId ? { traceId: outcomeTraceId } : {}),
+          }),
+        );
       }
     }
 
@@ -5516,7 +5804,15 @@ export class LocalBackendRouter {
       emit(this.sseData({ type: 'turn_usage', usage: turnUsage }));
     }
     if (assistant) {
-      emit(this.sseData({ type: 'message_id', messageId: assistant.id }));
+      emit(
+        this.sseData({
+          type: 'message_id',
+          messageId: assistant.id,
+          ...(typeof assistant.messageMetadata === 'string' && assistant.messageMetadata
+            ? { messageMetadata: assistant.messageMetadata }
+            : {}),
+        }),
+      );
     }
     emit('data: [DONE]\n\n');
     this.runTitleGenInBackground(chatId, shouldGenerateTitle, firstUserMessageForTitle);

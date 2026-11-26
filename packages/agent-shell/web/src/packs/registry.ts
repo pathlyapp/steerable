@@ -9,6 +9,7 @@
  * 的 web/ 目录）。
  */
 
+import type { ComponentType } from 'react';
 import type {
   PackChatSlotAutoRevealApi,
   PackChatSlotContribution,
@@ -33,6 +34,7 @@ export type {
 const routes: PackRouteContribution[] = [];
 const settingsPanels: PackSettingsPanelContribution[] = [];
 const chatSlots: PackChatSlotContribution[] = [];
+const topBanners: ComponentType[] = [];
 const hiddenSlashSkills = new Set<string>();
 const registeredPacks = new Set<string>();
 
@@ -45,6 +47,7 @@ export function registerPackRenderer(packId: string, contributions: PackRenderer
   routes.push(...(contributions.routes ?? []));
   settingsPanels.push(...(contributions.settingsPanels ?? []));
   chatSlots.push(...(contributions.chatSlots ?? []));
+  topBanners.push(...(contributions.topBanners ?? []));
   for (const name of contributions.hiddenSlashSkills ?? []) hiddenSlashSkills.add(name);
 }
 
@@ -58,6 +61,10 @@ export function getPackSettingsPanels(): readonly PackSettingsPanelContribution[
 
 export function getPackChatSlots(): readonly PackChatSlotContribution[] {
   return chatSlots;
+}
+
+export function getPackTopBanners(): readonly ComponentType[] {
+  return topBanners;
 }
 
 /** 包贡献的隐藏 slash 技能名集合（bootstrap 完成后稳定，渲染期只读）。 */

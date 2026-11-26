@@ -134,6 +134,11 @@
     "agent.session.branches",
     "agent.session.tree",
     "agent.session.messages",
+    "agent.session.compact",
+    "agent.session.context_status",
+    "license.status",
+    "license.reload",
+    "license.verify",
     "agent.children.list",
     "agent.children.interrupt"
   ]

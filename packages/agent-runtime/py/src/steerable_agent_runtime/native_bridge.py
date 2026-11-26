@@ -390,14 +390,61 @@ async def _post_tool_result(loop: CoreLoop, payload_json: str) -> str:
     )
 
 
+class _LoopCompactionJournal:
+    """Write-ahead durable journal backed by the run's ContextManager + HistoryStore."""
+
+    def __init__(
+        self, loop: CoreLoop, manager: ContextManager, chat_id: str | None
+    ) -> None:
+        self._loop = loop
+        self._manager = manager
+        self._chat_id = chat_id
+
+    async def open_bracket(
+        self,
+        *,
+        compaction_id: str,
+        reason: str,
+        action: str,
+        span_start_index: int,
+        span_end_index: int,
+        pre_tokens: int | None = None,
+    ) -> None:
+        self._manager.record_compaction_start(
+            compaction_id=compaction_id,
+            reason=reason,
+            action=action,
+            span_start_index=span_start_index,
+            span_end_index=span_end_index,
+            pre_tokens=pre_tokens,
+        )
+        await self._loop._flush_history(self._manager, self._chat_id)
+
+    async def record_summary(
+        self,
+        *,
+        compaction_id: str,
+        summary_text: str,
+    ) -> None:
+        self._manager.record_compaction_summary(
+            compaction_id=compaction_id,
+            summary_text=summary_text,
+        )
+        await self._loop._flush_history(self._manager, self._chat_id)
+
+
 async def _pre_step(
-    loop: CoreLoop, manager: ContextManager, transcript_json: str
+    loop: CoreLoop,
+    manager: ContextManager,
+    transcript_json: str,
+    chat_id: str | None = None,
 ) -> str:
     messages = [_msg_from_json(item) for item in json.loads(transcript_json)]
     action = await loop._hooks.pre_step(messages, loop._run_context)
     rewrite = action.rewrite
     if rewrite is not None:
         _apply_rewrite(manager, rewrite)
+        await loop._flush_history(manager, chat_id)
     applied_appends: list[LLMMessage] = []
     for item in action.appends or ():
         if item.fragment is not None:
@@ -407,12 +454,17 @@ async def _pre_step(
         applied_appends.append(entry.message)
     if action.kind != "reject" and loop._compact_event.is_set():
         loop._compact_event.clear()
+        compact_opts = dict(getattr(loop, "_compact_options", {}) or {})
+        loop._compact_options = {}
         compact_now = getattr(loop._hooks, "compact_now", None)
         if callable(compact_now):
-            manual = await compact_now(manager.projection, loop._run_context)
+            manual = await compact_now(
+                manager.projection, loop._run_context, **compact_opts
+            )
             if manual.rewrite is not None:
                 rewrite = manual.rewrite
                 _apply_rewrite(manager, rewrite)
+                await loop._flush_history(manager, chat_id)
     payload: dict[str, Any] = {
         "kind": action.kind,
         "reason": rewrite.reason if rewrite is not None else action.reason,
@@ -461,7 +513,10 @@ async def _pre_step(
 
 
 async def _on_request_error(
-    loop: CoreLoop, manager: ContextManager, payload_json: str
+    loop: CoreLoop,
+    manager: ContextManager,
+    payload_json: str,
+    chat_id: str | None = None,
 ) -> str:
     raw = json.loads(payload_json)
     error_raw = raw["error"]
@@ -478,6 +533,7 @@ async def _on_request_error(
     action = await loop._hooks.on_request_error(error, transcript, loop._run_context)
     if action.rewrite is not None:
         _apply_rewrite(manager, action.rewrite)
+        await loop._flush_history(manager, chat_id)
     payload: dict[str, Any] = {
         "kind": action.kind,
         "delay_ms": action.delay_ms,
@@ -633,7 +689,11 @@ async def run_native(
     # path reads the same ContextVars the caller's task would.
     caller_context = contextvars.copy_context()
     out: asyncio.Queue[tuple[LoopEvent, threading.Event] | None] = asyncio.Queue()
-    loop._run_context = LoopContext(chat_id=chat_id)
+    tools_json_str = json.dumps(tools or [], ensure_ascii=False, separators=(",", ":"))
+    loop._run_context = LoopContext(
+        chat_id=chat_id,
+        tool_schemas_bytes=len(tools_json_str.encode("utf-8")) if tools else 0,
+    )
     loop._wrap_up_active = False
     record_id = loop._record_id or chat_id
     seed = list(messages)
@@ -657,6 +717,10 @@ async def run_native(
     )
     if persisted_prefix:
         manager.mark_persisted_prefix(persisted_prefix)
+    if loop._history_store is not None and record_id is not None:
+        loop._run_context.compaction_journal = _LoopCompactionJournal(
+            loop, manager, chat_id
+        )
     loop.history = manager
     worker_error: list[BaseException] = []
     worker_result: list[dict[str, Any]] = []
@@ -933,12 +997,14 @@ async def run_native(
 
     def pre_step(transcript_json: str) -> str:
         return _await_on_loop(
-            _pre_step(loop, manager, transcript_json), aio_loop, caller_context
+            _pre_step(loop, manager, transcript_json, chat_id), aio_loop, caller_context
         )
 
     def on_request_error(payload_json: str) -> str:
         return _await_on_loop(
-            _on_request_error(loop, manager, payload_json), aio_loop, caller_context
+            _on_request_error(loop, manager, payload_json, chat_id),
+            aio_loop,
+            caller_context,
         )
 
     def wrap_up_may_drop_tools() -> bool:

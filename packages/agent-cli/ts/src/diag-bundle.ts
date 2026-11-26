@@ -45,6 +45,8 @@ export interface ExportDiagBundleOptions {
   readonly redactContent?: boolean;
   readonly extraSecrets?: readonly string[];
   readonly chats?: readonly ChatDiagnosticInput[];
+  readonly licenseFilePath?: string;
+  readonly licenseStatus?: Record<string, unknown> | null;
 }
 
 export function exportDiagBundle(options: ExportDiagBundleOptions): {
@@ -147,6 +149,76 @@ export function exportDiagBundle(options: ExportDiagBundleOptions): {
         'utf8',
       );
       includedFiles.push('chat-skeletons.json');
+    }
+
+    // 4. Redacted commercial license snapshot (`signature` and raw secrets strictly stripped)
+    const licPath = options.licenseFilePath ?? process.env.STEERABLE_LICENSE_FILE;
+    if (options.licenseStatus || (licPath && fs.existsSync(licPath))) {
+      let redactedLicense: Record<string, unknown>;
+      if (options.licenseStatus) {
+        const clone = { ...options.licenseStatus };
+        delete clone.signature;
+        if (redactContent && typeof clone.customer === 'string') {
+          clone.customer = summarizeRedactedText(clone.customer);
+        }
+        redactedLicense = {
+          observedAt: new Date().toISOString(),
+          ...clone,
+        };
+      } else {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(licPath!, 'utf8')) as {
+            payload?: Record<string, unknown>;
+            keyEnvironment?: string;
+          };
+          const p = parsed.payload ?? {};
+          const nowMs = Date.now();
+          const notAfterStr = typeof p.notAfter === 'string' ? p.notAfter : null;
+          const notAfterMs = notAfterStr
+            ? Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(notAfterStr) ? `${notAfterStr}T23:59:59.999Z` : notAfterStr)
+            : NaN;
+          const graceDays = typeof p.graceDays === 'number' ? p.graceDays : 15;
+          let state = 'valid';
+          if (Number.isFinite(notAfterMs)) {
+            if (nowMs > notAfterMs + graceDays * 86_400_000) state = 'expired';
+            else if (nowMs > notAfterMs) state = 'grace';
+            else if (notAfterMs - nowMs <= 30 * 86_400_000) state = 'expiring';
+          }
+          redactedLicense = {
+            observedAt: new Date().toISOString(),
+            state,
+            errorCode: state === 'expired' ? 'license_expired' : null,
+            licenseId: p.licenseId ?? null,
+            customer:
+              typeof p.customer === 'string'
+                ? redactContent
+                  ? summarizeRedactedText(p.customer)
+                  : p.customer
+                : null,
+            product: p.product ?? null,
+            features: Array.isArray(p.features) ? p.features : [],
+            notBefore: p.notBefore ?? null,
+            notAfter: p.notAfter ?? null,
+            graceDays,
+            maxUsers: p.maxUsers ?? null,
+            maxConcurrentRuns: p.maxConcurrentRuns ?? null,
+            keyEnvironment: parsed.keyEnvironment ?? null,
+          };
+        } catch (err) {
+          redactedLicense = {
+            observedAt: new Date().toISOString(),
+            state: 'invalid',
+            errorCode: 'malformed_license',
+            detail: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
+      fs.writeFileSync(
+        path.join(stageDir, 'license-status.json'),
+        JSON.stringify(redactedLicense, null, 2),
+        'utf8',
+      );
+      includedFiles.push('license-status.json');
     }
 
     const resolvedOut = path.resolve(options.outFile);

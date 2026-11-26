@@ -1165,7 +1165,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     useEffect(() => {
       if (slashQuery) {
         const query = slashQuery.query;
-        const skillMatches: SlashSuggestion[] = skills
+        const builtinCommandSkills: SkillItem[] = [
+          {
+            name: 'compact',
+            displayName: 'Compact context',
+            description: t('Summarize earlier messages to free up context window space'),
+            isBuiltin: true,
+          },
+        ];
+        const allSkills = [
+          ...builtinCommandSkills.filter(
+            (b) => !skills.some((s) => s.name.toLowerCase() === b.name),
+          ),
+          ...skills,
+        ];
+        const skillMatches: SlashSuggestion[] = allSkills
           .filter(
             (s) =>
               s.name.toLowerCase().includes(query) ||

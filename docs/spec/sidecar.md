@@ -62,9 +62,9 @@ One JSON object per line, UTF-8, terminated by `\n`. No length-prefix.
 {"jsonrpc":"2.0","method":"stream.chunk","params":{"streamId":"s_42","delta":"Hello"}}
 ```
 
-## Method catalog (v0.8.x)
+## Method catalog (v0.13.x)
 
-38 request methods. The list is frozen in `runtime-contract.json`, and a test
+43 request methods. The list is frozen in `runtime-contract.json`, and a test
 fails when a registered method drifts from it; the table below mirrors the
 contract.
 
@@ -95,6 +95,11 @@ contract.
 | `config.set`            | request   | `null`                                 |
 | `models.list`           | request   | `{models, catalogStatus, fetchedAt?, current?, error?}` (live `GET /models` discovery against the configured gateway) |
 | `agent.session.messages`| request   | projected transcript of a history record |
+| `agent.session.compact` | request   | `{compacted, preTokens, postTokens, preBytes, postBytes, summaryText, messages}` — authoritative immediate session compaction (supports partial compaction via `focus`, `keepHeadTurns`, `keepTailMessages`) |
+| `agent.session.context_status` | request | `{recordId, estimatedTokens, maxContextTokens, estimatedBytes, maxRequestBytes, compactionCount}` — live token and wire-byte watermark for a session |
+| `license.status`        | request   | `{enforced, state, errorCode, licenseId, product, features, notAfter, daysRemaining, maxUsers, maxConcurrentRuns, activeConcurrentRuns, deploymentId}` (`enforced: false, state: "disabled"` on public open-source builds) |
+| `license.reload`        | request   | hot-reloads the configured `.lic` file without restarting the sidecar (`disabled` no-op on public builds) |
+| `license.verify`        | request   | verifies candidate `.lic` text in memory without mutating active state (`disabled` no-op on public builds) |
 | `agent.children.list`   | request   | `{parentRecordId, children}` — every child agent recorded for a parent session, with a composed `status` (`running` from a live handle, `interrupted` when none and the row never settled) and `resumable`. The durable answer to "what did this session spawn", which the per-turn pool cannot give after the turn ends. Params: `{parentRecordId? | recordId?, prefix?, includeFinished?, answerPreviewChars?}` |
 | `agent.children.interrupt` | request | `{interrupted, reason?}` — cooperatively interrupt one running child of a chat's live turn (the desktop panel's stop control, not a model tool call). Params: `{chatId, childId}`. `interrupted: false` means the child is not running in this process, which is the honest answer for a row that settled between render and click |
 | `catalog.describe`      | request   | `{providers}` (bundled serving-provider catalog: default URLs, wire kinds, chat-capable model ids) |

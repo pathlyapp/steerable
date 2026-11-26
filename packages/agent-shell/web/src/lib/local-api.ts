@@ -649,6 +649,54 @@ export async function forkChat(chatId: string) {
   });
 }
 
+export interface CompactChatOptions {
+  focus?: string;
+  keepHeadTurns?: number;
+  keepTailMessages?: number;
+}
+
+export interface CompactChatResult {
+  compacted: number;
+  queuedOnActiveTurn?: boolean;
+  preTokens?: number;
+  postTokens?: number;
+  preBytes?: number;
+  postBytes?: number;
+  summaryText?: string;
+  compactionEpoch?: number;
+}
+
+/** Authoritatively compact a chat session's context (Phase 10 R3). */
+export async function compactChat(chatId: string, options: CompactChatOptions = {}) {
+  return bridge().localBackend.request<CompactChatResult>({
+    method: 'POST',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/compact`,
+    body: options,
+  });
+}
+
+export interface ChatContextStatus {
+  chatId: string;
+  recordId: string;
+  estimatedTokens: number;
+  maxContextTokens: number;
+  estimatedBytes: number;
+  maxRequestBytes: number;
+  promptTokens: number;
+  cachedPromptTokens: number;
+  cacheCreationTokens: number;
+  compactionCount: number;
+  compactionEpoch: number;
+}
+
+/** Read live token & wire-byte budget status for a chat (Phase 10 R3). */
+export async function getChatContextStatus(chatId: string) {
+  return bridge().localBackend.request<ChatContextStatus>({
+    method: 'GET',
+    path: `/api/v2/chats/${encodeURIComponent(chatId)}/context-status`,
+  });
+}
+
 /** 用户重命名。409 表示会话锁被占用，调用方恢复旧名。 */
 export async function updateChatTitle(chatId: string, title: string) {
   return bridge().localBackend.request<{ id: string; title: string }>({

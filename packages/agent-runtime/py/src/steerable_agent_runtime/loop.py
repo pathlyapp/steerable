@@ -239,6 +239,10 @@ class LoopContext:
     #: RouterToolExecutor to bridge the verdict into the router's
     #: require_consent gate. Plain False when no approval layer is wired.
     consent_granted: bool = False
+    #: Serialized UTF-8 byte size of tool schemas offered on this run (R1 byte budget).
+    tool_schemas_bytes: int = 0
+    #: Write-ahead journal for region-transaction brackets (R4).
+    compaction_journal: Any = None
 
 
 @dataclass(slots=True)
@@ -452,6 +456,7 @@ class CoreLoop:
         # it at the next pre_step boundary by delegating to the hook chain's
         # compact_now.
         self._compact_event = asyncio.Event()
+        self._compact_options: dict[str, Any] = {}
         # Compact trajectory recorded during run(); replayable via
         # replay.reduce_execution_state. Derived from the completion events
         # (single write path — see _emit_completion). Reset each run.
@@ -516,20 +521,27 @@ class CoreLoop:
         """
         self._cancel_event.clear()
 
-    def request_compact(self) -> None:
+    def request_compact(
+        self,
+        *,
+        focus: str | None = None,
+        keep_head_turns: int | None = None,
+        keep_tail_messages: int | None = None,
+    ) -> None:
         """Request a manual compaction of the running turn's transcript.
 
-        Called from the same event loop (e.g. a sidecar RPC handler for
-        ``agent.chat.compact``, the CC ``/compact`` parity path) while
-        ``run()`` is active. The loop consumes the request at the next
-        pre_step boundary: the hook chain's ``compact_now``
-        (CompactionHooks) folds old tool results and summarizes the middle
-        regardless of pressure, and the declared rewrite lands through the
-        same ``replace_all`` path as a pressure compaction. Without a
-        compaction hook in the chain the request is a no-op. Like steer(),
-        a request that arrives after the run has ended finds no boundary
-        left to consume it and has no effect.
+        Optional ``focus``, ``keep_head_turns``, and ``keep_tail_messages``
+        configure Partial Compaction when consumed at the next ``pre_step``
+        boundary.
         """
+        opts: dict[str, Any] = {}
+        if focus is not None:
+            opts["focus"] = focus
+        if keep_head_turns is not None:
+            opts["keep_head_turns"] = keep_head_turns
+        if keep_tail_messages is not None:
+            opts["keep_tail_messages"] = keep_tail_messages
+        self._compact_options = opts
         self._compact_event.set()
 
     @property
@@ -936,7 +948,7 @@ def _apply_rewrite(manager: ContextManager, rewrite: RewriteRequest) -> None:
     a crash between the summarizer call and the rewrite still leaves the
     paid summary attributable by ``compaction_id`` (P1).
     """
-    if rewrite.bracket is not None:
+    if rewrite.bracket is not None and not rewrite.bracket.already_journaled:
         manager.record_compaction_start(
             compaction_id=rewrite.bracket.compaction_id,
             reason=rewrite.reason,
@@ -1012,7 +1024,7 @@ def _host_view_through_loop_compactions(
                     message.role == "assistant" and not message.tool_calls
                 ):
                     view.append(message)
-        elif _is_host_visible(entry):
+        elif isinstance(entry, HistoryItem) and _is_host_visible(entry):
             view.append(entry.message)
         i += 1
     return view

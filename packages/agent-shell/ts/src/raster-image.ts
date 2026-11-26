@@ -42,6 +42,39 @@ export function builtinRasterSupports(filePath: string): boolean {
 }
 
 /**
+ * Decode an in-memory PNG or JPEG buffer into a crop/resize/encode surface.
+ * Non-raster or malformed buffers return `EMPTY_IMAGE` so callers can pass
+ * synthetic test stubs or unsupported formats through untouched.
+ */
+export function decodeRasterBuffer(bytes: Buffer, mediaType?: string): DecodedImage {
+  if (!bytes || bytes.length < 4) return EMPTY_IMAGE;
+  const isPng =
+    mediaType === 'image/png' ||
+    (bytes.length >= 8 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47);
+  const isJpeg =
+    mediaType === 'image/jpeg' || (bytes[0] === 0xff && bytes[1] === 0xd8);
+  try {
+    if (isPng && bytes[0] === 0x89 && bytes[1] === 0x50) {
+      const png = PNG.sync.read(bytes);
+      if (png.width < 1 || png.height < 1) return EMPTY_IMAGE;
+      return new RasterImage(png.width, png.height, Buffer.from(png.data));
+    }
+    if (isJpeg && bytes[0] === 0xff && bytes[1] === 0xd8) {
+      const decoded = jpeg.decode(bytes, { useTArray: true, formatAsRGBA: true });
+      if (decoded.width < 1 || decoded.height < 1) return EMPTY_IMAGE;
+      return new RasterImage(decoded.width, decoded.height, Buffer.from(decoded.data));
+    }
+  } catch {
+    return EMPTY_IMAGE;
+  }
+  return EMPTY_IMAGE;
+}
+
+/**
  * Decode a local PNG or JPEG into a crop/resize/encode surface.
  * Unreadable or unsupported files yield an empty image.
  */

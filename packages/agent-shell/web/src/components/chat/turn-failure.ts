@@ -23,8 +23,10 @@ export { readTurnFailureDetail, readTurnFailureKind };
 /** One action a failed turn can offer. */
 export type FailureAction =
   | { kind: 'retry' }
+  | { kind: 'compact-and-retry' }
   | { kind: 'network-diagnostics' }
   | { kind: 'open-model-settings' }
+  | { kind: 'open-license-settings' }
   | { kind: 'new-chat' };
 
 /** Everything the card renders, derived from one failure. */
@@ -111,9 +113,19 @@ export function failurePresentation(
     case 'context_overflow':
       return {
         title: t('This conversation is too long for the model'),
-        body: t('Start a new chat, or select Regenerate to try a different approach.'),
-        primary: { kind: 'new-chat' },
-        secondary: [{ kind: 'retry' }],
+        body: t('Compact earlier messages to free up space and continue, or start a new chat.'),
+        primary: { kind: 'compact-and-retry' },
+        secondary: [{ kind: 'new-chat' }, { kind: 'retry' }],
+        classified: true,
+      };
+    case 'license':
+      return {
+        title: t('Enterprise license expired or invalid'),
+        body: t(
+          'New AI turns are paused until an administrator updates the license. Your chat history, files, and exports remain fully accessible.',
+        ),
+        primary: { kind: 'open-license-settings' },
+        secondary: [],
         classified: true,
       };
     case 'invalid_request':

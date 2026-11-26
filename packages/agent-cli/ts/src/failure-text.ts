@@ -108,7 +108,17 @@ export function failureReport(input: FailureReportInput): FailureReport {
       return {
         kind,
         headline: '对话已经超出模型的上下文长度。',
-        fixes: ['新开一个会话：steerable-cli run "<任务>"', '或在 TUI 里用 /compact 压缩上下文'],
+        fixes: ['在 TUI 里用 /compact 压缩上下文并继续', '或新开一个会话：steerable-cli run "<任务>"'],
+        detail: input.message,
+      };
+    case 'license':
+      return {
+        kind,
+        headline: '企业部署授权已到期或校验失败，新的模型执行已暂停。',
+        fixes: [
+          '联系系统管理员在管理后台「系统授权」页上传有效 .lic 授权文件',
+          '运行 steerable-cli preflight --require-license 检查当前授权状态',
+        ],
         detail: input.message,
       };
     default:

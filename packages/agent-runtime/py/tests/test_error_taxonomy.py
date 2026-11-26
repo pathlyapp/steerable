@@ -58,8 +58,17 @@ def test_context_overflow_markers() -> None:
     assert classify_http_status(413, "Payload Too Large: too many tokens") == (
         "context_overflow"
     )
-    # 413 without overflow phrasing stays a plain client error
-    assert classify_http_status(413, "file upload too large") == "invalid_request"
+    # T-CMP-01: HTTP 413 unconditionally maps to context_overflow even when an
+    # intermediate reverse proxy (nginx/Envoy/Cloudflare) emits generic HTML.
+    assert (
+        classify_http_status(413, "<html><body>413 Request Entity Too Large</body></html>")
+        == "context_overflow"
+    )
+    assert classify_http_status(413, "") == "context_overflow"
+    assert (
+        classify_http_status(400, "request body too large: exceeds the maximum allowed size")
+        == "context_overflow"
+    )
 
 
 def test_classify_error_passthrough_and_fallbacks() -> None:

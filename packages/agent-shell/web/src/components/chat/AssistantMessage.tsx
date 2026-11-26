@@ -20,6 +20,7 @@ import type { ChildInfo } from './OrchestrationChildrenCard';
 import { collectTurnParticipants, extractMentionedAgentIds } from './executed-actions-model';
 import type { InspectTaskInput } from './executed-actions-model';
 import { StreamingStatus } from './StreamingStatus';
+import { classifyErrorMessage } from '@steerable/agent-protocol';
 import { TurnFailureCard, type TurnFailureCardProps } from './TurnFailureCard';
 import { readFailureDetail, type TurnFailureDetail } from './turn-failure';
 import type { RetryState } from './RetryStatus';
@@ -286,34 +287,48 @@ function readTurnStatus(message: ChatMessage): 'failed' | 'cancelled' | 'complet
 }
 
 function readTurnFailure(message: ChatMessage, content: string): TurnFailure | null {
-  if (content.startsWith(STREAM_ERROR_PREFIX)) {
-    // Live path: the framework stamped the reason into the content before the
-    // turn was persisted, so nothing structured is available yet.
-    return { reason: content.slice(STREAM_ERROR_PREFIX.length), contentIsError: true };
-  }
+  const isStreamErrorContent = content.startsWith(STREAM_ERROR_PREFIX);
   const raw = (message as { messageMetadata?: unknown }).messageMetadata;
-  if (typeof raw !== 'string' || !raw) return null;
-  try {
-    const meta = JSON.parse(raw) as {
-      completionStatus?: unknown;
-      completionReason?: unknown;
-      failure?: unknown;
-      traceId?: unknown;
-    };
-    if (
-      meta?.completionStatus === 'failed' &&
-      typeof meta.completionReason === 'string' &&
-      meta.completionReason
-    ) {
-      return {
-        reason: meta.completionReason,
-        contentIsError: false,
-        detail: readFailureDetail(meta.failure),
-        traceId: typeof meta.traceId === 'string' && meta.traceId ? meta.traceId : undefined,
+  if (typeof raw === 'string' && raw) {
+    try {
+      const meta = JSON.parse(raw) as {
+        completionStatus?: unknown;
+        completionReason?: unknown;
+        failure?: unknown;
+        failureInfo?: unknown;
+        traceId?: unknown;
       };
+      if (
+        meta?.completionStatus === 'failed' &&
+        typeof meta.completionReason === 'string' &&
+        meta.completionReason
+      ) {
+        const parsedDetail =
+          readFailureDetail(meta.failure) ?? readFailureDetail(meta.failureInfo);
+        const fallbackKind = classifyErrorMessage(meta.completionReason);
+        return {
+          reason: meta.completionReason,
+          contentIsError: isStreamErrorContent,
+          detail:
+            parsedDetail ??
+            (fallbackKind !== 'unknown' ? { kind: fallbackKind } : undefined),
+          traceId: typeof meta.traceId === 'string' && meta.traceId ? meta.traceId : undefined,
+        };
+      }
+    } catch {
+      // 元数据损坏按无失败处理——落回下方的流式前缀兜底或空消息展示。
     }
-  } catch {
-    // 元数据损坏按无失败处理——落回原有的空消息展示。
+  }
+  if (isStreamErrorContent) {
+    // Live path before message_id arrives: the framework stamped the reason
+    // into the content before the turn was persisted.
+    const rawReason = content.slice(STREAM_ERROR_PREFIX.length);
+    const fallbackKind = classifyErrorMessage(rawReason);
+    return {
+      reason: rawReason,
+      contentIsError: true,
+      detail: fallbackKind !== 'unknown' ? { kind: fallbackKind } : undefined,
+    };
   }
   return null;
 }

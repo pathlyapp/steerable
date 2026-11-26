@@ -217,6 +217,8 @@ class PressureCompaction:
     # refill; max_rapid_refills consecutive refills open the circuit.
     rapid_refill_window_rounds: int = 3
     max_rapid_refills: int = 3
+    max_request_bytes: int | None = None
+    byte_threshold_ratio: float = 0.85
     name: str = "pressure_compaction"
     assumes: str = (
         "long trajectories exceed the window; older detail is expendable "
@@ -225,11 +227,11 @@ class PressureCompaction:
     )
 
     def hooks(self, *, provider: LLMProvider | None = None) -> LoopHooks:
-        extra = (
-            {"fold_excerpt_chars": self.fold_excerpt_chars}
-            if self.fold_excerpt_chars is not None
-            else {}
-        )
+        extra: dict[str, Any] = {}
+        if self.fold_excerpt_chars is not None:
+            extra["fold_excerpt_chars"] = self.fold_excerpt_chars
+        if self.max_request_bytes is not None:
+            extra["max_request_bytes"] = self.max_request_bytes
         return _PreStepOnly(
             CompactionHooks(
                 max_context_tokens=self.max_context_tokens,
@@ -243,6 +245,7 @@ class PressureCompaction:
                 micro_compact_interval_rounds=self.micro_compact_interval_rounds,
                 rapid_refill_window_rounds=self.rapid_refill_window_rounds,
                 max_rapid_refills=self.max_rapid_refills,
+                byte_threshold_ratio=self.byte_threshold_ratio,
                 **extra,
             ),
             forward=("compact_now",),
@@ -382,6 +385,13 @@ class InformedBacktrack:
 
     max_context_tokens: int
     model: str | None = None
+    keep_last_messages: int = 6
+    keep_last_tool_results: int = 2
+    fold_excerpt_chars: int | None = None
+    keep_last_images: int = 1
+    image_offload: bool = True
+    max_request_bytes: int | None = None
+    byte_threshold_ratio: float = 0.85
     name: str = "informed_backtrack"
     assumes: str = (
         "context-overflow errors are recoverable by rewriting the transcript "
@@ -389,11 +399,22 @@ class InformedBacktrack:
     )
 
     def hooks(self, *, provider: LLMProvider | None = None) -> LoopHooks:
+        extra: dict[str, Any] = {}
+        if self.fold_excerpt_chars is not None:
+            extra["fold_excerpt_chars"] = self.fold_excerpt_chars
+        if self.max_request_bytes is not None:
+            extra["max_request_bytes"] = self.max_request_bytes
         return _OnRequestErrorOnly(
             CompactionHooks(
                 max_context_tokens=self.max_context_tokens,
+                keep_last_messages=self.keep_last_messages,
+                keep_last_tool_results=self.keep_last_tool_results,
+                keep_last_images=self.keep_last_images,
+                image_offload=self.image_offload,
                 summarizer=provider,
                 model=self.model,
+                byte_threshold_ratio=self.byte_threshold_ratio,
+                **extra,
             )
         )
 

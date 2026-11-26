@@ -79,13 +79,17 @@ class CompactionBracket:
 
     ``span_start_index`` / ``span_end_index`` index the pre-rewrite
     projection (the transcript the rewriter saw), naming exactly what the
-    summary shadows.
+    summary shadows. ``already_journaled`` is True when a ``CompactionJournal``
+    persisted ``compaction_start`` (before calling the summarizer) and
+    ``compaction_summary`` (immediately after) so ``_apply_rewrite`` only
+    needs to close the boundary.
     """
 
     compaction_id: str
     span_start_index: int
     span_end_index: int
     summary_text: str
+    already_journaled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,7 +446,10 @@ class ChainHooks:
         )
 
     async def compact_now(
-        self, transcript: list[LLMMessage], ctx: LoopContext
+        self,
+        transcript: list[LLMMessage],
+        ctx: LoopContext,
+        **kwargs: Any,
     ) -> PreStepAction:
         """Manual compaction (CC ``/compact`` parity): delegate to the first
         hook in the chain that implements ``compact_now`` (CompactionHooks).
@@ -458,7 +465,7 @@ class ChainHooks:
         for hook in self._hooks:
             callback = getattr(hook, "compact_now", None)
             if callable(callback):
-                return await callback(transcript, ctx)
+                return await callback(transcript, ctx, **kwargs)
         return PreStepAction(
             kind="proceed", reason="compact: no compaction hook in chain"
         )

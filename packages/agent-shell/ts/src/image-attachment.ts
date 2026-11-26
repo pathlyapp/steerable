@@ -21,6 +21,10 @@
 import { readFileSync, statSync } from 'fs';
 import { basename, extname } from 'path';
 import type { LlmImage } from './llm/types.js';
+import {
+  MODEL_IMAGE_JPEG_QUALITY,
+  MODEL_IMAGE_REENCODE_THRESHOLD_BYTES,
+} from './attachments/image-normalizer.js';
 import { builtinRasterSupports, createRasterImageDecoder } from './raster-image.js';
 
 /** Refuse to read source files larger than this (10 MB). */
@@ -228,9 +232,13 @@ export function processViewImage(
   let mediaType: 'image/png' | 'image/jpeg' =
     outputFormat === 'jpeg' ? 'image/jpeg' : 'image/png';
   let buffer = outputFormat === 'jpeg' ? rendered.toJPEG(85) : rendered.toPNG();
-  if (buffer.length > IMAGE_MAX_ENCODED_BYTES && input.format == null && outputFormat === 'png') {
+  if (
+    buffer.length > MODEL_IMAGE_REENCODE_THRESHOLD_BYTES &&
+    input.format == null &&
+    outputFormat === 'png'
+  ) {
     mediaType = 'image/jpeg';
-    buffer = rendered.toJPEG(80);
+    buffer = rendered.toJPEG(MODEL_IMAGE_JPEG_QUALITY);
   }
   if (buffer.length > IMAGE_MAX_ENCODED_BYTES) {
     return {
@@ -441,13 +449,15 @@ export function processImageAttachments(
       ? image.resize({ width: target.width, height: target.height, quality: 'good' })
       : image;
 
-    // PNG for graphics/screenshots (lossless), JPEG for photos (smaller).
+    // PNG for compact graphics/screenshots, JPEG for photos or PNGs over 512 KiB
+    // so Retina/4K screenshots never blow the 4 MiB gateway request ceiling while
+    // keeping the original file on disk completely untouched (R2 dual-track).
     const preferJpeg = ['.jpg', '.jpeg'].includes(extname(file.path).toLowerCase());
     let mediaType = preferJpeg ? 'image/jpeg' : 'image/png';
     let buffer = preferJpeg ? rendered.toJPEG(85) : rendered.toPNG();
-    if (buffer.length > IMAGE_MAX_ENCODED_BYTES && mediaType !== 'image/jpeg') {
+    if (buffer.length > MODEL_IMAGE_REENCODE_THRESHOLD_BYTES && mediaType !== 'image/jpeg') {
       mediaType = 'image/jpeg';
-      buffer = rendered.toJPEG(80);
+      buffer = rendered.toJPEG(MODEL_IMAGE_JPEG_QUALITY);
     }
     if (buffer.length > IMAGE_MAX_ENCODED_BYTES) {
       notes.push(`- ${label}：压缩后仍超过 ${formatMb(IMAGE_MAX_ENCODED_BYTES)}MB，未附加`);

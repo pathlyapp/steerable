@@ -295,10 +295,10 @@ Scaffolds, AST-validates, and bundles signed out-of-tree scenario packs.
 export function preflightHelp(): string {
   return `
 Usage:
-  <product> preflight [--profile server|desktop] [--manifest <file.json>] [--json]
+  <product> preflight [--profile server|desktop] [--manifest <file.json>] [--require-license] [--license-file <path>] [--json]
 
 Verifies CPU ISA (x86-64-v2), OS sandbox backend, free disk space, X.509 TLS
-certificate expiry, and manifest-declared commands and fonts before deployment.
+certificate expiry, optional signed license validity, and manifest-declared commands and fonts.
 `.trim();
 }
 

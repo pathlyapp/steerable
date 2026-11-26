@@ -87,6 +87,8 @@ export interface PackRendererContributions {
   readonly routes?: readonly PackRouteContribution[];
   readonly settingsPanels?: readonly PackSettingsPanelContribution[];
   readonly chatSlots?: readonly PackChatSlotContribution[];
+  /** Optional top-of-workspace banners contributed by a pack (rendered above main chat area). */
+  readonly topBanners?: readonly ComponentType[];
   /**
    * 包技能里由引擎自动注入、不进 "/" 菜单的技能名/目录名
    * （并入 slash-sources 的隐藏集，如某包的 90-<pack>）。

@@ -27,6 +27,19 @@ interface AnchoredSessionMemory {
 }
 
 const sessionMemoryMap = new Map<string, AnchoredSessionMemory>();
+const sessionCompactionEpochMap = new Map<string, number>();
+
+/** Read the current compaction epoch for a chat session (default 0). */
+export function getSessionCompactionEpoch(chatId: string): number {
+  return sessionCompactionEpochMap.get(chatId) ?? 0;
+}
+
+/** Increment and return the compaction epoch after a CompactionBoundary rewrite. */
+export function bumpSessionCompactionEpoch(chatId: string): number {
+  const next = (sessionCompactionEpochMap.get(chatId) ?? 0) + 1;
+  sessionCompactionEpochMap.set(chatId, next);
+  return next;
+}
 
 export interface MemoryTurnInjection {
   /** Immutable snapshot block for the session's initial user prefix (empty if no memory). */
@@ -46,7 +59,7 @@ export async function buildMemoryTurnInjection(options: {
   readonly nowMs?: number;
 }): Promise<MemoryTurnInjection> {
   const mode = await options.memoryStore.getPermissionMode();
-  const epoch = options.compactionEpoch ?? 0;
+  const epoch = options.compactionEpoch ?? getSessionCompactionEpoch(options.chatId);
   const existing = sessionMemoryMap.get(options.chatId);
 
   if (mode === 'off') {

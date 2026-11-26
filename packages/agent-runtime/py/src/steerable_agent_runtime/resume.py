@@ -254,12 +254,17 @@ async def load_history_items(
 
     from .history import (  # local: keeps the trace path import-light
         CompactionBoundary,
+        CompactionStart,
+        CompactionSummary,
+        ContextManager,
         HistoryItem,
         HistorySeed,
         RecordFormatError,
         entry_from_dict,
+        entry_to_dict,
         kind_for_role,
     )
+    from .tokens import estimate_tokens
 
     boundary_seq = -1
     cursor = until_seq
@@ -284,6 +289,10 @@ async def load_history_items(
         record_id, after_seq=boundary_seq, until_seq=until_seq
     )
     items: list[HistoryItem] = []
+    open_starts: dict[str, CompactionStart] = {}
+    open_summaries: dict[str, CompactionSummary] = {}
+    closed_ids: set[str] = set()
+    last_seq = boundary_seq
     for raw in entries:
         try:
             entry = entry_from_dict(raw)
@@ -292,6 +301,7 @@ async def load_history_items(
             # fail-closed read (the desktop-downgrade case) identifies
             # which record is unreadable.
             raise RecordFormatError(f"record {record_id!r}: {exc}") from exc
+        last_seq = max(last_seq, entry.seq)
         if isinstance(entry, HistoryItem):
             items.append(entry)
         elif isinstance(entry, HistorySeed):
@@ -310,12 +320,90 @@ async def load_history_items(
                         turn_id=entry.turn_id,
                     )
                 )
+        elif isinstance(entry, CompactionStart):
+            open_starts[entry.compaction_id] = entry
+        elif isinstance(entry, CompactionSummary):
+            open_summaries[entry.compaction_id] = entry
         elif isinstance(entry, CompactionBoundary):
-            # A boundary inside the forward range means the reverse scan's
-            # boundary wasn't the newest (concurrent writer) — restart the
-            # projection from here; the tail after it is the visible span.
+            if entry.compaction_id:
+                closed_ids.add(entry.compaction_id)
             items = []
+            open_starts.clear()
+            open_summaries.clear()
+
+    # R4 crash-safe summary reuse: if a paid compaction_summary landed in the
+    # durable record before the process crashed (missing its closing boundary),
+    # close the bracket immediately using the stored summary_text — zero LLM
+    # re-billing, while an unclosed compaction_start without a summary stays a
+    # harmless no-op.
+    if until_seq is None and open_summaries:
+        for cid in reversed(list(open_summaries.keys())):
+            if cid in closed_ids or cid not in open_starts:
+                continue
+            start_entry = open_starts[cid]
+            summary_entry = open_summaries[cid]
+            s_idx = start_entry.span_start_index
+            e_idx = start_entry.span_end_index
+            summary_text = summary_entry.summary_text.strip()
+            if (
+                summary_text
+                and s_idx is not None
+                and e_idx is not None
+                and 0 <= s_idx < e_idx <= len(items)
+            ):
+                visible_msgs = [it.message for it in items]
+                summary_msg = LLMMessage.text_of(
+                    "user",
+                    f"[context compacted: earlier conversation summarized]\n{summary_text}",
+                )
+                compacted = [
+                    *visible_msgs[:s_idx],
+                    summary_msg,
+                    *visible_msgs[e_idx:],
+                ]
+                mgr = ContextManager(
+                    first_seq=last_seq + 1,
+                    turn_id=start_entry.turn_id,
+                )
+                mgr.replace_all(
+                    compacted,
+                    reason=f"{start_entry.reason} (recovered)",
+                    action=start_entry.action,
+                    turn_id=start_entry.turn_id,
+                    pre_tokens=(
+                        start_entry.pre_tokens
+                        if start_entry.pre_tokens is not None
+                        else estimate_tokens(visible_msgs)
+                    ),
+                    post_tokens=estimate_tokens(compacted),
+                    compaction_id=cid,
+                )
+                recovered_entries = mgr.drain_pending()
+                await storage.append_history(
+                    record_id, [entry_to_dict(e) for e in recovered_entries]
+                )
+                items = mgr.projection_items
+                break
+
     return items
+
+
+async def recover_dangling_compaction(
+    storage: "HistoryStore",
+    record_id: str,
+) -> bool:
+    """Explicit recovery check for unclosed paid compaction brackets (R4).
+
+    Returns ``True`` when an unclosed ``compaction_start`` + ``compaction_summary``
+    pair was found and closed with a ``CompactionBoundary``; ``False`` when the
+    record was already clean or held only an unfinished ``compaction_start``.
+    """
+    latest_before = await storage.list_history(record_id, limit=1, reverse=True)
+    seq_before = int(latest_before[0]["seq"]) if latest_before else -1
+    await load_history_items(storage, record_id)
+    latest_after = await storage.list_history(record_id, limit=1, reverse=True)
+    seq_after = int(latest_after[0]["seq"]) if latest_after else -1
+    return seq_after > seq_before
 
 
 async def load_history_transcript(

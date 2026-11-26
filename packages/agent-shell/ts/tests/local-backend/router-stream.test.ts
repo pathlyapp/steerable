@@ -592,7 +592,7 @@ describe('流式回合失败与取消', () => {
 
   it('失败回合记一条 failed 的终态（R4）', async () => {
     const chat = await seedChat();
-    installStream(() => {}, { status: 'failed', reason: 'HTTP 401 Unauthorized' });
+    installStream(() => {}, { status: 'failed', reason: 'unexpected custom failure' });
     await makeRouter().handleStream(
       { method: 'POST', path: `/api/v2/chats/${chat.id}/send`, body: { message: 'hi' } },
       makeEmitCapture().emit,
@@ -600,8 +600,18 @@ describe('流式回合失败与取消', () => {
 
     const turn = h.store.state.usageEvents.find((event) => event.kind === 'turn');
     expect(turn).toMatchObject({ outcome: 'failed', attempts: 1, retried: false });
-    // 失败也要有类别：缺省 unknown 而不是空，统计里才不会丢掉这一类。
+    // 失败也要有类别：无匹配特征时缺省 unknown 而不是空，统计里才不会丢掉这一类。
     expect(turn?.failureKind).toBe('unknown');
+
+    // 带明确 HTTP 状态文本（如 401 / 413）的无结构化元数据失败，自动回退分类而非退化为 unknown (Phase 10 R1-3)
+    const chatAuth = await seedChat();
+    installStream(() => {}, { status: 'failed', reason: 'HTTP 401 Unauthorized' });
+    await makeRouter().handleStream(
+      { method: 'POST', path: `/api/v2/chats/${chatAuth.id}/send`, body: { message: 'hi' } },
+      makeEmitCapture().emit,
+    );
+    const authTurn = h.store.state.usageEvents.filter((event) => event.kind === 'turn')[1];
+    expect(authTurn?.failureKind).toBe('auth');
   });
 
   it('用户停止的回合记为 cancelled，不算失败（R4）', async () => {

@@ -19,6 +19,7 @@ export type TurnFailureKind =
   | 'auth'
   | 'invalid_request'
   | 'context_overflow'
+  | 'license'
   | 'unknown';
 
 /** Every kind, in the order diagnostics list them. */
@@ -29,6 +30,7 @@ export const TURN_FAILURE_KINDS: readonly TurnFailureKind[] = [
   'auth',
   'invalid_request',
   'context_overflow',
+  'license',
   'unknown',
 ];
 
@@ -67,7 +69,7 @@ export function readTurnFailureKind(value: unknown): TurnFailureKind | undefined
 export function readTurnFailureDetail(value: unknown): TurnFailureDetail | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  const kind = readTurnFailureKind(record.errorKind);
+  const kind = readTurnFailureKind(record.errorKind) ?? readTurnFailureKind(record.kind);
   if (!kind) return undefined;
   const proxy = typeof record.proxy === 'string' && record.proxy ? record.proxy : undefined;
   const attempts =
@@ -96,11 +98,24 @@ export function readTurnFailureDetail(value: unknown): TurnFailureDetail | undef
  */
 export function classifyErrorMessage(message: string): TurnFailureKind {
   const text = message.toLowerCase();
+  if (
+    /\blicense_(missing|expired|signature_invalid|clock_rollback|seat_exceeded|user_limit_reached|feature_disabled|malformed)\b|system license (expired|invalid|missing)|enterprise license (expired|invalid|missing)/.test(
+      text,
+    )
+  ) {
+    return 'license';
+  }
   if (/\b(401|403)\b|unauthor|invalid[ _-]?api[ _-]?key|authentication fail|incorrect api key/.test(text)) {
     return 'auth';
   }
   if (/\b429\b|rate[ _-]?limit|too many requests|quota exceeded/.test(text)) return 'rate_limit';
-  if (/context[ _-]?(length|window)|too many tokens|maximum context/.test(text)) return 'context_overflow';
+  if (
+    /\b413\b|context[ _-]?(length|window)|too many tokens|maximum context|request entity too large|payload too large|body too large|request too large|input is too long/.test(
+      text,
+    )
+  ) {
+    return 'context_overflow';
+  }
   if (/\b(400|404|422)\b|invalid[ _-]?request|bad request/.test(text)) return 'invalid_request';
   if (/\b5\d\d\b|internal server|bad gateway|service unavailable/.test(text)) return 'server';
   if (

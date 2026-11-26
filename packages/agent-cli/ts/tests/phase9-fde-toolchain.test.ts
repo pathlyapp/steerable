@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -385,5 +386,121 @@ describe('Phase 9 S5: Out-of-tree Signed Packs, PackTestHost, Preflight, Diag-Bu
       echoEmptyReasoningForToolCalls: true,
     });
     expect(fs.existsSync(reportPath)).toBe(true);
+  });
+
+  it('T-LIC-07: preflight --require-license verifies Ed25519 JCS license, warns on expiring/grace, fails on bad signature or deploymentId mismatch, and diag-bundle redacts signature', async () => {
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const spkiDer = publicKey.export({ format: 'der', type: 'spki' });
+    const rawPubHex = spkiDer.subarray(spkiDer.length - 32).toString('hex');
+
+    const signLic = (payload: Record<string, unknown>, keyEnvironment = 'production') => {
+      const canonical = JSON.stringify(
+        Object.keys(payload)
+          .sort()
+          .reduce<Record<string, unknown>>((acc, k) => {
+            acc[k] = payload[k];
+            return acc;
+          }, {}),
+      );
+      const sig = cryptoSign(null, Buffer.from(canonical, 'utf8'), privateKey).toString('base64url');
+      return JSON.stringify({ payload, keyEnvironment, signature: sig }, null, 2);
+    };
+
+    // 0. Open-source default (no --require-license, no STEERABLE_LICENSE_FILE) omits license check
+    const ossReport = await runPreflightChecks({
+      profile: 'server',
+      cpuArchOverride: 'arm64',
+    });
+    expect(ossReport.checks.find((c) => c.id === 'license')).toBeUndefined();
+
+    // 1. Valid license passes preflight
+    const stateDir = path.join(tempDir, 'lic-state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, '.deployment_id'), 'dep-node-01\n', 'utf8');
+    const validLicPath = path.join(stateDir, 'enterprise.lic');
+    const nowMs = Date.parse('2026-11-26T12:00:00Z');
+    fs.writeFileSync(
+      validLicPath,
+      signLic({
+        customer: 'Acme Corp Secret Tenant',
+        deploymentId: 'dep-node-01',
+        expiringNoticeDays: 30,
+        features: ['sso', 'audit'],
+        graceDays: 15,
+        issuedAt: '2026-11-01',
+        licenseId: 'lic-2026-0001',
+        maxConcurrentRuns: 10,
+        maxUsers: 50,
+        notAfter: '2027-06-01',
+        notBefore: '2026-11-01',
+        product: 'enterprise-suite',
+        schemaVersion: 1,
+      }),
+      'utf8',
+    );
+
+    const passReport = await runPreflightChecks({
+      profile: 'server',
+      cpuArchOverride: 'arm64',
+      requireLicense: true,
+      licenseFilePath: validLicPath,
+      licenseStateDir: stateDir,
+      expectedProduct: 'enterprise-suite',
+      licensePubkeyHex: rawPubHex,
+      nowMs,
+    });
+    expect(passReport.ok).toBe(true);
+    expect(passReport.checks.find((c) => c.id === 'license')?.status).toBe('pass');
+
+    // 2. Expiring within 30 days -> warn (ok remains true)
+    const expSoonMs = Date.parse('2027-05-15T12:00:00Z');
+    const warnReport = await runPreflightChecks({
+      profile: 'server',
+      cpuArchOverride: 'arm64',
+      requireLicense: true,
+      licenseFilePath: validLicPath,
+      licenseStateDir: stateDir,
+      expectedProduct: 'enterprise-suite',
+      licensePubkeyHex: rawPubHex,
+      nowMs: expSoonMs,
+    });
+    expect(warnReport.ok).toBe(true);
+    expect(warnReport.checks.find((c) => c.id === 'license')?.status).toBe('warn');
+
+    // 3. DeploymentId mismatch -> fail
+    fs.writeFileSync(path.join(stateDir, '.deployment_id'), 'dep-cloned-vm-99\n', 'utf8');
+    const mismatchReport = await runPreflightChecks({
+      profile: 'server',
+      cpuArchOverride: 'arm64',
+      requireLicense: true,
+      licenseFilePath: validLicPath,
+      licenseStateDir: stateDir,
+      expectedProduct: 'enterprise-suite',
+      licensePubkeyHex: rawPubHex,
+      nowMs,
+    });
+    expect(mismatchReport.ok).toBe(false);
+    expect(mismatchReport.checks.find((c) => c.id === 'license')?.detail).toContain(
+      'deploymentId mismatch',
+    );
+
+    // 4. diag-bundle includes license-status.json with signature stripped & customer redacted
+    const diagTgz = path.join(tempDir, 'lic-diag.tgz');
+    const bundle = exportDiagBundle({
+      dataDir: tempDir,
+      outFile: diagTgz,
+      licenseFilePath: validLicPath,
+    });
+    expect(bundle.includedFiles).toContain('license-status.json');
+    const unpackLicDir = path.join(tempDir, 'lic-diag-unpack');
+    fs.mkdirSync(unpackLicDir, { recursive: true });
+    execFileSync('tar', ['-xzf', diagTgz, '-C', unpackLicDir]);
+    const licJsonRaw = fs.readFileSync(path.join(unpackLicDir, 'license-status.json'), 'utf8');
+    const licJson = JSON.parse(licJsonRaw) as Record<string, unknown>;
+    expect(licJson.licenseId).toBe('lic-2026-0001');
+    expect(licJson.product).toBe('enterprise-suite');
+    expect(licJson.signature).toBeUndefined();
+    expect(licJsonRaw).not.toContain('Acme Corp Secret Tenant');
+    expect(String(licJson.customer)).toContain('[REDACTED len=');
   });
 });

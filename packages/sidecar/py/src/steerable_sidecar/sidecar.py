@@ -352,6 +352,11 @@ class Sidecar:
         register("agent.session.branches", self._handle_session_branches)
         register("agent.session.tree", self._handle_session_tree)
         register("agent.session.messages", self._handle_session_messages)
+        register("agent.session.compact", self._handle_session_compact)
+        register("agent.session.context_status", self._handle_session_context_status)
+        register("license.status", self._handle_license_status)
+        register("license.reload", self._handle_license_reload)
+        register("license.verify", self._handle_license_verify)
         register("agent.children.list", self._handle_children_list)
         register("agent.children.interrupt", self._handle_children_interrupt)
 
@@ -1664,6 +1669,307 @@ class Sidecar:
             )
         return {"recordId": str(record_id), "messages": messages}
 
+    async def _handle_session_compact(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Authoritatively compact a durable session record in ``sessions.db`` (Phase 10 R3).
+
+        Supports Partial Compaction options: ``focus``, ``keepHeadTurns``, and
+        ``keepTailMessages``. Writes the full crash-safe transaction bracket
+        (``compaction_start`` -> ``compaction_summary`` -> ``CompactionBoundary``)
+        and returns the post-boundary visible span so the host can sync its UI
+        ``chat_messages`` table atomically.
+        """
+        from steerable_agent_runtime import (
+            CompactionHooks,
+            ContextManager,
+            LoopContext,
+            close_dangling_tool_calls,
+            estimate_tokens,
+            estimate_wire_bytes,
+        )
+        from steerable_agent_runtime.history import entry_to_dict
+        from steerable_agent_runtime.loop import _apply_rewrite
+        from steerable_agent_runtime.resume import load_history_items
+        from steerable_agent_runtime.tokens import (
+            resolve_context_window,
+            resolve_max_request_bytes,
+        )
+
+        params = _require_params(params)
+        record_id = str(params.get("recordId") or "").strip()
+        if not record_id:
+            raise JsonRpcError("recordId required", code=-32602, kind="invalid_params")
+
+        items = await load_history_items(self.storage, record_id)
+        if items is None:
+            return {
+                "recordId": record_id,
+                "recordExists": False,
+                "compacted": 0,
+                "preTokens": 0,
+                "postTokens": 0,
+                "preBytes": 0,
+                "postBytes": 0,
+                "messages": [],
+            }
+
+        transcript = close_dangling_tool_calls([it.message for it in items])
+        model = params.get("model")
+        max_ctx = resolve_context_window(
+            model,
+            explicit=int(params.get("maxContextTokens") or 0) or None,
+            provider=params.get("provider"),
+            base_url=params.get("baseUrl"),
+        )
+        max_req_bytes = resolve_max_request_bytes(
+            int(params.get("maxRequestBytes") or 0) or None
+        )
+        summarizer: Any | None = None
+        if params.get("apiKey") or params.get("provider"):
+            try:
+                summarizer = self._llm_provider_factory(params)
+            except Exception:
+                summarizer = None
+
+        pre_tokens = estimate_tokens(transcript, model=model)
+        pre_bytes = estimate_wire_bytes(transcript)
+        last_rows = await self.storage.list_history(record_id, limit=1, reverse=True)
+        last_seq = int(last_rows[0]["seq"]) if last_rows else -1
+        manager = ContextManager(
+            list(transcript),
+            token_model=model,
+            first_seq=last_seq + 1,
+        )
+        manager.mark_persisted_prefix(len(transcript))
+
+        storage_ref = self.storage
+
+        class _SessionCompactJournal:
+            async def open_bracket(
+                self,
+                *,
+                compaction_id: str,
+                reason: str,
+                action: str,
+                span_start_index: int,
+                span_end_index: int,
+                pre_tokens: int | None = None,
+            ) -> None:
+                manager.record_compaction_start(
+                    compaction_id=compaction_id,
+                    reason=reason,
+                    action=action,
+                    span_start_index=span_start_index,
+                    span_end_index=span_end_index,
+                    pre_tokens=pre_tokens,
+                )
+                pending = manager.drain_pending()
+                if pending:
+                    await storage_ref.append_history(
+                        record_id, [entry_to_dict(e) for e in pending]
+                    )
+
+            async def record_summary(
+                self,
+                *,
+                compaction_id: str,
+                summary_text: str,
+            ) -> None:
+                manager.record_compaction_summary(
+                    compaction_id=compaction_id,
+                    summary_text=summary_text,
+                )
+                pending = manager.drain_pending()
+                if pending:
+                    await storage_ref.append_history(
+                        record_id, [entry_to_dict(e) for e in pending]
+                    )
+
+        policy = resolve_compaction_policy(model=model, max_context_tokens=max_ctx)
+        hooks = CompactionHooks(
+            max_context_tokens=max_ctx,
+            max_request_bytes=max_req_bytes,
+            model=model,
+            summarizer=summarizer,
+            journal=_SessionCompactJournal(),
+            **policy.as_params(),
+        )
+        focus_raw = params.get("focus")
+        keep_head = params.get("keepHeadTurns")
+        keep_tail = params.get("keepTailMessages")
+        ctx = LoopContext(chat_id=record_id)
+        action = await hooks.compact_now(
+            transcript,
+            ctx,
+            focus=str(focus_raw) if isinstance(focus_raw, str) and focus_raw.strip() else None,
+            keep_head_turns=int(keep_head) if isinstance(keep_head, int) else None,
+            keep_tail_messages=int(keep_tail) if isinstance(keep_tail, int) else None,
+        )
+        compacted_count = 0
+        summary_text = ""
+        if action.rewrite is not None:
+            compacted_msgs = list(action.rewrite.messages)
+            compacted_count = max(1, len(transcript) - len(compacted_msgs) + 1)
+            if action.rewrite.bracket is not None:
+                summary_text = action.rewrite.bracket.summary_text
+            _apply_rewrite(manager, action.rewrite)
+            pending = manager.drain_pending()
+            if pending:
+                await self.storage.append_history(
+                    record_id, [entry_to_dict(e) for e in pending]
+                )
+
+        final_items = manager.projection_items
+        final_msgs = [it.message for it in final_items]
+        post_tokens = estimate_tokens(final_msgs, model=model)
+        post_bytes = estimate_wire_bytes(final_msgs)
+        projected = []
+        for item in final_items:
+            text = (
+                "".join(
+                    getattr(part, "text", "")
+                    for part in item.message.content
+                    if getattr(part, "type", None) == "text"
+                )
+                if isinstance(item.message.content, list)
+                else str(item.message.content)
+            )
+            projected.append(
+                {"seq": item.seq, "role": item.message.role, "content": text}
+            )
+        return {
+            "recordId": record_id,
+            "recordExists": True,
+            "compacted": compacted_count,
+            "preTokens": pre_tokens,
+            "postTokens": post_tokens,
+            "preBytes": pre_bytes,
+            "postBytes": post_bytes,
+            "summaryText": summary_text,
+            "messages": projected,
+        }
+
+    async def _handle_session_context_status(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Return live token & wire-byte budget metrics for a durable session (Phase 10 R3)."""
+        from steerable_agent_runtime import estimate_tokens, estimate_wire_bytes
+        from steerable_agent_runtime.resume import load_history_items
+        from steerable_agent_runtime.tokens import (
+            resolve_context_window,
+            resolve_max_request_bytes,
+        )
+
+        params = _require_params(params)
+        record_id = str(params.get("recordId") or "").strip()
+        if not record_id:
+            raise JsonRpcError("recordId required", code=-32602, kind="invalid_params")
+
+        model = params.get("model")
+        max_ctx = resolve_context_window(
+            model,
+            explicit=int(params.get("maxContextTokens") or 0) or None,
+            provider=params.get("provider"),
+            base_url=params.get("baseUrl"),
+        )
+        max_req_bytes = resolve_max_request_bytes(
+            int(params.get("maxRequestBytes") or 0) or None
+        )
+        items = await load_history_items(self.storage, record_id)
+        if items is None:
+            return {
+                "recordId": record_id,
+                "recordExists": False,
+                "estimatedTokens": 0,
+                "maxContextTokens": max_ctx,
+                "estimatedBytes": 0,
+                "maxRequestBytes": max_req_bytes,
+                "messageCount": 0,
+                "compactionCount": 0,
+            }
+        transcript = [it.message for it in items]
+        all_rows = await self.storage.list_history(record_id, limit=500, reverse=True)
+        compaction_count = sum(1 for r in all_rows if r.get("entry") == "boundary")
+        return {
+            "recordId": record_id,
+            "recordExists": True,
+            "estimatedTokens": estimate_tokens(transcript, model=model),
+            "maxContextTokens": max_ctx,
+            "estimatedBytes": estimate_wire_bytes(transcript),
+            "maxRequestBytes": max_req_bytes,
+            "messageCount": len(transcript),
+            "compactionCount": compaction_count,
+        }
+
+    @staticmethod
+    def _disabled_license_payload() -> dict[str, Any]:
+        return {
+            "enforced": False,
+            "state": "disabled",
+            "errorCode": None,
+            "message": None,
+            "licenseId": None,
+            "customer": None,
+            "product": None,
+            "features": [],
+            "notBefore": None,
+            "notAfter": None,
+            "graceDays": None,
+            "daysRemaining": None,
+            "graceDaysRemaining": None,
+            "maxUsers": None,
+            "maxConcurrentRuns": None,
+            "activeConcurrentRuns": 0,
+            "deploymentId": None,
+        }
+
+    async def _handle_license_status(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Return redacted commercial license state from the native engine (or disabled on public builds)."""
+        try:
+            import steerable_agent_runtime_native as native
+
+            fn = getattr(native, "license_status", None)
+            if callable(fn):
+                return json.loads(fn())
+        except Exception:
+            pass
+        return self._disabled_license_payload()
+
+    async def _handle_license_reload(
+        self, _params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Hot-reload the commercial license file inside the native engine without restarting the sidecar."""
+        try:
+            import steerable_agent_runtime_native as native
+
+            fn = getattr(native, "license_reload", None)
+            if callable(fn):
+                return json.loads(fn())
+        except Exception:
+            pass
+        return self._disabled_license_payload()
+
+    async def _handle_license_verify(
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """Pre-verify candidate `.lic` text in the native engine before atomic disk replacement."""
+        params = _require_params(params)
+        raw = params.get("content") if params.get("content") is not None else params.get("raw")
+        if not isinstance(raw, str) or not raw.strip():
+            raise JsonRpcError("content required", code=-32602, kind="invalid_params")
+        try:
+            import steerable_agent_runtime_native as native
+
+            fn = getattr(native, "license_verify", None)
+            if callable(fn):
+                return json.loads(fn(raw))
+        except Exception:
+            pass
+        return self._disabled_license_payload()
+
     async def _handle_children_interrupt(
         self, params: dict[str, Any] | None
     ) -> dict[str, Any]:
@@ -1811,7 +2117,14 @@ class Sidecar:
         loop = self._coreloops.get(stream_id)
         if loop is None:
             return {"ok": False, "reason": "stream_not_active"}
-        loop.request_compact()
+        focus = params.get("focus")
+        keep_head = params.get("keepHeadTurns")
+        keep_tail = params.get("keepTailMessages")
+        loop.request_compact(
+            focus=str(focus) if isinstance(focus, str) and focus.strip() else None,
+            keep_head_turns=int(keep_head) if isinstance(keep_head, int) else None,
+            keep_tail_messages=int(keep_tail) if isinstance(keep_tail, int) else None,
+        )
         return {"ok": True}
 
     async def _run_chat_stream(
@@ -3668,7 +3981,10 @@ def _assemble_default_harness(
     from dataclasses import replace
 
     from steerable_agent_runtime.harness_spec import assemble_harness
-    from steerable_agent_runtime.tokens import resolve_context_window
+    from steerable_agent_runtime.tokens import (
+        resolve_context_window,
+        resolve_max_request_bytes,
+    )
 
     # Explicit maxContextTokens wins; otherwise the model's known context
     # window (a fixed 60k against a 131k model compacted far earlier than the
@@ -3678,6 +3994,9 @@ def _assemble_default_harness(
         explicit=int(params.get("maxContextTokens") or 0) or None,
         provider=params.get("provider"),
         base_url=params.get("baseUrl"),
+    )
+    max_req_bytes = resolve_max_request_bytes(
+        int(params.get("maxRequestBytes") or 0) or None
     )
     spec = _default_harness_spec()
     # STEERABLE_SIDECAR_SPILL=0 is deployment policy, not harness strategy:
@@ -3713,10 +4032,16 @@ def _assemble_default_harness(
         runtime_params={
             "pressure_compaction": {
                 "max_context_tokens": max_ctx,
+                "max_request_bytes": max_req_bytes,
                 "model": model,
                 **policy.as_params(),
             },
-            "informed_backtrack": {"max_context_tokens": max_ctx, "model": model},
+            "informed_backtrack": {
+                "max_context_tokens": max_ctx,
+                "max_request_bytes": max_req_bytes,
+                "model": model,
+                **policy.as_params(),
+            },
             # Desktop 16k inline. GLM 1M Harbor keeps full 100k bash clips
             # until compaction; 2k previews hid compile/train endings.
             "spill": {
