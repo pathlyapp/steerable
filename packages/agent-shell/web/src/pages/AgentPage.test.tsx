@@ -1038,4 +1038,59 @@ describe('AgentPage 追问建议', () => {
     });
     expect(await screen.findByText('调整封面配色')).toBeTruthy();
   });
+
+  it('流式 message_id 携带 messageMetadata 时连续多轮发送不崩溃且保留结构化失败卡片', async () => {
+    let call = 0;
+    streamMock.mockImplementation(
+      async (_input: unknown, onEvent: (event: SSEEvent) => void) => {
+        call += 1;
+        if (call === 1) {
+          onEvent({ type: 'content', content: 'UI_AUTUMN 回复' });
+          onEvent({
+            type: 'agent',
+            event: 'turn_timeline',
+            payload: { blocks: [{ type: 'text', content: 'UI_AUTUMN 回复' }] },
+          });
+          onEvent({
+            type: 'agent',
+            event: 'message_id',
+            payload: {
+              messageId: 'asst-db-autumn',
+              messageMetadata: JSON.stringify({ completionStatus: 'completed' }),
+            },
+          });
+          onEvent({ type: 'done' });
+        } else {
+          onEvent({
+            type: 'agent',
+            event: 'message_id',
+            payload: {
+              messageId: 'asst-db-413',
+              messageMetadata: JSON.stringify({
+                completionStatus: 'failed',
+                completionReason: 'HTTP 413 Request Entity Too Large',
+                traceId: 'trace-live-413',
+                failure: {
+                  kind: 'context_overflow',
+                  statusCode: 413,
+                  provider: 'openai_compat',
+                },
+              }),
+            },
+          });
+          onEvent({ type: 'error', message: 'HTTP 413 Request Entity Too Large' });
+        }
+      },
+    );
+    renderPage('/agent/chat-1', makeCtx());
+    await screen.findByRole('textbox');
+    await typeComposer('第一句');
+    pressEnter();
+    expect(await screen.findByText('UI_AUTUMN 回复')).toBeTruthy();
+
+    await typeComposer('第二句超大负载');
+    pressEnter();
+    const card = await screen.findByTestId('turn-failure');
+    expect(card.getAttribute('data-failure-kind')).toBe('context_overflow');
+  });
 });

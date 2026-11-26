@@ -688,7 +688,12 @@ function AgentChatView({
     persistExecPolicy(next);
   }, []);
 
-  const setMessagesRef = useRef<((updater: (prev: any[]) => any[]) => void) | null>(null);
+  const [liveMetadataByMessageId, setLiveMetadataByMessageId] = useState<
+    Record<string, string>
+  >({});
+  const [tailLiveMetadata, setTailLiveMetadata] = useState<string | null>(null);
+  const tailLiveMetadataRef = useRef<string | null>(null);
+  const latestMessagesRef = useRef<ChatMessage[]>(initialMessages ?? []);
 
   const handleUnknownEvent = useCallback((event: SSEEvent) => {
     const ev = event as any;
@@ -831,20 +836,12 @@ function AgentChatView({
       setTailAssistantDbId(messageId);
       const persistedMetadata = ev.payload?.messageMetadata;
       if (typeof persistedMetadata === "string" && persistedMetadata) {
-        setMessagesRef.current?.((prev) => {
-          for (let idx = prev.length - 1; idx >= 0; idx -= 1) {
-            if (prev[idx]?.role === "assistant") {
-              const next = [...prev];
-              next[idx] = {
-                ...next[idx],
-                id: messageId,
-                messageMetadata: persistedMetadata,
-              };
-              return next;
-            }
-          }
-          return prev;
-        });
+        tailLiveMetadataRef.current = persistedMetadata;
+        setTailLiveMetadata(persistedMetadata);
+        setLiveMetadataByMessageId((prev) => ({
+          ...prev,
+          [messageId]: persistedMetadata,
+        }));
       }
     }
     // AI 标题更新走的是后台 IPC 广播（chat-title-updated）而不是 SSE——
@@ -878,10 +875,12 @@ function AgentChatView({
     onUnknownEvent: handleUnknownEvent,
     onStreamError: handleStreamError,
   });
-  setMessagesRef.current = setMessages as any;
+  latestMessagesRef.current = messages;
   const awaitingRemoteActiveSnapshotRef = useRef(false);
   useEffect(() => {
     awaitingRemoteActiveSnapshotRef.current = false;
+    tailLiveMetadataRef.current = null;
+    setTailLiveMetadata(null);
   }, [chatId]);
 
   useEffect(() => {
@@ -1118,6 +1117,15 @@ function AgentChatView({
         ...(execPolicy === "full" ? { execPolicy: "full" } : {}),
         orchestration: readOrchestrationSetting(),
       };
+      const prevTailMeta = tailLiveMetadataRef.current;
+      if (prevTailMeta) {
+        const last = latestMessagesRef.current[latestMessagesRef.current.length - 1];
+        if (last?.role === "assistant") {
+          setLiveMetadataByMessageId((prev) => ({ ...prev, [last.id]: prevTailMeta }));
+        }
+      }
+      tailLiveMetadataRef.current = null;
+      setTailLiveMetadata(null);
       return sendUserMessage({
         ...input,
         metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
@@ -1306,6 +1314,15 @@ function AgentChatView({
       ...(mode === "plan" ? { mode: "plan" as const } : {}),
       ...(execPolicy === "full" ? { execPolicy: "full" as const } : {}),
     };
+    const prevTailMeta = tailLiveMetadataRef.current;
+    if (prevTailMeta) {
+      const last = latestMessagesRef.current[latestMessagesRef.current.length - 1];
+      if (last?.role === "assistant") {
+        setLiveMetadataByMessageId((prev) => ({ ...prev, [last.id]: prevTailMeta }));
+      }
+    }
+    tailLiveMetadataRef.current = null;
+    setTailLiveMetadata(null);
     return resumeTurn({
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     });
@@ -1492,9 +1509,23 @@ function AgentChatView({
   // ── 把远端运行中的快照叠进渲染层 ────────────────────────────────────
   const remoteContent = remoteStreaming ? (liveStream.content ?? "") : null;
   const effectiveMessages = useMemo<ChatMessage[]>(() => {
-    if (remoteContent === null) return messages;
+    const hasMapped = Object.keys(liveMetadataByMessageId).length > 0;
+    const base =
+      !hasMapped && !tailLiveMetadata
+        ? messages
+        : messages.map((m, idx) => {
+            if ((m as ChatMessageWithMetadata).messageMetadata) return m;
+            const mapped =
+              liveMetadataByMessageId[m.id] ??
+              (idx === messages.length - 1 && m.role === "assistant"
+                ? (tailLiveMetadata ?? undefined)
+                : undefined);
+            if (!mapped) return m;
+            return { ...m, messageMetadata: mapped } as ChatMessage;
+          });
+    if (remoteContent === null) return base;
     return [
-      ...messages,
+      ...base,
       {
         id: `live_${chatId}`,
         role: "assistant",
@@ -1502,7 +1533,7 @@ function AgentChatView({
         createdAt: new Date().toISOString(),
       },
     ];
-  }, [messages, remoteContent, chatId]);
+  }, [messages, liveMetadataByMessageId, tailLiveMetadata, remoteContent, chatId]);
   const effectiveIsStreaming = isStreaming || remoteStreaming;
 
   useEffect(() => {
