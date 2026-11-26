@@ -2,7 +2,7 @@
 
 All notable changes to the Steerable framework (lockstep across TypeScript, Python, CLI, UI, and desktop host packages) are documented in this file.
 
-## [Unreleased]
+## [0.13.1](https://github.com/pathlyapp/steerable/compare/v0.13.0...v0.13.1) - 2026-11-26
 
 ### Fixed
 
