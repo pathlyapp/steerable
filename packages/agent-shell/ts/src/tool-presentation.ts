@@ -266,6 +266,26 @@ const PRESENTERS: Record<string, Presenter> = {
   },
 
   present_files: { card: 'generic', kind: 'other', title: () => '交付文件' },
+  ui_surface_render: {
+    card: 'generic',
+    kind: 'other',
+    title: (args) => clip(str(args, 'title'), 48) || '结构化工作台',
+  },
+  memory_search: {
+    card: 'search',
+    kind: 'search',
+    title: (args) => clip(str(args, 'query'), 48) || '搜索记忆',
+  },
+  memory_read: {
+    card: 'read',
+    kind: 'read',
+    title: (args) => clip(str(args, 'topic') || str(args, 'scope'), 48) || '读取记忆',
+  },
+  memory_propose: {
+    card: 'generic',
+    kind: 'edit',
+    title: (args) => clip(str(args, 'content'), 48) || '保存记忆',
+  },
   local_open_path: {
     card: 'generic',
     kind: 'other',

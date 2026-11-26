@@ -157,7 +157,7 @@ export function createToolInvokeHandler(deps: ReverseToolDeps): SidecarReverseHa
     const activeStore = turnSec?.store ?? deps.store;
     const principal = turnSec?.principal ?? LOCAL_DEFAULT_PRINCIPAL;
     const originChannel = turnSec?.originChannel ?? 'web';
-    const schema = deps.toolRouter.getSchemaByName(name);
+    const schema = deps.toolRouter.getSchemaByName?.(name);
     if (chatId && activeStore) {
       const allForChat = await ensurePhase9Store(activeStore).listPendingReconciliations(
         chatId,

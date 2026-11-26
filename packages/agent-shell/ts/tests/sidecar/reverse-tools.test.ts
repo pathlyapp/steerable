@@ -28,7 +28,10 @@ describe('createToolInvokeHandler', () => {
         name: 'local_read_file',
         arguments: { path: '/tmp/a' },
       },
-      undefined,
+      expect.objectContaining({
+        projectRoot: null,
+        originChannel: 'web',
+      }),
     );
     expect(out.success).toBe(true);
     expect(out.data.value).toEqual({ stdout: 'file.txt' });
@@ -50,11 +53,11 @@ describe('createToolInvokeHandler', () => {
 
     expect(toolRouter.execute).toHaveBeenCalledWith(
       { name: 'local_read_file', arguments: { path: 'a.txt' } },
-      {
+      expect.objectContaining({
         projectRoot: null,
         chatId: 'chat-1',
         toolPolicy: { mode: 'denylist', tools: ['local_exec_shell'] },
-      },
+      }),
     );
   });
 
@@ -69,10 +72,9 @@ describe('createToolInvokeHandler', () => {
       context: { mode: 'agent', chatId: 'chat-1', toolPolicy: { mode: 'allowlist', tools: [] } },
     });
 
-    expect(toolRouter.execute).toHaveBeenCalledWith(
-      { name: 'local_read_file', arguments: { path: 'a.txt' } },
-      { projectRoot: null, chatId: 'chat-1' },
-    );
+    const callCtx = vi.mocked(toolRouter.execute).mock.calls[0]?.[1];
+    expect(callCtx).toMatchObject({ projectRoot: null, chatId: 'chat-1', originChannel: 'web' });
+    expect(callCtx).not.toHaveProperty('toolPolicy');
   });
 
   it('resolves the project root from context.chatId (W4-2 fence wiring)', async () => {
@@ -92,7 +94,7 @@ describe('createToolInvokeHandler', () => {
     // 4.6a 起 chatId 随上下文透传（task_*/worktree_* 工具按它归组）。
     expect(toolRouter.execute).toHaveBeenCalledWith(
       { name: 'local_read_file', arguments: { path: 'a.txt' } },
-      { projectRoot: '/repo/project', chatId: 'chat-9' },
+      expect.objectContaining({ projectRoot: '/repo/project', chatId: 'chat-9' }),
     );
   });
 
@@ -116,10 +118,10 @@ describe('createToolInvokeHandler', () => {
     // 围栏根收窄到 worktree——任务摸不到主检出。
     expect(toolRouter.execute).toHaveBeenCalledWith(
       { name: 'local_read_file', arguments: { path: 'a.txt' } },
-      {
+      expect.objectContaining({
         projectRoot: '/repo/project/.steerable/worktrees/demo',
         chatId: 'chat-9',
-      },
+      }),
     );
   });
 
@@ -143,11 +145,11 @@ describe('createToolInvokeHandler', () => {
 
     expect(toolRouter.execute).toHaveBeenCalledWith(
       { name: 'local_write_file', arguments: { path: '/repo/src/pkg/a.ts' } },
-      {
+      expect.objectContaining({
         projectRoot: '/repo/project/.steerable/worktrees/demo',
         chatId: 'chat-9',
         additionalWriteRoots: ['/repo/src'],
-      },
+      }),
     );
   });
 
@@ -166,7 +168,7 @@ describe('createToolInvokeHandler', () => {
 
     expect(toolRouter.execute).toHaveBeenCalledWith(
       { name: 'local_read_file', arguments: { path: 'a.txt' } },
-      { projectRoot: null, chatId: 'chat-1' },
+      expect.objectContaining({ projectRoot: null, chatId: 'chat-1' }),
     );
   });
 

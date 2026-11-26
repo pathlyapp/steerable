@@ -1,0 +1,7 @@
+{
+  "reconciliationId": "rec_20261126_001",
+  "toolName": "dispatch_external_transfer",
+  "argsPreview": "{\"recipient\":\"vendor-acme\",\"amount\":12500}",
+  "errorDetail": "Upstream HTTP gateway timed out after 30000ms before response headers arrived.",
+  "status": "pending"
+}

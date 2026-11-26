@@ -1,0 +1,49 @@
+{
+  "surfaceId": "surf_reconciliation_01",
+  "title": "Pending Vendor Approvals",
+  "subtitle": "Verify live source rows before outward sign-off",
+  "revision": 1,
+  "placement": "workbench",
+  "data": {
+    "items": {
+      "$source": "procurement/pending-items",
+      "params": { "quarter": "2026-Q4" }
+    }
+  },
+  "resolvedData": {
+    "items": [
+      { "id": "row-1", "vendor": "Acme Systems", "amount": "$12,500", "status": "ready" }
+    ]
+  },
+  "sourceHashes": {
+    "items": "3f9a1c8b7d4e2f6a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a"
+  },
+  "components": [
+    {
+      "id": "tbl-items",
+      "kind": "table",
+      "title": "Line Items",
+      "dataKey": "items",
+      "selectable": true,
+      "columns": [
+        { "key": "vendor", "label": "Vendor", "align": "left" },
+        { "key": "amount", "label": "Amount", "align": "right" },
+        { "key": "status", "label": "Status", "align": "center" }
+      ],
+      "rows": [
+        { "id": "row-1", "vendor": "Acme Systems", "amount": "$12,500", "status": "ready" }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "act-approve",
+      "label": "Approve Selected",
+      "toolName": "approve_vendor_batch",
+      "dataKey": "items",
+      "variant": "primary",
+      "checkpoint": "outward",
+      "requiresSelection": true
+    }
+  ]
+}
