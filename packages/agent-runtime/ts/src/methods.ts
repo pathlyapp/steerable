@@ -20,6 +20,8 @@ export const SIDECAR_METHODS = [
   'agent.session.fork',
   'agent.session.branches',
   'agent.session.messages',
+  'agent.session.compact',
+  'agent.session.context_status',
   'agent.chat.stream',
   'agent.chat.cancel',
   'agent.chat.steer',
@@ -49,6 +51,9 @@ export const SIDECAR_METHODS = [
   'plugin.disable',
   'plugin.reload',
   'plugin.tools.describe',
+  'license.status',
+  'license.reload',
+  'license.verify',
 ] as const;
 
 export type SidecarMethod = (typeof SIDECAR_METHODS)[number];

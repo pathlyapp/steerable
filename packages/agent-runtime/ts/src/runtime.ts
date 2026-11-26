@@ -632,6 +632,45 @@ export class AgentRuntime {
     return this.process.request('agent.chat.fork', { streamId, label });
   }
 
+  /** Authoritatively compact a session record (supports partial compaction via focus/keepHeadTurns/keepTailMessages). */
+  compactSession(params: {
+    recordId: string;
+    focus?: string;
+    keepHeadTurns?: number;
+    keepTailMessages?: number;
+    provider?: string;
+    model?: string;
+    baseUrl?: string;
+    apiKey?: string;
+  }): Promise<Record<string, unknown>> {
+    return this.process.request('agent.session.compact', params);
+  }
+
+  /** Query live estimated tokens, wire bytes, and compaction watermark for a session record. */
+  sessionContextStatus(params: {
+    recordId: string;
+    model?: string;
+    maxContextTokens?: number;
+    maxRequestBytes?: number;
+  }): Promise<Record<string, unknown>> {
+    return this.process.request('agent.session.context_status', params);
+  }
+
+  /** Read redacted commercial license state (`disabled` on open-source builds). */
+  licenseStatus(): Promise<Record<string, unknown>> {
+    return this.process.request('license.status');
+  }
+
+  /** Hot-reload the configured `.lic` file without restarting the sidecar. */
+  reloadLicense(): Promise<Record<string, unknown>> {
+    return this.process.request('license.reload');
+  }
+
+  /** Verify candidate `.lic` text in memory without mutating active state. */
+  verifyLicense(content: string): Promise<Record<string, unknown>> {
+    return this.process.request('license.verify', { content });
+  }
+
   // ---- tools / skills / workspace --------------------------------------
 
   listTools(): Promise<ToolDescriptor[]> {
