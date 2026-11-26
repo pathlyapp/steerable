@@ -7,25 +7,28 @@ All notable changes to the Steerable framework (lockstep across TypeScript, Pyth
 ## [0.14.1](https://github.com/pathlyapp/steerable/compare/v0.14.0...v0.14.1) - 2026-11-27
 
 ### Fixed
-- **shell-web:** Preserve the `useChatStream` messages array when attaching live turn metadata, preventing message state from being dropped during streaming updates.
+
+- **shell-web:** Preserve the `useChatStream` message array when attaching live `messageMetadata` from `message_id` SSE events, preventing multi-turn stream state from dropping messages while keeping immediate structured `TurnFailureCard` rendering on live stream errors.
 
 ### Added
-- **cli:** Document the `--require-license` and `--license-file` preflight flags.
+
+- **cli, docs:** Document `--require-license` and `--license-file` flags in `docs/cli.md` for `preflight` and `diag-bundle` CLI flag parity.
 
 ## [0.14.0](https://github.com/pathlyapp/steerable/compare/v0.13.1...v0.14.0) - 2026-11-27
 
 ### Breaking Changes
-- **runtime:** HTTP 413 responses are now unconditionally classified as `context_overflow`, regardless of provider or error body.
+
+- **runtime:** Classify HTTP `413` responses unconditionally as `context_overflow` across all providers regardless of response body format, preserving structured `failureInfo` (`statusCode`, `provider`, `traceId`) across `Continue` and session resume flows.
 
 ### Added
-- **runtime:** Byte-budget compaction triggered by a 4 MiB `max_request_bytes` pressure threshold, with tiered tail-image offload.
-- **runtime:** Partial compaction support.
-- **runtime:** Ingress image normalizer that downscales images to a maximum of 1568px while keeping on-disk originals lossless.
-- **sidecar:** License RPC surface.
-- **shell:** Sidecar RPC wrappers for the Phase 10 surface.
 
-### Fixed
-- **runtime:** Phase 10 sidecar RPC wrappers are now wired up, and Rust artifacts are adopted at 1.0.12.
+- **runtime, sidecar:** Wire-byte request estimator with a `4 MiB` `max_request_bytes` compaction threshold and tiered tail-image offload (`10 -> 4 -> 2 -> 0` preserved images with `[Image offloaded due to request size budget — original path: ...]` placeholders), authoritative `agent.session.compact` (supporting partial compaction via `focus`, `keepHeadTurns`, and `keepTailMessages`) and `agent.session.context_status` JSON-RPC methods, plus pre-summarizer `compaction_start` write-ahead journaling for crash-safe summary reuse.
+- **shell, ui:** `ContextUsagePill` near the chat composer (effective context occupancy, prompt-cache hit ratio, compaction count, and one-click compact), `/compact [focus]` slash command, `compact-and-retry` failure recovery action, ingress `image-normalizer` (`<= 1568px` bounding box while preserving lossless originals on disk), `'license'` `TurnFailureKind` and non-retryable `TurnFailureCard` (`open-license-settings`), and `@steerable/pack-sdk/web` `topBanners` layout slot.
+- **cli, sidecar:** `license.status`, `license.reload`, and `license.verify` sidecar RPC wrappers, `steerable-cli preflight --require-license [--license-file <path>]`, and `diag-bundle` `license-status.json` export with license signature redaction.
+
+### Changed
+
+- **engine:** Adopt Rust artifacts `1.0.12` (full native `CompactionHooks` parity with Python, `cached_prompt_tokens` extraction, crash-safe `HistoryCompactionJournal`, and compile-time `--features licensed` `keel-license` Ed25519 / RFC 8785 JCS / 24h monotonic clock guard).
 
 ## [0.13.1](https://github.com/pathlyapp/steerable/compare/v0.13.0...v0.13.1) - 2026-11-26
 
