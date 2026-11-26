@@ -2,6 +2,12 @@
 
 All notable changes to the Steerable framework (lockstep across TypeScript, Python, CLI, UI, and desktop host packages) are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **runtime, shell, pack-testkit, spec:** Declare cross-language tool presentations for `ui_surface_render`, `memory_search`, `memory_read`, and `memory_propose` across Python and TypeScript, add canonical block conformance fixtures for `OutcomeReconcilePayload` and `UiSurfacePayload`, and include the `@steerable/pack-testkit` unit test suite in CI.
+
 ## [0.13.0](https://github.com/pathlyapp/steerable/compare/v0.12.8...v0.13.0) - 2026-11-26
 
 ### Added
