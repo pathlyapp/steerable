@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   LuActivity,
   LuBlocks,
+  LuBookOpen,
   LuBot,
   LuChartBar,
   LuCodeXml,
@@ -21,6 +22,7 @@ import { getLocale, t } from '@/i18n';
 import { useAppRelease } from '@/components/SidebarRelease';
 import { AgentsSettingsPanel } from '@/components/settings/AgentsSettingsPanel';
 import { AppearanceSettingsPanel } from '@/components/settings/AppearanceSettingsPanel';
+import { MemorySettingsPanel } from '@/components/settings/MemorySettingsPanel';
 import { OrchestrationSettingsPanel } from '@/components/settings/OrchestrationSettingsPanel';
 import { AppUpdateSettingsPanel } from '@/components/settings/AppUpdateSettingsPanel';
 import { PortableSettingsPanel } from '@/components/settings/PortableSettingsPanel';
@@ -209,6 +211,7 @@ export function SettingsPage() {
     if (settingsChrome('security')) {
       list.push({ id: 'security', label: t('Security'), Icon: LuShieldCheck });
     }
+    list.push({ id: 'memory', label: t('Memory'), Icon: LuBookOpen });
     if (settingsChrome('insights')) {
       list.push({ id: 'insights', label: t('Help improve the product'), Icon: LuChartBar });
     }
@@ -470,6 +473,14 @@ export function SettingsPage() {
                 <SecuritySettingsPanel />
               </section>
               )}
+
+              <section className="space-y-2" data-testid="settings-section-memory">
+                <h2 className="flex items-center gap-1.5 text-xs font-semibold text-agent-foreground">
+                  <LuBookOpen className="h-3.5 w-3.5 text-agent-muted-foreground" />
+                  {t('Memory')}
+                </h2>
+                <MemorySettingsPanel />
+              </section>
 
               {settingsChrome('insights') && (
               <section className="space-y-2" data-testid="settings-section-insights">

@@ -14,6 +14,10 @@ export interface CommandIO {
   active?: boolean;
   /** `children answer --wait`: block until the child reaches a terminal state. */
   wait?: boolean;
+  /** `memory --scope user|workspace|tenant`. */
+  scope?: string;
+  /** `memory edit --text <markdown>`. */
+  text?: string;
 }
 
 type OpenClient = (body: (client: AgentClient) => Promise<number>) => Promise<number>;
@@ -587,4 +591,205 @@ interface McpRow {
   name: string;
   command?: string;
   args?: string[];
+}
+
+export async function appCommand(
+  io: CommandIO,
+  stdout: NodeJS.WritableStream,
+  stderr: NodeJS.WritableStream,
+  open: OpenClient,
+  help: string,
+): Promise<number> {
+  const sub = io.positionals[1];
+  if (io.help && !sub) {
+    stdout.write(`${help}\n`);
+    return 0;
+  }
+  if (sub === 'list' || !sub) {
+    return open(async (client) => {
+      const res = await client.request('GET', '/api/v2/applications/active');
+      if (res.status !== 200) {
+        fail(stderr, 'app list', res.status);
+        return 1;
+      }
+      if (io.json) {
+        stdout.write(`${JSON.stringify(res.data)}\n`);
+        return 0;
+      }
+      const data = res.data as {
+        application?: { id?: string };
+        available?: Array<{ id: string; defaultAgentProfileId?: string }>;
+      };
+      const activeId = data.application?.id ?? 'default';
+      stdout.write(`active: ${activeId}\n`);
+      for (const app of data.available ?? []) {
+        stdout.write(
+          `  ${app.id === activeId ? '*' : ' '} ${app.id} (profile=${app.defaultAgentProfileId ?? '-'})\n`,
+        );
+      }
+      return 0;
+    });
+  }
+  if (sub === 'reset') {
+    return open(async (client) => {
+      const res = await client.request('POST', '/api/v2/applications/reset', {});
+      if (res.status !== 200) {
+        fail(stderr, 'app reset', res.status);
+        return 1;
+      }
+      if (io.json) {
+        stdout.write(`${JSON.stringify(res.data)}\n`);
+        return 0;
+      }
+      stdout.write('Active application reset to default.\n');
+      return 0;
+    });
+  }
+  if (sub === 'use') {
+    const appId = io.positionals[2];
+    if (!appId) {
+      stderr.write(`missing <id>\n${help}\n`);
+      return 2;
+    }
+    return open(async (client) => {
+      const res = await client.request('POST', '/api/v2/applications/active', {
+        applicationId: appId,
+      });
+      if (res.status !== 200) {
+        stderr.write(`${messageOf(res.data, `app use failed (${res.status})`)}\n`);
+        return 1;
+      }
+      if (io.json) {
+        stdout.write(`${JSON.stringify(res.data)}\n`);
+        return 0;
+      }
+      stdout.write(`Active application set to ${appId}.\n`);
+      return 0;
+    });
+  }
+  stderr.write(`unknown app command: ${sub}\n${help}\n`);
+  return 2;
+}
+
+export async function memoryCommand(
+  io: CommandIO,
+  stdout: NodeJS.WritableStream,
+  stderr: NodeJS.WritableStream,
+  open: OpenClient,
+  help: string,
+): Promise<number> {
+  const sub = io.positionals[1] ?? 'list';
+  if (io.help) {
+    stdout.write(`${help}\n`);
+    return 0;
+  }
+  const scope = io.scope === 'workspace' || io.scope === 'tenant' ? io.scope : 'user';
+
+  if (sub === 'list') {
+    return open(async (client) => {
+      const res = await client.request('GET', `/api/v2/memory?scope=${encodeURIComponent(scope)}`);
+      if (res.status !== 200) {
+        fail(stderr, 'memory list', res.status);
+        return 1;
+      }
+      if (io.json) {
+        stdout.write(`${JSON.stringify(res.data)}\n`);
+        return 0;
+      }
+      const d = res.data as {
+        permissionMode?: string;
+        bytesUsed?: number;
+        maxBytes?: number;
+        contentMarkdown?: string;
+        refinements?: Array<{ id: string; status: string; content: string }>;
+      };
+      stdout.write(
+        `scope: ${scope}  mode: ${d.permissionMode ?? 'ask'}  bytes: ${d.bytesUsed ?? 0}/${d.maxBytes ?? 16384}\n`,
+      );
+      if (d.contentMarkdown?.trim()) {
+        stdout.write(`\n${d.contentMarkdown.trim()}\n`);
+      } else {
+        stdout.write('(empty)\n');
+      }
+      return 0;
+    });
+  }
+
+  if (sub === 'edit') {
+    const nextText = io.text ?? io.positionals.slice(2).join(' ');
+    if (nextText === undefined || (!io.text && io.positionals.length < 3)) {
+      stderr.write(`missing --text <markdown>\n${help}\n`);
+      return 2;
+    }
+    return open(async (client) => {
+      const cur = await client.request('GET', `/api/v2/memory?scope=${encodeURIComponent(scope)}`);
+      if (cur.status !== 200) {
+        fail(stderr, 'memory edit', cur.status);
+        return 1;
+      }
+      const baseHash = (cur.data as { contentSha256?: string }).contentSha256;
+      const saved = await client.request('PUT', '/api/v2/memory', {
+        scope,
+        contentMarkdown: nextText,
+        baseHash,
+      });
+      if (saved.status !== 200) {
+        stderr.write(`${messageOf(saved.data, `memory edit failed (${saved.status})`)}\n`);
+        return 1;
+      }
+      if (io.json) {
+        stdout.write(`${JSON.stringify(saved.data)}\n`);
+        return 0;
+      }
+      stdout.write(`Saved ${scope} MEMORY.md.\n`);
+      return 0;
+    });
+  }
+
+  if (sub === 'withdraw') {
+    const refId = io.positionals[2];
+    if (!refId) {
+      stderr.write(`missing <refinement-id>\n${help}\n`);
+      return 2;
+    }
+    return open(async (client) => {
+      const res = await client.request(
+        'POST',
+        `/api/v2/memory/refinements/${encodeURIComponent(refId)}/withdraw`,
+        {},
+      );
+      if (res.status !== 200) {
+        stderr.write(`${messageOf(res.data, `memory withdraw failed (${res.status})`)}\n`);
+        return 1;
+      }
+      if (io.json) {
+        stdout.write(`${JSON.stringify(res.data)}\n`);
+        return 0;
+      }
+      stdout.write(`Withdrew refinement ${refId} and blocked re-learning.\n`);
+      return 0;
+    });
+  }
+
+  if (sub === 'clear') {
+    return open(async (client) => {
+      const saved = await client.request('PUT', '/api/v2/memory', {
+        scope,
+        contentMarkdown: '',
+      });
+      if (saved.status !== 200) {
+        stderr.write(`${messageOf(saved.data, `memory clear failed (${saved.status})`)}\n`);
+        return 1;
+      }
+      if (io.json) {
+        stdout.write(`${JSON.stringify(saved.data)}\n`);
+        return 0;
+      }
+      stdout.write(`Cleared ${scope} MEMORY.md.\n`);
+      return 0;
+    });
+  }
+
+  stderr.write(`unknown memory command: ${sub}\n${help}\n`);
+  return 2;
 }

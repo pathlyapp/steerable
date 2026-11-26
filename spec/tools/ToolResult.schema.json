@@ -12,6 +12,13 @@
     "nextAction": { "type": "string" },
     "message": { "type": "string" },
     "error": { "type": "string" },
+    "effect": {
+      "type": "string",
+      "enum": ["none", "committed", "unknown"]
+    },
+    "outcomeUnknown": { "type": "boolean" },
+    "retryable": { "type": "boolean" },
+    "reconciliationId": { "type": "string" },
     "data": { "type": "object", "additionalProperties": true }
   }
 }

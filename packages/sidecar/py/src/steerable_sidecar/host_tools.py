@@ -123,6 +123,8 @@ class HostApprover:
             "category": request.category,
             "round": request.round_index,
         }
+        if request.checkpoint == "outward":
+            params["checkpoint"] = "outward"
         if self._chat_id:
             # The renderer only shows the card in the chat that asked.
             params["chatId"] = self._chat_id

@@ -169,7 +169,8 @@ jobs:
         run: |
           python scripts/check_package_install.py \
             --package agent-protocol --package agent-harness \
-            --package agent-runtime --package agent-client --package agent-cli
+            --package pack-testkit --package agent-runtime \
+            --package agent-client --package agent-cli
 
       - name: Publish each @steerable/* TS package whose version is new
         env:
@@ -196,7 +197,7 @@ jobs:
           # published with `npm publish` from their own directory. They come
           # after `agent-cli`'s dependencies are on the registry, and before
           # `agent-cli` itself, which names them as optional dependencies.
-          WORKSPACE_PACKAGES="packages/agent-protocol/ts packages/agent-harness/ts packages/agent-ui/ts packages/pack-sdk/ts packages/agent-runtime/ts packages/agent-shell/ts packages/agent-client/ts packages/agent-shell/web packages/agent-shell/tauri"
+          WORKSPACE_PACKAGES="packages/agent-protocol/ts packages/agent-harness/ts packages/agent-ui/ts packages/pack-sdk/ts packages/pack-testkit/ts packages/agent-runtime/ts packages/agent-shell/ts packages/agent-client/ts packages/agent-shell/web packages/agent-shell/tauri"
           RUNTIME_PACKAGES="dist/runtime/runtime-darwin-arm64 dist/runtime/runtime-darwin-x64 dist/runtime/runtime-linux-x64 dist/runtime/runtime-linux-arm64 dist/runtime/runtime-win32-x64"
 
           publish_workspace() {

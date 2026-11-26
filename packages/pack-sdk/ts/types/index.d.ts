@@ -23,6 +23,196 @@
 /** 场景 id。开放字符串（不再是二值联合）。 */
 export type ScenarioId = string;
 
+/** 触发当前请求或回合的入口渠道。 */
+export type OriginChannel = 'desktop' | 'web' | 'cli' | 'im' | 'webhook';
+
+/** 宿主解析并认证后的产品中立请求身份。 */
+export interface Principal {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly displayName: string;
+  readonly email: string | null;
+  readonly roles: readonly string[];
+  readonly isAdmin: boolean;
+  readonly externalId?: string | null;
+  readonly attrs?: Readonly<Record<string, string>>;
+}
+
+/** 凭证代管注入载荷（明文仅注入底层传输层，工具返回与日志自动脱敏）。 */
+export interface CredentialInjection {
+  readonly headers?: Record<string, string>;
+  readonly query?: Record<string, string>;
+  readonly env?: Record<string, string>;
+}
+
+/** 注入给场景包工具的受控凭证解析客户端。 */
+export interface PackCredentialClient {
+  resolve(sourceId: string): Promise<CredentialInjection | null>;
+  fetch(
+    sourceId: string,
+    url: string | URL,
+    init?: RequestInit,
+  ): Promise<Response>;
+}
+
+/** 场景包声明的外部数据源与凭证需求（兼支持 R1 加密凭据与 R4 `$source` 只读查询）。 */
+export interface PackDataSource {
+  readonly id: string;
+  readonly label?: Readonly<Record<string, string>>;
+  readonly authKind?: 'bearer' | 'basic' | 'header' | 'oauth2' | 'custom_env';
+  readonly scope?: 'tenant' | 'user';
+  readonly requiredRoles?: readonly string[];
+  readonly description?: Readonly<Record<string, string>>;
+  readonly query?: (
+    params: Record<string, unknown>,
+    ctx: {
+      readonly principal: Principal;
+      readonly chatId: string;
+    },
+  ) => Promise<unknown>;
+}
+
+/** 交付物质检问题条目。 */
+export interface VerifierIssue {
+  readonly severity: 'blocking' | 'warning';
+  readonly code: string;
+  readonly message: string;
+  readonly location?: string;
+}
+
+/** 交付物质检结论。 */
+export interface DeliverableVerificationResult {
+  readonly status: 'verified' | 'warnings' | 'failed';
+  readonly issues: readonly VerifierIssue[];
+  readonly summary?: string;
+  readonly reportPath?: string;
+}
+
+/** 交付物完成定义与质检钩子（R5）。 */
+export interface DeliverableVerifier {
+  readonly id: string;
+  readonly matchExtensions?: readonly string[];
+  readonly matchMimeTypes?: readonly string[];
+  verify(ctx: {
+    readonly filePath: string;
+    readonly chatId: string;
+    readonly principal: Principal;
+    readonly executedActions: readonly {
+      readonly id?: string;
+      readonly tool: string;
+      readonly arguments: Record<string, unknown>;
+      readonly success: boolean;
+    }[];
+  }): Promise<DeliverableVerificationResult>;
+}
+
+/** 声明式工作台实时数据源绑定（R4）。 */
+export interface UiSurfaceSourceBinding {
+  readonly tool: string;
+  readonly args?: Record<string, unknown>;
+  readonly label?: Readonly<Record<string, string>>;
+}
+
+/** 声明式工作台受控写动作（仅允许引用已注册写工具）。 */
+export interface UiSurfaceActionSpec {
+  readonly id: string;
+  readonly label: Readonly<Record<string, string>>;
+  readonly tool: string;
+  readonly checkpoint?: 'standard' | 'outward';
+  readonly staticArgs?: Record<string, unknown>;
+}
+
+/** 声明式工作台字段/区块节点（纯 JSON 受控组件树，禁止 HTML/脚本字符串）。 */
+export type UiSurfaceNodeSpec =
+  | {
+      readonly kind: 'metric';
+      readonly id: string;
+      readonly label: Readonly<Record<string, string>>;
+      readonly sourceKey: string;
+      readonly path?: string;
+    }
+  | {
+      readonly kind: 'table';
+      readonly id: string;
+      readonly label: Readonly<Record<string, string>>;
+      readonly sourceKey: string;
+      readonly columns: readonly { readonly key: string; readonly label: Readonly<Record<string, string>> }[];
+    }
+  | {
+      readonly kind: 'input';
+      readonly id: string;
+      readonly name: string;
+      readonly label: Readonly<Record<string, string>>;
+      readonly inputType?: 'text' | 'number' | 'select' | 'checkbox';
+      readonly required?: boolean;
+      readonly defaultValue?: string | number | boolean;
+      readonly options?: readonly { readonly value: string; readonly label: Readonly<Record<string, string>> }[];
+    }
+  | {
+      readonly kind: 'callout';
+      readonly id: string;
+      readonly tone?: 'info' | 'warning' | 'danger';
+      readonly text: Readonly<Record<string, string>>;
+    };
+
+/** 会话级声明式工作台规范（R4）。 */
+export interface UiSurfaceSpec {
+  readonly surfaceId: string;
+  readonly title: Readonly<Record<string, string>>;
+  readonly summary?: Readonly<Record<string, string>>;
+  readonly sources?: Readonly<Record<string, UiSurfaceSourceBinding>>;
+  readonly nodes: readonly UiSurfaceNodeSpec[];
+  readonly actions?: readonly UiSurfaceActionSpec[];
+}
+
+/** 第二层 Agent Profile（角色提示词、默认工具集与技能编排，R3）。 */
+export interface AgentProfileSpec {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly rolePrompt: string;
+  readonly forbiddenPrompt?: string;
+  readonly defaultTools?: readonly string[];
+  readonly skillIds?: readonly string[];
+  readonly preferredModel?: string;
+}
+
+/** 未登录启动门公开认证方式描述（R3）。 */
+export type PublicAuthMethod =
+  | { readonly kind: 'password'; readonly showTenantSlugInput: boolean }
+  | {
+      readonly kind: 'oidc';
+      readonly providerId: string;
+      readonly label: string;
+      readonly authorizePath: string;
+    }
+  | {
+      readonly kind: 'sso_proxy';
+      readonly label: string;
+      readonly loginUrl: string;
+    };
+
+/** 未登录可读取的公开启动配置载荷（GET /api/v2/auth/bootstrap）。 */
+export interface PublicBootstrapPayload {
+  readonly productName: string;
+  readonly authRequired: boolean;
+  readonly authMethods: readonly PublicAuthMethod[];
+  readonly iamMode?: string;
+  readonly defaultApplicationId?: string;
+  readonly safeMode?: boolean;
+}
+
+/** 第三层 Application 应用形态（默认工作台、导航裁剪与登录引导，R3）。 */
+export interface ApplicationManifest {
+  readonly id: string;
+  readonly title: Readonly<Record<string, string>>;
+  readonly defaultAgentProfileId: string;
+  readonly allowedPackIds: readonly ScenarioId[];
+  readonly defaultWorkbenchTabs?: readonly ('preview' | 'workbench' | 'terminal' | 'fact_chain')[];
+  readonly hiddenNavItems?: readonly ('skills' | 'mcp' | 'agents' | 'terminal')[];
+  readonly bootstrapAuthMethods?: readonly ('password' | 'oidc' | 'sso_proxy')[];
+}
+
 /**
  * 工具安全分级与曝光层。这两个枚举的单一真源在本包（0.3a 从
  * tool-router.ts 迁入）；tool-router re-export 兼容既有调用方。
@@ -59,6 +249,12 @@ export interface PackToolContext {
   projectRoot?: string | null;
   /** 调用发生的 chat id；任务类工具按它归组。 */
   chatId?: string;
+  /** 宿主认证身份（本地/单机默认注入 LOCAL_DEFAULT_PRINCIPAL）。 */
+  principal?: Principal;
+  /** 触发当前回合的入口渠道。 */
+  originChannel?: OriginChannel;
+  /** 受控凭证代管解析客户端（明文不出工具上下文与 trace）。 */
+  credentials?: PackCredentialClient;
 }
 
 /** 工具 handler：接收模型 JSON 参数与调用上下文，返回可 JSON 序列化的结果。 */
@@ -77,6 +273,15 @@ export interface ToolContribution {
   readonly exposure?: ToolExposure;
   /** 缺省时审批类别等于工具名。 */
   readonly approval?: ToolApprovalSpec;
+  /**
+   * 幂等性声明：非幂等写工具（idempotent === false）一旦越过执行前校验进入
+   * 分发，超时或未知异常归类为 outcome_unknown 并阻断同名工具重试。
+   */
+  readonly idempotent?: boolean;
+  /**
+   * 签批等级：'outward' 强制逐次人类确认（禁止本会话/始终记住与 CLI 静默放行）。
+   */
+  readonly checkpoint?: 'standard' | 'outward';
   readonly handler: PackToolHandler;
 }
 
@@ -167,6 +372,8 @@ export interface HttpRouteRequest {
   readonly params: Record<string, string>;
   readonly query: Record<string, string>;
   readonly body: unknown;
+  readonly principal?: Principal;
+  readonly originChannel?: OriginChannel;
 }
 
 /** 主进程面贡献集合。 */
@@ -177,6 +384,10 @@ export interface MainContribution {
   readonly skills?: readonly SkillContribution[];
   readonly agentSeeds?: readonly AgentSeed[];
   readonly httpRoutes?: readonly HttpRouteContribution[];
+  readonly dataSources?: readonly PackDataSource[];
+  readonly deliverableVerifiers?: readonly DeliverableVerifier[];
+  readonly agentProfiles?: readonly AgentProfileSpec[];
+  readonly applications?: readonly ApplicationManifest[];
 }
 
 /**
@@ -327,6 +538,10 @@ export interface PackBackendRouteRequest {
   readonly body: unknown;
   /** 原始请求头（HTTP 模式下透传，便于检查 Range / If-None-Match）。 */
   readonly headers?: Record<string, string | string[] | undefined>;
+  /** 宿主认证身份（本地/单机默认注入 LOCAL_DEFAULT_PRINCIPAL）。 */
+  readonly principal?: Principal;
+  /** 触发当前请求的入口渠道。 */
+  readonly originChannel?: OriginChannel;
 }
 
 export interface PackBackendRoute {

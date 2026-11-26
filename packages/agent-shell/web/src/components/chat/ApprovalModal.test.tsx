@@ -300,4 +300,36 @@ describe('ApprovalModalHost 网络出口分支（W-egress-ask）', () => {
     expect(screen.getByText(/that network access fails/)).toBeTruthy();
     expect(screen.queryByText(/about 2 minutes/)).toBeNull();
   });
+
+  it('T-OUT-07: outward checkpoint hides session/always buttons, focuses Reject by default, and maps Escape to deny_once', () => {
+    const onDecide = vi.fn();
+    render(
+      <ApprovalPromptMenu
+        request={{
+          requestId: 'req-outward-1',
+          toolName: 'oa_publish_notice',
+          arguments: { title: 'November Budget Notice', recipients: 28 },
+          mode: 'external',
+          category: 'oa_publish_notice',
+          checkpoint: 'outward',
+          round: 0,
+        }}
+        pendingCount={0}
+        onDecide={onDecide}
+      />,
+    );
+
+    expect(screen.getByTestId('approval-outward-badge').textContent).toContain(
+      'Outward submission · manual confirmation required every time',
+    );
+    expect(screen.queryByText('Always allow')).toBeNull();
+    expect(screen.queryByText('Allow for this chat')).toBeNull();
+    expect(screen.queryByText('Always deny')).toBeNull();
+
+    const rejectBtn = screen.getByTestId('approval-deny_once');
+    expect(document.activeElement).toBe(rejectBtn);
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onDecide).toHaveBeenCalledWith('deny_once');
+  });
 });

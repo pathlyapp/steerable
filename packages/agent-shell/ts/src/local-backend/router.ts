@@ -159,7 +159,39 @@ import { invokePackHttpRoute } from '../host/http-routes.js';
 import { installProductCli } from '../cli-install.js';
 import { collectTurnFiles } from './turn-files.js';
 import { resolveMentionedPaths } from './mentioned-paths.js';
-import { getAuthProvider, type Principal } from '../auth/index.js';
+import {
+  LOCAL_DEFAULT_PRINCIPAL,
+  getAuthProvider,
+  parseOriginChannel,
+  resolvePublicBootstrap,
+  type OriginChannel,
+  type Principal,
+} from '../auth/index.js';
+import {
+  CredentialAccessError,
+  defaultCredentialBroker,
+  type StoredSecretPayload,
+} from '../auth/credentials.js';
+import {
+  listRegisteredAgentProfiles,
+  listRegisteredApplications,
+  resetActiveApplication,
+  resolveActiveApplication,
+  setActiveApplication,
+} from '../scenario/applications.js';
+import {
+  beginTurnSecurityContext,
+  endTurnSecurityContext,
+  getTurnSecurityContext,
+} from './turn-security-context.js';
+import { ensurePhase9Store } from '../storage/fde-fallback.js';
+import {
+  dispatchUiSurfaceAction,
+  refreshPersistedUiSurface,
+  renderAndPersistUiSurface,
+} from './ui-surface.js';
+import { assembleFactChainGraph } from './fact-chain.js';
+import { handleMemoryHttpRoute } from '../memory/routes.js';
 
 export interface LocalBackendRequest {
   method: string;
@@ -169,6 +201,8 @@ export interface LocalBackendRequest {
   headers?: Record<string, string | string[] | undefined>;
   /** Authenticated identity supplied by the BS HTTP layer. */
   principal?: Principal;
+  /** Originating channel ('desktop' | 'web' | 'cli' | 'im' | 'webhook'). */
+  originChannel?: OriginChannel;
 }
 
 export interface LocalBackendResponse<T = unknown> {
@@ -575,6 +609,9 @@ export class LocalBackendRouter {
     this.resolveStore = options.resolveStore ?? (() => options.store);
     this.broadcast = options.broadcast ?? null;
     this.taskService = options.taskService ?? null;
+    (this.toolRouter as ToolRouter & { setPhase9Store?: (s: ScopedStore) => void }).setPhase9Store?.(
+      options.store,
+    );
     const goals = (this.toolRouter as ToolRouter & {
       goals?: () => { onChange(listener: (chatId: string, goal: unknown) => void): () => void };
     }).goals?.();
@@ -620,6 +657,199 @@ export class LocalBackendRouter {
     const { method } = request;
     const url = new URL(request.path, 'http://local.backend');
     const pathname = url.pathname;
+
+    if (pathname.startsWith('/api/v2/memory')) {
+      const memRes = await handleMemoryHttpRoute({
+        method,
+        pathname,
+        searchParams: url.searchParams,
+        body: this.toRecord(request.body),
+        store: this.store,
+        principal: request.principal,
+      });
+      if (memRes) return memRes;
+    }
+
+    const reconciliationsMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/reconciliations$/);
+    if (reconciliationsMatch && method === 'GET') {
+      const chatId = decodeURIComponent(reconciliationsMatch[1]);
+      const chat = await this.store.getChat(chatId);
+      if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+      const includeResolved = url.searchParams.get('includeResolved') === '1';
+      const reconciliations = await ensurePhase9Store(this.store).listPendingReconciliations(
+        chatId,
+        { includeResolved },
+      );
+      return { status: 200, data: { reconciliations } };
+    }
+
+    const reconcileMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/reconcile$/);
+    if (reconcileMatch && method === 'POST') {
+      const chatId = decodeURIComponent(reconcileMatch[1]);
+      const chat = await this.store.getChat(chatId);
+      if (!chat) return { status: 404, data: { detail: 'chat not found' } };
+      const payload = this.toRecord(request.body);
+      const reconciliationId = String(payload.reconciliationId ?? '').trim();
+      const rawInput = String(payload.resolution ?? payload.status ?? '').trim();
+      const resolutionMap: Record<
+        string,
+        'confirmed_executed' | 'confirmed_not_executed'
+      > = {
+        confirmed_succeeded: 'confirmed_executed',
+        confirmed_executed: 'confirmed_executed',
+        resolved_committed: 'confirmed_executed',
+        confirmed_not_executed: 'confirmed_not_executed',
+        resolved_not_committed: 'confirmed_not_executed',
+      };
+      const normalizedStatus = resolutionMap[rawInput];
+      if (!reconciliationId || !normalizedStatus) {
+        return {
+          status: 400,
+          data: {
+            detail:
+              'reconciliationId and resolution (confirmed_succeeded | confirmed_not_executed) are required',
+          },
+        };
+      }
+      const note = typeof payload.note === 'string' && payload.note.trim() ? payload.note.trim() : null;
+      const principal = request.principal ?? LOCAL_DEFAULT_PRINCIPAL;
+      const updated = await ensurePhase9Store(this.store).resolvePendingReconciliation({
+        chatId,
+        reconciliationId,
+        status: normalizedStatus,
+        resolutionNote: note,
+        resolvedBy: principal.id,
+      });
+      if (!updated) {
+        return { status: 404, data: { detail: 'reconciliation not found' } };
+      }
+      const ledgerSummary =
+        normalizedStatus === 'confirmed_executed'
+          ? `[Reconciliation ${updated.id}] Human operator (${principal.id}) confirmed that "${updated.toolName}" SUCCEEDED externally${note ? `: ${note}` : ''}. Do NOT re-execute "${updated.toolName}" for the same intent.`
+          : `[Reconciliation ${updated.id}] Human operator (${principal.id}) confirmed that "${updated.toolName}" DID NOT execute externally${note ? `: ${note}` : ''}. Lock released; automatic retry is NOT triggered until requested.`;
+      await this.store.addMessage(chatId, 'system', ledgerSummary);
+      this.broadcast?.('reconciliation:updated', { chatId, reconciliation: updated });
+      return { status: 200, data: { reconciliation: updated, ledgerNote: ledgerSummary } };
+    }
+
+    const surfacesListMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/surfaces$/);
+    if (surfacesListMatch) {
+      const chatId = decodeURIComponent(surfacesListMatch[1]);
+      if (!await this.store.getChat(chatId)) {
+        return { status: 404, data: { detail: 'chat not found' } };
+      }
+      if (method === 'GET') {
+        const rows = await ensurePhase9Store(this.store).listChatUiSurfaces(chatId);
+        const surfaces = rows.map((r) => ({
+          ...(r.state.rawPayload && typeof r.state.rawPayload === 'object'
+            ? (r.state.rawPayload as Record<string, unknown>)
+            : {}),
+          surfaceId: r.surfaceId,
+          revision: r.revision,
+          resolvedData: r.state.resolvedData ?? {},
+          sourceHashes: r.state.sourceHashes ?? {},
+        }));
+        return { status: 200, data: { surfaces } };
+      }
+      if (method === 'POST') {
+        const surface = await renderAndPersistUiSurface({
+          store: this.store,
+          chatId,
+          principal: request.principal,
+          raw: this.toRecord(request.body),
+        });
+        this.broadcast?.('ui_surface:updated', { chatId, surface });
+        return { status: 200, data: { surface } };
+      }
+    }
+
+    const surfaceRefreshMatch = pathname.match(
+      /^\/api\/v2\/chats\/([^/]+)\/surfaces\/([^/]+)\/refresh$/,
+    );
+    if (surfaceRefreshMatch && method === 'GET') {
+      const chatId = decodeURIComponent(surfaceRefreshMatch[1]);
+      const surfaceId = decodeURIComponent(surfaceRefreshMatch[2]);
+      if (!await this.store.getChat(chatId)) {
+        return { status: 404, data: { detail: 'chat not found' } };
+      }
+      const surface = await refreshPersistedUiSurface({
+        store: this.store,
+        chatId,
+        surfaceId,
+        principal: request.principal,
+      });
+      if (!surface) return { status: 404, data: { detail: 'surface not found' } };
+      return { status: 200, data: { surface } };
+    }
+
+    const surfaceActionMatch = pathname.match(
+      /^\/api\/v2\/chats\/([^/]+)\/surfaces\/([^/]+)\/actions$/,
+    );
+    if (surfaceActionMatch && method === 'POST') {
+      const chatId = decodeURIComponent(surfaceActionMatch[1]);
+      const surfaceId = decodeURIComponent(surfaceActionMatch[2]);
+      if (!await this.store.getChat(chatId)) {
+        return { status: 404, data: { detail: 'chat not found' } };
+      }
+      return await dispatchUiSurfaceAction({
+        store: this.store,
+        toolRouter: this.toolRouter,
+        chatId,
+        surfaceId,
+        principal: request.principal,
+        originChannel: request.originChannel,
+        body: this.toRecord(request.body),
+      });
+    }
+
+    const factChainMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/fact-chain$/);
+    if (factChainMatch && method === 'GET') {
+      const chatId = decodeURIComponent(factChainMatch[1]);
+      if (!await this.store.getChat(chatId)) {
+        return { status: 404, data: { detail: 'chat not found' } };
+      }
+      const rawKind = url.searchParams.get('targetKind') ?? 'message';
+      const targetKind =
+        rawKind === 'tool' || rawKind === 'deliverable' ? rawKind : 'message';
+      const targetId = url.searchParams.get('targetId') ?? '';
+      const graph = await assembleFactChainGraph({
+        store: this.store,
+        chatId,
+        targetKind,
+        targetId,
+      });
+      return { status: 200, data: { graph } };
+    }
+
+    const deliverablesListMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/deliverables$/);
+    if (deliverablesListMatch && method === 'GET') {
+      const chatId = decodeURIComponent(deliverablesListMatch[1]);
+      if (!await this.store.getChat(chatId)) {
+        return { status: 404, data: { detail: 'chat not found' } };
+      }
+      const deliverables = await ensurePhase9Store(this.store).listChatDeliverables(chatId);
+      return { status: 200, data: { deliverables } };
+    }
+
+    const deliverableSnapshotMatch = pathname.match(
+      /^\/api\/v2\/chats\/([^/]+)\/deliverables\/([^/]+)\/snapshot$/,
+    );
+    if (deliverableSnapshotMatch && method === 'GET') {
+      const chatId = decodeURIComponent(deliverableSnapshotMatch[1]);
+      const deliverableId = decodeURIComponent(deliverableSnapshotMatch[2]);
+      const deliverables = await ensurePhase9Store(this.store).listChatDeliverables(chatId);
+      const deliv = deliverables.find((d) => d.id === deliverableId);
+      if (!deliv || !deliv.reportPath) {
+        return { status: 404, data: { detail: 'deliverable snapshot not found' } };
+      }
+      return {
+        kind: 'file',
+        status: 200,
+        filePath: deliv.reportPath,
+        contentType: deliv.mimeType || 'application/octet-stream',
+        fileName: deliv.fileName,
+      };
+    }
 
     const goalMatch = pathname.match(/^\/api\/v2\/chats\/([^/]+)\/goal$/);
     if (goalMatch) {
@@ -693,6 +923,13 @@ export class LocalBackendRouter {
       };
     }
 
+    if (method === 'GET' && pathname === '/api/v2/auth/bootstrap') {
+      const data = await resolvePublicBootstrap(request.headers ?? {}, {
+        ...(url.searchParams.get('safe') === '1' ? { safeMode: true } : {}),
+      });
+      return { status: 200, data };
+    }
+
     if (method === 'GET' && pathname === '/api/v2/auth/me') {
       const authProvider = getAuthProvider();
       if (authProvider) {
@@ -705,6 +942,88 @@ export class LocalBackendRouter {
         };
       }
       return { status: 200, data: buildLocalApiUser() };
+    }
+
+    const effectivePrincipal = Object.freeze({
+      ...(request.principal ?? LOCAL_DEFAULT_PRINCIPAL),
+    });
+    const effectiveOriginChannel = parseOriginChannel(
+      request.originChannel ?? request.headers?.['x-steerable-origin-channel'],
+      'web',
+    );
+
+    if (pathname === '/api/v2/applications/active') {
+      if (method === 'GET') {
+        const application = await resolveActiveApplication(this.store, {
+          safeMode: url.searchParams.get('safe') === '1',
+        });
+        return {
+          status: 200,
+          data: {
+            application,
+            available: listRegisteredApplications(),
+            profiles: listRegisteredAgentProfiles(),
+          },
+        };
+      }
+      if (method === 'POST') {
+        const payload = this.toRecord(request.body);
+        const appId = String(payload.applicationId ?? 'default').trim() || 'default';
+        try {
+          const application = await setActiveApplication(this.store, appId);
+          return { status: 200, data: { application } };
+        } catch (err) {
+          return {
+            status: 400,
+            data: { detail: err instanceof Error ? err.message : String(err) },
+          };
+        }
+      }
+      return this.notFound('Not found');
+    }
+
+    if (method === 'POST' && pathname === '/api/v2/applications/reset') {
+      const application = await resetActiveApplication(this.store);
+      return { status: 200, data: { application } };
+    }
+
+    if (pathname === '/api/v2/credentials' && method === 'GET') {
+      const items = await defaultCredentialBroker.listMetadata(
+        this.store,
+        effectivePrincipal,
+      );
+      return { status: 200, data: { items } };
+    }
+
+    const credMatch = pathname.match(/^\/api\/v2\/credentials\/([^/]+)$/);
+    if (credMatch) {
+      const sourceId = decodeURIComponent(credMatch[1]);
+      try {
+        if (method === 'PUT' || method === 'POST') {
+          const payload = this.toRecord(request.body) as StoredSecretPayload;
+          const item = await defaultCredentialBroker.setCredential(
+            this.store,
+            effectivePrincipal,
+            sourceId,
+            payload,
+          );
+          return { status: 200, data: { item } };
+        }
+        if (method === 'DELETE') {
+          const deleted = await defaultCredentialBroker.deleteCredential(
+            this.store,
+            effectivePrincipal,
+            sourceId,
+          );
+          return { status: 200, data: { deleted } };
+        }
+      } catch (err) {
+        if (err instanceof CredentialAccessError) {
+          return { status: err.status, data: { detail: err.message } };
+        }
+        throw err;
+      }
+      return this.notFound('Not found');
     }
 
     if (
@@ -2693,11 +3012,17 @@ export class LocalBackendRouter {
         params: packMatch.params,
         query: url.searchParams,
         body: request.body,
+        principal: effectivePrincipal,
+        originChannel: effectiveOriginChannel,
         ...(request.headers ? { headers: request.headers } : {}),
       });
     }
 
-    const packHttp = await invokePackHttpRoute(method, pathname, request.body);
+    const packHttp = await invokePackHttpRoute(method, pathname, request.body, {
+      principal: effectivePrincipal,
+      originChannel: effectiveOriginChannel,
+      query: Object.fromEntries(url.searchParams.entries()),
+    });
     if (packHttp) return packHttp;
 
     return this.fallbackResponse(method, pathname);
@@ -2953,6 +3278,18 @@ export class LocalBackendRouter {
     });
     const turnEntry = { abort: turnAbort, done: turnDone };
     this.activeTurnRuns.set(chatId, turnEntry);
+    const streamOriginChannel = parseOriginChannel(
+      request.originChannel ??
+        request.headers?.['x-steerable-origin-channel'] ??
+        payload.originChannel,
+      'web',
+    );
+    const turnSec = beginTurnSecurityContext({
+      chatId,
+      principal: request.principal ?? LOCAL_DEFAULT_PRINCIPAL,
+      originChannel: streamOriginChannel,
+      store: this.store,
+    });
 
     try {
     return await this.withChatWriteLock(chatId, emit, async (emit) => {
@@ -3293,6 +3630,7 @@ export class LocalBackendRouter {
     });
     });
     } finally {
+      endTurnSecurityContext(chatId, turnSec);
       if (this.activeTurnRuns.get(chatId) === turnEntry) {
         this.activeTurnRuns.delete(chatId);
       }
@@ -4639,7 +4977,27 @@ export class LocalBackendRouter {
         },
         execSandbox,
         approval: approval
-          ? { ...approval, writableRoots: turnFileRoots, pathBase: workspaceRoot }
+          ? {
+              ...approval,
+              writableRoots: turnFileRoots,
+              pathBase: workspaceRoot,
+              pendingReconciliations: await (async () => {
+                const allRecs = await ensurePhase9Store(this.store).listPendingReconciliations(
+                  chatId,
+                  { includeResolved: true },
+                );
+                const blocking: Record<string, string> = {};
+                for (const rec of allRecs) {
+                  if (
+                    (rec.status === 'pending' || rec.status === 'confirmed_executed') &&
+                    !(rec.toolName in blocking)
+                  ) {
+                    blocking[rec.toolName] = rec.id;
+                  }
+                }
+                return blocking;
+              })(),
+            }
           : undefined,
         // delegate-on-pool 统一:模型的多代理面收敛为单工具
         // delegate_subagent(默认开)。内置画像集(explore/research/coder)
@@ -4995,32 +5353,40 @@ export class LocalBackendRouter {
     // settled — the crash would then look like a normal stopped turn and
     // "continue last reply" would never be offered. The record stays on the
     // user turn, which is what the resume path replays.
+    const activeSec = getTurnSecurityContext(chatId);
+    const safeAssistantText = activeSec?.redactor.hasSecrets
+      ? activeSec.redactor.redactString(assistantText)
+      : assistantText;
+    const rawAssistantMeta = {
+      completionStatus,
+      completionReason,
+      executedActions,
+      timeline,
+      mode: chatMode,
+      coreloop: true,
+      traceId: outcomeTraceId,
+      ...(parentAgentId ? { agentId: parentAgentId } : {}),
+      ...(children.length > 0 ? { orchestrationChildEvents: children } : {}),
+      ...(durationMs != null ? { durationMs } : {}),
+      ...(autoContinuations > 0 ? { autoContinuations } : {}),
+      ...(turnFiles.length > 0 ? { turnFiles } : {}),
+      // R6: the turn's bill, kept on the row so a replayed message shows
+      // the same figures the live turn did — the child rows only carry
+      // their own slice, and the per-turn total is not derivable from
+      // them (the parent's own spend is not in any child).
+      ...(turnUsage ? { usage: turnUsage } : {}),
+      ...(failureInfo ? { failure: failureInfo } : {}),
+    };
+    const safeAssistantMeta = activeSec?.redactor.hasSecrets
+      ? activeSec.redactor.redactUnknown(rawAssistantMeta)
+      : rawAssistantMeta;
     const assistant = sidecarLost
       ? null
       : await this.store.addMessage(
           chatId,
           'assistant',
-          assistantText,
-          JSON.stringify({
-            completionStatus,
-            completionReason,
-            executedActions,
-            timeline,
-            mode: chatMode,
-            coreloop: true,
-            traceId: outcomeTraceId,
-            ...(parentAgentId ? { agentId: parentAgentId } : {}),
-            ...(children.length > 0 ? { orchestrationChildEvents: children } : {}),
-            ...(durationMs != null ? { durationMs } : {}),
-            ...(autoContinuations > 0 ? { autoContinuations } : {}),
-            ...(turnFiles.length > 0 ? { turnFiles } : {}),
-            // R6: the turn's bill, kept on the row so a replayed message shows
-            // the same figures the live turn did — the child rows only carry
-            // their own slice, and the per-turn total is not derivable from
-            // them (the parent's own spend is not in any child).
-            ...(turnUsage ? { usage: turnUsage } : {}),
-            ...(failureInfo ? { failure: failureInfo } : {}),
-          })
+          safeAssistantText,
+          JSON.stringify(safeAssistantMeta)
         );
     if (!sidecarLost) {
       try {
@@ -5080,6 +5446,21 @@ export class LocalBackendRouter {
         const durationMs = typeof sidecarTrace.durationMs === 'number'
           ? sidecarTrace.durationMs
           : null;
+        const rawTracePayload = {
+          coreloop: true,
+          trace: sidecarTrace,
+          spans: fetched.spans ?? [],
+          events: fetched.events ?? [],
+          ...(fetched.eventsTruncated
+            ? {
+                eventsTruncated: true,
+                eventsTotal: fetched.eventsTotal,
+              }
+            : {}),
+        };
+        const safeTracePayload = activeSec?.redactor.hasSecrets
+          ? activeSec.redactor.redactUnknown(rawTracePayload)
+          : rawTracePayload;
         await this.store.saveTrace({
           id: traceId,
           chatId,
@@ -5089,18 +5470,7 @@ export class LocalBackendRouter {
           startedAtMs: durationMs != null ? Date.now() - durationMs : Date.now(),
           durationMs,
           status: passStatus,
-          payload: {
-            coreloop: true,
-            trace: sidecarTrace,
-            spans: fetched.spans ?? [],
-            events: fetched.events ?? [],
-            ...(fetched.eventsTruncated
-              ? {
-                  eventsTruncated: true,
-                  eventsTotal: fetched.eventsTotal,
-                }
-              : {}),
-          },
+          payload: safeTracePayload,
         });
       } catch (err) {
         // 丢了 trace 就没有现场：这条日志必须带够可定位信息，且措辞直白

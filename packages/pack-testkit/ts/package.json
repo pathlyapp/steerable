@@ -1,0 +1,48 @@
+{
+  "name": "@steerable/pack-testkit",
+  "version": "0.12.8",
+  "type": "module",
+  "description": "In-memory test host (`createPackTestHost`) and TypeScript AST static boundary guards for @steerable/pack-sdk scenario pack authors.",
+  "license": "Apache-2.0",
+  "homepage": "https://steerableframework.com/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pathlyapp/steerable.git",
+    "directory": "packages/pack-testkit/ts"
+  },
+  "bugs": {
+    "url": "https://github.com/pathlyapp/steerable/issues"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "gen": "echo pack-testkit-ts",
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "pnpm run build",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "check:drift": "echo ok"
+  },
+  "dependencies": {
+    "@steerable/pack-sdk": "workspace:*",
+    "typescript": "^5.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "vitest": "^3.2.4"
+  }
+}

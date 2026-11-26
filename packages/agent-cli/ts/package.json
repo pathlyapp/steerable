@@ -54,7 +54,8 @@
     "@steerable/agent-client": "workspace:*",
     "@steerable/agent-protocol": "workspace:*",
     "@steerable/agent-runtime": "workspace:*",
-    "@steerable/agent-shell": "workspace:*"
+    "@steerable/agent-shell": "workspace:*",
+    "@steerable/pack-testkit": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

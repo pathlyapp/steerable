@@ -39,3 +39,5 @@ export * from "./generated/SearchSourcesPayload.js";
 export * from "./generated/SummaryMessagePayload.js";
 export * from "./generated/ActionSegmentPayload.js";
 export * from "./generated/ToolExecutionPayload.js";
+export * from "./generated/OutcomeReconcilePayload.js";
+export * from "./generated/UiSurfacePayload.js";

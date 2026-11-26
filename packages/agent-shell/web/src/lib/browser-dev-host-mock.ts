@@ -742,6 +742,79 @@ async function request<T>(input: LocalBackendRequestInput): Promise<T> {
     } as T;
   }
 
+  if (method === 'GET' && cleanPath === '/api/v2/auth/bootstrap') {
+    return {
+      applicationId: 'default',
+      safeMode: false,
+      brand: { displayName: 'Steerable Workbench' },
+      authMethods: [{ kind: 'local', id: 'local', label: 'Local session' }],
+    } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/applications') {
+    return {
+      activeApplicationId: 'default',
+      safeMode: false,
+      applications: [
+        {
+          id: 'default',
+          name: 'Default Workbench',
+          description: 'Standard full-featured agent workbench',
+        },
+      ],
+    } as T;
+  }
+
+  if (method === 'GET' && cleanPath === '/api/v2/memory') {
+    const scope = parseQuery(path).get('scope') ?? 'user';
+    return {
+      scope,
+      scopeId: scope === 'user' ? 'demo-user' : 'default',
+      permissionMode: 'ask',
+      markdown: '- Prefer concise tables with source citations.\n',
+      baseHash: 'demo00000001',
+      bytesUsed: 46,
+      maxBytes: 16_384,
+      linesUsed: 1,
+      maxLines: 200,
+      canWrite: true,
+      entries: [
+        {
+          id: 'mem-demo-1',
+          kind: 'ordinary',
+          content: 'Prefer concise tables with source citations.',
+          contentHash: 'demo00000001',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          humanEdited: true,
+        },
+      ],
+    } as T;
+  }
+
+  if (method === 'GET' && /^\/api\/v2\/chats\/[^/]+\/fact-chain$/.test(cleanPath)) {
+    const chatId = decodeURIComponent(cleanPath.split('/')[4] ?? 'demo');
+    return {
+      chatId,
+      evidenceStatus: 'complete',
+      requestNode: {
+        messageId: 'msg-demo-1',
+        promptSummary: 'Summarize weekly invoices and export a verified report.',
+        policyDigest: '9f86d081884c7d65',
+      },
+      toolNodes: [
+        {
+          id: 'tc-demo-1',
+          toolName: 'read_file',
+          argsSummary: '{"path":"invoices/2026-11.csv"}',
+          status: 'executed',
+          durationMs: 18,
+        },
+      ],
+      deliverableNodes: [],
+    } as T;
+  }
+
   if (method === 'GET' && cleanPath === '/api/v2/llm/presets') {
     return {
       presets: [

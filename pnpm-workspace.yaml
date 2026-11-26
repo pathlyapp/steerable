@@ -3,6 +3,7 @@ packages:
   - "packages/*/web"
   - "packages/*/tauri"
   - "tests/conformance/ts"
+  - "tests/guards"
   - "examples/ts-minimal"
   - "examples/ts-runtime"
   - "examples/web-shell"

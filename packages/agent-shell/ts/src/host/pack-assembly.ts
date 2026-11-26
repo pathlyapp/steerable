@@ -15,7 +15,11 @@
  */
 
 import type {
+  AgentProfileSpec,
+  ApplicationManifest,
+  DeliverableVerifier,
   HttpRouteContribution,
+  PackDataSource,
   ToolContribution,
 } from '../scenario/pack.js';
 import type { PackDbAccess } from '../storage/driver.js';
@@ -32,6 +36,14 @@ export interface PackAssemblyDeps {
   readonly broadcast: (channel: string, payload: unknown) => void;
   /** 工具贡献注册口（toolRouter.registerToolContributions 的收窄面）。 */
   readonly registerTools: (tools: readonly ToolContribution[]) => void;
+  /** 外部数据源声明注册口（R1）。 */
+  readonly registerDataSources?: (items: readonly PackDataSource[]) => void;
+  /** 交付物质检钩子注册口（R5）。 */
+  readonly registerDeliverableVerifiers?: (items: readonly DeliverableVerifier[]) => void;
+  /** Agent Profile 注册口（R3）。 */
+  readonly registerAgentProfiles?: (items: readonly AgentProfileSpec[]) => void;
+  /** Application 应用形态注册口（R3）。 */
+  readonly registerApplications?: (items: readonly ApplicationManifest[]) => void;
   /** 用量归因（包的独立流不经 router 记账路径，不注入会静默漏账）。 */
   readonly recordUsage: (input: {
     chatId: string;

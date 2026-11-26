@@ -1,4 +1,5 @@
-import { LuShieldAlert, LuTriangleAlert } from 'react-icons/lu';
+import { useEffect, useRef } from 'react';
+import { LuFlag, LuShieldAlert, LuTriangleAlert } from 'react-icons/lu';
 import {
   type ApprovalDecisionKind,
   type ApprovalPromptRequest,
@@ -6,17 +7,11 @@ import {
 import { t } from '@/i18n';
 
 /**
- * ApprovalPromptMenu — W4-1 审批代数的输入区 UI。
+ * ApprovalPromptMenu — W4-1 & Phase 9 `outward` approval UI.
  *
- * 由 ApprovalPromptProvider 提供当前请求，在普通输入框的位置让用户对
- * 工具调用做 7 变体决策（允许/拒绝 × 一次性/会话/持久 + 中止）。
- *
- * 持久化语义（与框架 ApprovalExecutor 对齐）：
- *   - 一次性：只作用于本次调用，不缓存。
- *   - 会话：按 category（默认=工具名）缓存在本 chat 的会话级 cache。
- *   - 持久：写入 ~/.steerable/approvals.json，跨会话生效。
- *
- * 请求队列及刷新恢复由 Provider 管理。
+ * Supports the 7-variant approval algebra for standard/egress/sandbox prompts,
+ * and enforces single-invocation confirmation for `checkpoint === 'outward'`
+ * (hiding session/always options and placing initial keyboard focus on Reject).
  */
 
 const MODE_LABEL: Record<string, string> = {
@@ -27,8 +22,6 @@ const MODE_LABEL: Record<string, string> = {
 };
 
 function summarizeArguments(args: Record<string, unknown>): string {
-  // 'url' 必须在前列：批准一次 web_fetch 就是批准一次出网请求，
-  // 用户必须看清目标地址（W5-2）。
   for (const key of ['url', 'command', 'cmd', 'path', 'file', 'target', 'query', 'content']) {
     const v = args[key];
     if (typeof v === 'string' && v.length > 0) {
@@ -111,17 +104,30 @@ export function ApprovalPromptMenu({
   pendingCount: number;
   onDecide: (kind: ApprovalDecisionKind) => void;
 }) {
+  const isOutward = current.checkpoint === 'outward';
+  const outwardRejectRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!isOutward) return;
+    outwardRejectRef.current?.focus();
+    const onWindowKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onDecide('deny_once');
+      }
+    };
+    window.addEventListener('keydown', onWindowKeyDown);
+    return () => window.removeEventListener('keydown', onWindowKeyDown);
+  }, [isOutward, current.requestId, onDecide]);
+
   const destructive = current.mode === 'destructive';
-  // 网络出口拓宽（W-egress-ask）：sidecar 的 web 工具被 egress 代理 403
-  // 后发起。白名单是代理进程级的（会话寿命），所以「始终」变体对网络
-  // 出口没有意义——只给一次性/会话两档，且默认焦点在拒绝（安全默认：
-  // 用户能认出 api.github.com，认不出 cdn.jsdelivr.net.evil.com）。
   const isEgress = current.category === 'network_egress';
   const isSandboxEscalation = current.category === 'sandbox_escalation';
   const isBrowser = current.category === 'browser';
   const sandboxOff = current.sandboxEnforced === false;
   const outsideWorkspace =
     current.outsideWorkspace === true &&
+    !isOutward &&
     !isEgress &&
     !isSandboxEscalation &&
     !isBrowser &&
@@ -136,132 +142,188 @@ export function ApprovalPromptMenu({
     <div
       className="overflow-hidden rounded-agent-lg border border-agent-border bg-agent-canvas text-xs text-agent-foreground shadow-xl"
       data-testid="approval-composer"
+      onKeyDown={(e) => {
+        if (isOutward && e.key === 'Escape') {
+          e.preventDefault();
+          onDecide('deny_once');
+        }
+      }}
     >
-        <div className="flex items-center gap-2 border-b border-agent-border px-3 py-2">
-          {destructive ? (
-            <LuTriangleAlert className="h-4 w-4 shrink-0 text-agent-destructive" />
-          ) : (
-            <LuShieldAlert className="h-4 w-4 shrink-0 text-amber-500" />
-          )}
-          <div className="min-w-0 flex-1">
-            <div className="text-xs font-medium text-agent-foreground">
-              {isEgress ? (
-                <>
-                  {t('Agent requests internet access')}
-                  <span className="mx-1 font-mono">
-                    {egressHost}
-                    {egressPort !== null ? `:${egressPort}` : ''}
-                  </span>
-                  {current.categoryLabel ? (
-                    <span className="text-agent-muted-foreground">
-                      {t('({category})', { category: categoryName(current.categoryLabel) })}
-                    </span>
-                  ) : null}
-                </>
-              ) : isSandboxEscalation ? (
-                <>
-                  {t('Agent requests to run a command outside the workspace')}
-                  {current.categoryLabel ? (
-                    <span className="ml-1 text-agent-muted-foreground">
-                      {t('({category})', { category: categoryName(current.categoryLabel) })}
-                    </span>
-                  ) : null}
-                </>
-              ) : isBrowser && current.toolName === 'browser_navigate' ? (
-                <>
-                  {t('Agent requests to open a page')}
-                  <span className="mx-1 font-mono">{current.toolName}</span>
-                  {current.categoryLabel ? (
-                    <span className="text-agent-muted-foreground">
-                      {t('({category})', { category: categoryName(current.categoryLabel) })}
-                    </span>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  {t('Agent requests to run')}
-                  <span className="mx-1 font-mono">{current.toolName}</span>
+      <div
+        className={`flex items-center gap-2 border-b px-3 py-2 ${
+          isOutward
+            ? 'border-rose-500/30 bg-rose-500/10'
+            : 'border-agent-border'
+        }`}
+      >
+        {isOutward ? (
+          <LuFlag className="h-4 w-4 shrink-0 text-agent-destructive" aria-hidden="true" />
+        ) : destructive ? (
+          <LuTriangleAlert className="h-4 w-4 shrink-0 text-agent-destructive" />
+        ) : (
+          <LuShieldAlert className="h-4 w-4 shrink-0 text-amber-500" />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-agent-foreground">
+            {isOutward ? (
+              <span data-testid="approval-outward-badge">
+                {t('Outward submission · manual confirmation required every time')}
+                <span className="mx-1 font-mono">{current.toolName}</span>
+              </span>
+            ) : isEgress ? (
+              <>
+                {t('Agent requests internet access')}
+                <span className="mx-1 font-mono">
+                  {egressHost}
+                  {egressPort !== null ? `:${egressPort}` : ''}
+                </span>
+                {current.categoryLabel ? (
                   <span className="text-agent-muted-foreground">
-                    {current.categoryLabel
-                      ? t('({category})', { category: categoryName(current.categoryLabel) })
-                      : t('({mode} action)', {
-                          mode: MODE_LABEL[current.mode] ? t(MODE_LABEL[current.mode]) : current.mode,
-                        })}
+                    {t('({category})', { category: categoryName(current.categoryLabel) })}
                   </span>
-                </>
-              )}
-            </div>
-            {pendingCount > 0 && (
-              <div className="mt-0.5 text-[11px] text-agent-muted-foreground">
-                {t('{count} more awaiting approval', { count: pendingCount })}
-              </div>
+                ) : null}
+              </>
+            ) : isSandboxEscalation ? (
+              <>
+                {t('Agent requests to run a command outside the workspace')}
+                {current.categoryLabel ? (
+                  <span className="ml-1 text-agent-muted-foreground">
+                    {t('({category})', { category: categoryName(current.categoryLabel) })}
+                  </span>
+                ) : null}
+              </>
+            ) : isBrowser && current.toolName === 'browser_navigate' ? (
+              <>
+                {t('Agent requests to open a page')}
+                <span className="mx-1 font-mono">{current.toolName}</span>
+                {current.categoryLabel ? (
+                  <span className="text-agent-muted-foreground">
+                    {t('({category})', { category: categoryName(current.categoryLabel) })}
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {t('Agent requests to run')}
+                <span className="mx-1 font-mono">{current.toolName}</span>
+                <span className="text-agent-muted-foreground">
+                  {current.categoryLabel
+                    ? t('({category})', { category: categoryName(current.categoryLabel) })
+                    : t('({mode} action)', {
+                        mode: MODE_LABEL[current.mode] ? t(MODE_LABEL[current.mode]) : current.mode,
+                      })}
+                </span>
+              </>
             )}
           </div>
-        </div>
-
-        <div className="max-h-48 overflow-auto px-3 py-2">
-          <pre className="whitespace-pre-wrap break-all rounded-agent-md bg-agent-muted/50 px-3 py-2 font-mono text-xs text-agent-foreground">
-            {summarizeArguments(current.arguments)}
-          </pre>
-            {isEgress ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-              {t(
-                'This domain is not on the egress allowlist. Check the full spelling before allowing it (lookalike domains often use similar spellings, such as cdn.jsdelivr.net.evil.com). Allowing it applies only to this chat. To allow it permanently, add the domain to the egress allowlist in Settings.',
-              )}
-            </p>
-          ) : isSandboxEscalation ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-              {t(
-                'The workspace sandbox blocked this command. Allowing it retries only this command, without limiting where it can write.',
-              )}
-            </p>
-          ) : isBrowser ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-              {t(
-                'Opening pages, clicking, filling, and pressing keys act on that site and can send information off this computer. Scrolling, reading, and screenshots do not need approval.',
-              )}
-            </p>
-          ) : outsideWorkspace ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-              {current.outsideWorkspaceKind === 'workspace'
-                ? cwd
-                  ? t(
-                      'The command runs in the sandbox. Working directory {cwd} is outside this chat workspace, so writes there are blocked.',
-                      { cwd },
-                    )
-                  : t(
-                      'The command runs in the sandbox. Its working directory is outside this chat workspace, so writes there are blocked.',
-                    )
-                : cwd
-                  ? t(
-                      'The command runs in the sandbox. Working directory {cwd} is outside the project, so writes there are blocked. Add that directory as a project source folder when a write is required.',
-                      { cwd },
-                    )
-                  : t(
-                      'The command runs in the sandbox. Its working directory is outside the project, so writes there are blocked. Add that directory as a project source folder when a write is required.',
-                    )}
-            </p>
-          ) : (
-            <>
-              {current.category !== current.toolName && (
-                <p className="mt-2 text-[11px] text-agent-muted-foreground">
-                  {t(
-                    'Saved category: {category} (a chat or always decision applies to every call in this category)',
-                    { category: current.category },
-                  )}
-                </p>
-              )}
-              {!sandboxOff && (
-                <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
-                  {t(
-                    'Runs in the workspace sandbox. Writes outside it are blocked. To write outside, switch the sandbox to "Full access" and try again.',
-                  )}
-                </p>
-              )}
-            </>
+          {pendingCount > 0 && (
+            <div className="mt-0.5 text-[11px] text-agent-muted-foreground">
+              {t('{count} more awaiting approval', { count: pendingCount })}
+            </div>
           )}
         </div>
+      </div>
 
+      <div className="max-h-48 overflow-auto px-3 py-2">
+        <pre className="whitespace-pre-wrap break-all rounded-agent-md bg-agent-muted/50 px-3 py-2 font-mono text-xs text-agent-foreground">
+          {summarizeArguments(current.arguments)}
+        </pre>
+        {isOutward ? (
+          <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+            {t(
+              'This action submits data to an external system or modifies authoritative records. Session and permanent auto-allow grants are disabled.',
+            )}
+          </p>
+        ) : isEgress ? (
+          <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+            {t(
+              'This domain is not on the egress allowlist. Check the full spelling before allowing it (lookalike domains often use similar spellings, such as cdn.jsdelivr.net.evil.com). Allowing it applies only to this chat. To allow it permanently, add the domain to the egress allowlist in Settings.',
+            )}
+          </p>
+        ) : isSandboxEscalation ? (
+          <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+            {t(
+              'The workspace sandbox blocked this command. Allowing it retries only this command, without limiting where it can write.',
+            )}
+          </p>
+        ) : isBrowser ? (
+          <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+            {t(
+              'Opening pages, clicking, filling, and pressing keys act on that site and can send information off this computer. Scrolling, reading, and screenshots do not need approval.',
+            )}
+          </p>
+        ) : outsideWorkspace ? (
+          <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+            {current.outsideWorkspaceKind === 'workspace'
+              ? cwd
+                ? t(
+                    'The command runs in the sandbox. Working directory {cwd} is outside this chat workspace, so writes there are blocked.',
+                    { cwd },
+                  )
+                : t(
+                    'The command runs in the sandbox. Its working directory is outside this chat workspace, so writes there are blocked.',
+                  )
+              : cwd
+                ? t(
+                    'The command runs in the sandbox. Working directory {cwd} is outside the project, so writes there are blocked. Add that directory as a project source folder when a write is required.',
+                    { cwd },
+                  )
+                : t(
+                    'The command runs in the sandbox. Its working directory is outside the project, so writes there are blocked. Add that directory as a project source folder when a write is required.',
+                  )}
+          </p>
+        ) : (
+          <>
+            {current.category !== current.toolName && (
+              <p className="mt-2 text-[11px] text-agent-muted-foreground">
+                {t(
+                  'Saved category: {category} (a chat or always decision applies to every call in this category)',
+                  { category: current.category },
+                )}
+              </p>
+            )}
+            {!sandboxOff && (
+              <p className="mt-2 text-[11px] leading-relaxed text-agent-muted-foreground">
+                {t(
+                  'Runs in the workspace sandbox. Writes outside it are blocked. To write outside, switch the sandbox to "Full access" and try again.',
+                )}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      {isOutward ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-agent-border px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              ref={outwardRejectRef}
+              type="button"
+              data-testid="approval-deny_once"
+              onClick={() => onDecide('deny_once')}
+              className="rounded-agent-md border border-agent-border px-3 py-1.5 text-xs font-medium text-agent-foreground transition hover:bg-agent-muted"
+            >
+              {t('Reject this submission')}
+            </button>
+            <button
+              type="button"
+              data-testid="approval-abort"
+              onClick={() => onDecide('abort')}
+              className="rounded-agent-md bg-agent-destructive px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90"
+            >
+              {t('Abort this turn')}
+            </button>
+          </div>
+          <button
+            type="button"
+            data-testid="approval-allow_once"
+            onClick={() => onDecide('allow_once')}
+            className="rounded-agent-md bg-agent-foreground px-3 py-1.5 text-xs font-medium text-agent-canvas transition hover:opacity-90"
+          >
+            {t('Approve this submission')}
+          </button>
+        </div>
+      ) : (
         <div className="space-y-2 border-t border-agent-border px-3 py-2">
           <DecisionRow
             buttons={
@@ -295,6 +357,7 @@ export function ApprovalPromptMenu({
               : t('"This chat" applies only to this chat. "Always" is saved on this computer and applies to every chat.')}
           </p>
         </div>
+      )}
     </div>
   );
 }

@@ -18,6 +18,11 @@
 
 import { randomUUID } from 'node:crypto';
 import type { SidecarReverseHandler } from './types.js';
+import { isRestrictedOriginChannel } from '../auth/index.js';
+import {
+  getTurnSecurityContext,
+  touchHostActivity,
+} from '../local-backend/turn-security-context.js';
 
 /**
  * The approval algebra's decision variants (mirrors
@@ -60,6 +65,8 @@ export interface ApprovalPromptRequest {
    * blocked. Absent keeps that sentence for an older sidecar.
    */
   sandboxEnforced?: boolean;
+  /** `'outward'` forces per-invocation human confirmation with no remembered grants. */
+  checkpoint?: 'standard' | 'outward';
 }
 
 interface PendingApproval {
@@ -137,12 +144,26 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps): ApprovalBridge {
         deps.onLog?.(`approval: ${toolName} matches the dangerous-command list; no card`);
         return { kind: 'allow_once', reason: '' };
       }
-      if (!deps.hasWindow()) {
-        deps.onLog?.(`approval: no renderer window; denying ${toolName} once`);
-        return deny('no renderer window available to approve the call');
-      }
       const requestId = randomUUID();
       const chatId = typeof p.chatId === 'string' && p.chatId ? p.chatId : undefined;
+      const checkpoint = p.checkpoint === 'outward' ? 'outward' : undefined;
+      const turnSec = getTurnSecurityContext(chatId);
+      if (isRestrictedOriginChannel(turnSec?.originChannel) && checkpoint === 'outward') {
+        const workbenchHref = chatId ? `/#/agent/${encodeURIComponent(chatId)}` : '/#/agent';
+        deps.onLog?.(`approval: denying outward tool ${toolName} on restricted channel ${turnSec?.originChannel}`);
+        return deny(
+          `outward_confirmation_required: open Web or Desktop workbench to confirm (${workbenchHref})`,
+        );
+      }
+      if (!deps.hasWindow()) {
+        deps.onLog?.(`approval: no renderer window; denying ${toolName} once`);
+        return deny(
+          checkpoint === 'outward'
+            ? 'outward_confirmation_required: no interactive window available'
+            : 'no renderer window available to approve the call',
+        );
+      }
+      touchHostActivity();
       const category = typeof p.category === 'string' ? p.category : toolName;
       const categoryLabel = deps.categoryLabel?.(toolName, category);
       const fence = deps.outsideWorkspace
@@ -161,6 +182,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps): ApprovalBridge {
         ...(outsideWorkspace ? { outsideWorkspace: true } : {}),
         ...(fence === 'workspace' ? { outsideWorkspaceKind: 'workspace' as const } : {}),
         ...(typeof p.sandboxEnforced === 'boolean' ? { sandboxEnforced: p.sandboxEnforced } : {}),
+        ...(checkpoint ? { checkpoint } : {}),
       };
       deps.onLog?.(`approval: prompting for ${toolName} (${prompt.mode}/${prompt.category})`);
       return await new Promise((resolve) => {
@@ -186,11 +208,24 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps): ApprovalBridge {
       const entry = pending.get(requestId);
       if (!entry) return { ok: false };
       pending.delete(requestId);
-      const kind = APPROVAL_DECISION_KINDS.find((k) => k === p.kind);
-      if (!kind) {
+      const rawKind = APPROVAL_DECISION_KINDS.find((k) => k === p.kind);
+      if (!rawKind) {
         entry.resolve(deny(`renderer returned an invalid decision kind: ${String(p.kind)}`));
         return { ok: true };
       }
+      touchHostActivity();
+      if (
+        entry.prompt.checkpoint === 'outward' &&
+        (rawKind === 'allow_for_session' || rawKind === 'allow_always')
+      ) {
+        entry.resolve(deny('outward checkpoint forbids remembered approval grants'));
+        return { ok: true };
+      }
+      const turnSec = getTurnSecurityContext(entry.prompt.chatId);
+      const kind: ApprovalDecisionKind =
+        isRestrictedOriginChannel(turnSec?.originChannel) && rawKind === 'allow_always'
+          ? 'allow_once'
+          : rawKind;
       const reason = typeof p.reason === 'string' ? p.reason : '';
       entry.resolve({ kind, reason });
       if (

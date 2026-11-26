@@ -7,7 +7,13 @@
  * 通道的 `<packId>:` 前缀同一命名空间纪律。
  */
 
-import type { HttpRouteContribution, HttpRouteRequest } from '../scenario/pack.js';
+import type {
+  HttpRouteContribution,
+  HttpRouteRequest,
+  OriginChannel,
+  Principal,
+} from '../scenario/pack.js';
+import { LOCAL_DEFAULT_PRINCIPAL } from '../auth/index.js';
 
 export type { HttpRouteContribution, HttpRouteRequest };
 
@@ -44,13 +50,20 @@ export async function invokePackHttpRoute(
   method: string,
   pathname: string,
   body: unknown,
+  context?: {
+    principal?: Principal;
+    originChannel?: OriginChannel;
+    query?: Record<string, string>;
+  },
 ): Promise<{ status: number; data: unknown } | null> {
   const match = matchPackHttpRoute(method, pathname);
   if (!match) return null;
   const data = await match.route.handler({
     params: match.params,
-    query: {},
+    query: context?.query ?? {},
     body,
+    principal: Object.freeze({ ...(context?.principal ?? LOCAL_DEFAULT_PRINCIPAL) }),
+    originChannel: context?.originChannel ?? 'web',
   });
   return { status: 200, data };
 }

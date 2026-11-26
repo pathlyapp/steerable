@@ -37,10 +37,101 @@ export function toolStatus(action: ToolAction): string {
 export function toolOutput(action: ToolAction): string {
   const error = textOf(action.error);
   if (error) return clip(error);
+  if (action.tool === 'ui_surface_render') {
+    const surfaceText = renderUiSurfacePlainText(action.result ?? action.arguments);
+    if (surfaceText) return surfaceText;
+  }
   // A reopened chat only has the stored result object, which has no string field the generic extractor reads.
   const replay = askUserReplay(action);
   if (replay) return clip(replay.lines);
   return clip(textOf(action.result));
+}
+
+/**
+ * Plain-text ASCII table + numbered action hint degradation for `UiSurface` in TUI (R4 / wireframe C1).
+ */
+export function renderUiSurfacePlainText(raw: unknown): string {
+  let obj: Record<string, unknown> | null = null;
+  if (typeof raw === 'string' && raw.trim().startsWith('{')) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        obj = parsed as Record<string, unknown>;
+      }
+    } catch {
+      return '';
+    }
+  } else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    obj = raw as Record<string, unknown>;
+  }
+  if (!obj) return '';
+  const surface =
+    obj.surface && typeof obj.surface === 'object'
+      ? (obj.surface as Record<string, unknown>)
+      : obj.data && typeof obj.data === 'object' && (obj.data as Record<string, unknown>).surfaceId
+        ? (obj.data as Record<string, unknown>)
+        : obj;
+  const title = typeof surface.title === 'string' ? surface.title : '';
+  const components = Array.isArray(surface.components)
+    ? (surface.components as Array<Record<string, unknown>>)
+    : [];
+  if (!title && components.length === 0) return '';
+
+  const lines: string[] = [];
+  const rev = typeof surface.revision === 'number' ? ` (v${surface.revision})` : '';
+  if (title) lines.push(`[Workbench] ${title}${rev}`);
+
+  const resolvedData =
+    surface.resolvedData && typeof surface.resolvedData === 'object'
+      ? (surface.resolvedData as Record<string, unknown>)
+      : {};
+
+  for (const comp of components) {
+    if (comp.kind === 'steps' && Array.isArray(comp.steps)) {
+      const stepText = (comp.steps as Array<Record<string, unknown>>)
+        .map((s) => `${String(s.label ?? '')}[${String(s.status ?? 'pending')}]`)
+        .join(' -> ');
+      if (stepText) lines.push(`Steps: ${stepText}`);
+    } else if (comp.kind === 'table') {
+      const cols = Array.isArray(comp.columns)
+        ? (comp.columns as Array<{ key?: string; label?: string }>)
+        : [];
+      const dataKey = typeof comp.dataKey === 'string' ? comp.dataKey : '';
+      const rows =
+        dataKey && Array.isArray(resolvedData[dataKey])
+          ? (resolvedData[dataKey] as Array<Record<string, unknown>>)
+          : Array.isArray(comp.rows)
+            ? (comp.rows as Array<Record<string, unknown>>)
+            : [];
+      if (cols.length > 0) {
+        lines.push(cols.map((c) => String(c.label ?? c.key ?? '')).join(' | '));
+        lines.push(cols.map(() => '---').join('-+-'));
+        for (const row of rows.slice(0, 20)) {
+          lines.push(
+            cols
+              .map((c) => String(row[String(c.key ?? '')] ?? ''))
+              .join(' | '),
+          );
+        }
+        if (rows.length > 20) {
+          lines.push(`... (${rows.length - 20} more rows)`);
+        }
+      }
+    }
+  }
+
+  const actions = Array.isArray(surface.actions)
+    ? (surface.actions as Array<{ id?: string; label?: string }>)
+    : [];
+  if (actions.length > 0) {
+    lines.push(
+      'Actions: ' +
+        actions
+          .map((a, idx) => `[${idx + 1}] ${String(a.label ?? a.id ?? '')} (${String(a.id ?? '')})`)
+          .join('  '),
+    );
+  }
+  return lines.join('\n');
 }
 
 /** First question, for the folded tool row. The intro stays out of that column. */

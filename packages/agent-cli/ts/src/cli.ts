@@ -26,9 +26,13 @@ import {
   type ProjectSpec,
 } from './project-binding.js';
 import { readFileSync } from 'node:fs';
-import { chatCommand, childrenCommand, configCommand, mcpCommand, skillsCommand, type CommandIO } from './commands.js';
+import { appCommand, chatCommand, childrenCommand, configCommand, mcpCommand, memoryCommand, skillsCommand, type CommandIO } from './commands.js';
 import { EXIT_CONFIG, EXIT_INTERRUPTED, EXIT_OK, EXIT_TURN_FAILED, EXIT_USAGE } from './exit-codes.js';
-import { chatHelp, childrenHelp, configHelp, doctorHelp, loginHelp, logoutHelp, mcpHelp, renderCommandName, rootHelp, runHelp, skillsHelp, tuiHelp, webHelp } from './help.js';
+import { appHelp, chatHelp, childrenHelp, configHelp, diagBundleHelp, doctorHelp, loginHelp, logoutHelp, mcpHelp, memoryHelp, packHelp, preflightHelp, renderCommandName, rootHelp, runHelp, siteEvalHelp, skillsHelp, tuiHelp, webHelp } from './help.js';
+import { runPackCliCommand } from './pack.js';
+import { runPreflightChecks } from './preflight.js';
+import { exportDiagBundle } from './diag-bundle.js';
+import { runSiteEvalSuite } from './site-eval.js';
 import { preflightApiKey } from './credentials.js';
 import { loginCommand, logoutCommand, preflightFixes } from './login.js';
 import { webCommand } from './web.js';
@@ -106,6 +110,18 @@ async function runCli(options: CliOptions): Promise<number> {
         child: { type: 'string' },
         active: { type: 'boolean', default: false },
         wait: { type: 'boolean', default: false },
+        scope: { type: 'string' },
+        text: { type: 'string' },
+        id: { type: 'string' },
+        out: { type: 'string' },
+        'signing-key-env': { type: 'string' },
+        profile: { type: 'string' },
+        manifest: { type: 'string' },
+        'redact-content': { type: 'boolean' },
+        'no-redact-content': { type: 'boolean', default: false },
+        suite: { type: 'string' },
+        model: { type: 'string' },
+        'base-url': { type: 'string' },
       },
     });
   } catch (error) {
@@ -131,6 +147,100 @@ async function runCli(options: CliOptions): Promise<number> {
   if (command === 'children') return dispatch(parsed, options, stdout, stderr, present(options, childrenHelp()), childrenCommand);
   if (command === 'skills') return dispatch(parsed, options, stdout, stderr, present(options, skillsHelp()), skillsCommand);
   if (command === 'mcp') return dispatch(parsed, options, stdout, stderr, present(options, mcpHelp()), mcpCommand);
+  if (command === 'app') return dispatch(parsed, options, stdout, stderr, present(options, appHelp()), appCommand);
+  if (command === 'memory') return dispatch(parsed, options, stdout, stderr, present(options, memoryHelp()), memoryCommand);
+  if (command === 'pack') {
+    if (parsed.values.help && !parsed.positionals[1]) {
+      stdout.write(`${present(options, packHelp())}\n`);
+      return EXIT_OK;
+    }
+    return runPackCliCommand({
+      subcommand: parsed.positionals[1] ?? '',
+      targetDir: parsed.positionals[2] ?? '.',
+      packId: typeof parsed.values.id === 'string' ? parsed.values.id : undefined,
+      outFile: typeof parsed.values.out === 'string' ? parsed.values.out : undefined,
+      signingKeyEnv:
+        typeof parsed.values['signing-key-env'] === 'string'
+          ? parsed.values['signing-key-env']
+          : undefined,
+      json: parsed.values.json === true,
+      env: options.env ?? process.env,
+      stdout,
+      stderr,
+    });
+  }
+  if (command === 'preflight') {
+    if (parsed.values.help) {
+      stdout.write(`${present(options, preflightHelp())}\n`);
+      return EXIT_OK;
+    }
+    const profile = parsed.values.profile === 'desktop' ? 'desktop' : 'server';
+    const report = await runPreflightChecks({
+      profile,
+      manifestPath: typeof parsed.values.manifest === 'string' ? parsed.values.manifest : undefined,
+    });
+    if (parsed.values.json) {
+      stdout.write(`${JSON.stringify(report)}\n`);
+    } else {
+      for (const c of report.checks) {
+        stdout.write(`[${c.status.toUpperCase()}] ${c.id}: ${c.detail}\n`);
+        if (c.remediation) stdout.write(`  fix: ${c.remediation}\n`);
+      }
+    }
+    return report.ok ? EXIT_OK : EXIT_CONFIG;
+  }
+  if (command === 'diag-bundle') {
+    if (parsed.values.help) {
+      stdout.write(`${present(options, diagBundleHelp())}\n`);
+      return EXIT_OK;
+    }
+    const dataDir =
+      typeof parsed.values['data-dir'] === 'string'
+        ? parsed.values['data-dir']
+        : getUserDataDir();
+    const outFile =
+      typeof parsed.values.out === 'string'
+        ? parsed.values.out
+        : `steerable-diag-${Date.now()}.tgz`;
+    const redactContent = parsed.values['no-redact-content'] !== true;
+    const bundle = exportDiagBundle({ dataDir, outFile, redactContent });
+    if (parsed.values.json) {
+      stdout.write(`${JSON.stringify(bundle)}\n`);
+    } else {
+      stdout.write(`Exported diagnostic bundle to ${bundle.outFile} (redactContent=${bundle.redactContent})\n`);
+    }
+    return EXIT_OK;
+  }
+  if (command === 'site-eval') {
+    if (parsed.values.help) {
+      stdout.write(`${present(options, siteEvalHelp())}\n`);
+      return EXIT_OK;
+    }
+    const suitePath = typeof parsed.values.suite === 'string' ? parsed.values.suite : '';
+    const model = typeof parsed.values.model === 'string' ? parsed.values.model : '';
+    if (!suitePath || !model) {
+      stderr.write(`--suite and --model are required\n${present(options, siteEvalHelp())}\n`);
+      return EXIT_USAGE;
+    }
+    const baseUrl =
+      typeof parsed.values['base-url'] === 'string'
+        ? parsed.values['base-url']
+        : (options.env ?? process.env).OPENAI_BASE_URL ?? 'http://127.0.0.1:8000/v1';
+    const report = await runSiteEvalSuite({
+      suitePath,
+      model,
+      baseUrl,
+      outFile: typeof parsed.values.out === 'string' ? parsed.values.out : undefined,
+    });
+    if (parsed.values.json) {
+      stdout.write(`${JSON.stringify(report)}\n`);
+    } else {
+      stdout.write(
+        `site-eval ${report.model}: passed=${report.passedCases}/${report.totalCases} hitRate=${report.toolHitRate} pseudoRecovery=${report.pseudoToolRecoveryRate} promisedRescue=${report.promisedActionRescueRate}\n`,
+      );
+    }
+    return EXIT_OK;
+  }
   if (command === 'config') return dispatch(parsed, options, stdout, stderr, present(options, configHelp()), configCommand);
   if (command === 'doctor') return doctorCommand(parsed, options, stdout, stderr);
   if (command === 'tui') return tuiCommand(parsed, options, stdout, stderr);
@@ -275,6 +385,8 @@ function commandIO(parsed: ReturnType<typeof parseArgs>): CommandIO {
     ...(typeof parsed.values.child === 'string' ? { child: parsed.values.child } : {}),
     active: parsed.values.active === true,
     wait: parsed.values.wait === true,
+    ...(typeof parsed.values.scope === 'string' ? { scope: parsed.values.scope } : {}),
+    ...(typeof parsed.values.text === 'string' ? { text: parsed.values.text } : {}),
   };
 }
 

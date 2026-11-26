@@ -30,7 +30,10 @@ import {
   type BsServerDeps,
 } from '../../src/server/http-server.js';
 import { registerPackHttpRoutes, resetPackHttpRoutes } from '../../src/host/http-routes.js';
-import { registerAuthProvider } from '../../src/auth/index.js';
+import {
+  LOCAL_DEFAULT_PRINCIPAL,
+  registerAuthProvider,
+} from '../../src/auth/index.js';
 import { resetProductConfigForTests, setProductConfig } from '../../src/product-config.js';
 
 const mocks = vi.hoisted(() => ({
@@ -161,6 +164,7 @@ describe('BS HTTP server', () => {
         method: 'POST',
         path: '/api/v2/chats',
         body: { title: 't' },
+        originChannel: 'web',
       });
     });
 
@@ -171,6 +175,7 @@ describe('BS HTTP server', () => {
         method: 'GET',
         path: '/api/v2/chats?limit=3',
         body: undefined,
+        originChannel: 'web',
       });
     });
 
@@ -400,7 +405,13 @@ describe('BS HTTP server', () => {
       registerPackHttpRoutes('demo-pack', [{ method: 'POST', path: '/host/demo-pack/ping', handler }]);
       const body = await (await post('/host/demo-pack/ping', { x: 1 })).json();
       expect(body).toEqual({ from: 'pack' });
-      expect(handler).toHaveBeenCalledWith({ params: {}, query: {}, body: { x: 1 } });
+      expect(handler).toHaveBeenCalledWith({
+        params: {},
+        query: {},
+        body: { x: 1 },
+        principal: LOCAL_DEFAULT_PRINCIPAL,
+        originChannel: 'web',
+      });
     });
 
     it('未知 /host 端点 → 404 + detail', async () => {
@@ -488,6 +499,7 @@ describe('BS HTTP server', () => {
           method: 'GET',
           path: '/api/v2/auth/me',
           body: undefined,
+          originChannel: 'web',
           principal,
         });
       } finally {

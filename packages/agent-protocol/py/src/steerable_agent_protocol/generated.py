@@ -34,6 +34,16 @@ class OrchestrationPlanPayload(BaseModel):
     tasks: list[Any]
     coordinator: dict[str, Any] | None = None
 
+class OutcomeReconcilePayload(BaseModel):
+    reconciliationId: str
+    toolName: str
+    argsPreview: str | None = None
+    errorDetail: str | None = None
+    status: str
+    resolutionNote: str | None = None
+    resolvedBy: str | None = None
+    resolvedAt: str | None = None
+
 class PlanSelectorPayload(BaseModel):
     comparison: str
     selectedPlan: Any | None = None
@@ -85,6 +95,19 @@ class ToolExecutionPayload(BaseModel):
     durationMs: Any | None = None
     icon: Any | None = None
     expandable: bool | None = None
+
+class UiSurfacePayload(BaseModel):
+    surfaceId: str
+    title: str
+    subtitle: str | None = None
+    revision: int
+    placement: str | None = None
+    data: dict[str, Any] | None = None
+    resolvedData: dict[str, Any] | None = None
+    sourceHashes: dict[str, Any] | None = None
+    staleKeys: list[Any] | None = None
+    components: list[Any]
+    actions: list[Any] | None = None
 
 class ChatAgent(BaseModel):
     id: str
@@ -247,4 +270,8 @@ class ToolResult(BaseModel):
     nextAction: str | None = None
     message: str | None = None
     error: str | None = None
+    effect: str | None = None
+    outcomeUnknown: bool | None = None
+    retryable: bool | None = None
+    reconciliationId: str | None = None
     data: dict[str, Any] | None = None

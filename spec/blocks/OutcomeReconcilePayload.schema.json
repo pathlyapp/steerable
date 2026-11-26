@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/OutcomeReconcilePayload.schema.json",
+  "title": "OutcomeReconcilePayload",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["reconciliationId", "toolName", "status"],
+  "properties": {
+    "reconciliationId": { "type": "string" },
+    "toolName": { "type": "string" },
+    "argsPreview": { "type": "string" },
+    "errorDetail": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "confirmed_executed", "confirmed_not_executed"]
+    },
+    "resolutionNote": { "type": "string" },
+    "resolvedBy": { "type": "string" },
+    "resolvedAt": { "type": "string" }
+  }
+}

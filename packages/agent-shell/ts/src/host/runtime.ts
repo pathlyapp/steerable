@@ -71,6 +71,17 @@ import {
   type PackAssemblyHandle,
 } from './pack-assembly.js';
 import { registerPackHttpRoutes } from './http-routes.js';
+import {
+  registerAgentProfiles,
+  registerApplications,
+  registerDeliverableVerifiers,
+  registerPackDataSources,
+} from '../scenario/applications.js';
+import { bindHostPendingCounters } from '../local-backend/turn-security-context.js';
+import {
+  ExternalPackIntegrityError,
+  loadVerifiedExternalPacks,
+} from './external-pack-loader.js';
 
 export interface HostRuntimeOptions {
   /** Storage ownership for this host process. Defaults to local personal use. */
@@ -271,13 +282,55 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
     // 单例求值）——构造时注册表尚空，此处（装配前）补上已注册包迁移。
     // 幂等（按包 id 去重），注册表为空时零开销。
     for (const [packId, assemble] of getPackAssemblies()) {
-      const handle = assemble(packDeps);
+      const scopedDeps: PackAssemblyDeps = {
+        ...packDeps,
+        registerDataSources: (items) => registerPackDataSources(packId, items),
+        registerDeliverableVerifiers: (items) => registerDeliverableVerifiers(packId, items),
+        registerAgentProfiles: (items) => registerAgentProfiles(packId, items),
+        registerApplications: (items) => registerApplications(packId, items),
+      };
+      const handle = assemble(scopedDeps);
       if (handle) packHandles.set(packId, handle);
     }
   }
   for (const [packId, handle] of packHandles) {
     const routes = handle.httpRoutes?.();
     if (routes && routes.length > 0) registerPackHttpRoutes(packId, routes);
+  }
+  const externalPackDirsRaw = process.env.STEERABLE_PACK_DIRS?.trim();
+  if (externalPackDirsRaw) {
+    const paths = externalPackDirsRaw
+      .split(process.platform === 'win32' ? ';' : ':')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    try {
+      const mounted = await loadVerifiedExternalPacks({
+        packPaths: paths,
+        publicKeyDerHex: process.env.STEERABLE_PACK_PUBLIC_KEY?.trim() || undefined,
+      });
+      for (const extPack of mounted.packs) {
+        if (extPack.main?.tools) toolRouter.registerToolContributions(extPack.main.tools);
+        if (extPack.main?.dataSources) registerPackDataSources(extPack.id, extPack.main.dataSources);
+        if (extPack.main?.deliverableVerifiers) {
+          registerDeliverableVerifiers(extPack.id, extPack.main.deliverableVerifiers);
+        }
+        if (extPack.main?.agentProfiles) {
+          registerAgentProfiles(extPack.id, extPack.main.agentProfiles);
+        }
+        if (extPack.main?.applications) {
+          registerApplications(extPack.id, extPack.main.applications);
+        }
+        if (extPack.main?.httpRoutes) {
+          registerPackHttpRoutes(extPack.id, extPack.main.httpRoutes);
+        }
+      }
+    } catch (err) {
+      if (err instanceof ExternalPackIntegrityError) {
+        onLog(`[packs] FATAL integrity failure (${err.code}): ${err.message}`);
+        process.exit(err.exitCode);
+      }
+      throw err;
+    }
   }
   const worktreeService = new WorktreeService({ resolveProject: resolveChatProjectRoot });
   const taskService = new TaskService({
@@ -363,6 +416,10 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
     onLog: (line) => onLog(line),
   });
   localBackendRouter.setAskReplay((chatId) => askUserBridge.takeResolved(chatId));
+  bindHostPendingCounters({
+    pendingApprovals: () => approvalBridge.pending().length,
+    pendingQuestions: () => askUserBridge.pending().length,
+  });
 
   let started = false;
   let instanceLease: InstanceLease | null = null;
@@ -401,6 +458,7 @@ export async function createHostRuntime(options: HostRuntimeOptions): Promise<Ho
       await startHostSidecar({
         store: defaultStore,
         toolRouter,
+        broadcast,
         resolveProjectRoot: async (chatId) =>
           localBackendRouter.resolveChatWorkspaceRoot(chatId),
         // 读：附件目录、源文件夹、包声明的可写根，以及只读参考面（技能根 /

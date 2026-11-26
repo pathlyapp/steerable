@@ -430,6 +430,8 @@ interface AgentSidebarProps {
   onToggleRightPanel?: (kind: string) => void;
   /** 收起侧边栏（AgentLayout 换成窄 rail，展开按钮在 rail 上）。 */
   onCollapse: () => void;
+  /** Custom ApplicationManifest navigation visibility rules (bypassed under ?safe=1). */
+  hiddenNavItems?: readonly ('skills' | 'mcp' | 'agents' | 'terminal')[];
 }
 
 export function AgentSidebar({
@@ -437,6 +439,7 @@ export function AgentSidebar({
   rightPanel: _rightPanel,
   onToggleRightPanel: _onToggleRightPanel,
   onCollapse,
+  hiddenNavItems = [],
 }: AgentSidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -449,11 +452,13 @@ export function AgentSidebar({
     () => new URLSearchParams(location.search).get("section"),
     [location.search],
   );
+  const hiddenSet = useMemo(() => new Set(hiddenNavItems), [hiddenNavItems]);
   const pluginsAvailable =
-    settingsChrome("agents") ||
-    settingsChrome("skills") ||
-    settingsChrome("mcp") ||
-    settingsChrome("web-search");
+    (!hiddenSet.has("agents") && settingsChrome("agents")) ||
+    (!hiddenSet.has("skills") && settingsChrome("skills")) ||
+    (!hiddenSet.has("mcp") && settingsChrome("mcp")) ||
+    (!(hiddenSet.has("agents") && hiddenSet.has("skills") && hiddenSet.has("mcp")) &&
+      settingsChrome("web-search"));
   const onPluginsSettings =
     pluginsAvailable &&
     onSettingsPage &&

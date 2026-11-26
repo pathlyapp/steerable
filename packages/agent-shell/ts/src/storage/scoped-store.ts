@@ -17,9 +17,24 @@ import type { UsageSummary } from './usage-summary.js';
 import type { ReliabilitySummary } from './reliability-summary.js';
 import type { WebSearchSettings } from './web-search-settings.js';
 import type { TenantScope } from './driver.js';
+import type { Phase9ScopedStore } from './fde-types.js';
+
+export type {
+  ChatDeliverableRecord,
+  ChatUiReceiptRecord,
+  ChatUiSurfaceRecord,
+  CredentialOwnerScope,
+  MemoryDocumentRecord,
+  MemoryEntryRecord,
+  MemoryRefinementMetaRecord,
+  MemoryScopeKind,
+  PackCredentialRecord,
+  PendingReconciliationRecord,
+  Phase9ScopedStore,
+} from './fde-types.js';
 
 /** Explicit asynchronous storage API bound to one tenant and user. */
-export interface ScopedStore {
+export interface ScopedStore extends Partial<Phase9ScopedStore> {
   readonly scope: TenantScope;
   listChats(page?: number, limit?: number): Promise<{ chats: ChatSessionRecord[]; total: number }>;
   createChat(title?: string, agentId?: string | null, projectId?: string | null): Promise<ChatSessionRecord>;

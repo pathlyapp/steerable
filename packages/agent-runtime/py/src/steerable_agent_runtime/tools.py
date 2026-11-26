@@ -65,6 +65,8 @@ class RegisteredTool:
     #: (no side effects, no shared mutable state). Auto-derived from ``mode``
     #: at registration (read → safe) unless explicitly overridden.
     concurrency_safe: bool = False
+    idempotent: bool = True
+    checkpoint: Literal["standard", "outward"] = "standard"
     exposure: ToolExposure = "direct"
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -100,6 +102,8 @@ class ToolRouter:
         schema: dict[str, Any] | None = None,
         require_consent: bool | None = None,
         concurrency_safe: bool | None = None,
+        idempotent: bool = True,
+        checkpoint: Literal["standard", "outward"] = "standard",
         exposure: ToolExposure = "direct",
         metadata: dict[str, Any] | None = None,
     ) -> RegisteredTool:
@@ -129,6 +133,8 @@ class ToolRouter:
             concurrency_safe=(
                 concurrency_safe if concurrency_safe is not None else resolved_mode == "read"
             ),
+            idempotent=idempotent,
+            checkpoint=checkpoint,
             exposure=exposure,
             metadata=merged_metadata,
         )
@@ -145,6 +151,8 @@ class ToolRouter:
         schema: dict[str, Any] | None = None,
         require_consent: bool | None = None,
         concurrency_safe: bool | None = None,
+        idempotent: bool = True,
+        checkpoint: Literal["standard", "outward"] = "standard",
         exposure: ToolExposure = "direct",
         metadata: dict[str, Any] | None = None,
     ) -> RegisteredTool:
@@ -174,6 +182,8 @@ class ToolRouter:
             schema=schema,
             require_consent=require_consent,
             concurrency_safe=concurrency_safe,
+            idempotent=idempotent,
+            checkpoint=checkpoint,
             exposure=exposure,
             metadata={**(metadata or {}), "remote": True},
         )
@@ -250,6 +260,7 @@ class ToolRouter:
             return ToolResult(
                 success=False,
                 error=error,
+                effect="none",
                 terminal=False,
                 needsFollowup=True,
                 data={"unknownTool": call.name, "suggestions": suggestions},
@@ -297,6 +308,16 @@ class ToolRouter:
                 data={"durationMs": int((time.monotonic() - started) * 1000)},
             )
         coerced = _coerce_to_tool_result(result, duration_ms=int((time.monotonic() - started) * 1000))
+        # Local in-process handlers have already executed once _invoke runs;
+        # prevent an unsealed local handler from claiming effect='none' on a
+        # non-idempotent failure.
+        if (
+            not tool.metadata.get("remote")
+            and not tool.idempotent
+            and not coerced.success
+            and coerced.effect == "none"
+        ):
+            coerced = coerced.model_copy(update={"effect": None})
         if safety_note is not None:
             if coerced.data is None:
                 coerced.data = {}
@@ -352,6 +373,8 @@ def tool(
     schema: dict[str, Any] | None = None,
     require_consent: bool | None = None,
     concurrency_safe: bool | None = None,
+    idempotent: bool = True,
+    checkpoint: Literal["standard", "outward"] = "standard",
     exposure: ToolExposure = "direct",
     router: ToolRouter | None = None,
 ) -> Callable[[ToolHandler], ToolHandler]:
@@ -378,6 +401,8 @@ def tool(
             "schema": schema,
             "require_consent": require_consent,
             "concurrency_safe": concurrency_safe,
+            "idempotent": idempotent,
+            "checkpoint": checkpoint,
             "exposure": exposure,
         }
         handler.__steerable_tool_meta__ = meta
@@ -390,6 +415,8 @@ def tool(
                 schema=schema,
                 require_consent=require_consent,
                 concurrency_safe=concurrency_safe,
+                idempotent=idempotent,
+                checkpoint=checkpoint,
                 exposure=exposure,
             )
         return handler

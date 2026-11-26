@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://steerable.dev/spec/blocks/UiSurfacePayload.schema.json",
+  "title": "UiSurfacePayload",
+  "description": "Declarative structured workspace surface (v1) bounded to 6 closed component kinds, 64 KiB payload size, and 500 table rows. Supports read-only server data bindings ($source) verified via SHA-256 sourceHashes prior to any action dispatch.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["surfaceId", "title", "revision", "components"],
+  "properties": {
+    "surfaceId": { "type": "string" },
+    "title": { "type": "string" },
+    "subtitle": { "type": "string" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "placement": {
+      "type": "string",
+      "enum": ["inline", "workbench"],
+      "default": "inline"
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Static data or $source binding descriptors ({ \"$source\": \"namespace/query\", \"params\": {...} })."
+    },
+    "resolvedData": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Host-evaluated read-only data snapshot corresponding to `data`."
+    },
+    "sourceHashes": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Canonical JSON SHA-256 hex digest per data key bound via $source."
+    },
+    "staleKeys": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "kind"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "table",
+              "detail-card",
+              "form",
+              "steps",
+              "kv-diff",
+              "artifact-card"
+            ]
+          },
+          "title": { "type": "string" },
+          "dataKey": { "type": "string" },
+          "rowIdField": { "type": "string", "default": "id" },
+          "selectable": { "type": "boolean" },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["key", "label"],
+              "properties": {
+                "key": { "type": "string" },
+                "label": { "type": "string" },
+                "align": { "type": "string", "enum": ["left", "center", "right"] }
+              }
+            }
+          },
+          "rows": {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["key", "label"],
+              "properties": {
+                "key": { "type": "string" },
+                "label": { "type": "string" },
+                "type": {
+                  "type": "string",
+                  "enum": ["text", "number", "select", "textarea", "checkbox"]
+                },
+                "required": { "type": "boolean" },
+                "options": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "value": {}
+              }
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["id", "label", "status"],
+              "properties": {
+                "id": { "type": "string" },
+                "label": { "type": "string" },
+                "detail": { "type": "string" },
+                "status": {
+                  "type": "string",
+                  "enum": ["pending", "active", "completed", "failed"]
+                }
+              }
+            }
+          },
+          "diffs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["key"],
+              "properties": {
+                "key": { "type": "string" },
+                "label": { "type": "string" },
+                "before": {},
+                "after": {}
+              }
+            }
+          },
+          "artifact": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "name": { "type": "string" },
+              "path": { "type": "string" },
+              "mimeType": { "type": "string" },
+              "sha256": { "type": "string" },
+              "sizeBytes": { "type": "integer" },
+              "downloadUrl": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "label", "toolName"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "toolName": { "type": "string" },
+          "dataKey": { "type": "string" },
+          "variant": {
+            "type": "string",
+            "enum": ["primary", "secondary", "danger"]
+          },
+          "checkpoint": {
+            "type": "string",
+            "enum": ["standard", "outward"]
+          },
+          "requiresSelection": { "type": "boolean" },
+          "staticArgs": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

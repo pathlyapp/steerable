@@ -13,7 +13,7 @@ import {
   type HeldWriteLease,
 } from './write-lease.js';
 
-export const HOST_SCHEMA_VERSION = 1;
+export const HOST_SCHEMA_VERSION = 2;
 
 /** How long a starting host waits for another host to finish migrating. */
 export const OPEN_LOCK_WAIT_MS = 15_000;

@@ -107,6 +107,9 @@ importers:
       '@steerable/agent-shell':
         specifier: workspace:*
         version: link:../../agent-shell/ts
+      '@steerable/pack-testkit':
+        specifier: workspace:*
+        version: link:../../pack-testkit/ts
     devDependencies:
       '@types/node':
         specifier: ^22.10.5
@@ -409,6 +412,22 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.19)(happy-dom@15.11.7)(lightningcss@1.32.0)
 
+  packages/pack-testkit/ts:
+    dependencies:
+      '@steerable/pack-sdk':
+        specifier: workspace:*
+        version: link:../../pack-sdk/ts
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.19)(happy-dom@15.11.7)(lightningcss@1.32.0)
+
   tests/conformance/ts:
     dependencies:
       '@steerable/agent-harness':
@@ -430,6 +449,25 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.19)(happy-dom@15.11.7)(lightningcss@1.32.0)
+
+  tests/guards:
+    dependencies:
+      '@steerable/agent-shell':
+        specifier: workspace:*
+        version: link:../../packages/agent-shell/ts
+      '@steerable/pack-testkit':
+        specifier: workspace:*
+        version: link:../../packages/pack-testkit/ts
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.19.19
       vitest:
         specifier: ^3.2.4
         version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.19)(happy-dom@15.11.7)(lightningcss@1.32.0)

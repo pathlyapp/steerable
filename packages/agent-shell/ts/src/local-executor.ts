@@ -1,4 +1,4 @@
-import { shellOpenExternal, shellOpenPath } from './runtime.js';
+import { getUserDataDir, shellOpenExternal, shellOpenPath } from './runtime.js';
 import { access, mkdir, readFile, rename, stat, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -595,6 +595,10 @@ export class LocalExecutor {
         return { success: false, error: 'command is required' };
       }
       command = rewriteExeCommandIfNeeded(command);
+      const privateShellDeny = this.detectPrivateHostDataAccess(command);
+      if (privateShellDeny) {
+        return { success: false, error: privateShellDeny, exitCode: 1, platform: process.platform };
+      }
       const dangerousReason = this.detectDangerousCommand(command);
       if (dangerousReason) {
         return { success: false, error: `Blocked dangerous command: ${dangerousReason}` };
@@ -885,6 +889,8 @@ export class LocalExecutor {
   ): Promise<LocalFileReadResult> {
     try {
       const filePath = this.resolvePath(request.path, projectRoot);
+      const privateDeny = this.checkPrivateHostFilePath(filePath);
+      if (privateDeny) return { success: false, error: privateDeny };
       if (projectRoot) {
         const root = this.resolvePath(projectRoot);
         const inAdditionalRoot = (additionalReadRoots ?? []).some((r) =>
@@ -925,6 +931,8 @@ export class LocalExecutor {
     additionalWriteRoots?: string[] | null,
   ): Promise<LocalFileWriteResult> {
     const filePath = this.resolvePath(request.path, projectRoot);
+    const privateDeny = this.checkPrivateHostFilePath(filePath);
+    if (privateDeny) return { success: false, error: privateDeny };
     const violation = writableFenceViolation(
       filePath,
       writableFenceRoots(projectRoot, additionalWriteRoots),
@@ -992,6 +1000,8 @@ export class LocalExecutor {
     additionalWriteRoots?: string[] | null,
   ): Promise<LocalFileEditResult> {
     const filePath = this.resolvePath(request.path, projectRoot);
+    const privateDeny = this.checkPrivateHostFilePath(filePath);
+    if (privateDeny) return { success: false, error: privateDeny };
     const violation = writableFenceViolation(
       filePath,
       writableFenceRoots(projectRoot, additionalWriteRoots),
@@ -1385,6 +1395,39 @@ export class LocalExecutor {
       const flags = d.platform === 'windows' ? 'i' : undefined;
       return new RegExp(d.pattern, flags);
     });
+  }
+
+  private getPrivateDeniedPaths(): string[] {
+    const rawUserDir = path.resolve(getUserDataDir());
+    const realUserDir = this.resolvePath(getUserDataDir());
+    const roots = new Set([rawUserDir, realUserDir]);
+    const out: string[] = [];
+    for (const userDir of roots) {
+      out.push(
+        path.join(userDir, 'memory'),
+        path.join(userDir, 'authoring-candidates'),
+        path.join(userDir, 'credential-master-key.bin'),
+      );
+    }
+    return out;
+  }
+
+  private checkPrivateHostFilePath(resolvedFilePath: string): string | null {
+    for (const denied of this.getPrivateDeniedPaths()) {
+      if (resolvedFilePath === denied || isPathWithinRoot(resolvedFilePath, denied)) {
+        return `Access denied: ${resolvedFilePath} is inside host-isolated private storage (${denied}). Use memory_read / memory_propose instead.`;
+      }
+    }
+    return null;
+  }
+
+  private detectPrivateHostDataAccess(command: string): string | null {
+    for (const denied of this.getPrivateDeniedPaths()) {
+      if (command.includes(denied)) {
+        return `Blocked by sandbox private-deny policy: direct shell access to host private path "${denied}" is forbidden.`;
+      }
+    }
+    return null;
   }
 
   private resolvePath(inputPath: string, baseDir?: string | null): string {

@@ -250,6 +250,7 @@ def _sbpl_string(path: str) -> str:
 def build_seatbelt_profile(
     *,
     writable_roots: list[str] | None = None,
+    private_deny_roots: Sequence[str] | None = None,
     network: bool = True,
     allowed_hosts: Sequence[str] | None = None,
     web_egress: bool = False,
@@ -292,6 +293,12 @@ def build_seatbelt_profile(
         parts.append(
             f"; host-declared writable root\n"
             f"(allow file-read* file-write* (subpath {_sbpl_string(normalized)}))\n"
+        )
+    for denied in private_deny_roots or []:
+        normalized_denied = os.path.realpath(os.path.abspath(os.path.expanduser(denied)))
+        parts.append(
+            f"; host-isolated private directory (memory / credentials)\n"
+            f"(deny file-read* file-write* (subpath {_sbpl_string(normalized_denied)}))\n"
         )
     if network:
         if allowed_hosts is None:
@@ -337,12 +344,14 @@ class SeatbeltExecBackend:
         self,
         *,
         writable_roots: Sequence[str] | None = None,
+        private_deny_roots: Sequence[str] | None = None,
         network: bool = False,
         allowed_hosts: Sequence[str] | None = None,
         shell: str = "/bin/sh",
     ) -> None:
         self._profile = build_seatbelt_profile(
             writable_roots=list(writable_roots or []),
+            private_deny_roots=list(private_deny_roots or []),
             network=network,
             allowed_hosts=allowed_hosts,
         )
@@ -453,6 +462,7 @@ class BwrapExecBackend:
         self,
         *,
         writable_roots: Sequence[str] | None = None,
+        private_deny_roots: Sequence[str] | None = None,
         network: bool = False,
         allowed_hosts: Sequence[str] | None = None,
         shell: str = "/bin/sh",
@@ -468,6 +478,11 @@ class BwrapExecBackend:
                     "must exist before the command runs"
                 )
             self._roots.append(normalized)
+        self._private_deny_roots = [
+            _normalize_root(d)
+            for d in (private_deny_roots or [])
+            if os.path.isdir(_normalize_root(d))
+        ]
         self._network = network
         self._allowed_hosts = list(allowed_hosts) if allowed_hosts is not None else None
         self._shell = shell
@@ -491,6 +506,8 @@ class BwrapExecBackend:
             args.append("--unshare-net")
         for root in self._roots:
             args += ["--bind", root, root]
+        for denied in self._private_deny_roots:
+            args += ["--tmpfs", denied]
         return args
 
     def argv_for(self, command: str) -> list[str]:

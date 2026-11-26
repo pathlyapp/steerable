@@ -58,3 +58,36 @@ export type { ActionSegmentCardProps } from './ActionSegmentCard.js';
 
 export { ToolExecutionCard } from './ToolExecutionCard.js';
 export type { ToolExecutionCardProps } from './ToolExecutionCard.js';
+
+export { OutcomeReconcileCard } from './OutcomeReconcileCard.js';
+export type {
+  OutcomeReconcileCardProps,
+  OutcomeReconcileDecision,
+} from './OutcomeReconcileCard.js';
+
+export {
+  getUiSurfaceDraft,
+  patchUiSurfaceDraft,
+  clearUiSurfaceDraft,
+  subscribeUiSurfaceDraft,
+  resetAllUiSurfaceDraftsForTests,
+} from './ui-surface-draft.js';
+export type { UiSurfaceDraftState } from './ui-surface-draft.js';
+
+export { UiSurfaceCard } from './UiSurfaceCard.js';
+export type { UiSurfaceCardProps } from './UiSurfaceCard.js';
+
+export { UiSurfaceWorkbench } from './UiSurfaceWorkbench.js';
+export type {
+  UiSurfaceWorkbenchProps,
+  UiSurfaceActionDispatchRequest,
+} from './UiSurfaceWorkbench.js';
+
+export { FactChainDrawer } from './FactChainDrawer.js';
+export type {
+  FactChainDrawerProps,
+  FactChainGraph,
+  FactChainRequestNode,
+  FactChainToolNode,
+  FactChainDeliverableNode,
+} from './FactChainDrawer.js';

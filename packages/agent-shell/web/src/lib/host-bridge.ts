@@ -72,6 +72,8 @@ export interface ApprovalPromptRequest {
    * 缺省保持旧 sidecar 的说明。
    */
   sandboxEnforced?: boolean;
+  /** `'outward'` forces per-invocation human confirmation with no remembered grants. */
+  checkpoint?: 'standard' | 'outward';
 }
 
 /**

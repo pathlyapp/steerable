@@ -7,14 +7,28 @@
  * on the CoreLoop path the framework's blocking semantics apply.
  */
 
+import { createHash } from 'node:crypto';
 import { classifyShellCommand } from './safety-patterns.js';
+import { isRejectedBeforeEffectError } from './rejected-before-effect.js';
 import { compactToolResultJson } from '../local-backend/context-compactor.js';
 import { normalizeToolPolicy } from '../local-backend/agent-capability.js';
+import {
+  getTurnSecurityContext,
+  touchHostActivity,
+} from '../local-backend/turn-security-context.js';
+import {
+  LOCAL_DEFAULT_PRINCIPAL,
+  isRestrictedOriginChannel,
+} from '../auth/index.js';
+import { ensurePhase9Store } from '../storage/fde-fallback.js';
+import type { ScopedStore } from '../storage/scoped-store.js';
 import type { ToolRouter } from '../tool-router.js';
 import type { SidecarReverseHandler } from './types.js';
 
 export interface ReverseToolDeps {
   toolRouter: ToolRouter;
+  store?: ScopedStore;
+  broadcast?: (channel: string, payload: unknown) => void;
   onBlocked?: (info: { command: string; rules: string[] }) => void;
   /**
    * 项目模式：按 chatId 解析项目根（绝对路径），无绑定/已删除返回 null。
@@ -80,7 +94,7 @@ export function createToolInvokeHandler(deps: ReverseToolDeps): SidecarReverseHa
     const name = typeof p.name === 'string' ? p.name : '';
     const toolArgs = p.arguments ?? {};
     if (!name) {
-      return { success: false, error: 'missing tool name', needsFollowup: false };
+      return { success: false, error: 'missing tool name', effect: 'none', retryable: false, needsFollowup: false };
     }
     // Plan mode is enforced at the execution layer too, not just by tool
     // advertisement — a pseudo-recovered call could name a write tool that
@@ -91,6 +105,8 @@ export function createToolInvokeHandler(deps: ReverseToolDeps): SidecarReverseHa
         return {
           success: false,
           error: `blocked by plan mode: ${name} is a write tool`,
+          effect: 'none',
+          retryable: false,
           needsFollowup: false,
         };
       }
@@ -123,6 +139,8 @@ export function createToolInvokeHandler(deps: ReverseToolDeps): SidecarReverseHa
         return {
           success: false,
           error: `blocked by shell safety policy (critical): ${classification.matchedRules.join(', ')}`,
+          effect: 'none',
+          retryable: false,
           needsFollowup: false,
         };
       }
@@ -134,35 +152,152 @@ export function createToolInvokeHandler(deps: ReverseToolDeps): SidecarReverseHa
       : null;
     const toolPolicy =
       normalizedPolicy && normalizedPolicy.mode !== 'all' ? normalizedPolicy : null;
-    const execContext =
-      projectRoot ||
-      additionalReadRoots.length > 0 ||
-      additionalWriteRoots.length > 0 ||
-      p.context?.chatId ||
-      toolPolicy
-        ? {
-            projectRoot,
-            chatId: p.context?.chatId,
-            // 4.6a：chatId 随上下文透传——task_run/status/result 与
-            // worktree_* 工具按它把任务绑定到来源对话。
-            ...(toolPolicy ? { toolPolicy } : {}),
-            ...(additionalReadRoots.length > 0 ? { additionalReadRoots } : {}),
-            ...(additionalWriteRoots.length > 0 ? { additionalWriteRoots } : {}),
+    const chatId = p.context?.chatId;
+    const turnSec = getTurnSecurityContext(chatId);
+    const activeStore = turnSec?.store ?? deps.store;
+    const principal = turnSec?.principal ?? LOCAL_DEFAULT_PRINCIPAL;
+    const originChannel = turnSec?.originChannel ?? 'web';
+    const schema = deps.toolRouter.getSchemaByName(name);
+    if (chatId && activeStore) {
+      const allForChat = await ensurePhase9Store(activeStore).listPendingReconciliations(
+        chatId,
+        { includeResolved: true },
+      );
+      const latestForTool = allForChat.find((item) => item.toolName === name);
+      if (
+        latestForTool &&
+        (latestForTool.status === 'pending' || latestForTool.status === 'confirmed_executed')
+      ) {
+        const reason =
+          latestForTool.status === 'confirmed_executed'
+            ? `reconciliation_committed: previous call to "${name}" was confirmed_succeeded (reconciliationId=${latestForTool.id}); automatic re-execution is locked.`
+            : `reconciliation_required: previous call to "${name}" ended with outcome_unknown (reconciliationId=${latestForTool.id}). Confirm whether external side effects occurred before retrying.`;
+        return {
+          success: false,
+          error: reason,
+          effect: 'none',
+          retryable: false,
+          reconciliationId: latestForTool.id,
+          needsFollowup: false,
+        };
+      }
+    }
+    if (isRestrictedOriginChannel(originChannel) && schema?.checkpoint === 'outward') {
+      const workbenchHref = chatId ? `/#/agent/${encodeURIComponent(chatId)}` : '/#/agent';
+      return {
+        success: false,
+        error: `outward_confirmation_required: tool "${name}" requires interactive confirmation in the Web or Desktop workbench (${workbenchHref})`,
+        effect: 'none',
+        retryable: true,
+        needsFollowup: false,
+        workbenchHref,
+      };
+    }
+    if (schema?.inputSchema && typeof schema.inputSchema === 'object') {
+      const schemaObj = schema.inputSchema as {
+        required?: unknown;
+        properties?: Record<string, { type?: string }>;
+      };
+      if (Array.isArray(schemaObj.required)) {
+        for (const reqKey of schemaObj.required) {
+          if (typeof reqKey === 'string' && toolArgs[reqKey] === undefined) {
+            return {
+              success: false,
+              error: `schema_validation_failed: missing required argument "${reqKey}" for tool "${name}"`,
+              effect: 'none',
+              retryable: true,
+              needsFollowup: true,
+            };
           }
-        : undefined;
+        }
+      }
+    }
+    touchHostActivity();
+    const execContext = {
+      projectRoot,
+      chatId,
+      principal,
+      originChannel,
+      ...(turnSec?.credentials ? { credentials: turnSec.credentials } : {}),
+      ...(toolPolicy ? { toolPolicy } : {}),
+      ...(additionalReadRoots.length > 0 ? { additionalReadRoots } : {}),
+      ...(additionalWriteRoots.length > 0 ? { additionalWriteRoots } : {}),
+    };
+    const isNonIdempotent = schema?.idempotent === false;
+    const recordUnknownOutcome = async (errorText: string): Promise<Record<string, unknown>> => {
+      const rawArgsJson = JSON.stringify(toolArgs);
+      const safeArgsJson = turnSec?.redactor.hasSecrets
+        ? turnSec.redactor.redactString(rawArgsJson)
+        : rawArgsJson;
+      const argsDigest = createHash('sha256').update(safeArgsJson).digest('hex').slice(0, 16);
+      let reconciliationId: string | undefined;
+      if (chatId && activeStore) {
+        const rec = await ensurePhase9Store(activeStore).createPendingReconciliation({
+          chatId,
+          toolName: name,
+          argsDigest,
+          argsPreview: safeArgsJson.slice(0, 300),
+          errorDetail: errorText.slice(0, 500),
+        });
+        reconciliationId = rec.id;
+        deps.broadcast?.('reconciliation:updated', { chatId, reconciliation: rec });
+      }
+      return {
+        success: false,
+        error: errorText.startsWith('outcome_unknown') ? errorText : `outcome_unknown: ${errorText}`,
+        effect: 'unknown',
+        outcomeUnknown: true,
+        retryable: false,
+        ...(reconciliationId ? { reconciliationId } : {}),
+        needsFollowup: true,
+      };
+    };
     try {
-      const out = await deps.toolRouter.execute(
+      const rawOut = await deps.toolRouter.execute(
         { name, arguments: toolArgs },
         execContext,
       );
+      const out = turnSec?.redactor.hasSecrets
+        ? turnSec.redactor.redactUnknown(rawOut)
+        : rawOut;
+      if (
+        out &&
+        typeof out === 'object' &&
+        (out as Record<string, unknown>).outcomeUnknown === true
+      ) {
+        const msg = String(
+          (out as Record<string, unknown>).error ??
+            `tool "${name}" returned an unknown side-effect outcome`,
+        );
+        return await recordUnknownOutcome(msg);
+      }
       if (out && typeof out === 'object' && 'success' in (out as Record<string, unknown>)) {
         return capResultForModelContext(out);
       }
       return capResultForModelContext({ success: true, data: { value: out } });
     } catch (err) {
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      const safeMsg = turnSec?.redactor.hasSecrets
+        ? turnSec.redactor.redactString(rawMsg)
+        : rawMsg;
+      if (isRejectedBeforeEffectError(err)) {
+        return {
+          success: false,
+          error: safeMsg,
+          effect: 'none',
+          retryable: err.retryable,
+          needsFollowup: err.retryable,
+        };
+      }
+      const explicitUnknown = Boolean(
+        err && typeof err === 'object' && (err as { outcomeUnknown?: unknown }).outcomeUnknown === true,
+      );
+      if (isNonIdempotent || explicitUnknown) {
+        return await recordUnknownOutcome(safeMsg);
+      }
       return {
         success: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: safeMsg,
         needsFollowup: true,
       };
     }

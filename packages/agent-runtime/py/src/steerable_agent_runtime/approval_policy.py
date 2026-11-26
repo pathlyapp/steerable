@@ -201,6 +201,8 @@ class PolicyApprover:
         self._policy = policy
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
+        if request.checkpoint == "outward":
+            return await self._inner.approve(request)
         decision = self._policy.decide(request)
         if decision is not None:
             return decision
@@ -221,6 +223,8 @@ def rule_from_amendment(
     return ``None`` (the decision itself still stands; only the persistence
     is dropped), never raise into the approval path.
     """
+    if request.checkpoint == "outward":
+        return None
     if not isinstance(amendment, dict):
         return None
     decision = amendment.get("decision")

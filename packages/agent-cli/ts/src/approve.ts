@@ -32,12 +32,17 @@ export function parseApprovePolicy(raw: string | undefined): ApprovePolicy | nul
 /**
  * `mode` is the declared tool mode. A missing mode is not treated as read.
  * `prompt` means the TUI should show the card.
+ * `outward` checkpoints never auto-approve: interactive `tui` prompts once,
+ * headless `run` denies once even under `--approve allow-all`.
  */
 export function decisionFor(
   spec: ApprovalSpec,
-  prompt: { mode?: string },
+  prompt: { mode?: string; checkpoint?: 'standard' | 'outward' },
   surface: ApprovalSurface,
 ): ApprovalDecisionKind | 'prompt' {
+  if (prompt.checkpoint === 'outward') {
+    return surface === 'tui' ? 'prompt' : 'deny_once';
+  }
   if (spec.policy === 'allow-all') return 'allow_once';
   if (spec.policy === 'ask') return 'prompt';
   if (spec.policy === 'allow-read' && prompt.mode === 'read') return 'allow_once';

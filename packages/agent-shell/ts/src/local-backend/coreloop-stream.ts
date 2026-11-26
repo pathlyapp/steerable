@@ -222,6 +222,8 @@ export interface TurnToolWire {
   inputSchema: unknown;
   mode?: string;
   approvalCategory?: string;
+  idempotent?: boolean;
+  checkpoint?: 'standard' | 'outward';
 }
 
 /**
@@ -234,6 +236,8 @@ export function toTurnTool(schema: {
   inputSchema: unknown;
   mode?: string;
   approval?: { category?: string } | null;
+  idempotent?: boolean;
+  checkpoint?: 'standard' | 'outward';
 }): TurnToolWire {
   const tool: TurnToolWire = {
     name: schema.name,
@@ -243,6 +247,8 @@ export function toTurnTool(schema: {
   if (schema.mode) tool.mode = schema.mode;
   const category = schema.approval?.category;
   if (category) tool.approvalCategory = category;
+  if (schema.idempotent !== undefined) tool.idempotent = schema.idempotent;
+  if (schema.checkpoint) tool.checkpoint = schema.checkpoint;
   return tool;
 }
 

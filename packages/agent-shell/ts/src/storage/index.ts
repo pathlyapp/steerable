@@ -43,6 +43,19 @@ import {
   matchesPreviousIdentity,
   type AgentSeedRow,
 } from './pack-seeds.js';
+import type {
+  ChatDeliverableRecord,
+  ChatUiReceiptRecord,
+  ChatUiSurfaceRecord,
+  MemoryDocumentRecord,
+  MemoryEntryRecord,
+  MemoryRefinementMetaRecord,
+  MemoryScopeKind,
+  PackCredentialRecord,
+  PendingReconciliationRecord,
+  Phase9ScopedStore,
+} from './fde-types.js';
+import type { UiSurfaceSpec, VerifierIssue } from '../scenario/pack.js';
 import type { AgentSeed } from '../scenario/pack.js';
 import {
   buildUsageSummary,
@@ -228,7 +241,7 @@ const DEFAULT_LOCAL_USER_ID = 'local';
 // insightsApiBase 对端）定义，改名会破坏对端解析。
 const INSIGHTS_EXPORT_SCHEMA = 'deeppath-agent-insights/v1'; // shell-neutral:allow（线协议常量，见上行）
 
-export class SqliteScopedStore implements ScopedStore {
+export class SqliteScopedStore implements ScopedStore, Phase9ScopedStore {
   constructor(
     private readonly db: Database.Database,
     readonly scope: TenantScope,
@@ -515,6 +528,150 @@ export class SqliteScopedStore implements ScopedStore {
       );
 
       CREATE INDEX IF NOT EXISTS idx_tasks_chat ON tasks(chat_id, datetime(updated_at) DESC);
+
+      CREATE TABLE IF NOT EXISTS pack_credentials (
+        tenant_id TEXT NOT NULL,
+        owner_user_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        auth_kind TEXT NOT NULL,
+        cipher_text TEXT NOT NULL,
+        iv TEXT NOT NULL,
+        auth_tag TEXT NOT NULL,
+        updated_by TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, owner_user_id, source_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS pending_reconciliations (
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        args_digest TEXT NOT NULL,
+        args_preview TEXT NOT NULL,
+        error_detail TEXT NOT NULL,
+        status TEXT NOT NULL,
+        resolution_note TEXT,
+        resolved_by TEXT,
+        created_at TEXT NOT NULL,
+        resolved_at TEXT,
+        PRIMARY KEY (tenant_id, user_id, id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_pending_reconciliations_chat
+        ON pending_reconciliations(tenant_id, user_id, chat_id, status);
+
+      CREATE TABLE IF NOT EXISTS chat_ui_surfaces (
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        surface_id TEXT NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 1,
+        title_json TEXT NOT NULL,
+        spec_json TEXT NOT NULL,
+        state_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, user_id, chat_id, surface_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_ui_receipts (
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        surface_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        action_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        source_fingerprints_json TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, user_id, id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_ui_receipts_chat
+        ON chat_ui_receipts(tenant_id, user_id, chat_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS chat_deliverables (
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        message_id TEXT,
+        file_path TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        sha256 TEXT NOT NULL,
+        verification_status TEXT NOT NULL,
+        verifier_id TEXT,
+        issues_json TEXT NOT NULL,
+        summary TEXT,
+        report_path TEXT,
+        source_refs_json TEXT NOT NULL,
+        tool_calls_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, user_id, id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_deliverables_chat
+        ON chat_deliverables(tenant_id, user_id, chat_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS memory_documents (
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        scope_kind TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        content_markdown TEXT NOT NULL,
+        content_sha256 TEXT NOT NULL,
+        updated_by TEXT NOT NULL,
+        source_chat_id TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, user_id, scope_kind, scope_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_entries (
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        scope_kind TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        content_sha256 TEXT NOT NULL,
+        source_chat_id TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, user_id, id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_memory_entries_scope
+        ON memory_entries(tenant_id, user_id, scope_kind, scope_id, status, updated_at);
+
+      CREATE TABLE IF NOT EXISTS memory_revoked_hashes (
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        scope_kind TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        content_sha256 TEXT NOT NULL,
+        revoked_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, user_id, scope_kind, scope_id, content_sha256)
+      );
+
+      CREATE TABLE IF NOT EXISTS memory_refinement_meta (
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        scope_kind TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        refined_session_count INTEGER NOT NULL DEFAULT 0,
+        last_refined_at TEXT,
+        last_status TEXT,
+        PRIMARY KEY (tenant_id, user_id, scope_kind, scope_id)
+      );
     `);
 
     // 跨轮压缩已下沉框架 CoreLoop（token 压力触发 CompactionHooks，压缩边界
@@ -1032,6 +1189,16 @@ export class SqliteScopedStore implements ScopedStore {
     this.db.prepare(
       `DELETE FROM settings_kv WHERE tenant_id = ? AND user_id = ? AND key = ?`,
     ).run(this.scope.tenantId, this.scope.userId, `turn_active:${chatId}`);
+    for (const table of [
+      'pending_reconciliations',
+      'chat_ui_surfaces',
+      'chat_ui_receipts',
+      'chat_deliverables',
+    ]) {
+      this.db
+        .prepare(`DELETE FROM ${table} WHERE tenant_id = ? AND user_id = ? AND chat_id = ?`)
+        .run(this.scope.tenantId, this.scope.userId, chatId);
+    }
     return info.changes > 0;
   }
 
@@ -2074,6 +2241,902 @@ export class SqliteScopedStore implements ScopedStore {
       isBuiltin: Number(row.is_builtin ?? 0) === 1,
       isArchived: Number(row.is_archived ?? 0) === 1,
       sortOrder: Number(row.sort_order ?? 0),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  async getCustomSetting(key: string): Promise<string | null> {
+    return this.getSetting(`custom:${key}`);
+  }
+
+  async setCustomSetting(key: string, value: string | null): Promise<void> {
+    const namespaced = `custom:${key}`;
+    if (value === null) {
+      this.db
+        .prepare(`DELETE FROM settings_kv WHERE tenant_id = ? AND user_id = ? AND key = ?`)
+        .run(this.scope.tenantId, this.scope.userId, namespaced);
+      return;
+    }
+    this.setSetting(namespaced, value);
+  }
+
+  async upsertPackCredential(input: {
+    ownerUserId: string;
+    sourceId: string;
+    authKind: string;
+    cipherText: string;
+    iv: string;
+    authTag: string;
+    updatedBy: string;
+  }): Promise<PackCredentialRecord> {
+    const updatedAt = new Date().toISOString();
+    this.db
+      .prepare(`
+        INSERT INTO pack_credentials (
+          tenant_id, owner_user_id, source_id, auth_kind, cipher_text, iv, auth_tag, updated_by, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, owner_user_id, source_id)
+        DO UPDATE SET
+          auth_kind = excluded.auth_kind,
+          cipher_text = excluded.cipher_text,
+          iv = excluded.iv,
+          auth_tag = excluded.auth_tag,
+          updated_by = excluded.updated_by,
+          updated_at = excluded.updated_at
+      `)
+      .run(
+        this.scope.tenantId,
+        input.ownerUserId,
+        input.sourceId,
+        input.authKind,
+        input.cipherText,
+        input.iv,
+        input.authTag,
+        input.updatedBy,
+        updatedAt,
+      );
+    return {
+      tenantId: this.scope.tenantId,
+      ownerUserId: input.ownerUserId,
+      sourceId: input.sourceId,
+      authKind: input.authKind,
+      cipherText: input.cipherText,
+      iv: input.iv,
+      authTag: input.authTag,
+      updatedBy: input.updatedBy,
+      updatedAt,
+    };
+  }
+
+  async getPackCredential(ownerUserId: string, sourceId: string): Promise<PackCredentialRecord | null> {
+    const row = this.db
+      .prepare(`
+        SELECT tenant_id, owner_user_id, source_id, auth_kind, cipher_text, iv, auth_tag, updated_by, updated_at
+        FROM pack_credentials
+        WHERE tenant_id = ? AND owner_user_id = ? AND source_id = ?
+      `)
+      .get(this.scope.tenantId, ownerUserId, sourceId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.mapPackCredential(row);
+  }
+
+  async listPackCredentials(ownerUserIds?: readonly string[]): Promise<PackCredentialRecord[]> {
+    const ids = ownerUserIds && ownerUserIds.length > 0 ? [...ownerUserIds] : [this.scope.userId, '__tenant__'];
+    const placeholders = ids.map(() => '?').join(', ');
+    const rows = this.db
+      .prepare(`
+        SELECT tenant_id, owner_user_id, source_id, auth_kind, cipher_text, iv, auth_tag, updated_by, updated_at
+        FROM pack_credentials
+        WHERE tenant_id = ? AND owner_user_id IN (${placeholders})
+        ORDER BY source_id ASC
+      `)
+      .all(this.scope.tenantId, ...ids) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.mapPackCredential(row));
+  }
+
+  async deletePackCredential(ownerUserId: string, sourceId: string): Promise<boolean> {
+    const res = this.db
+      .prepare(`
+        DELETE FROM pack_credentials
+        WHERE tenant_id = ? AND owner_user_id = ? AND source_id = ?
+      `)
+      .run(this.scope.tenantId, ownerUserId, sourceId);
+    return res.changes > 0;
+  }
+
+  private mapPackCredential(row: Record<string, unknown>): PackCredentialRecord {
+    return {
+      tenantId: String(row.tenant_id),
+      ownerUserId: String(row.owner_user_id),
+      sourceId: String(row.source_id),
+      authKind: String(row.auth_kind),
+      cipherText: String(row.cipher_text),
+      iv: String(row.iv),
+      authTag: String(row.auth_tag),
+      updatedBy: String(row.updated_by),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  async createPendingReconciliation(input: {
+    id?: string;
+    chatId: string;
+    toolName: string;
+    argsDigest: string;
+    argsPreview: string;
+    errorDetail: string;
+  }): Promise<PendingReconciliationRecord> {
+    const id = input.id ?? randomUUID();
+    const createdAt = new Date().toISOString();
+    this.db
+      .prepare(`
+        INSERT INTO pending_reconciliations (
+          tenant_id, user_id, id, chat_id, tool_name, args_digest, args_preview,
+          error_detail, status, resolution_note, resolved_by, created_at, resolved_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, NULL)
+      `)
+      .run(
+        this.scope.tenantId,
+        this.scope.userId,
+        id,
+        input.chatId,
+        input.toolName,
+        input.argsDigest,
+        input.argsPreview,
+        input.errorDetail,
+        createdAt,
+      );
+    return {
+      id,
+      chatId: input.chatId,
+      toolName: input.toolName,
+      argsDigest: input.argsDigest,
+      argsPreview: input.argsPreview,
+      errorDetail: input.errorDetail,
+      status: 'pending',
+      resolutionNote: null,
+      resolvedBy: null,
+      createdAt,
+      resolvedAt: null,
+    };
+  }
+
+  async listPendingReconciliations(
+    chatId: string,
+    options?: { includeResolved?: boolean },
+  ): Promise<PendingReconciliationRecord[]> {
+    const rows = options?.includeResolved
+      ? (this.db
+          .prepare(`
+            SELECT * FROM pending_reconciliations
+            WHERE tenant_id = ? AND user_id = ? AND chat_id = ?
+            ORDER BY created_at DESC
+          `)
+          .all(this.scope.tenantId, this.scope.userId, chatId) as Array<Record<string, unknown>>)
+      : (this.db
+          .prepare(`
+            SELECT * FROM pending_reconciliations
+            WHERE tenant_id = ? AND user_id = ? AND chat_id = ? AND status = 'pending'
+            ORDER BY created_at DESC
+          `)
+          .all(this.scope.tenantId, this.scope.userId, chatId) as Array<Record<string, unknown>>);
+    return rows.map((row) => this.mapPendingReconciliation(row));
+  }
+
+  async resolvePendingReconciliation(input: {
+    chatId: string;
+    reconciliationId: string;
+    status: 'confirmed_executed' | 'confirmed_not_executed';
+    resolutionNote?: string | null;
+    resolvedBy: string;
+  }): Promise<PendingReconciliationRecord | null> {
+    const resolvedAt = new Date().toISOString();
+    const res = this.db
+      .prepare(`
+        UPDATE pending_reconciliations
+        SET status = ?, resolution_note = ?, resolved_by = ?, resolved_at = ?
+        WHERE tenant_id = ? AND user_id = ? AND chat_id = ? AND id = ?
+      `)
+      .run(
+        input.status,
+        input.resolutionNote ?? null,
+        input.resolvedBy,
+        resolvedAt,
+        this.scope.tenantId,
+        this.scope.userId,
+        input.chatId,
+        input.reconciliationId,
+      );
+    if (res.changes === 0) return null;
+    const row = this.db
+      .prepare(`
+        SELECT * FROM pending_reconciliations
+        WHERE tenant_id = ? AND user_id = ? AND chat_id = ? AND id = ?
+      `)
+      .get(this.scope.tenantId, this.scope.userId, input.chatId, input.reconciliationId) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? this.mapPendingReconciliation(row) : null;
+  }
+
+  private mapPendingReconciliation(row: Record<string, unknown>): PendingReconciliationRecord {
+    const rawStatus = String(row.status);
+    const status: PendingReconciliationRecord['status'] =
+      rawStatus === 'confirmed_executed' || rawStatus === 'confirmed_not_executed'
+        ? rawStatus
+        : 'pending';
+    return {
+      id: String(row.id),
+      chatId: String(row.chat_id),
+      toolName: String(row.tool_name),
+      argsDigest: String(row.args_digest),
+      argsPreview: String(row.args_preview),
+      errorDetail: String(row.error_detail),
+      status,
+      resolutionNote: row.resolution_note != null ? String(row.resolution_note) : null,
+      resolvedBy: row.resolved_by != null ? String(row.resolved_by) : null,
+      createdAt: String(row.created_at),
+      resolvedAt: row.resolved_at != null ? String(row.resolved_at) : null,
+    };
+  }
+
+  async upsertChatUiSurface(input: {
+    chatId: string;
+    spec: UiSurfaceSpec;
+    state?: Record<string, unknown>;
+    status?: 'active' | 'submitted' | 'archived';
+  }): Promise<ChatUiSurfaceRecord> {
+    const existing = await this.getChatUiSurface(input.chatId, input.spec.surfaceId);
+    const revision = existing ? existing.revision + 1 : 1;
+    const updatedAt = new Date().toISOString();
+    const state = input.state ?? existing?.state ?? {};
+    const status = input.status ?? existing?.status ?? 'active';
+    const title = { ...input.spec.title };
+    this.db
+      .prepare(`
+        INSERT INTO chat_ui_surfaces (
+          tenant_id, user_id, chat_id, surface_id, revision, title_json, spec_json, state_json, status, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, user_id, chat_id, surface_id)
+        DO UPDATE SET
+          revision = excluded.revision,
+          title_json = excluded.title_json,
+          spec_json = excluded.spec_json,
+          state_json = excluded.state_json,
+          status = excluded.status,
+          updated_at = excluded.updated_at
+      `)
+      .run(
+        this.scope.tenantId,
+        this.scope.userId,
+        input.chatId,
+        input.spec.surfaceId,
+        revision,
+        JSON.stringify(title),
+        JSON.stringify(input.spec),
+        JSON.stringify(state),
+        status,
+        updatedAt,
+      );
+    return {
+      chatId: input.chatId,
+      surfaceId: input.spec.surfaceId,
+      revision,
+      title,
+      spec: input.spec,
+      state,
+      status,
+      updatedAt,
+    };
+  }
+
+  async getChatUiSurface(chatId: string, surfaceId: string): Promise<ChatUiSurfaceRecord | null> {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM chat_ui_surfaces
+        WHERE tenant_id = ? AND user_id = ? AND chat_id = ? AND surface_id = ?
+      `)
+      .get(this.scope.tenantId, this.scope.userId, chatId, surfaceId) as Record<string, unknown> | undefined;
+    return row ? this.mapChatUiSurface(row) : null;
+  }
+
+  async listChatUiSurfaces(chatId: string): Promise<ChatUiSurfaceRecord[]> {
+    const rows = this.db
+      .prepare(`
+        SELECT * FROM chat_ui_surfaces
+        WHERE tenant_id = ? AND user_id = ? AND chat_id = ?
+        ORDER BY updated_at DESC
+      `)
+      .all(this.scope.tenantId, this.scope.userId, chatId) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.mapChatUiSurface(row));
+  }
+
+  private mapChatUiSurface(row: Record<string, unknown>): ChatUiSurfaceRecord {
+    const rawStatus = String(row.status);
+    const status: ChatUiSurfaceRecord['status'] =
+      rawStatus === 'submitted' || rawStatus === 'archived' ? rawStatus : 'active';
+    return {
+      chatId: String(row.chat_id),
+      surfaceId: String(row.surface_id),
+      revision: Number(row.revision ?? 1),
+      title: this.safeJson<Record<string, string>>(row.title_json, {}),
+      spec: this.safeJson<UiSurfaceSpec>(row.spec_json, {
+        surfaceId: String(row.surface_id),
+        title: {},
+        nodes: [],
+      }),
+      state: this.safeJson<Record<string, unknown>>(row.state_json, {}),
+      status,
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  async recordChatUiReceipt(input: {
+    chatId: string;
+    surfaceId: string;
+    revision: number;
+    actionId: string;
+    toolName: string;
+    payload: Record<string, unknown>;
+    sourceFingerprints: Record<string, string>;
+    result: Record<string, unknown>;
+    actorId: string;
+  }): Promise<ChatUiReceiptRecord> {
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    this.db
+      .prepare(`
+        INSERT INTO chat_ui_receipts (
+          tenant_id, user_id, id, chat_id, surface_id, revision, action_id, tool_name,
+          payload_json, source_fingerprints_json, result_json, actor_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        this.scope.tenantId,
+        this.scope.userId,
+        id,
+        input.chatId,
+        input.surfaceId,
+        input.revision,
+        input.actionId,
+        input.toolName,
+        JSON.stringify(input.payload),
+        JSON.stringify(input.sourceFingerprints),
+        JSON.stringify(input.result),
+        input.actorId,
+        createdAt,
+      );
+    return {
+      id,
+      chatId: input.chatId,
+      surfaceId: input.surfaceId,
+      revision: input.revision,
+      actionId: input.actionId,
+      toolName: input.toolName,
+      payload: input.payload,
+      sourceFingerprints: input.sourceFingerprints,
+      result: input.result,
+      actorId: input.actorId,
+      createdAt,
+    };
+  }
+
+  async listChatUiReceipts(chatId: string, surfaceId?: string): Promise<ChatUiReceiptRecord[]> {
+    const rows = surfaceId
+      ? (this.db
+          .prepare(`
+            SELECT * FROM chat_ui_receipts
+            WHERE tenant_id = ? AND user_id = ? AND chat_id = ? AND surface_id = ?
+            ORDER BY created_at DESC
+          `)
+          .all(this.scope.tenantId, this.scope.userId, chatId, surfaceId) as Array<Record<string, unknown>>)
+      : (this.db
+          .prepare(`
+            SELECT * FROM chat_ui_receipts
+            WHERE tenant_id = ? AND user_id = ? AND chat_id = ?
+            ORDER BY created_at DESC
+          `)
+          .all(this.scope.tenantId, this.scope.userId, chatId) as Array<Record<string, unknown>>);
+    return rows.map((row) => ({
+      id: String(row.id),
+      chatId: String(row.chat_id),
+      surfaceId: String(row.surface_id),
+      revision: Number(row.revision ?? 1),
+      actionId: String(row.action_id),
+      toolName: String(row.tool_name),
+      payload: this.safeJson<Record<string, unknown>>(row.payload_json, {}),
+      sourceFingerprints: this.safeJson<Record<string, string>>(row.source_fingerprints_json, {}),
+      result: this.safeJson<Record<string, unknown>>(row.result_json, {}),
+      actorId: String(row.actor_id),
+      createdAt: String(row.created_at),
+    }));
+  }
+
+  async saveChatDeliverable(input: {
+    id?: string;
+    chatId: string;
+    messageId?: string | null;
+    filePath: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    sha256: string;
+    verificationStatus: 'verified' | 'warnings' | 'failed' | 'unverified';
+    verifierId?: string | null;
+    issues?: readonly VerifierIssue[];
+    summary?: string | null;
+    reportPath?: string | null;
+    sourceRefs?: readonly string[];
+    toolCalls?: ReadonlyArray<{ id?: string; tool: string; summary?: string }>;
+  }): Promise<ChatDeliverableRecord> {
+    const id = input.id ?? randomUUID();
+    const createdAt = new Date().toISOString();
+    const issues = [...(input.issues ?? [])];
+    const sourceRefs = [...(input.sourceRefs ?? [])];
+    const toolCalls = [...(input.toolCalls ?? [])];
+    this.db
+      .prepare(`
+        INSERT INTO chat_deliverables (
+          tenant_id, user_id, id, chat_id, message_id, file_path, file_name, mime_type,
+          size_bytes, sha256, verification_status, verifier_id, issues_json, summary,
+          report_path, source_refs_json, tool_calls_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, user_id, id)
+        DO UPDATE SET
+          verification_status = excluded.verification_status,
+          verifier_id = excluded.verifier_id,
+          issues_json = excluded.issues_json,
+          summary = excluded.summary,
+          report_path = excluded.report_path,
+          source_refs_json = excluded.source_refs_json,
+          tool_calls_json = excluded.tool_calls_json
+      `)
+      .run(
+        this.scope.tenantId,
+        this.scope.userId,
+        id,
+        input.chatId,
+        input.messageId ?? null,
+        input.filePath,
+        input.fileName,
+        input.mimeType,
+        input.sizeBytes,
+        input.sha256,
+        input.verificationStatus,
+        input.verifierId ?? null,
+        JSON.stringify(issues),
+        input.summary ?? null,
+        input.reportPath ?? null,
+        JSON.stringify(sourceRefs),
+        JSON.stringify(toolCalls),
+        createdAt,
+      );
+    return {
+      id,
+      chatId: input.chatId,
+      messageId: input.messageId ?? null,
+      filePath: input.filePath,
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+      sha256: input.sha256,
+      verificationStatus: input.verificationStatus,
+      verifierId: input.verifierId ?? null,
+      issues,
+      summary: input.summary ?? null,
+      reportPath: input.reportPath ?? null,
+      sourceRefs,
+      toolCalls,
+      createdAt,
+    };
+  }
+
+  async listChatDeliverables(chatId: string): Promise<ChatDeliverableRecord[]> {
+    const rows = this.db
+      .prepare(`
+        SELECT * FROM chat_deliverables
+        WHERE tenant_id = ? AND user_id = ? AND chat_id = ?
+        ORDER BY created_at DESC
+      `)
+      .all(this.scope.tenantId, this.scope.userId, chatId) as Array<Record<string, unknown>>;
+    return rows.map((row) => {
+      const statusRaw = String(row.verification_status);
+      const verificationStatus: ChatDeliverableRecord['verificationStatus'] =
+        statusRaw === 'verified' || statusRaw === 'warnings' || statusRaw === 'failed'
+          ? statusRaw
+          : 'unverified';
+      return {
+        id: String(row.id),
+        chatId: String(row.chat_id),
+        messageId: row.message_id != null ? String(row.message_id) : null,
+        filePath: String(row.file_path),
+        fileName: String(row.file_name),
+        mimeType: String(row.mime_type),
+        sizeBytes: Number(row.size_bytes ?? 0),
+        sha256: String(row.sha256),
+        verificationStatus,
+        verifierId: row.verifier_id != null ? String(row.verifier_id) : null,
+        issues: this.safeJson<VerifierIssue[]>(row.issues_json, []),
+        summary: row.summary != null ? String(row.summary) : null,
+        reportPath: row.report_path != null ? String(row.report_path) : null,
+        sourceRefs: this.safeJson<string[]>(row.source_refs_json, []),
+        toolCalls: this.safeJson<Array<{ id?: string; tool: string; summary?: string }>>(row.tool_calls_json, []),
+        createdAt: String(row.created_at),
+      };
+    });
+  }
+
+  async getMemoryDocument(
+    scopeKind: MemoryScopeKind,
+    scopeId: string,
+  ): Promise<MemoryDocumentRecord | null> {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM memory_documents
+        WHERE tenant_id = ? AND user_id = ? AND scope_kind = ? AND scope_id = ?
+      `)
+      .get(this.scope.tenantId, this.scope.userId, scopeKind, scopeId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      scopeKind,
+      scopeId,
+      contentMarkdown: String(row.content_markdown),
+      contentSha256: String(row.content_sha256),
+      updatedBy: String(row.updated_by),
+      sourceChatId: row.source_chat_id != null ? String(row.source_chat_id) : null,
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  async putMemoryDocument(input: {
+    scopeKind: MemoryScopeKind;
+    scopeId: string;
+    contentMarkdown: string;
+    contentSha256: string;
+    updatedBy: string;
+    sourceChatId?: string | null;
+  }): Promise<MemoryDocumentRecord> {
+    const updatedAt = new Date().toISOString();
+    this.db
+      .prepare(`
+        INSERT INTO memory_documents (
+          tenant_id, user_id, scope_kind, scope_id, content_markdown, content_sha256, updated_by, source_chat_id, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, user_id, scope_kind, scope_id)
+        DO UPDATE SET
+          content_markdown = excluded.content_markdown,
+          content_sha256 = excluded.content_sha256,
+          updated_by = excluded.updated_by,
+          source_chat_id = excluded.source_chat_id,
+          updated_at = excluded.updated_at
+      `)
+      .run(
+        this.scope.tenantId,
+        this.scope.userId,
+        input.scopeKind,
+        input.scopeId,
+        input.contentMarkdown,
+        input.contentSha256,
+        input.updatedBy,
+        input.sourceChatId ?? null,
+        updatedAt,
+      );
+    return {
+      scopeKind: input.scopeKind,
+      scopeId: input.scopeId,
+      contentMarkdown: input.contentMarkdown,
+      contentSha256: input.contentSha256,
+      updatedBy: input.updatedBy,
+      sourceChatId: input.sourceChatId ?? null,
+      updatedAt,
+    };
+  }
+
+  async listMemoryEntries(
+    scopeKind?: MemoryScopeKind,
+    scopeId?: string,
+    includeRevoked = false,
+  ): Promise<MemoryEntryRecord[]> {
+    const clauses = ['tenant_id = ?', 'user_id = ?'];
+    const params: unknown[] = [this.scope.tenantId, this.scope.userId];
+    if (scopeKind) {
+      clauses.push('scope_kind = ?');
+      params.push(scopeKind);
+    }
+    if (scopeId !== undefined) {
+      clauses.push('scope_id = ?');
+      params.push(scopeId);
+    }
+    if (!includeRevoked) {
+      clauses.push(`status = 'active'`);
+    }
+    const rows = this.db
+      .prepare(`
+        SELECT * FROM memory_entries
+        WHERE ${clauses.join(' AND ')}
+        ORDER BY updated_at DESC, created_at DESC
+      `)
+      .all(...params) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.mapMemoryEntry(row));
+  }
+
+  async upsertMemoryEntry(input: {
+    id?: string;
+    scopeKind: MemoryScopeKind;
+    scopeId: string;
+    content: string;
+    contentSha256: string;
+    sourceChatId?: string | null;
+  }): Promise<{ entry: MemoryEntryRecord; skippedRevoked: boolean }> {
+    const revoked = await this.isMemoryHashRevoked(
+      input.scopeKind,
+      input.scopeId,
+      input.contentSha256,
+    );
+    if (revoked) {
+      const now = new Date().toISOString();
+      return {
+        skippedRevoked: true,
+        entry: {
+          id: input.id ?? randomUUID(),
+          scopeKind: input.scopeKind,
+          scopeId: input.scopeId,
+          content: input.content,
+          contentSha256: input.contentSha256,
+          sourceChatId: input.sourceChatId ?? null,
+          status: 'revoked',
+          createdAt: now,
+          updatedAt: now,
+        },
+      };
+    }
+    const existing = this.db
+      .prepare(`
+        SELECT * FROM memory_entries
+        WHERE tenant_id = ? AND user_id = ? AND scope_kind = ? AND scope_id = ? AND content_sha256 = ?
+      `)
+      .get(
+        this.scope.tenantId,
+        this.scope.userId,
+        input.scopeKind,
+        input.scopeId,
+        input.contentSha256,
+      ) as Record<string, unknown> | undefined;
+    const now = new Date().toISOString();
+    if (existing) {
+      this.db
+        .prepare(`
+          UPDATE memory_entries
+          SET content = ?, status = 'active', source_chat_id = COALESCE(?, source_chat_id), updated_at = ?
+          WHERE tenant_id = ? AND user_id = ? AND id = ?
+        `)
+        .run(
+          input.content,
+          input.sourceChatId ?? null,
+          now,
+          this.scope.tenantId,
+          this.scope.userId,
+          String(existing.id),
+        );
+      return {
+        skippedRevoked: false,
+        entry: {
+          ...this.mapMemoryEntry(existing),
+          content: input.content,
+          status: 'active',
+          updatedAt: now,
+        },
+      };
+    }
+    const id = input.id ?? randomUUID();
+    this.db
+      .prepare(`
+        INSERT INTO memory_entries (
+          tenant_id, user_id, id, scope_kind, scope_id, content, content_sha256, source_chat_id, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+      `)
+      .run(
+        this.scope.tenantId,
+        this.scope.userId,
+        id,
+        input.scopeKind,
+        input.scopeId,
+        input.content,
+        input.contentSha256,
+        input.sourceChatId ?? null,
+        now,
+        now,
+      );
+    return {
+      skippedRevoked: false,
+      entry: {
+        id,
+        scopeKind: input.scopeKind,
+        scopeId: input.scopeId,
+        content: input.content,
+        contentSha256: input.contentSha256,
+        sourceChatId: input.sourceChatId ?? null,
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+      },
+    };
+  }
+
+  async revokeMemoryEntry(entryId: string): Promise<MemoryEntryRecord | null> {
+    const existing = this.db
+      .prepare(`
+        SELECT * FROM memory_entries
+        WHERE tenant_id = ? AND user_id = ? AND id = ?
+      `)
+      .get(this.scope.tenantId, this.scope.userId, entryId) as Record<string, unknown> | undefined;
+    if (!existing) return null;
+    const now = new Date().toISOString();
+    this.db
+      .prepare(`
+        UPDATE memory_entries
+        SET status = 'revoked', updated_at = ?
+        WHERE tenant_id = ? AND user_id = ? AND id = ?
+      `)
+      .run(now, this.scope.tenantId, this.scope.userId, entryId);
+    this.db
+      .prepare(`
+        INSERT INTO memory_revoked_hashes (
+          tenant_id, user_id, scope_kind, scope_id, content_sha256, revoked_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, user_id, scope_kind, scope_id, content_sha256)
+        DO UPDATE SET revoked_at = excluded.revoked_at
+      `)
+      .run(
+        this.scope.tenantId,
+        this.scope.userId,
+        String(existing.scope_kind),
+        String(existing.scope_id),
+        String(existing.content_sha256),
+        now,
+      );
+    return {
+      ...this.mapMemoryEntry(existing),
+      status: 'revoked',
+      updatedAt: now,
+    };
+  }
+
+  async isMemoryHashRevoked(
+    scopeKind: MemoryScopeKind,
+    scopeId: string,
+    contentSha256: string,
+  ): Promise<boolean> {
+    const row = this.db
+      .prepare(`
+        SELECT 1 FROM memory_revoked_hashes
+        WHERE tenant_id = ? AND user_id = ? AND scope_kind = ? AND scope_id = ? AND content_sha256 = ?
+      `)
+      .get(this.scope.tenantId, this.scope.userId, scopeKind, scopeId, contentSha256);
+    return Boolean(row);
+  }
+
+  async clearMemoryScope(scopeKind?: MemoryScopeKind, scopeId?: string): Promise<number> {
+    const clauses = ['tenant_id = ?', 'user_id = ?'];
+    const params: unknown[] = [this.scope.tenantId, this.scope.userId];
+    if (scopeKind) {
+      clauses.push('scope_kind = ?');
+      params.push(scopeKind);
+    }
+    if (scopeId !== undefined) {
+      clauses.push('scope_id = ?');
+      params.push(scopeId);
+    }
+    const where = clauses.join(' AND ');
+    const entries = this.db
+      .prepare(`SELECT scope_kind, scope_id, content_sha256 FROM memory_entries WHERE ${where}`)
+      .all(...params) as Array<Record<string, unknown>>;
+    const now = new Date().toISOString();
+    for (const item of entries) {
+      this.db
+        .prepare(`
+          INSERT INTO memory_revoked_hashes (
+            tenant_id, user_id, scope_kind, scope_id, content_sha256, revoked_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(tenant_id, user_id, scope_kind, scope_id, content_sha256)
+          DO UPDATE SET revoked_at = excluded.revoked_at
+        `)
+        .run(
+          this.scope.tenantId,
+          this.scope.userId,
+          String(item.scope_kind),
+          String(item.scope_id),
+          String(item.content_sha256),
+          now,
+        );
+    }
+    const delEntries = this.db.prepare(`DELETE FROM memory_entries WHERE ${where}`).run(...params);
+    this.db.prepare(`DELETE FROM memory_documents WHERE ${where}`).run(...params);
+    return delEntries.changes;
+  }
+
+  async getMemoryRefinementMeta(
+    scopeKind: MemoryScopeKind,
+    scopeId: string,
+  ): Promise<MemoryRefinementMetaRecord> {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM memory_refinement_meta
+        WHERE tenant_id = ? AND user_id = ? AND scope_kind = ? AND scope_id = ?
+      `)
+      .get(this.scope.tenantId, this.scope.userId, scopeKind, scopeId) as Record<string, unknown> | undefined;
+    if (!row) {
+      return {
+        scopeKind,
+        scopeId,
+        refinedSessionCount: 0,
+        lastRefinedAt: null,
+        lastStatus: null,
+      };
+    }
+    return {
+      scopeKind,
+      scopeId,
+      refinedSessionCount: Number(row.refined_session_count ?? 0),
+      lastRefinedAt: row.last_refined_at != null ? String(row.last_refined_at) : null,
+      lastStatus: row.last_status != null ? String(row.last_status) : null,
+    };
+  }
+
+  async setMemoryRefinementMeta(input: {
+    scopeKind: MemoryScopeKind;
+    scopeId: string;
+    refinedSessionCount: number;
+    lastRefinedAt?: string | null;
+    lastStatus?: string | null;
+  }): Promise<MemoryRefinementMetaRecord> {
+    this.db
+      .prepare(`
+        INSERT INTO memory_refinement_meta (
+          tenant_id, user_id, scope_kind, scope_id, refined_session_count, last_refined_at, last_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tenant_id, user_id, scope_kind, scope_id)
+        DO UPDATE SET
+          refined_session_count = excluded.refined_session_count,
+          last_refined_at = excluded.last_refined_at,
+          last_status = excluded.last_status
+      `)
+      .run(
+        this.scope.tenantId,
+        this.scope.userId,
+        input.scopeKind,
+        input.scopeId,
+        input.refinedSessionCount,
+        input.lastRefinedAt ?? null,
+        input.lastStatus ?? null,
+      );
+    return {
+      scopeKind: input.scopeKind,
+      scopeId: input.scopeId,
+      refinedSessionCount: input.refinedSessionCount,
+      lastRefinedAt: input.lastRefinedAt ?? null,
+      lastStatus: input.lastStatus ?? null,
+    };
+  }
+
+  private mapMemoryEntry(row: Record<string, unknown>): MemoryEntryRecord {
+    const rawScope = String(row.scope_kind);
+    const scopeKind: MemoryScopeKind =
+      rawScope === 'workspace' ||
+      rawScope === 'tenant' ||
+      rawScope === 'project' ||
+      rawScope === 'agent'
+        ? rawScope
+        : 'user';
+    return {
+      id: String(row.id),
+      scopeKind,
+      scopeId: String(row.scope_id),
+      content: String(row.content),
+      contentSha256: String(row.content_sha256),
+      sourceChatId: row.source_chat_id != null ? String(row.source_chat_id) : null,
+      status: String(row.status) === 'revoked' ? 'revoked' : 'active',
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };

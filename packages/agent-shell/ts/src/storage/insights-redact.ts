@@ -1,8 +1,20 @@
+import { didChatContributeMemory } from '../memory/injector.js';
+
 const SECRET = /(sk-[A-Za-z0-9_\-]{8,}|api[_-]?key\s*[:=]\s*\S+|bearer\s+[A-Za-z0-9._\-]{8,})/gi;
 const WIN_HOME = /[A-Za-z]:\\(?:Users|home)\\[^\\\s]+/gi;
 const UNIX_HOME = /\/(?:Users|home)\/[^/\s]+/g;
 
-export function redactInsightText(value: unknown, limit: number): string {
+export function redactInsightText(
+  value: unknown,
+  limit: number,
+  options?: { readonly memoryContributed?: boolean; readonly chatId?: string },
+): string {
+  if (
+    options?.memoryContributed === true ||
+    (options?.chatId && didChatContributeMemory(options.chatId))
+  ) {
+    return '';
+  }
   if (typeof value !== 'string' || !value) return '';
   let text = value.replace(/\u0000/g, '');
   text = text.replace(SECRET, '[redacted]');

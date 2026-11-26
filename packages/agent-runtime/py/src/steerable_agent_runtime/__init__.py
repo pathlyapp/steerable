@@ -19,6 +19,20 @@ from .antihallucination import (
     parse_turn_route,
     should_run_grounding_judge,
 )
+from .sidecall import (
+    DEFAULT_HEAD_CHARS,
+    DEFAULT_TAIL_CHARS,
+    FAST_DECISION_TIMEOUT_S,
+    PROMISED_ACTION_NUDGE_MESSAGE,
+    SUMMARY_DECISION_TIMEOUT_S,
+    PromisedActionContinuationHooks,
+    SideCallOutcome,
+    SideCallPort,
+    SideCallSecretRedactor,
+    SideCallSpec,
+    SideCallUsage,
+    slice_head_tail,
+)
 from .approval import (
     ApprovalDecision,
     ApprovalExecutor,
@@ -28,7 +42,9 @@ from .approval import (
     AutoApprover,
     InMemoryApprovalStore,
     JsonApprovalStore,
+    RejectedBeforeEffectError,
     SessionApprovalCache,
+    compute_policy_digest,
 )
 from .approval_policy import (
     ApprovalPolicy,
@@ -431,6 +447,8 @@ __all__ = [
     "InMemorySpillStore",
     "JsonApprovalPolicyStore",
     "JsonApprovalStore",
+    "RejectedBeforeEffectError",
+    "compute_policy_digest",
     "JsonlRequestSink",
     "LLMMessage",
     "LLMProvider",

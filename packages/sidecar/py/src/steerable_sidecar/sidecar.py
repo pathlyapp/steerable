@@ -2201,11 +2201,48 @@ class Sidecar:
                 approver = AutoApprover()
             else:
                 approver = _host_approver()
+            from steerable_agent_runtime.approval import compute_policy_digest
+
+            raw_net = (
+                exec_sandbox.get("allowedHosts")
+                if isinstance(exec_sandbox, dict)
+                else None
+            )
+            allowed_hosts = (
+                [str(h) for h in raw_net if h]
+                if isinstance(raw_net, list)
+                else []
+            )
+            policy_digest = (
+                approval.get("policyDigest")
+                if isinstance(approval.get("policyDigest"), str)
+                and approval["policyDigest"].strip()
+                else compute_policy_digest(
+                    approval_mode=str(approval.get("mode") or "host"),
+                    sandbox_enforced=bool(
+                        isinstance(exec_sandbox, dict) and exec_sandbox.get("enabled")
+                    ),
+                    writable_roots=writable_roots,
+                    allowed_hosts=allowed_hosts,
+                )
+            )
+            session_cache = self._approval_session(approval_chat_id or params.get("chatId"))
+            raw_pending = approval.get("pendingReconciliations")
+            if isinstance(raw_pending, dict):
+                session_cache.sync_pending_reconciliations(
+                    {
+                        str(k): str(v)
+                        for k, v in raw_pending.items()
+                        if isinstance(k, str) and isinstance(v, str)
+                    }
+                )
             executor = ApprovalExecutor(
                 executor,
                 approver,
-                session=self._approval_session(approval_chat_id or params.get("chatId")),
-                store=JsonApprovalStore(store_path) if store_path else None,
+                session=session_cache,
+                store=JsonApprovalStore(store_path, policy_digest=policy_digest)
+                if store_path
+                else None,
                 timeout_s=(float(timeout_ms) / 1000.0) if timeout_ms else None,
                 resolve=approval_resolve,
             )
@@ -3490,22 +3527,23 @@ def _coerce_tool_calls(items: Any) -> list[ToolCall] | None:
 def _model_tool(tool: Any) -> Any:
     """Drop approval metadata before the provider sees the tool list.
 
-    ``mode`` and ``approvalCategory`` are host-to-sidecar fields. Provider
-    APIs reject unknown tool keys.
+    ``mode``, ``approvalCategory``, ``idempotent``, and ``checkpoint`` are
+    host-to-sidecar fields. Provider APIs reject unknown tool keys.
     """
     if not isinstance(tool, dict):
         return tool
+    strip_keys = ("mode", "approvalCategory", "idempotent", "checkpoint")
     cleaned = {
         key: value
         for key, value in tool.items()
-        if key not in ("mode", "approvalCategory")
+        if key not in strip_keys
     }
     function = cleaned.get("function")
     if isinstance(function, dict):
         cleaned["function"] = {
             key: value
             for key, value in function.items()
-            if key not in ("mode", "approvalCategory")
+            if key not in strip_keys
         }
     return cleaned
 

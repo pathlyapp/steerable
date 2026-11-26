@@ -47,6 +47,7 @@ import { resolvePlatformRuntime } from '@steerable/agent-runtime';
 export interface HostSidecarDeps {
   store: ScopedStore;
   toolRouter: ToolRouter;
+  broadcast?: (channel: string, payload: unknown) => void;
   /** W4-2 围栏：chatId → 项目家目录或无项目对话工作区。 */
   resolveProjectRoot: (chatId: string) => Promise<string | null>;
   /**
@@ -363,6 +364,8 @@ export async function startHostSidecar(deps: HostSidecarDeps): Promise<void> {
       'tool.invoke',
       createToolInvokeHandler({
         toolRouter: deps.toolRouter,
+        store: deps.store,
+        broadcast: deps.broadcast,
         onBlocked: (info) =>
           log.warn('[sidecar tool] blocked critical shell command', info),
         // W4-2: project-mode fence on the CoreLoop path — the sidecar's

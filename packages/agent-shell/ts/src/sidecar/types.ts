@@ -524,6 +524,12 @@ export interface SidecarChatStreamRequest {
      * starts with `..`.
      */
     pathBase?: string;
+    /**
+     * Authoritative host map of unresolved `outcome_unknown` tool locks
+     * (`toolName -> reconciliationId`), synced before opening a new turn.
+     */
+    pendingReconciliations?: Record<string, string>;
+    policyDigest?: string;
   };
 }
 

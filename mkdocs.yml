@@ -68,13 +68,18 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - CLI Reference: cli.md
+  - Field Deployment (FDE): fde.md
   - Comparison: comparison.md
   - Evals: evals.md
   - Spec:
       - Overview: spec/overview.md
       - Architecture: spec/architecture.md
+      - State ownership: spec/state-ownership.md
       - Events: spec/events.md
       - Tools: spec/tools.md
+      - UiSurface & verifiers: spec/ui-surface.md
+      - Dual-layer memory: spec/memory.md
       - Plugin host: spec/plugin-host.md
       - Chat: spec/chat.md
       - Safety: spec/safety.md
@@ -83,6 +88,7 @@ nav:
       - CoreLoop: spec/core-loop.md
       - Engine compatibility: spec/engine-compatibility.md
       - Compaction: spec/compaction.md
+      - ACP: spec/acp.md
       - Desktop paste: spec/desktop-paste.md
   - UI:
       - Components: ui/index.md
@@ -115,3 +121,4 @@ extra:
 not_in_nav: |
   zh/index.md
   ja/index.md
+  release-pipeline.md

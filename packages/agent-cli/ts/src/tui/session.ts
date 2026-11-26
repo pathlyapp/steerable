@@ -92,7 +92,12 @@ export class AgentTui implements Component {
   private rows: ChatRow[] = [];
   private chats: ChatRow[] | null = null;
   private selected = 0;
-  private approval: { requestId: string; toolName: string; summary: string } | null = null;
+  private approval: {
+    requestId: string;
+    toolName: string;
+    summary: string;
+    checkpoint?: 'standard' | 'outward';
+  } | null = null;
   private approvalSubmitting = false;
   private ask: { requestId: string; prompt: string } | null = null;
   private readOnly = false;
@@ -294,7 +299,7 @@ export class AgentTui implements Component {
     }
     if (this.approval) {
       if (this.approvalSubmitting) return;
-      const kind = approvalKind(data);
+      const kind = approvalKind(data, this.approval.checkpoint);
       if (kind) void this.decide(kind);
       return;
     }
@@ -894,6 +899,34 @@ export class AgentTui implements Component {
       await this.showRules();
       return;
     }
+    if (command === 'memory') {
+      const mem = await this.client.request('GET', '/api/v2/memory?scope=user', undefined);
+      if (mem.status === 200) {
+        const d = mem.data as { permissionMode?: string; bytesUsed?: number; maxBytes?: number };
+        this.status = `Memory (${d.permissionMode ?? 'ask'}) ${d.bytesUsed ?? 0}/${d.maxBytes ?? 16384}B`;
+      } else {
+        this.status = `memory unavailable (${mem.status})`;
+      }
+      this.touch();
+      return;
+    }
+    if (command === 'refine') {
+      const note = rest.join(' ').trim();
+      if (!note) {
+        this.status = 'Usage: /refine <lesson note>';
+        this.touch();
+        return;
+      }
+      const res = await this.client.request('POST', '/api/v2/memory/propose', {
+        scope: 'workspace',
+        chatId: this.chatId ?? 'tui',
+        turnId: 'tui_manual_refine',
+        content: note,
+      });
+      this.status = res.status === 200 ? 'Saved lesson to workspace memory' : `Refine failed (${res.status})`;
+      this.touch();
+      return;
+    }
     if (command === 'permissions') {
       if (this.approvalPolicy.policy === 'allow-all' || this.approvalPolicy.policy === 'allow-read') {
         this.approvalPolicy = { policy: 'ask', answerAsk: false };
@@ -1197,12 +1230,18 @@ export class AgentTui implements Component {
     for await (const event of this.client.events()) {
       if (this.stopped) return;
       if (event.channel === 'approval:request') {
-        const payload = event.payload as { requestId?: string; toolName?: string; arguments?: unknown; mode?: string };
+        const payload = event.payload as {
+          requestId?: string;
+          toolName?: string;
+          arguments?: unknown;
+          mode?: string;
+          checkpoint?: 'standard' | 'outward';
+        };
         if (!payload.requestId) continue;
         const spec = this.permission === 'auto'
           ? { policy: 'allow-all' as const, answerAsk: this.approvalPolicy.answerAsk }
           : this.approvalPolicy;
-        const decision = decisionFor(spec, { mode: payload.mode }, 'tui');
+        const decision = decisionFor(spec, { mode: payload.mode, checkpoint: payload.checkpoint }, 'tui');
         if (decision !== 'prompt') {
           if (decision === 'allow_once' && payload.toolName === 'network_egress') {
             this.ensureEgressLine(payload.arguments);
@@ -1220,6 +1259,7 @@ export class AgentTui implements Component {
         this.approval = {
           requestId: payload.requestId,
           toolName,
+          ...(payload.checkpoint ? { checkpoint: payload.checkpoint } : {}),
           summary: toolName === 'network_egress'
             ? (egressApprovalTarget(payload.arguments) || toolArgs(payload.arguments))
             : toolArgs(payload.arguments),
@@ -1622,15 +1662,19 @@ export class AgentTui implements Component {
   }
 }
 
-function approvalKind(data: string): ApprovalDecisionKind | null {
+function approvalKind(
+  data: string,
+  checkpoint?: 'standard' | 'outward',
+): ApprovalDecisionKind | null {
   const keys = getKeybindings();
   if (keys.matches(data, 'agent.approval.allowOnce')) return 'allow_once';
+  if (keys.matches(data, 'agent.approval.denyOnce')) return 'deny_once';
+  if (keys.matches(data, 'agent.approval.abort')) return 'abort';
+  if (checkpoint === 'outward') return null;
   if (keys.matches(data, 'agent.approval.allowSession')) return 'allow_for_session';
   if (keys.matches(data, 'agent.approval.allowAlways')) return 'allow_always';
-  if (keys.matches(data, 'agent.approval.denyOnce')) return 'deny_once';
   if (keys.matches(data, 'agent.approval.denySession')) return 'deny_for_session';
   if (keys.matches(data, 'agent.approval.denyAlways')) return 'deny_always';
-  if (keys.matches(data, 'agent.approval.abort')) return 'abort';
   return null;
 }
 

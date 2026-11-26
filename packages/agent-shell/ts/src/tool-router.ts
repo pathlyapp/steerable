@@ -19,7 +19,20 @@ import type { McpServerRegistry } from './mcp-server-registry.js';
 import type { ProjectRegistry } from './project-registry.js';
 import type { TaskService } from './local-backend/task-service.js';
 import type { WorktreeService } from './local-backend/worktree-service.js';
-import type { ToolApprovalSpec, ToolContribution, ToolMode, ToolExposure } from './scenario/pack.js';
+import type {
+  OriginChannel,
+  PackCredentialClient,
+  Principal,
+  ToolApprovalSpec,
+  ToolContribution,
+  ToolMode,
+  ToolExposure,
+} from './scenario/pack.js';
+import { LOCAL_DEFAULT_PRINCIPAL } from './auth/index.js';
+import {
+  RejectedBeforeEffectError,
+  validateArgsAgainstJsonSchema,
+} from './sidecar/rejected-before-effect.js';
 
 export type { ToolMode, ToolExposure } from './scenario/pack.js';
 import {
@@ -39,6 +52,19 @@ import {
   PRESENT_FILES_TOOL_NAME,
   executePresentFiles,
 } from './present-files.js';
+import {
+  UI_SURFACE_RENDER_SCHEMA,
+  UI_SURFACE_RENDER_TOOL_NAME,
+  renderAndPersistUiSurface,
+} from './local-backend/ui-surface.js';
+import {
+  MEMORY_PROPOSE_TOOL_NAME,
+  MEMORY_READ_TOOL_NAME,
+  MEMORY_SEARCH_TOOL_NAME,
+  MEMORY_TOOL_SCHEMAS,
+  executeMemoryTool,
+} from './memory/tools.js';
+import type { ScopedStore } from './storage/scoped-store.js';
 import { isHostToolCapabilityEnabled } from './host-tools.js';
 import { getResolvedHostTools } from './host-tools-runtime.js';
 import { GoalStore, MODEL_GOAL_ACTIONS } from './goal-store.js';
@@ -101,6 +127,18 @@ export interface ToolExecContext {
    * （广告层不出 + 分发层拒绝）。缺省 = 不限制。
    */
   toolPolicy?: AgentToolPolicy | null;
+  /** Authoritative authenticated principal injected by the host router. */
+  principal?: Principal;
+  /** Originating entry channel for channel-specific safety gates. */
+  originChannel?: OriginChannel;
+  /** Host-managed credential broker client scoped to `principal`. */
+  credentials?: PackCredentialClient;
+  /** Optional scoped store override for multi-tenant request contexts. */
+  store?: ScopedStore;
+  /** True when executing inside a delegated subagent. */
+  isSubagent?: boolean;
+  /** True when executing inside a forked conversation. */
+  isFork?: boolean;
 }
 
 export interface ToolSchema {
@@ -112,6 +150,10 @@ export interface ToolSchema {
   exposure?: ToolExposure;
   /** 审批分组。缺省时 sidecar 用工具名做类别。 */
   approval?: ToolApprovalSpec;
+  /** 非幂等写工具标记（false = 执行中异常落入 outcome_unknown）。 */
+  idempotent?: boolean;
+  /** 签批等级（'outward' = 强制逐次人类确认）。 */
+  checkpoint?: 'standard' | 'outward';
 }
 
 /** 审批类别：小写开头，最长 64，且不占用内置类别。 */
@@ -283,9 +325,14 @@ export class ToolRouter {
 
   /** 会话目标的持久化。缺省写到用户数据目录；测试注入临时文件。 */
   private goalStore: GoalStore | null = null;
+  private phase9Store: ScopedStore | null = null;
 
   setGoalStore(store: GoalStore | null): void {
     this.goalStore = store;
+  }
+
+  setPhase9Store(store: ScopedStore | null): void {
+    this.phase9Store = store;
   }
 
   /** 目标工具使用的存储；LocalBackendRouter 的续跑与目标路由共用同一实例。 */
@@ -534,6 +581,8 @@ export class ToolRouter {
         },
       },
       PRESENT_FILES_SCHEMA,
+      UI_SURFACE_RENDER_SCHEMA,
+      ...MEMORY_TOOL_SCHEMAS,
       {
         name: 'local_open_path',
         description: 'Open local path or URL',
@@ -686,14 +735,19 @@ export class ToolRouter {
       // 名字不带族前缀，按名归族会漏过 plugins 能力开关，这里显式判定。
       ...(this.pluginToolsEnabled() ? this.pluginToolSchemas.values() : []),
       // ─── 场景包贡献的工具（0.3a 开槽） ─────────────────
-      ...[...this.contributedTools.values()].map((c) => ({
-        name: c.name,
-        description: c.description,
-        inputSchema: c.inputSchema,
-        mode: c.mode,
-        ...(c.exposure ? { exposure: c.exposure } : {}),
-        ...(c.approval ? { approval: c.approval } : {}),
-      })),
+      ...[...this.contributedTools.values()].map((c) => {
+        const effectiveIdempotent = c.idempotent ?? (c.mode === 'read' ? undefined : false);
+        return {
+          name: c.name,
+          description: c.description,
+          inputSchema: c.inputSchema,
+          mode: c.mode,
+          ...(c.exposure ? { exposure: c.exposure } : {}),
+          ...(c.approval ? { approval: c.approval } : {}),
+          ...(effectiveIdempotent !== undefined ? { idempotent: effectiveIdempotent } : {}),
+          ...(c.checkpoint ? { checkpoint: c.checkpoint } : {}),
+        };
+      }),
     ];
   }
 
@@ -1195,12 +1249,18 @@ export class ToolRouter {
     // 已经把被拒的工具藏了，但模型可能从历史或幻觉里捞出名字直调。
     const toolPolicy = context?.toolPolicy ?? null;
     if (toolPolicy && !isToolAllowed(toolPolicy, call.name)) {
-      throw new Error(
+      throw RejectedBeforeEffectError.create(
+        'policy_denied',
         `工具 ${call.name} 被当前智能体的工具策略拒绝（智能体管理 → 工具权限）`,
+        false,
       );
     }
     if (!isHostToolCapabilityEnabled(call.name, getResolvedHostTools())) {
-      throw new Error(`工具 ${call.name} 未在本产品引入`);
+      throw RejectedBeforeEffectError.create(
+        'capability_disabled',
+        `工具 ${call.name} 未在本产品引入`,
+        false,
+      );
     }
     if (call.name.startsWith(MCP_DYNAMIC_TOOL_PREFIX)) {
       return await this.executeRegisteredMcpTool(call.name, args);
@@ -1308,7 +1368,46 @@ export class ToolRouter {
         return edited;
       }
       case PRESENT_FILES_TOOL_NAME:
-        return await executePresentFiles(args, projectRoot);
+        return await executePresentFiles(args, projectRoot, {
+          store: context?.store ?? this.phase9Store ?? undefined,
+          chatId: context?.chatId,
+          principal: context?.principal,
+        });
+      case UI_SURFACE_RENDER_TOOL_NAME: {
+        const activeStore = context?.store ?? this.phase9Store;
+        if (!activeStore || !context?.chatId) {
+          return {
+            success: false,
+            error: 'ui_surface_render requires an active chat context.',
+          };
+        }
+        const surface = await renderAndPersistUiSurface({
+          store: activeStore,
+          chatId: context.chatId,
+          principal: context.principal,
+          raw: args,
+        });
+        return {
+          success: true,
+          surface,
+        };
+      }
+      case MEMORY_SEARCH_TOOL_NAME:
+      case MEMORY_READ_TOOL_NAME:
+      case MEMORY_PROPOSE_TOOL_NAME: {
+        const activeStore = context?.store ?? this.phase9Store;
+        if (!activeStore) {
+          return { success: false, error: 'memory tools require an active store.', effect: 'none' };
+        }
+        return await executeMemoryTool(call.name, args, {
+          store: activeStore,
+          chatId: context?.chatId,
+          workspaceId: projectRoot ?? undefined,
+          principal: context?.principal,
+          isSubagent: context?.isSubagent,
+          isFork: context?.isFork,
+        });
+      }
       case 'local_open_path':
         return await this.localExecutor.openLocalTarget({
           target: String(args.target || ''),
@@ -1492,7 +1591,17 @@ export class ToolRouter {
         // 场景包贡献的工具在 default 分发：内置工具优先（注册时已拒重名）。
         const contributed = this.contributedTools.get(call.name);
         if (contributed) {
-          return await contributed.handler(args, context ?? {});
+          validateArgsAgainstJsonSchema(call.name, contributed.inputSchema, args);
+          const safePrincipal = Object.freeze({
+            ...(context?.principal ?? LOCAL_DEFAULT_PRINCIPAL),
+          });
+          return await contributed.handler(args, {
+            projectRoot: context?.projectRoot,
+            chatId: context?.chatId,
+            principal: safePrincipal,
+            originChannel: context?.originChannel ?? 'web',
+            ...(context?.credentials ? { credentials: context.credentials } : {}),
+          });
         }
         if (this.pluginToolSchemas.has(call.name) && this.pluginToolInvoke) {
           if (!this.pluginToolsEnabled()) {

@@ -32,6 +32,7 @@ Usage:
   <product> children list [--session <id>] [--active] | answer --child <id> [--wait]
   <product> skills list
   <product> mcp list | add <name> -- <cmd...> | rm <name>
+  <product> app list | use <id> | reset
   <product> config get <key> | set <key> <value>
   <product> doctor [--json] [--deep] [--verbose]
   <product> tui${pack}
@@ -115,6 +116,19 @@ Usage:
 
 Examples:
   <product> skills list
+`.trim();
+}
+
+export function appHelp(): string {
+  return `
+Usage:
+  <product> app list [--json] [--data-dir <dir>]
+  <product> app use <id> [--json] [--data-dir <dir>]
+  <product> app reset [--json] [--data-dir <dir>]
+
+Examples:
+  <product> app list
+  <product> app reset
 `.trim();
 }
 
@@ -248,5 +262,61 @@ interrupted.
 Examples:
   <product> web
   <product> web --port 8080
+`.trim();
+}
+
+export function memoryHelp(): string {
+  return `
+Usage:
+  <product> memory [list] [--scope user|workspace|tenant] [--json]
+  <product> memory edit --text <markdown> [--scope user|workspace|tenant]
+  <product> memory withdraw <refinement-id>
+  <product> memory clear [--scope user|workspace|tenant]
+
+Inspects or edits host-isolated MEMORY.md notes and RSI refinement paragraphs.
+
+  --scope <kind>     Target scope: user (default), workspace, or tenant.
+  --text <markdown>  Replacement markdown content for memory edit.
+  --json             Emit structured JSON output.
+`.trim();
+}
+
+export function packHelp(): string {
+  return `
+Usage:
+  <product> pack init [<dir>] [--id <pack-id>] [--json]
+  <product> pack test [<dir>] [--json]
+  <product> pack bundle [<dir>] [--out <file.spack.tgz>] [--signing-key-env <ENV>] [--json]
+
+Scaffolds, AST-validates, and bundles signed out-of-tree scenario packs.
+`.trim();
+}
+
+export function preflightHelp(): string {
+  return `
+Usage:
+  <product> preflight [--profile server|desktop] [--manifest <file.json>] [--json]
+
+Verifies CPU ISA (x86-64-v2), OS sandbox backend, free disk space, X.509 TLS
+certificate expiry, and manifest-declared commands and fonts before deployment.
+`.trim();
+}
+
+export function diagBundleHelp(): string {
+  return `
+Usage:
+  <product> diag-bundle [--out <bundle.tgz>] [--chat <id>] [--redact-content] [--no-redact-content] [--json]
+
+Exports a scrubbed diagnostic bundle (environment, recent logs, chat event
+skeletons) with SecretRedactor and content redaction enabled by default.
+`.trim();
+}
+
+export function siteEvalHelp(): string {
+  return `
+Usage:
+  <product> site-eval --suite <dir-or-file> --model <id> [--base-url <url>] [--out <report.json>] [--json]
+
+Runs offline private-model tool-calling & compatibility evaluation without external network access.
 `.trim();
 }

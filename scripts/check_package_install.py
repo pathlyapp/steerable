@@ -39,6 +39,7 @@ PUBLISHABLE: dict[str, str] = {
     "agent-protocol": "packages/agent-protocol/ts",
     "agent-harness": "packages/agent-harness/ts",
     "pack-sdk": "packages/pack-sdk/ts",
+    "pack-testkit": "packages/pack-testkit/ts",
     "agent-ui": "packages/agent-ui/ts",
     "agent-runtime": "packages/agent-runtime/ts",
     "agent-client": "packages/agent-client/ts",
@@ -53,6 +54,7 @@ PUBLISHABLE: dict[str, str] = {
 PROBES: dict[str, str] = {
     "agent-protocol": "RUNTIME_TARGETS",
     "agent-harness": "consumeBudget",
+    "pack-testkit": "createPackTestHost",
     "agent-runtime": "AgentRuntime",
     "agent-client": "createLocalClient",
     "agent-ui": "",

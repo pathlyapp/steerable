@@ -1,0 +1,22 @@
+{
+  "name": "@steerable/guards",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "gen": "echo guards",
+    "build": "echo guards",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "check:drift": "echo ok"
+  },
+  "dependencies": {
+    "@steerable/agent-shell": "workspace:*",
+    "@steerable/pack-testkit": "workspace:*",
+    "typescript": "^5.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "vitest": "^3.2.4"
+  }
+}

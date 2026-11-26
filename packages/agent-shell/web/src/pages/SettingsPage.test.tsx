@@ -127,6 +127,7 @@ describe('SettingsPage header save', () => {
       'settings-section-usage',
       'settings-section-diagnose',
       'settings-section-security',
+      'settings-section-memory',
       'settings-section-insights',
       'settings-section-telemetry',
     ]);

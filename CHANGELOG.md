@@ -4,6 +4,18 @@ All notable changes to the Steerable framework (lockstep across TypeScript, Pyth
 
 ## [Unreleased]
 
+### Added
+
+- **shell, security:** Unified `Principal` and `OriginChannel` turn context (`im` / `webhook` channel confinement), AES-256-GCM `CredentialBroker` with cross-origin redirect header stripping, unified `SecretRedactor` across transcripts, logs, spills, memories, and diagnostic bundles, runtime `/api/v2/auth/bootstrap`, `ApplicationManifest` switching (`steerable-cli app list|use|reset`), and `?safe=1` Safe Recovery Mode.
+- **protocol, runtime, shell:** Sealed `RejectedBeforeEffect` boundaries, mandatory human sign-off for `outward` actions (never auto-approved by unattended mode or session cache), `outcome_unknown` non-retryable tool settlement with `OutcomeReconcileCard` (`POST /api/v2/chats/:id/reconcile`), and `policyDigest`-scoped `allow_always` rules (`_by_policy`).
+- **ui, shell, cli:** Controlled `UiSurface` v1 (`UiSurfaceCard`, `UiSurfaceWorkbench`, ASCII TUI fallback) with real-time `$source` SHA-256 drift detection (`409 UI_STALE`) and idempotent command receipts, plus `DeliverableVerifier` immutable snapshot archiving and `FactChainDrawer` claim-to-source provenance inspection.
+- **runtime, memory:** Guarded `SideCallPort` (16 KiB input truncation, secret redaction, main-turn abort cascade, independent `caller` spend attribution), `PromisedActionContinuationHooks` single-nudge guard, automatic conversation title refresh, and Host-isolated dual-layer `MEMORY.md` + Zero-Trust RSI (`user | workspace | tenant` scopes, Seatbelt/bwrap sandbox read-deny on raw memory storage, 30-day auto-expiry, permanent revoke tombstones, `MemorySettingsPanel`, `/memory`, and `/refine`).
+- **pack-testkit, cli, guards:** Published `@steerable/pack-testkit` (`createPackTestHost` and AST boundary checks), signed external `.spack` loading (Ed25519 + SHA-256 + symlink refusal), `steerable-cli pack init|test|bundle`, `preflight`, `diag-bundle`, and `site-eval`, plus five repository AST architecture guards.
+
+### Changed
+
+- **engine:** Adopt Rust artifacts `1.0.11` (`SideCallPort`, `PromisedActionContinuationHooks`, `outward` / `outcome_unknown` enforcement, and `ring::digest::SHA256` `policyDigest` verification).
+
 ## [0.12.8](https://github.com/pathlyapp/steerable/compare/v0.12.7...v0.12.8) - 2026-11-25
 
 ### Added

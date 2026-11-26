@@ -44,7 +44,15 @@ import { getBrand } from '../brand.js';
 import { saveAttachmentFiles } from '../attachments.js';
 import { selectNativeDirectory } from '../native-folder-dialog.js';
 import type { SseBus } from './sse-bus.js';
-import { getAuthProvider, type Principal } from '../auth/index.js';
+import {
+  LOCAL_DEFAULT_PRINCIPAL,
+  getAuthProvider,
+  parseOriginChannel,
+  resolvePublicBootstrap,
+  type OriginChannel,
+  type Principal,
+} from '../auth/index.js';
+import { getHostActivitySnapshot } from '../local-backend/turn-security-context.js';
 import { isHostRouteAllowed } from '../host-tools.js';
 import { getResolvedHostTools } from '../host-tools-runtime.js';
 
@@ -308,6 +316,7 @@ export function createBsServer(deps: BsServerDeps): Server {
     res: ServerResponse,
     pathname: string,
     principal: Principal | undefined,
+    originChannel: OriginChannel,
   ): Promise<void> {
     const isStream = req.method === 'POST' && STREAM_PATH_PATTERNS.some((p) => p.test(pathname));
     const body = req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT'
@@ -318,6 +327,7 @@ export function createBsServer(deps: BsServerDeps): Server {
       method: req.method ?? 'GET',
       path: `${pathname}${search}`,
       body,
+      originChannel,
       ...(principal ? { principal } : {}),
     };
 
@@ -367,11 +377,22 @@ export function createBsServer(deps: BsServerDeps): Server {
   }
 
   /** `/host/*`：preload direct-IPC 的 HTTP 等价物。全部 POST JSON，除标记 GET 的。 */
-  async function handleHost(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
+  async function handleHost(
+    req: IncomingMessage,
+    res: ServerResponse,
+    pathname: string,
+    principal: Principal | undefined,
+    originChannel: OriginChannel,
+  ): Promise<void> {
     const body = asRecord(await readJsonBody(req));
     const method = req.method ?? 'GET';
     if (!isHostRouteAllowed(pathname, getResolvedHostTools())) {
       sendJson(res, 403, { detail: 'Host route is disabled for this product' });
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/host/health/activity') {
+      sendJson(res, 200, getHostActivitySnapshot());
       return;
     }
 
@@ -544,10 +565,13 @@ export function createBsServer(deps: BsServerDeps): Server {
     // host 端点目前不用 query string，query 先传空表。 ───
     const packMatch = matchPackHttpRoute(method, pathname);
     if (packMatch) {
+      const urlObj = new URL(req.url ?? '/', 'http://bs.local');
       sendJson(res, 200, await packMatch.route.handler({
         params: packMatch.params,
-        query: {},
+        query: Object.fromEntries(urlObj.searchParams.entries()),
         body,
+        principal: Object.freeze({ ...(principal ?? LOCAL_DEFAULT_PRINCIPAL) }),
+        originChannel,
       }));
       return;
     }
@@ -623,9 +647,20 @@ export function createBsServer(deps: BsServerDeps): Server {
           throw new Error('BS middleware returned pass after starting a response');
         }
       }
+      if (pathname === '/api/v2/auth/bootstrap' && req.method === 'GET') {
+        const payload = await resolvePublicBootstrap(req.headers, {
+          ...(url.searchParams.get('safe') === '1' ? { safeMode: true } : {}),
+        });
+        sendJson(res, 200, payload);
+        return;
+      }
       // 门 2：API 与宿主能力要 Bearer token；静态资源不验（浏览器靠它
       // 拿 token），静态面不暴露任何能力。
       const needsAuth = pathname.startsWith('/api/v2/') || pathname.startsWith('/host/');
+      const originChannel = parseOriginChannel(
+        req.headers['x-steerable-origin-channel'],
+        'web',
+      );
       let principal: Principal | undefined;
       if (needsAuth) {
         const authProvider = getAuthProvider();
@@ -650,11 +685,11 @@ export function createBsServer(deps: BsServerDeps): Server {
         return;
       }
       if (pathname.startsWith('/api/v2/')) {
-        await handleApi(req, res, pathname, principal);
+        await handleApi(req, res, pathname, principal, originChannel);
         return;
       }
       if (pathname.startsWith('/host/')) {
-        await handleHost(req, res, pathname);
+        await handleHost(req, res, pathname, principal, originChannel);
         return;
       }
       if (req.method === 'GET' || req.method === 'HEAD') {

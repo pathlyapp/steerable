@@ -691,8 +691,31 @@ class CoreLoop:
             await asyncio.gather(task, return_exceptions=True)
             raise
         except TimeoutError:
+            clock.timed_out = True
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+            rec_id = clock.outcome_unknown_reconciliation_id
+            if rec_id is not None:
+                return ToolResult(
+                    success=False,
+                    error="outcome_unknown: tool_timeout",
+                    needsFollowup=True,
+                    effect="unknown",
+                    outcomeUnknown=True,
+                    retryable=False,
+                    reconciliationId=rec_id,
+                    data={
+                        "timeout": True,
+                        "timeoutMs": timeout_ms,
+                        "outcomeUnknown": True,
+                        "reconciliationId": rec_id,
+                        "message": (
+                            f"{_TOOL_TIMEOUT_MESSAGE.format(name=call.name, timeout_ms=timeout_ms)} "
+                            f"Tool '{call.name}' is non-idempotent and its side-effect outcome is unknown "
+                            f"(reconciliationId={rec_id}). Do NOT retry until reconciled."
+                        ),
+                    },
+                )
             return ToolResult(
                 success=False,
                 error="tool_timeout",

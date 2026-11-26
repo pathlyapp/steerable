@@ -337,10 +337,11 @@ function watchApprovals(
           toolName?: string;
           category?: string;
           mode?: string;
+          checkpoint?: 'standard' | 'outward';
           arguments?: unknown;
         };
         if (!prompt.requestId) continue;
-        const kind = decisionFor(spec, { mode: prompt.mode }, 'run');
+        const kind = decisionFor(spec, { mode: prompt.mode, checkpoint: prompt.checkpoint }, 'run');
         if (kind === 'prompt') continue;
         if (denied(kind)) onDenied();
         const record: AutoAnswered = {

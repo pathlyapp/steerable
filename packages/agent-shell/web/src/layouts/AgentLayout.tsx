@@ -8,6 +8,13 @@ import { TaskProcessPanel, type InspectedTask } from '@/components/chat/TaskProc
 import { AskUserPromptProvider } from '@/components/chat/AskUserPromptProvider';
 import { ApprovalPromptProvider } from '@/components/chat/ApprovalPromptProvider';
 import { InsightsConsentBanner } from '@/components/settings/InsightsSettingsPanel';
+import { SafeRecoveryBanner } from '@/components/SafeRecoveryBanner';
+import {
+  fetchActiveApplication,
+  isSafeRecoveryMode,
+  type ActiveApplicationState,
+  type HiddenNavItem,
+} from '@/lib/safe-mode';
 import { trackBehavior } from '@/lib/insights';
 import { getHostBridge, hasHostBridge } from '@/lib/host-bridge';
 import { deleteChatIfEmpty, pruneEmptyChats } from '@/lib/local-api';
@@ -694,6 +701,33 @@ function AgentLayoutContent() {
     trackBehavior('app_open', { path: window.location.hash || '#/' });
   }, []);
 
+  const [safeModeActive, setSafeModeActive] = useState<boolean>(() => isSafeRecoveryMode());
+  const [activeApp, setActiveApp] = useState<ActiveApplicationState | null>(null);
+
+  useEffect(() => {
+    const syncSafe = () => setSafeModeActive(isSafeRecoveryMode());
+    window.addEventListener('hashchange', syncSafe);
+    window.addEventListener('popstate', syncSafe);
+    return () => {
+      window.removeEventListener('hashchange', syncSafe);
+      window.removeEventListener('popstate', syncSafe);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchActiveApplication(safeModeActive).then((app) => {
+      if (!cancelled) setActiveApp(app);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [safeModeActive]);
+
+  const hiddenNavItems: readonly HiddenNavItem[] = safeModeActive
+    ? []
+    : (activeApp?.hiddenNavItems ?? []);
+
   return (
     <div className="relative flex h-full w-full bg-agent-muted/30">
       {sidebarCollapsed ? (
@@ -719,6 +753,7 @@ function AgentLayoutContent() {
               rightPanel={rightPanel}
               onToggleRightPanel={toggleRightPanel}
               onCollapse={toggleSidebarCollapsed}
+              hiddenNavItems={hiddenNavItems}
             />
           </div>
           {/* Drag handle — 1px wide, 4px hit area via padding. */}
@@ -736,6 +771,14 @@ function AgentLayoutContent() {
       <div className="h-full min-w-0 flex-1 p-1.5">
         <div className="flex h-full w-full">
           <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden rounded-agent-lg bg-agent-canvas shadow-sm">
+            {safeModeActive && (
+              <SafeRecoveryBanner
+                onResetComplete={() => {
+                  setSafeModeActive(false);
+                  void fetchActiveApplication(false).then(setActiveApp);
+                }}
+              />
+            )}
             <div className="min-h-0 flex-1 overflow-hidden">
               <Outlet
                 context={{

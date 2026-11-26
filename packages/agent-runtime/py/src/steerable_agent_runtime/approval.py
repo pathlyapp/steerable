@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import json
 import logging
 import os
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
@@ -37,7 +39,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkabl
 from steerable_agent_harness.policy import ToolMode, decide_tool_mode
 from steerable_agent_protocol.generated import ToolCall, ToolResult
 
-from .errors import ApprovalAborted
+from .errors import ApprovalAborted, PolicyDeniedError
 from .sandboxed import DEFAULT_SHELL_TOOLS
 
 if TYPE_CHECKING:
@@ -54,12 +56,86 @@ __all__ = [
     "ApprovalStore",
     "Approver",
     "AutoApprover",
+    "CheckpointKind",
+    "RejectedBeforeEffectError",
     "WorkspaceAutoApprover",
+    "compute_policy_digest",
     "declared_resolver",
     "InMemoryApprovalStore",
     "JsonApprovalStore",
     "SessionApprovalCache",
 ]
+
+CheckpointKind = Literal["standard", "outward"]
+
+_REJECTED_BEFORE_EFFECT_SEAL = object()
+
+
+class RejectedBeforeEffectError(Exception):
+    """Framework-sealed pre-dispatch rejection that settles as ``effect='none'``.
+
+    Tool/plugin handlers cannot construct this directly without the private
+    module token; any exception raised inside a handler for ``idempotent=False``
+    settles as ``outcome_unknown``.
+    """
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = True,
+        _seal: object = None,
+    ) -> None:
+        if _seal is not _REJECTED_BEFORE_EFFECT_SEAL:
+            raise TypeError(
+                "RejectedBeforeEffectError is sealed to framework pre-dispatch ports"
+            )
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+        self._seal = _seal
+
+
+def _reject_before_effect(
+    code: str, message: str, *, retryable: bool = True
+) -> RejectedBeforeEffectError:
+    return RejectedBeforeEffectError(
+        code, message, retryable=retryable, _seal=_REJECTED_BEFORE_EFFECT_SEAL
+    )
+
+
+def _is_sealed_rejection(exc: BaseException) -> bool:
+    return (
+        isinstance(exc, RejectedBeforeEffectError)
+        and getattr(exc, "_seal", None) is _REJECTED_BEFORE_EFFECT_SEAL
+    )
+
+
+def compute_policy_digest(
+    *,
+    approval_mode: str = "host",
+    sandbox_enforced: bool = False,
+    writable_roots: list[str] | tuple[str, ...] = (),
+    allowed_hosts: list[str] | tuple[str, ...] = (),
+    safety_rules: list[str] | tuple[str, ...] = (),
+    **_ignored: Any,
+) -> str:
+    """Compute a 16-byte (32-hex) SHA-256 digest over canonical security policy.
+
+    Model IDs, API endpoints, and UI theme fields are intentionally ignored so
+    non-security changes do not invalidate durable ``allow_always`` grants,
+    while any sandbox/root/egress/approval-mode change produces a distinct digest.
+    """
+    canonical = {
+        "allowedHosts": sorted({str(h).strip().lower() for h in allowed_hosts if str(h).strip()}),
+        "approvalMode": str(approval_mode or "host"),
+        "safetyRules": sorted({str(r).strip() for r in safety_rules if str(r).strip()}),
+        "sandboxEnforced": bool(sandbox_enforced),
+        "writableRoots": sorted({str(r).strip() for r in writable_roots if str(r).strip()}),
+    }
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:32]
 
 #: The 8 decision variants. Codex's ``ApprovedExecpolicyAmendment`` /
 #: ``ApprovedMcpPolicyAmendment`` / ``NetworkPolicyAmendment`` are codex's
@@ -119,6 +195,9 @@ class ApprovalRequest:
     category: str
     round_index: int = 0
     call_id: str = ""
+    checkpoint: CheckpointKind = "standard"
+    idempotent: bool = True
+    input_schema: dict[str, Any] | None = None
 
 
 @runtime_checkable
@@ -300,6 +379,8 @@ class WorkspaceAutoApprover:
         self._sandbox_enforced = enforced
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
+        if request.checkpoint == "outward":
+            return await self._inner.approve(request)
         if request.tool_name in self._auto_allow_tools:
             return ApprovalDecision("allow_once", "trusted host control tool")
         paths = declared_target_paths(request)
@@ -339,16 +420,22 @@ class AutoApprover:
         self._deny_reason = deny_reason
 
     async def approve(self, request: ApprovalRequest) -> ApprovalDecision:
+        if request.checkpoint == "outward":
+            return ApprovalDecision(
+                "deny_once",
+                "outward_confirmation_required: interactive confirmation required for outward checkpoint",
+            )
         if request.mode in self._allow_modes:
             return ApprovalDecision("allow_once")
         return ApprovalDecision("deny_once", self._deny_reason)
 
 
 class SessionApprovalCache:
-    """Session scope: per-category decisions for the cache instance's lifetime."""
+    """Session scope: per-category decisions and pending reconciliations."""
 
     def __init__(self) -> None:
         self._decisions: dict[str, ApprovalKind] = {}
+        self._pending_reconciliations: dict[str, str] = {}
 
     def get(self, category: str) -> ApprovalKind | None:
         return self._decisions.get(category)
@@ -357,6 +444,23 @@ class SessionApprovalCache:
         if kind not in _SESSION_KINDS:
             raise ValueError(f"not a session-scope kind: {kind}")
         self._decisions[category] = kind
+
+    def mark_outcome_unknown(self, tool_name: str, reconciliation_id: str) -> None:
+        self._pending_reconciliations[tool_name] = reconciliation_id
+
+    def get_pending_reconciliation(self, tool_name: str) -> str | None:
+        return self._pending_reconciliations.get(tool_name)
+
+    def clear_reconciliation(self, tool_name: str) -> None:
+        self._pending_reconciliations.pop(tool_name, None)
+
+    def sync_pending_reconciliations(self, pending: dict[str, str]) -> None:
+        """Synchronize unresolved ``outcome_unknown`` locks from authoritative host state."""
+        self._pending_reconciliations = {
+            str(tool_name): str(rec_id)
+            for tool_name, rec_id in pending.items()
+            if tool_name and rec_id
+        }
 
 
 @runtime_checkable
@@ -388,27 +492,53 @@ class InMemoryApprovalStore:
 
 
 class JsonApprovalStore:
-    """File-backed durable store: one JSON object ``{category: kind}``.
+    """File-backed durable store.
 
-    Writes are atomic (tmp file + rename) so a crash mid-write cannot leave a
-    truncated file that would fail every future load.
+    Without ``policy_digest``, stores ``{category: kind}``.
+    With ``policy_digest``, stores ``{"_by_policy": {policy_digest: {category: kind}}}``
+    so changing sandbox/network/policy rules invalidates prior ``allow_always``
+    decisions while keeping model/UI changes transparent.
+    Writes are atomic (tmp file + rename).
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, policy_digest: str | None = None) -> None:
         self._path = Path(path)
+        self._policy_digest = (
+            policy_digest.strip()
+            if isinstance(policy_digest, str) and policy_digest.strip()
+            else None
+        )
 
-    def load(self) -> dict[str, ApprovalKind]:
+    def _read_raw_dict(self) -> dict[str, Any]:
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
         except (OSError, json.JSONDecodeError) as exc:
-            # A corrupt store must fail closed, not crash the run: treating it
-            # as empty re-asks the approver instead of auto-allowing.
             logger.warning("approval store %s unreadable (%s); ignoring", self._path, exc)
             return {}
+        return raw if isinstance(raw, dict) else {}
+
+    def load(self) -> dict[str, ApprovalKind]:
+        raw = self._read_raw_dict()
+        if not raw:
+            return {}
+        if self._policy_digest is not None:
+            by_policy = raw.get("_by_policy")
+            bucket = (
+                by_policy.get(self._policy_digest)
+                if isinstance(by_policy, dict)
+                else None
+            )
+            if not isinstance(bucket, dict):
+                return {}
+            return {
+                str(category): cast(ApprovalKind, kind)
+                for category, kind in bucket.items()
+                if kind in _DURABLE_KINDS
+            }
         return {
-            str(category): kind
+            str(category): cast(ApprovalKind, kind)
             for category, kind in raw.items()
             if kind in _DURABLE_KINDS
         }
@@ -416,13 +546,27 @@ class JsonApprovalStore:
     def put(self, category: str, kind: ApprovalKind) -> None:
         if kind not in _DURABLE_KINDS:
             raise ValueError(f"not a durable-scope kind: {kind}")
-        decisions = self.load()
-        decisions[category] = kind
+        if self._policy_digest is not None:
+            full = self._read_raw_dict()
+            by_policy = full.get("_by_policy")
+            if not isinstance(by_policy, dict):
+                by_policy = {}
+                full["_by_policy"] = by_policy
+            bucket = by_policy.get(self._policy_digest)
+            if not isinstance(bucket, dict):
+                bucket = {}
+                by_policy[self._policy_digest] = bucket
+            bucket[category] = kind
+            payload_to_write: dict[str, Any] = full
+        else:
+            decisions = self.load()
+            decisions[category] = kind
+            payload_to_write = dict(decisions)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=self._path.parent, suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(decisions, handle, ensure_ascii=False, indent=1)
+                json.dump(payload_to_write, handle, ensure_ascii=False, indent=1)
             os.replace(tmp, self._path)
         except BaseException:
             os.unlink(tmp)
@@ -491,24 +635,49 @@ def declared_resolver(
     name as the category. Old hosts that omit the fields keep the previous
     behavior.
     """
-    declared: dict[str, tuple[Any, Any]] = {}
+    declared: dict[str, tuple[Any, Any, Any, Any, Any]] = {}
     for tool in tools or []:
         if not isinstance(tool, dict):
+            reg_name = getattr(tool, "name", None)
+            if isinstance(reg_name, str) and reg_name:
+                reg_schema = getattr(tool, "schema", None)
+                reg_meta = getattr(tool, "metadata", None)
+                reg_cat = reg_meta.get("approvalCategory") if isinstance(reg_meta, dict) else None
+                declared[reg_name] = (
+                    getattr(tool, "mode", None),
+                    reg_cat,
+                    getattr(tool, "checkpoint", None),
+                    getattr(tool, "idempotent", None),
+                    reg_schema if isinstance(reg_schema, dict) else None,
+                )
             continue
         name = _tool_declared_name(tool)
         if name is None:
             continue
+        schema = (
+            _tool_declared_field(tool, "inputSchema")
+            or _tool_declared_field(tool, "parameters")
+        )
         declared[name] = (
             _tool_declared_field(tool, "mode"),
             _tool_declared_field(tool, "approvalCategory"),
+            _tool_declared_field(tool, "checkpoint"),
+            _tool_declared_field(tool, "idempotent"),
+            schema if isinstance(schema, dict) else None,
         )
 
     def resolve(call: ToolCall, ctx: LoopContext) -> ApprovalRequest:
-        mode, category = declared.get(call.name, (None, None))
+        mode, category, checkpoint, idempotent, schema = declared.get(
+            call.name, (None, None, None, None, None)
+        )
         resolved_mode = (
             mode if isinstance(mode, str) and mode in TOOL_MODES else decide_tool_mode(call.name)
         )
         resolved_category = category if isinstance(category, str) and category else call.name
+        resolved_checkpoint: CheckpointKind = (
+            "outward" if checkpoint == "outward" else "standard"
+        )
+        resolved_idempotent = False if idempotent is False else True
         return ApprovalRequest(
             tool_name=call.name,
             arguments=call.arguments or {},
@@ -516,9 +685,52 @@ def declared_resolver(
             category=resolved_category,
             round_index=ctx.round_index,
             call_id=call.id,
+            checkpoint=resolved_checkpoint,
+            idempotent=resolved_idempotent,
+            input_schema=schema,
         )
 
     return resolve
+
+
+def _validate_tool_schema(request: ApprovalRequest) -> RejectedBeforeEffectError | None:
+    schema = request.input_schema
+    if not isinstance(schema, dict):
+        return None
+    args = request.arguments
+    required = schema.get("required")
+    if isinstance(required, list):
+        for key in required:
+            if isinstance(key, str) and args.get(key) is None:
+                return _reject_before_effect(
+                    "schema_validation_failed",
+                    f"missing required argument '{key}' for tool '{request.tool_name}'",
+                    retryable=True,
+                )
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        for key, spec in props.items():
+            if key not in args or not isinstance(spec, dict):
+                continue
+            expected = spec.get("type")
+            if not isinstance(expected, str):
+                continue
+            val = args[key]
+            ok = (
+                (expected == "string" and isinstance(val, str))
+                or (expected == "boolean" and isinstance(val, bool))
+                or (expected == "integer" and isinstance(val, int) and not isinstance(val, bool))
+                or (expected == "number" and isinstance(val, (int, float)) and not isinstance(val, bool))
+                or (expected == "array" and isinstance(val, list))
+                or (expected == "object" and isinstance(val, dict))
+            )
+            if not ok:
+                return _reject_before_effect(
+                    "schema_validation_failed",
+                    f"argument '{key}' for tool '{request.tool_name}' expected {expected}",
+                    retryable=True,
+                )
+    return None
 
 
 class ToolTimeoutClock:
@@ -534,6 +746,8 @@ class ToolTimeoutClock:
         self.resumed = asyncio.Event()
         self.resumed.set()
         self.paused = asyncio.Event()
+        self.timed_out = False
+        self.outcome_unknown_reconciliation_id: str | None = None
 
     def suspend(self) -> None:
         self._depth += 1
@@ -586,17 +800,94 @@ class ApprovalExecutor:
         self._approver = approver
         self._session = session
         self._store = store
-        self._resolve = resolve or _default_resolver
+        self._resolve = resolve or self._build_router_aware_resolver(inner)
         self._timeout_s = timeout_s
         self._durable: dict[str, ApprovalKind] | None = None
+        self._pending_reconciliations: dict[str, str] = {}
+
+    @staticmethod
+    def _build_router_aware_resolver(inner: ToolExecutor) -> Any:
+        router = getattr(inner, "_router", None)
+        if router is None or not hasattr(router, "get"):
+            return _default_resolver
+
+        def _resolve_from_router(call: ToolCall, ctx: LoopContext) -> ApprovalRequest:
+            reg = router.get(call.name)
+            if reg is None:
+                return _default_resolver(call, ctx)
+            meta = getattr(reg, "metadata", None)
+            cat = meta.get("approvalCategory") if isinstance(meta, dict) else None
+            schema = getattr(reg, "schema", None)
+            return ApprovalRequest(
+                tool_name=call.name,
+                arguments=call.arguments or {},
+                mode=getattr(reg, "mode", None) or decide_tool_mode(call.name),
+                category=cat if isinstance(cat, str) and cat else call.name,
+                round_index=ctx.round_index,
+                call_id=call.id,
+                checkpoint="outward" if getattr(reg, "checkpoint", None) == "outward" else "standard",
+                idempotent=False if getattr(reg, "idempotent", True) is False else True,
+                input_schema=schema if isinstance(schema, dict) else None,
+            )
+
+        return _resolve_from_router
 
     def concurrency_safe(self, call: ToolCall) -> bool:
         check = getattr(self._inner, "concurrency_safe", None)
         return bool(check is not None and check(call))
 
+    def _get_pending_reconciliation(self, tool_name: str) -> str | None:
+        if self._session is not None:
+            return self._session.get_pending_reconciliation(tool_name)
+        return self._pending_reconciliations.get(tool_name)
+
+    def _mark_outcome_unknown(self, tool_name: str, reconciliation_id: str) -> None:
+        if self._session is not None:
+            self._session.mark_outcome_unknown(tool_name, reconciliation_id)
+        self._pending_reconciliations[tool_name] = reconciliation_id
+
+    def clear_reconciliation(self, tool_name: str) -> None:
+        """Release a pending ``outcome_unknown`` lock after human reconciliation."""
+        if self._session is not None:
+            self._session.clear_reconciliation(tool_name)
+        self._pending_reconciliations.pop(tool_name, None)
+
     async def execute(self, call: ToolCall, ctx: LoopContext) -> ToolResult:
         request = self._resolve(call, ctx)
-        stored = self._stored_decision(request)
+        pending_rec = self._get_pending_reconciliation(request.tool_name)
+        if pending_rec is not None:
+            return ToolResult(
+                success=False,
+                error="reconciliation_required",
+                effect="none",
+                retryable=False,
+                reconciliationId=pending_rec,
+                needsFollowup=False,
+                data={
+                    "reconciliationId": pending_rec,
+                    "message": (
+                        f"reconciliation_required: previous call to '{request.tool_name}' "
+                        f"ended with outcome_unknown ({pending_rec})"
+                    ),
+                },
+            )
+
+        schema_err = _validate_tool_schema(request)
+        if schema_err is not None:
+            return ToolResult(
+                success=False,
+                error=schema_err.code,
+                effect="none",
+                retryable=schema_err.retryable,
+                needsFollowup=schema_err.retryable,
+                data={"message": str(schema_err)},
+            )
+
+        stored = (
+            None
+            if request.checkpoint == "outward"
+            else self._stored_decision(request)
+        )
         decision = stored
         # A fresh decision records the wait so the trace can show approval
         # latency. A session allow reused from the cache carries `cached`
@@ -606,7 +897,13 @@ class ApprovalExecutor:
             ask_started = time.monotonic()
             decision = await self._ask(request)
             waited_ms = int((time.monotonic() - ask_started) * 1000)
-            self._persist(request, decision)
+            if request.checkpoint == "outward":
+                if decision.kind in _ALLOW_KINDS and decision.kind != "allow_once":
+                    decision = ApprovalDecision("allow_once", decision.reason)
+                elif decision.kind in (_SESSION_KINDS | _DURABLE_KINDS):
+                    decision = ApprovalDecision("deny_once", decision.reason)
+            else:
+                self._persist(request, decision)
 
         if stored is not None and stored.kind == "allow_for_session":
             approval_marker = {
@@ -634,9 +931,15 @@ class ApprovalExecutor:
             )
         if not decision.allowed:
             reason = decision.reason or "denied by approval policy"
+            is_outward_req = (
+                request.checkpoint == "outward"
+                and "outward_confirmation_required" in reason
+            )
             return ToolResult(
                 success=False,
-                error="approval_denied",
+                error="outward_confirmation_required" if is_outward_req else "approval_denied",
+                effect="none",
+                retryable=is_outward_req,
                 needsFollowup=True,
                 data={
                     "approval": decision.kind,
@@ -650,7 +953,75 @@ class ApprovalExecutor:
                 },
             )
         ctx.consent_granted = True
-        result = await self._inner.execute(call, ctx)
+        try:
+            result = await self._inner.execute(call, ctx)
+        except asyncio.CancelledError:
+            clock = tool_timeout_clock.get()
+            if clock is not None and clock.timed_out and not request.idempotent:
+                rec_id = f"rec_{uuid.uuid4().hex[:12]}"
+                self._mark_outcome_unknown(request.tool_name, rec_id)
+                clock.outcome_unknown_reconciliation_id = rec_id
+            raise
+        except PolicyDeniedError as exc:
+            return ToolResult(
+                success=False,
+                error=str(exc),
+                effect="none",
+                retryable=False,
+                needsFollowup=True,
+                data={"message": str(exc)},
+            )
+        except Exception as exc:  # noqa: BLE001 — classify sealed pre-dispatch vs unknown outcome
+            if _is_sealed_rejection(exc):
+                sealed = cast(RejectedBeforeEffectError, exc)
+                return ToolResult(
+                    success=False,
+                    error=sealed.code,
+                    effect="none",
+                    retryable=sealed.retryable,
+                    needsFollowup=sealed.retryable,
+                    data={"message": str(sealed)},
+                )
+            if not request.idempotent:
+                rec_id = f"rec_{uuid.uuid4().hex[:12]}"
+                self._mark_outcome_unknown(request.tool_name, rec_id)
+                return ToolResult(
+                    success=False,
+                    error=f"outcome_unknown: {exc}",
+                    effect="unknown",
+                    outcomeUnknown=True,
+                    retryable=False,
+                    reconciliationId=rec_id,
+                    needsFollowup=True,
+                    data={"reconciliationId": rec_id, "message": str(exc)},
+                )
+            raise
+
+        if result.outcomeUnknown:
+            rec_id = result.reconciliationId or f"rec_{uuid.uuid4().hex[:12]}"
+            self._mark_outcome_unknown(request.tool_name, rec_id)
+            result = result.model_copy(
+                update={
+                    "effect": "unknown",
+                    "outcomeUnknown": True,
+                    "retryable": False,
+                    "reconciliationId": rec_id,
+                }
+            )
+        elif not result.success and not request.idempotent and result.effect != "none":
+            rec_id = result.reconciliationId or f"rec_{uuid.uuid4().hex[:12]}"
+            self._mark_outcome_unknown(request.tool_name, rec_id)
+            result = result.model_copy(
+                update={
+                    "effect": "unknown",
+                    "outcomeUnknown": True,
+                    "retryable": False,
+                    "reconciliationId": rec_id,
+                }
+            )
+        elif result.success and not request.idempotent and result.effect is None:
+            result = result.model_copy(update={"effect": "committed"})
+
         data = result.data if isinstance(result.data, dict) else None
         if approval_marker is not None or (data is not None and "_sandbox" in data):
             result = result.model_copy(
