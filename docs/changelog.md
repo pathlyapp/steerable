@@ -2,6 +2,14 @@
 
 All notable changes to the Steerable framework (lockstep across TypeScript, Python, CLI, UI, and desktop host packages) are documented in this file.
 
+## [0.14.1](https://github.com/pathlyapp/steerable/compare/v0.14.0...v0.14.1) - 2026-11-27
+
+### Fixed
+- **shell-web:** Preserve the `useChatStream` messages array when attaching live turn metadata, preventing message state from being dropped during streaming updates.
+
+### Added
+- **cli:** Document the `--require-license` and `--license-file` preflight flags.
+
 ## [0.14.0](https://github.com/pathlyapp/steerable/compare/v0.13.1...v0.14.0) - 2026-11-27
 
 ### Breaking Changes
