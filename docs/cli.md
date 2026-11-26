@@ -62,6 +62,8 @@
 | `--signing-key-env` | string | Environment variable holding hex Ed25519 signing key for `pack bundle` |
 | `--profile` | string | Target profile (`server` or `desktop`) for `preflight` |
 | `--manifest` | string | JSON manifest of required commands, fonts, and TLS cert for `preflight` |
+| `--require-license` | boolean | Require a valid commercial `.lic` file during `preflight` |
+| `--license-file` | string | Explicit `.lic` file path for `preflight` or `diag-bundle` (defaults to `STEERABLE_LICENSE_FILE`) |
 | `--redact-content` | boolean | Redact user/assistant/document prose to length + SHA-256 summaries (default on) |
 | `--no-redact-content` | boolean | Preserve raw prose in `diag-bundle` (credentials are still scrubbed) |
 | `--suite` | string | Path to evaluation case directory or JSON file for `site-eval` |
