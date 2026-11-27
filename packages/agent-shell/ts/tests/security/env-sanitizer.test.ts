@@ -91,7 +91,7 @@ describe('T-ENV-02: tool subprocess environment sanitizer', () => {
       STEERABLE_CREDENTIAL_MASTER_KEY: 'master-key-xyz-987654',
       DEEPSEEK_API_KEY: 'sk-live-tenant-secret-key',
       TEAM_SERVER_INTERNAL_TOKEN: 'internal-token-secret-abc',
-      SHARED_MYSQL_URL: 'mysql://root:db_pass_secret_42@127.0.0.1:3306/etown',
+      SHARED_MYSQL_URL: 'mysql://root:db_pass_secret_42@127.0.0.1:3306/teamdb',
     });
     registerGlobalSecret('manual-registered-tenant-secret');
 
