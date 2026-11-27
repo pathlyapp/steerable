@@ -785,10 +785,10 @@ GLM-5.3-Flash @high (<code>n=1</code>)：**Steerable 79.8%** · C&#42; C&#42; 77
         <span class="sf-brand-name">DeepPath</span>
         <span class="sf-brand-domain">deeppath.cc</span>
       </a>
-      <a href="https://aroli.work" target="_blank" rel="noopener noreferrer" class="sf-brand-item">
-        <img src="../assets/users/aroli.png" alt="Aroli">
-        <span class="sf-brand-name">Aroli</span>
-        <span class="sf-brand-domain">aroli.work</span>
+      <a href="https://steeragent.app" target="_blank" rel="noopener noreferrer" class="sf-brand-item">
+        <img src="../assets/users/steer.png" alt="Steer">
+        <span class="sf-brand-name">Steer</span>
+        <span class="sf-brand-domain">steeragent.app</span>
       </a>
       <a href="https://dpkgs.cn" target="_blank" rel="noopener noreferrer" class="sf-brand-item">
         <img src="../assets/users/dpkgs.png" alt="DPKGS">
