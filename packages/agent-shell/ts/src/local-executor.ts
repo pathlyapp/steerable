@@ -24,6 +24,7 @@ import {
   shellSessionStatus,
   startPtySession,
 } from './shell-session.js';
+import { redactSubprocessText, scrubToolSubprocessEnv } from './env-sanitizer.js';
 import { applyEdits, EditError, type ApplyEditsResult, type EditOp } from './local-edit.js';
 // `he` ships as CommonJS and does not expose ESM named exports, so we have to
 // take the default import and destructure at runtime in this ESM module.
@@ -446,12 +447,7 @@ interface ResolvedShell {
 }
 
 function stringEnv(extra?: Record<string, string>): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === 'string') env[key] = value;
-  }
-  if (extra) Object.assign(env, extra);
-  return env;
+  return scrubToolSubprocessEnv(process.env, extra);
 }
 
 function toWslPath(input: string): string {
@@ -634,7 +630,7 @@ export class LocalExecutor {
       }
       const timeout = Math.max(1000, rawTimeout);
       const cwd = this.resolveCwd(request.cwd, resolvedShell.type);
-      const env = { ...process.env, ...(request.env || {}) };
+      const env = scrubToolSubprocessEnv(process.env, request.env);
       if (this.shellBackend || useSsh || request.pty) {
         return await this.runPlannedShell({
           command,
@@ -728,9 +724,9 @@ export class LocalExecutor {
           clearTimeout(timer);
           resolve({
             success: false,
-            stdout: Buffer.concat(stdoutChunks).toString('utf-8'),
-            stderr: Buffer.concat(stderrChunks).toString('utf-8'),
-            error: err.message,
+            stdout: redactSubprocessText(Buffer.concat(stdoutChunks).toString('utf-8')),
+            stderr: redactSubprocessText(Buffer.concat(stderrChunks).toString('utf-8')),
+            error: redactSubprocessText(err.message),
             truncated,
             shell: resolvedShell.type,
             platform: process.platform,
@@ -741,8 +737,8 @@ export class LocalExecutor {
           clearTimeout(timer);
           resolve({
             success: exitCode === 0,
-            stdout: Buffer.concat(stdoutChunks).toString('utf-8'),
-            stderr: Buffer.concat(stderrChunks).toString('utf-8'),
+            stdout: redactSubprocessText(Buffer.concat(stdoutChunks).toString('utf-8')),
+            stderr: redactSubprocessText(Buffer.concat(stderrChunks).toString('utf-8')),
             exitCode: exitCode ?? -1,
             truncated,
             shell: resolvedShell.type,

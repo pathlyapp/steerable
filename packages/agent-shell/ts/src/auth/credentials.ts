@@ -42,12 +42,38 @@ const MIN_REDACT_SECRET_LEN = 4;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_CREDENTIAL_REDIRECTS = 5;
 
+const globalSecretNeedles = new Set<string>();
+
+/**
+ * Registers a host-level secret so every `SecretRedactor` instance created
+ * afterward scrubs its raw, URL-encoded, and Base64-encoded forms.
+ */
+export function registerGlobalSecret(secret: string): () => void {
+  const trimmed = secret.trim();
+  if (trimmed.length < MIN_REDACT_SECRET_LEN) return () => {};
+  globalSecretNeedles.add(trimmed);
+  return () => {
+    globalSecretNeedles.delete(trimmed);
+  };
+}
+
+/** Clears process-wide registered secrets in unit tests. */
+export function clearGlobalSecretsForTests(): void {
+  globalSecretNeedles.clear();
+}
+
 /**
  * Tracks active plaintext secrets and scrubs their raw, URL-encoded, and
  * base64-encoded forms from strings and structured JSON payloads.
  */
 export class SecretRedactor {
   private readonly needles = new Set<string>();
+
+  constructor() {
+    for (const secret of globalSecretNeedles) {
+      this.registerSecret(secret);
+    }
+  }
 
   /** Registers one or more secret strings for scrubbing. */
   registerSecret(secret: string): void {

@@ -4,6 +4,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import * as pty from 'node-pty';
+import { redactSubprocessText, scrubToolSubprocessEnv } from './env-sanitizer.js';
 import { stripAnsi } from './shell-process.js';
 
 const MAX_SESSION_MS = 10 * 60 * 1000;
@@ -37,17 +38,13 @@ export interface ShellSessionUpdate {
 const sessions = new Map<string, LiveSession>();
 
 function stringEnv(env: Record<string, string> | undefined): Record<string, string> {
-  const next: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === 'string') next[key] = value;
-  }
-  if (env) Object.assign(next, env);
+  const next = scrubToolSubprocessEnv(process.env, env);
   next.TERM = 'xterm-256color';
   return next;
 }
 
 function takeNew(live: LiveSession): string {
-  const fresh = stripAnsi(live.raw.slice(live.cursor));
+  const fresh = redactSubprocessText(stripAnsi(live.raw.slice(live.cursor)));
   live.cursor = live.raw.length;
   return fresh;
 }
