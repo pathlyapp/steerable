@@ -4,6 +4,8 @@ All notable changes to the Steerable framework (lockstep across TypeScript, Pyth
 
 ## [Unreleased]
 
+## [0.14.2](https://github.com/pathlyapp/steerable/compare/v0.14.1...v0.14.2) - 2026-11-28
+
 ### Added
 
 - **shell, security:** Add `scrubToolSubprocessEnv`, `registerProtectedEnvKeys`, `redactSubprocessText`, and `isProtectedHostEnvKey` in `@steerable/agent-shell` to strip host-only platform secrets (`DEEPPATH_*`, `ETOWN_*`, `*_DATABASE_URL`, `*_JWT_SECRET`, `*_INTERNAL_*`, `*_SIGNING_KEY`) from local tool and persistent shell subprocess environments while preserving user and runtime variables, plus `registerGlobalSecret` on `SecretRedactor` so host bootstrap secrets are scrubbed across transcripts, logs, spills, memories, and diagnostic bundles.
